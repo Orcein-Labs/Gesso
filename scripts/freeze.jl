@@ -118,12 +118,15 @@ end
 
 # SHA-256 manifest over everything staged so far (manifest excluded itself).
 cd(stage) do
-    files = sort(
-        String[
-            relpath(f, stage) for f in readdir(stage; join=true, recursive=true) if
-            isfile(f) && basename(f) != "FREEZE_MANIFEST.txt"
-        ],
-    )
+    files = String[]
+    for (dirpath, dirs, filenames) in walkdir(stage)
+        for fname in filenames
+            full = joinpath(dirpath, fname)
+            basename(full) == "FREEZE_MANIFEST.txt" && continue
+            push!(files, relpath(full, stage))
+        end
+    end
+    files = sort(files)
     open("FREEZE_MANIFEST.txt", "w") do io
         for f in files
             write(io, read(`sha256sum $f`, String))
