@@ -1,8 +1,8 @@
-# Backend interface draft (Phase 0, Harpe_Stack.md §LXXIII).
+# Backend interface (Harpe_Stack.md §XX, §XXI, §XXII-XXIII; §LXXIII draft).
 #
-# This is the seam every backend lowering will implement — CUDA.jl in Phase 4,
-# Lava in Phase 8 — written now so later phases cannot quietly design their own
-# incompatible notions of "a backend".
+# This is the seam every backend lowering implements — CUDA.jl in Phase 4,
+# Lava in Phase 8 — written now so later phases cannot quietly design their
+# own incompatible notions of "a backend".
 #
 # Laws encoded here:
 #
@@ -15,16 +15,15 @@
 #                     lower-tier fallback. Tier 0 (PORTABLE_CORRECTNESS) is
 #                     always available because it is the CPU reference.
 #
-#   §LXX              Failure must be explicit. A missing backend or an
-#                     unsupported operation raises; it never silently
+#   §LXX              Failure must be explicit. Missing backend or unsupported
+#                     operation raises (see errors.jl) — never silently
 #                     substitutes.
 #
-# Phase 0 scope: types, traits, and the contract signatures only. No execution
-# machinery — that is Phase 2 (CPU reference) and Phase 4 (CUDA lowering).
+# Scope here: backend types, traits, and the lowering-operation contract
+# signatures only. Concrete execution arrives with Phase 2 (CPU reference).
 
 export AbstractHarpeBackend, CPUBackend
 export backend_name, execution_tier, supports
-export LoweringNotImplemented, lowering_not_implemented
 
 """
     AbstractHarpeBackend
@@ -78,51 +77,17 @@ rather than throw, so capability probing is always safe.
 """
 supports(::CPUBackend, ::Symbol) = false
 
-"""
-    LoweringNotImplemented
-
-Raised when an operation is lowered to a backend that does not implement it
-(§LXX: failure must be explicit — no silent substitution, no silent fallback).
-
-This is the *only* legal way for a lowering method to decline work. Returning
-`nothing`, a sibling backend's result, or a CPU result instead is a law
-violation. Policy-permitted degradation is a planner decision, recorded via
-`@hfallback` — never a lowering-side surprise.
-"""
-struct LoweringNotImplemented <: Exception
-    op::Symbol
-    backend::Symbol
-end
-
-Base.showerror(io::IO, e::LoweringNotImplemented) = print(
-    io,
-    "LoweringNotImplemented: operation :",
-    e.op,
-    " has no lowering for backend :",
-    e.backend,
-    " (explicit failure per Harpe_Stack.md §LXX — no silent substitution)",
-)
-
-"""
-    lowering_not_implemented(op::Symbol, backend) -> Nothing
-
-Throw [`LoweringNotImplemented`](@ref) for `op` on `backend`. Standard body of
-every Phase 0 lowering stub below.
-"""
-function lowering_not_implemented(op::Symbol, backend::AbstractHarpeBackend)
-    throw(LoweringNotImplemented(op, backend_name(backend)))
-end
-
 # --- Lowering operation contract -------------------------------------------
 #
-# Signatures only. Every stub throws; concrete methods arrive with Phase 2
-# (CPU reference execution). Method names are the contract; argument order
-# follows the convention `op!(dst..., src...; workload)` where `dst`/`src` are
-# semantic tensors (§XI) and workload identifies the execution phase (§XXX).
+# Signatures only; every stub fails explicitly via errors.jl. Concrete methods
+# arrive with Phase 2 (CPU reference execution). Method names are the
+# contract; argument order follows the convention `op!(dst..., src...;
+# workload)` where `dst`/`src` are semantic tensors (§XI) and workload
+# identifies the execution phase (§XXX).
 #
 # Add new operations here as the vocabulary grows. An operation missing from
 # this list does not exist for planners; an operation present here but
-# unimplemented for a backend raises LoweringNotImplemented.
+# unimplemented for a backend raises LoweringNotImplemented (errors.jl).
 
 for op in (
     :rmsnorm!,

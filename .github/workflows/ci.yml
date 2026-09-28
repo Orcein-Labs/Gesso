@@ -9,14 +9,19 @@ jobs:
   test:
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        julia-version: ['1.12']
+        # add 'pre' when the workspace tolerates nightly churn
     steps:
       - uses: actions/checkout@v4
       - uses: julia-actions/setup-julia@v2
         with:
-          version: '1.12'
+          version: ${{ matrix.julia-version }}
       - uses: julia-actions/cache@v2
       - name: Instantiate workspace
-        run: julia --project=. -e 'using Pkg; Pkg.instantiate(); Pkg.instantiate("test"); Pkg.instantiate("benchmark")'
+        run: julia --project=. -e 'using Pkg; Pkg.instantiate(); Pkg.activate("test"); Pkg.instantiate(); Pkg.activate("benchmark"); Pkg.instantiate()'
       - name: Run tests
         run: julia --project=test --check-bounds=yes test/runtests.jl
 
@@ -33,3 +38,23 @@ jobs:
           julia -e 'using Pkg; Pkg.add("JuliaFormatter")'
           julia -e 'using JuliaFormatter; format(".", verbose=true) || exit(1)'
           git diff --exit-code --color
+
+  bench-smoke:
+    # §XXXIII harness-integrity guard: the bench suite must always RUN and
+    # PERSIST. This job does not gate on timing numbers — hardware variance
+    # makes numeric gating flaky — it gates on the harness staying alive.
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: julia-actions/setup-julia@v2
+        with:
+          version: '1.12'
+      - uses: julia-actions/cache@v2
+      - name: Instantiate benchmark env
+        run: julia --project=. -e 'using Pkg; Pkg.instantiate(); Pkg.activate("benchmark"); Pkg.instantiate()'
+      - name: Run benchmark suite (smoke)
+        run: |
+          julia --project=benchmark benchmark/runbenchmarks.jl | tee bench_out.txt
+          test -f benchmark/results/*.tsv || (echo "FAIL: no results file persisted" && exit 1)
+          grep -q "benchmarks recorded" bench_out.txt || (echo "FAIL: suite did not complete" && exit 1)

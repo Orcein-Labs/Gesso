@@ -1,15 +1,15 @@
-# Phase 0 test harness (Harpe_Stack.md §LXXIII).
+# Harpe test harness (Harpe_Stack.md §LXXIII).
 #
-# Exit criterion for Phase 0: package loads, tests pass, dependency graph
-# intentional. The "dependency law" testset below *is* that law, enforced —
-# it reads the live Project.toml rather than trusting this file to stay honest.
-# When a phase deliberately adds a dependency, it must also deliberately
-# update this test. That friction is the point.
+# Structure: this file owns the package-level laws (dependency law, load,
+# foundation contracts) and includes per-area test files. Tests are cheap,
+# CPU-only, and deterministic — GPU/differential tests arrive with their
+# phases, gated on hardware availability.
 
 using Harpe
 using Test
 
 @testset "Harpe" begin
+    include("test_foundation.jl")
 
     @testset "package loads" begin
         @test Harpe.Log isa Module

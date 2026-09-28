@@ -1,0 +1,6 @@
+schema	date_utc	julia_version	benchmark	samples	median_ns
+bench-result-v1	2026-09-28 T20:42:21Z	1.12.6	backend_tag_construction	10000	1.586
+bench-result-v1	2026-09-28 T20:42:21Z	1.12.6	capability_probe	10000	1.587
+bench-result-v1	2026-09-28 T20:42:21Z	1.12.6	lowering_not_implemented_throw	10000	1.64
+bench-result-v1	2026-09-28 T20:42:21Z	1.12.6	receipt_emit_inmemory	10000	267.17333333333335
+bench-result-v1	2026-09-28 T20:42:21Z	1.12.6	structured_log_event	10000	1281.0
