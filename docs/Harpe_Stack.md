@@ -1,0 +1,3316 @@
+/goal HARPE — SEMANTIC ML + AGENT RUNTIME
+
+STATUS
+======
+
+Harpe is no longer being conceived as "a Julia replacement for PyTorch."
+
+Harpe is a Julia-native semantic machine-learning compiler/runtime whose first practical mission is:
+
+    TAKE EXISTING MODELS
+    UNDERSTAND THEM BETTER
+    MATERIALIZE THEM BETTER
+    EXECUTE THEM BETTER
+    ORCHESTRATE THEM BETTER
+
+The primary and only target is inference.
+
+    TRAINING IS NOT OUR PROBLEM.
+
+Harpe is not a training stack, does not ship one, and does not reserve one. Training the
+models Harpe serves is — by deliberate, explicit decision — somebody else's project.
+See TRAINING BOUNDARY (Section LVIII).
+
+Harpe should be able to consume models trained elsewhere, preserve their architectural meaning,
+compile/materialize them for actual hardware and workloads, and expose an inference and
+multi-agent execution runtime substantially more integrated than conventional Python-first stacks.
+
+The long-term goal is not simply:
+
+    "Julia, but PyTorch."
+
+The long-term goal is:
+
+    A SEMANTIC ML SYSTEM WHERE MODEL MEANING SURVIVES DEEP ENOUGH INTO THE MACHINE
+    TO INFORM REPRESENTATION, PRECISION, MEMORY, SCHEDULING, SPECIALIZATION,
+    QUANTIZATION, KERNELS, AND AGENT ORCHESTRATION.
+
+Short version:
+
+    THE MODEL SHOULD NOT LOSE ITS MEANING BEFORE IT REACHES THE MACHINE.
+
+And now, additionally:
+
+    THE RUNTIME SHOULD NOT LOSE SIGHT OF WHY THE MODEL IS BEING INVOKED.
+
+
+===============================================================================
+I. PROJECT IDENTITY
+===============================================================================
+
+Canonical project:
+
+    Harpe.jl
+
+Ecosystem shorthand:
+
+    Harpe Stack™
+
+Conventional competing ecosystem shorthand used internally:
+
+    PyStack™
+
+Core practical pairing:
+
+    using Harpe
+    using Lava
+
+Harpe:
+    semantic ML compiler/runtime
+    model representation
+    inference runtime
+    semantic scheduling
+    multi-agent runtime
+    representation planning
+    materialization
+    execution synthesis
+    profiling/autotuning
+    compatibility surfaces
+
+Lava:
+    portable machine/GPU substrate
+    Vulkan-oriented hardware execution path
+    major portability layer
+    NOT authored by Harpe
+
+CUDA.jl:
+    mature NVIDIA execution path
+    performance control
+    strategic fast path
+    proof that Harpe's semantic architecture can be developed independently of Lava maturity
+
+Harpe should not demand ideological backend purity.
+
+If CUDA is the strongest lowering for a workload:
+
+    USE CUDA.
+
+If Lava enables competitive execution on broader hardware:
+
+    USE LAVA.
+
+Harpe decides what should execute.
+
+The backend determines how that decision reaches the machine.
+
+
+===============================================================================
+II. FIRST PRINCIPLE
+===============================================================================
+
+Never discard semantic information earlier than necessary.
+
+Conventional execution frequently trends toward:
+
+    model
+      ↓
+    generic tensor operations
+      ↓
+    graph
+      ↓
+    graph analysis
+      ↓
+    attempt to recover patterns
+      ↓
+    compiler optimization
+      ↓
+    backend
+
+Harpe should prefer:
+
+    logical model
+        ↓
+    semantic architecture
+        ↓
+    semantic parameters / tensors / operators
+        ↓
+    representation planning
+        ↓
+    execution planning
+        ↓
+    specialization
+        ↓
+    lowering
+        ↓
+    generated / selected kernels
+        ↓
+    hardware backend
+
+The compiler should not need to rediscover information that Harpe possessed earlier.
+
+Examples:
+
+    This matrix is not merely [4096,4096] FP16.
+
+It may be:
+
+    frozen
+    GQA K-projection
+    inference-only
+    repeatedly accessed during decode
+    quantization tolerant under constraint ε
+    resident across requests
+    optimized primarily for batch 1–4
+
+That additional information can influence:
+
+    representation
+    layout
+    packing
+    quantization
+    cache behavior
+    memory residency
+    fusion
+    specialization
+    kernel choice
+    scheduling
+
+
+===============================================================================
+III. DEVELOPMENT LAW
+===============================================================================
+
+The order remains:
+
+    MAKE IT WORK
+        ↓
+    MAKE IT COMPLETE
+        ↓
+    MAKE IT MEASURABLE
+        ↓
+    MAKE IT FAST
+        ↓
+    MAKE IT WEIRD
+        ↓
+    MAKE THE WEIRDNESS FAST
+
+But "complete" has now been redefined for V1.
+
+V1 does NOT require:
+
+    distributed training
+    optimizer zoo
+    arbitrary differentiation
+    full framework parity
+    PlasticWeights
+    FluidGEMM
+    every model architecture
+    every accelerator backend
+
+V1 DOES require a credible inference system.
+
+There is no training stack to earn. Training is out of Harpe's scope permanently;
+see TRAINING BOUNDARY (Section LVIII).
+
+
+===============================================================================
+IV. V1 PRODUCT DEFINITION
+===============================================================================
+
+Harpe V1 is:
+
+    AN INFERENCE-FIRST SEMANTIC COMPILER/RUNTIME
+    FOR EXISTING OPEN-WEIGHT MODELS.
+
+Primary question:
+
+    Can Harpe take a checkpoint that already exists and extract materially better
+    practical execution from it because Harpe understands more about the model?
+
+"Better" may include:
+
+    lower latency
+    higher throughput
+    lower VRAM consumption
+    better model fit
+    longer practical context
+    better batching
+    better cache utilization
+    phase-specific execution
+    hardware-specific materialization
+    better quantization decisions
+    efficient multi-agent execution
+
+Harpe cannot magically add learned knowledge to unchanged weights.
+
+Therefore distinguish:
+
+    intrinsic model capability
+
+from:
+
+    effective deployed capability.
+
+Harpe targets the second.
+
+A model that can run:
+
+    faster
+    with more context
+    with more concurrent agents
+    under less memory pressure
+    on more hardware
+    with more reasoning tokens per wall-clock second
+
+is a more capable practical system even if its checkpoint is unchanged.
+
+
+===============================================================================
+V. V1 NON-GOALS
+===============================================================================
+
+Do NOT build, ever, as Harpe scope — these are the training stack's problem, not
+deferred Harpe features (see TRAINING BOUNDARY):
+
+    distributed training
+    optimizer zoo
+    gradient accumulation
+    training checkpoint orchestration
+    data pipelines
+    FSDP equivalents
+    training schedulers
+    training-time fault tolerance
+    pretraining infrastructure
+    RLHF pipelines
+    every AD mode
+    Harpe-native model training
+
+Do NOT begin by building:
+
+    custom GPU kernels for every operation
+    every quantization scheme
+    every architecture
+    PlasticWeights execution
+    generalized speculative decoding
+    autonomous architecture mutation
+
+Do NOT begin by replacing:
+
+    CUDA
+    Lava
+    JuliaGPU
+    LLVM
+    safetensors
+    Hugging Face model metadata
+    every Julia ML package
+
+Reuse machinery where it is already good.
+
+Harpe's value is architecture and semantics, not gratuitous reinvention.
+
+
+===============================================================================
+VI. HIGH-LEVEL STACK
+===============================================================================
+
+                        APPLICATIONS
+                            │
+          ┌─────────────────┼─────────────────┐
+          │                 │                 │
+       NIRA-Prime      Native Julia       C / C++ users
+          │                 │                 │
+          │                 │              libharpe
+          │                 │                 │
+          └─────────────────┼─────────────────┘
+                            ▼
+                    HARPE PUBLIC API
+                            │
+                            ▼
+                  SEMANTIC MODEL LAYER
+                            │
+             ┌──────────────┼──────────────┐
+             │              │              │
+       architecture     parameters     operators
+       semantics        semantics      semantics
+             │              │              │
+             └──────────────┼──────────────┘
+                            ▼
+                 REPRESENTATION PLANNER
+                            │
+                            ▼
+                   EXECUTION PLANNER
+                            │
+             ┌──────────────┼──────────────┐
+             │              │              │
+          prefill         decode       agent/swarm
+          planning       planning       planning
+             │              │              │
+             └──────────────┼──────────────┘
+                            ▼
+                    SPECIALIZATION
+                            │
+                            ▼
+                      LOWERING
+                         │
+              ┌──────────┴──────────┐
+              ▼                     ▼
+           CUDA.jl                 Lava
+              │                     │
+              └──────────┬──────────┘
+                         ▼
+                     HARDWARE
+
+
+===============================================================================
+VII. PACKAGE PHILOSOPHY
+===============================================================================
+
+Harpe core should remain relatively lean.
+
+Avoid importing the entire Julia ML ecosystem merely because it exists.
+
+Initial Project.toml philosophy:
+
+    Harpe earns every hard dependency.
+
+Prefer:
+
+    weak dependencies
+    package extensions
+    clean backend interfaces
+    interoperability modules
+
+Potential package organization:
+
+    Harpe/
+    ├── src/
+    │   ├── Harpe.jl
+    │   ├── Semantics/
+    │   ├── ModelIR/
+    │   ├── Parameters/
+    │   ├── Operators/
+    │   ├── Representation/
+    │   ├── Planning/
+    │   ├── Lowering/
+    │   ├── Inference/
+    │   ├── Agents/
+    │   ├── Runtime/
+    │   ├── Profiling/
+    │   ├── Autotune/
+    │   └── CAPI/
+    │
+    ├── ext/
+    │   ├── HarpeLavaExt.jl
+    │   └── HarpeCUDAExt.jl
+    │
+    ├── test/
+    ├── benchmark/
+    ├── examples/
+    └── docs/
+
+Exact boundaries remain subject to implementation discovery.
+
+Do not prematurely split everything into separate repositories.
+
+
+===============================================================================
+VIII. MODEL IMPORT
+===============================================================================
+
+Harpe must accept existing models without requiring retraining.
+
+Target:
+
+    model config
+    tokenizer definition
+    safetensors / equivalent checkpoint
+              ↓
+        Harpe importer
+              ↓
+      canonical architecture
+              +
+      semantic parameter map
+              ↓
+       executable Harpe model
+
+Checkpoint format is transport.
+
+Architecture semantics are execution information.
+
+Harpe should understand concepts such as:
+
+    embeddings
+    RMSNorm
+    LayerNorm
+    RoPE
+    attention
+    GQA
+    MQA
+    sliding attention
+    local/global attention
+    SwiGLU
+    dense FFN
+    MoE
+    expert routing
+    recurrent blocks
+    state-space blocks
+    cache semantics
+    output heads
+
+Do NOT implement:
+
+    LlamaRuntime
+    QwenRuntime
+    MistralRuntime
+    ModelFooRuntime
+
+Prefer:
+
+    reusable semantic primitives
+
+A new architecture should usually require:
+
+    configuration mapping
+    parameter mapping
+    composition of existing operators
+
+Only genuinely novel computation should require a new semantic primitive.
+
+
+===============================================================================
+IX. MODEL ACCEPTANCE LADDER
+===============================================================================
+
+Model support should advance through explicit tiers.
+
+TIER A — TOY / REFERENCE
+
+    tiny internal transformer
+    CPU/reference execution
+    deterministic tests
+    gradient irrelevant initially
+    fast development cycle
+
+TIER B — SMALL REAL MODEL
+
+    open checkpoint
+    fast enough for constant regression testing
+    validates importer
+    validates tokenizer
+    validates generation
+
+TIER C — MODERN MID-SIZED MODEL
+
+    exercises:
+        GQA
+        current normalization
+        modern positional encoding
+        real KV behavior
+        quantization
+        longer context
+
+TIER D — LARGE LOCAL MODEL
+
+    validates:
+        memory planning
+        quantization
+        multi-device pressure
+        scheduler behavior
+        real-world throughput
+
+TIER E — ARCHITECTURAL VARIETY
+
+    MoE
+    hybrid models
+    recurrent/state-space
+    novel attention forms
+
+For each accepted family:
+
+    config acceptance
+    parameter import
+    logit parity
+    generation parity
+    quantized parity
+    performance measurements
+
+
+===============================================================================
+X. CORRECTNESS CONTRACT
+===============================================================================
+
+No performance claim without correctness.
+
+Harpe needs:
+
+    CPU/reference implementation
+    deterministic fixtures
+    numerical tolerance policies
+    dtype-specific tolerance
+    odd-shape coverage
+    boundary conditions
+    invalid-input tests
+    serialization tests
+    tokenizer parity
+    logit parity
+    sampling parity where deterministic
+    KV-cache consistency tests
+    prefill/decode equivalence tests
+
+Core invariant:
+
+    optimized execution must preserve declared semantics.
+
+Autotuning must NEVER select a faster implementation that silently violates:
+
+    numerical contract
+    memory contract
+    determinism contract
+    representation contract
+    architecture semantics
+
+
+===============================================================================
+XI. SEMANTIC PARAMETERS AND TENSORS
+===============================================================================
+
+Harpe should distinguish storage from meaning.
+
+Conventional:
+
+    Tensor{Float16}
+
+Harpe conceptually:
+
+    ProjectionWeight
+    KVCache
+    EmbeddingTable
+    ExpertWeight
+    FrozenParameter
+    QuantizedParameter
+    Activation
+    TemporaryWorkspace
+    RoutingState
+    DecodeState
+    AdapterDelta
+
+Important:
+
+    DO NOT make every scalar symbolic.
+
+Semantic richness belongs primarily at:
+
+    parameter
+    tensor
+    operator
+    region
+    execution object
+
+levels.
+
+A parameter may carry:
+
+    logical identity
+    semantic role
+    mutability
+    lifecycle
+    constraints
+    precision policy
+    quantization eligibility
+    sparsity information
+    locality
+    execution phase relevance
+    residency policy
+
+Physical bytes are one realization of that logical object.
+
+Boundary notes:
+
+    Gradient and OptimizerState are training-side concepts and are NOT Harpe semantic
+    types. Harpe parameters are inference-resident objects.
+
+    AdapterDelta (LoRA-style) IS a Harpe semantic type. Serving adapters is a
+    materialization problem — base model plus hot-swappable deltas trained elsewhere.
+    Consuming fine-tunes is in scope; producing them is not. The interchange point is
+    weights-on-disk, which already exists and is standardized.
+
+
+===============================================================================
+XII. MULTIPLE DISPATCH AS EXECUTION MECHANISM
+===============================================================================
+
+Julia multiple dispatch is central.
+
+Kernel/operator behavior is often a function of:
+
+    operation
+      × representation
+      × dtype
+      × layout
+      × semantic role
+      × device
+      × workload
+      × execution phase
+
+Example conceptually:
+
+    matmul!(
+        ::Activation,
+        ::FrozenQuantizedProjection,
+        ::DecodeWorkload,
+        ::LavaDevice
+    )
+
+may resolve differently from:
+
+    matmul!(
+        ::Activation,
+        ::BF16Projection,
+        ::PrefillWorkload,
+        ::CUDADevice
+    )
+
+This avoids giant branch-heavy operators.
+
+The semantic question becomes:
+
+    What implementation is appropriate for this interaction among these objects?
+
+
+===============================================================================
+XIII. SPECIALIZATION DISCIPLINE
+===============================================================================
+
+Do NOT encode every property in Julia types.
+
+Otherwise:
+
+    HARPE = compile-latency benchmark.
+
+Use approximately:
+
+    TYPES
+        stable structural identity
+
+    TRAITS
+        optimization-relevant properties
+
+    RUNTIME METADATA
+        volatile information
+
+Possible type-level information:
+
+    tensor semantic family
+    representation family
+    backend family
+    layout family
+
+Possible traits:
+
+    frozen
+    quantized
+    contiguous
+    immutable
+    decode-hot
+    inference-only
+    sparse
+    cooperative-matrix capable
+
+Runtime:
+
+    batch size
+    sequence length
+    request count
+    free memory
+    queue pressure
+
+Harpe should decide when runtime facts deserve promotion into specialization.
+
+This promotion can eventually become profile-guided.
+
+
+===============================================================================
+XIV. SEMANTIC MODEL MATERIALIZATION
+===============================================================================
+
+CORE HEAVYWEIGHT IDEA #1
+
+Logical model ≠ physical model.
+
+Harpe should answer:
+
+    Given:
+
+        logical model
+        hardware
+        workload
+        memory constraints
+        latency objective
+        numerical constraints
+
+    how should this model physically exist?
+
+Potential choices:
+
+    dtype
+    quantization
+    layout
+    packing
+    sparsity
+    tiling
+    residency
+    cache representation
+    fusion
+    kernel family
+    backend
+    device partitioning
+
+Example:
+
+    Same model:
+
+        long prefill    → throughput-oriented layout
+        batch-1 decode  → latency-oriented packed representation
+        low-memory mode → more aggressive compression
+        adapter serving → base + AdapterDelta realization
+
+The logical model remains the same.
+
+
+===============================================================================
+XV. QUANTIZATION AS LOWERING
+===============================================================================
+
+Quantization is NOT merely:
+
+    checkpoint
+       ↓
+    external quantizer
+       ↓
+    new checkpoint
+
+Harpe:
+
+    logical parameter
+        +
+    semantic role
+        +
+    sensitivity / error contract
+        +
+    workload
+        +
+    device capability
+        ↓
+    representation planner
+        ↓
+    selected physical representation
+        ↓
+    matching kernel
+
+Potential result:
+
+    embeddings      → INT8
+    hot projection  → INT4
+    sensitive norm  → BF16
+    cold expert     → aggressive compression
+    KV cache        → context/workload-specific representation
+
+Representation selection should be explainable and benchmarked.
+
+Long-term:
+
+    the same logical checkpoint may not have one canonical quantization.
+
+
+===============================================================================
+XVI. PHASE-SPECIFIC MATERIALIZATION
+===============================================================================
+
+Prefill and decode are different workloads.
+
+Do not pretend otherwise.
+
+Harpe may choose distinct:
+
+    layouts
+    kernel families
+    quantization
+    cache strategies
+    scheduling
+    memory policies
+
+for:
+
+    prompt prefill
+    batch-1 decode
+    batched decode
+    long-context execution
+    structured/tool output
+    swarm inference
+
+This is one of the earliest semantic advantages worth testing.
+
+
+===============================================================================
+XVII. SEMANTIC EXECUTION SYNTHESIS
+===============================================================================
+
+CORE HEAVYWEIGHT IDEA #2
+
+Execution need not be one fixed tensor graph.
+
+Harpe may synthesize among legal plans involving:
+
+    fusion
+    staging
+    recomputation
+    asynchronous overlap
+    precision
+    representation conversion
+    memory placement
+    backend choice
+    cache policy
+    speculation
+    device partitioning
+
+Concept:
+
+    semantic computation
+            ↓
+    legal execution plans
+            ↓
+    constraint filtering
+            ↓
+    cost/performance evaluation
+            ↓
+    selected executable plan
+
+
+===============================================================================
+XVIII. SEMANTIC PARTIAL EVALUATION
+===============================================================================
+
+Harpe should eventually exploit known stable facts:
+
+    frozen weights
+    fixed architecture
+    fixed head dimensions
+    constant masks
+    inference-only operators
+    fixed routing elements
+    device properties
+    chosen quantization
+    workload regime
+
+Then transform:
+
+    general model program
+
+into:
+
+    specialized residual program.
+
+This can support:
+
+    dead program elimination
+    constant folding
+    frozen-region folding
+    specialization
+    fusion
+    smaller runtime surface
+
+This is one of the areas where "Harpe" as a name is conceptually perfect.
+
+The stack cuts away computation and generality that deployment no longer requires.
+
+
+===============================================================================
+XIX. WHOLE-MODEL MEMORY SYNTHESIS
+===============================================================================
+
+Memory management should eventually be a global planning problem.
+
+Inputs:
+
+    model
+    hardware memory
+    expected workload
+    latency objective
+    context requirements
+
+Planner may determine:
+
+    weight residency
+    host/GPU tiering
+    KV placement
+    activation lifetime
+    workspace reuse
+    expert residency
+    compression
+    recomputation
+    transfer scheduling
+
+Long-term interface concept:
+
+    materialize(
+        model;
+        objective = MinLatency(),
+        memory_budget = GiB(16)
+    )
+
+Harpe should be able to explain why a plan fits.
+
+
+===============================================================================
+XX. HARDWARE CAPABILITY MODEL
+===============================================================================
+
+Harpe should target capabilities, not vendor names.
+
+Represent capabilities such as:
+
+    native BF16
+    native FP16
+    FP8 support
+    INT8 dot products
+    cooperative matrix operations
+    subgroup width
+    local/shared memory
+    asynchronous copy behavior
+    available VRAM
+    relevant atomic operations
+    matrix accelerator characteristics
+
+Target question:
+
+    What can this device legally and efficiently execute?
+
+Not:
+
+    Is this NVIDIA?
+
+
+===============================================================================
+XXI. EXECUTION TIERS
+===============================================================================
+
+Harpe should degrade gracefully.
+
+TIER 0 — PORTABLE CORRECTNESS
+
+    generic legal execution
+    broad hardware support
+    performance secondary
+
+TIER 1 — OPTIMIZED GENERIC
+
+    common GPU capabilities
+    broadly tuned implementations
+
+TIER 2 — ARCHITECTURE-SPECIALIZED
+
+    hardware-family specialization
+    NVIDIA-specific / AMD-specific etc.
+
+TIER 3 — DEVICE + MODEL + WORKLOAD SPECIALIZATION
+
+    actual model
+    actual device
+    actual workload regime
+    profile-derived specialization
+
+Every higher tier must retain a lower-tier fallback.
+
+
+===============================================================================
+XXII. CUDA.jl STRATEGY
+===============================================================================
+
+CUDA.jl is strategically valuable.
+
+Early Harpe can prove:
+
+    semantic architecture
+    model import
+    representation planning
+    inference scheduling
+    materialization
+    quantization
+    agent runtime
+
+without simultaneously solving Vulkan kernel parity.
+
+Path:
+
+    Harpe
+      ↓
+    CUDA.jl
+      ↓
+    NVIDIA
+
+This creates a mature control backend.
+
+If Harpe + CUDA wins against conventional execution:
+
+    Harpe architecture is doing useful work.
+
+If Harpe + CUDA performs well but Lava lags:
+
+    improve Lava/kernel path.
+
+Do not confuse backend maturity with compiler architecture.
+
+
+===============================================================================
+XXIII. LAVA STRATEGY
+===============================================================================
+
+Lava provides the portable/native machine path.
+
+Harpe should build against a capability-oriented backend contract.
+
+Harpe should NOT force Lava to understand:
+
+    model architecture
+    agent roles
+    quantization policy
+    NIRA semantics
+
+Lava should expose:
+
+    device
+    memory
+    kernels
+    synchronization
+    execution
+    low-level capabilities
+
+Harpe owns ML semantics.
+
+This separation prevents mutual contamination.
+
+
+===============================================================================
+XXIV. KERNEL PROGRAM
+===============================================================================
+
+Eventually required kernel families include:
+
+    GEMM
+    GEMV
+    reductions
+    softmax
+    RMSNorm
+    LayerNorm
+    RoPE
+    activations
+    SwiGLU
+    fused FFN
+    attention
+    KV transforms
+    embedding lookup
+    routing
+    token grouping
+    expert GEMM
+    aggregation
+    quantize
+    dequantize
+    sampling
+
+But Harpe should not begin by rewriting every kernel.
+
+Use available performant kernels where possible.
+
+Generate/tune where Harpe has evidence of opportunity.
+
+
+===============================================================================
+XXV. METAPROGRAMMED IMPLEMENTATION FAMILIES
+===============================================================================
+
+Avoid handwritten explosion:
+
+    INT4_GQA_DECODE_HEAD128_X
+    INT8_GQA_DECODE_HEAD128_Y
+    BF16_GQA_PREFILL_HEAD128_Z
+    ...
+
+Prefer:
+
+    semantic operator
+       +
+    representation
+       +
+    hardware capability
+       +
+    workload
+       ↓
+    implementation generator
+       ↓
+    legal candidate family
+       ↓
+    correctness filter
+       ↓
+    benchmark
+       ↓
+    selected specialization
+
+
+===============================================================================
+XXVI. AUTOTUNING
+===============================================================================
+
+Autotuning is a first-class Harpe concern.
+
+Harpe should survey and integrate existing Julia autotuning/kernel-generation work before
+creating redundant infrastructure.
+
+Generic loop:
+
+    semantic operation
+          ↓
+    device capability set
+          ↓
+    workload signature
+          ↓
+    candidate generation
+          ↓
+    compile
+          ↓
+    correctness validation
+          ↓
+    benchmark
+          ↓
+    select winner
+          ↓
+    cache result
+
+Cache key may eventually include:
+
+    device identity
+    driver/toolchain
+    backend
+    model architecture
+    operator semantics
+    representation
+    shape regime
+    workload signature
+
+Autotuning must be:
+
+    reproducible
+    inspectable
+    invalidatable
+    numerically gated
+
+
+===============================================================================
+XXVII. PROFILE-GUIDED SPECIALIZATION
+===============================================================================
+
+Observe actual use.
+
+Example:
+
+    92% of decode traffic:
+        batch 1–3
+        head_dim 128
+        context 8k–24k
+
+Harpe may conclude:
+
+    these properties are stable enough to justify specialized execution.
+
+Loop:
+
+    observe
+      ↓
+    identify stable facts
+      ↓
+    propose specialization
+      ↓
+    benchmark
+      ↓
+    validate
+      ↓
+    retain winner
+
+
+===============================================================================
+XXVIII. PROFILE-GUIDED REMATERIALIZATION
+===============================================================================
+
+CORE HEAVYWEIGHT IDEA #3
+
+The learned weights do not need to change.
+
+Harpe may alter their physical realization.
+
+Examples:
+
+    hot region
+        → higher-performance packing
+
+    cold expert
+        → compress or move
+
+    workload changes to long context
+        → alter cache representation
+
+    available memory changes
+        → rematerialize under pressure
+
+    decode dominates
+        → choose decode-specific physical layout
+
+Closed loop:
+
+    semantics
+       ↓
+    representation
+       ↓
+    execution
+       ↓
+    profiling
+       ↓
+    improved materialization
+       ↓
+    validation
+       ↓
+    deployment
+
+
+===============================================================================
+XXIX. HARPE INFERENCE ENGINE
+===============================================================================
+
+Inference is NOT an adapter around llama.cpp.
+
+Harpe requires a native inference stack.
+
+Main components:
+
+    model loader
+    semantic model
+    representation planner
+    execution planner
+    KV manager
+    prefill engine
+    decode engine
+    scheduler
+    continuous batching
+    sampling
+    prefix cache
+    streaming
+    memory-pressure handling
+    backend lowering
+    metrics
+    profiling
+    autotuning
+
+Concept:
+
+                    HARPE INFERENCE
+
+     semantic model
+          │
+          ├── prefill plan
+          ├── decode plan
+          ├── batch plan
+          └── long-context plan
+          │
+          ▼
+        scheduler
+          │
+     ┌────┴────┐
+     ▼         ▼
+   CUDA       Lava
+
+
+===============================================================================
+XXX. PREFILL / DECODE SEPARATION
+===============================================================================
+
+Make prefill and decode explicit execution modes from the beginning.
+
+Prefill:
+
+    throughput-oriented
+    large matrix work
+    prompt ingestion
+    different memory locality
+    potentially different quantization/layout
+
+Decode:
+
+    latency-oriented
+    small token increments
+    KV dominated
+    repeated weight access
+    batch-sensitive
+    scheduler-sensitive
+
+Never force both through one "generic generate()" implementation internally.
+
+
+===============================================================================
+XXXI. KV CACHE AS A SEMANTIC OBJECT
+===============================================================================
+
+KV cache should not simply be "some tensors."
+
+Harpe should understand:
+
+    ownership
+    request identity
+    prefix sharing
+    sequence position
+    lifetime
+    mutability
+    compression
+    representation
+    residency
+    eviction eligibility
+
+Potential future optimizations:
+
+    paged cache
+    prefix reuse
+    cross-agent system-prompt sharing
+    tiering
+    quantized KV
+    context-pressure rematerialization
+
+
+===============================================================================
+XXXII. SCHEDULER
+===============================================================================
+
+Harpe requires its own inference-aware scheduler.
+
+Inputs include:
+
+    prefill requests
+    decode requests
+    request priority
+    latency budget
+    throughput objective
+    memory state
+    backend state
+    agent dependencies
+
+Scheduler can distinguish:
+
+    long prefill
+    short prefill
+    interactive decode
+    background decode
+    speculative work
+    blocked agents
+
+This is necessary before Harpe can fully exploit multi-agent workloads.
+
+
+===============================================================================
+XXXIII. MULTI-AGENT ORCHESTRATION
+===============================================================================
+
+NEW MAJOR PILLAR
+
+Harpe should treat multi-agent orchestration as a SYSTEMS RUNTIME problem.
+
+Do NOT build:
+
+    LangChain.jl
+
+Do NOT reproduce:
+
+    giant Python callback framework
+    stringly typed agent objects
+    serialization everywhere
+    one inference API call per conceptual agent action
+
+Harpe should expose a small set of composable primitives around:
+
+    agents
+    tasks
+    dependencies
+    channels
+    capabilities
+    tools
+    inference intents
+    budgets
+    priorities
+    cancellation
+    deadlines
+    receipts
+
+
+===============================================================================
+XXXIV. WHY ORCHESTRATION BELONGS IN HARPE
+===============================================================================
+
+Harpe can know BOTH:
+
+    what the model computation means
+
+and:
+
+    why the model is currently being invoked.
+
+This enables:
+
+    cross-agent batching
+    shared model residency
+    shared kernels
+    shared prefix state
+    workload-aware scheduling
+    GPU priority decisions
+    memory-aware swarm control
+    agent-aware inference planning
+
+A detached application-level framework cannot easily optimize across those boundaries.
+
+
+===============================================================================
+XXXV. AGENT REPRESENTATION
+===============================================================================
+
+Potential conceptual structure:
+
+    Agent
+        model
+        context
+        tools
+        policy
+        priority
+        budget
+        capabilities
+
+Julia multiple dispatch can naturally express:
+
+    act!(::ResearchAgent, ::ResearchTask)
+    act!(::CodeAgent, ::CodeTask)
+    act!(::CriticAgent, ::ReviewTask)
+
+Tool permissions:
+
+    allowed(::ResearchAgent, ::WebSearch)
+    allowed(::ResearchAgent, ::ShellExec)
+
+Again:
+
+    JSON may remain a wire format.
+
+JSON should NOT become Harpe's ontology.
+
+
+===============================================================================
+XXXVI. SHARED MODEL EXECUTION
+===============================================================================
+
+Five agents using one model should not require five conceptual model installations.
+
+Harpe should share when safe:
+
+    model weights
+    materialized representations
+    compiled kernels
+    tokenizer state
+    common prefixes
+    system-prompt prefixes
+    immutable tool schemas
+
+while maintaining:
+
+    separate logical contexts
+    separate task state
+    separate mutable memories
+    separate agent identity
+
+
+===============================================================================
+XXXVII. CROSS-AGENT BATCHING
+===============================================================================
+
+Example runtime state:
+
+    Agent A → next-token decode
+    Agent B → waiting for tool
+    Agent C → next-token decode
+    Agent D → 4k-token prefill
+    Agent E → next-token decode
+    Agent F → blocked
+    Agent G → short prefill
+
+Harpe may construct:
+
+    decode batch:
+        A, C, E
+
+    prefill batch:
+        D, G
+
+    zero GPU time:
+        B, F
+
+No individual agent needs to understand batching.
+
+The runtime does.
+
+
+===============================================================================
+XXXVIII. AGENT PRIORITIES
+===============================================================================
+
+Example:
+
+    interactive user response       = highest priority
+    tool-selection decision         = high priority
+    coder continuation              = medium
+    background critic               = low
+    speculative research branch     = very low
+
+Harpe can optimize global system latency rather than only per-request throughput.
+
+
+===============================================================================
+XXXIX. BUDGET-AWARE ORCHESTRATION
+===============================================================================
+
+Potential API direction:
+
+    run!(
+        swarm;
+        token_budget = 50_000,
+        memory_budget = GiB(24),
+        latency_budget = Second(30),
+        objective = MaximizeQuality()
+    )
+
+Harpe may decide:
+
+    number of concurrent agents
+    model assignment
+    batch formation
+    quantization
+    speculative branch count
+    branch termination
+    inference priority
+    memory reservations
+
+Long-term policy stack:
+
+    parameter policy
+        ↓
+    model policy
+        ↓
+    inference policy
+        ↓
+    agent policy
+        ↓
+    swarm policy
+
+
+===============================================================================
+XL. TOOL EXECUTION
+===============================================================================
+
+Tools should be semantic capabilities.
+
+Examples:
+
+    Search(query)
+    RunTests(project)
+    Compile(target)
+    InspectArtifact(id)
+    QueryMemory(key)
+
+Model-facing serialization may remain JSON.
+
+Runtime-facing representation should be structured.
+
+This permits:
+
+    type checking
+    capability checking
+    authorization
+    validation
+    scheduling
+    receipts
+
+
+===============================================================================
+XLI. AGENT WORKFLOW COMPILATION
+===============================================================================
+
+Repeated workflows may expose stable structure.
+
+Example:
+
+    plan
+      ↓
+    inspect
+      ↓
+    edit
+      ↓
+    test
+      ↓
+    review
+      ↓
+    commit
+
+Harpe should NOT compile away model reasoning.
+
+But it may optimize the surrounding machinery:
+
+    dependency scheduling
+    tool prewarming
+    likely schema loading
+    model batching
+    cache allocation
+    process startup
+    prefix preparation
+    resource reservation
+
+This is the agent analogue of semantic partial evaluation.
+
+
+===============================================================================
+XLII. RECEIPTS
+===============================================================================
+
+Harpe agent execution should be auditable.
+
+Each significant action may record:
+
+    agent
+    task
+    model
+    materialization
+    inference request
+    tool request
+    tool result
+    parent dependency
+    timing
+    token usage
+    memory usage
+    failure
+    retry
+    cancellation
+    output digest
+
+Receipts matter for:
+
+    debugging
+    deterministic replay where possible
+    benchmarking
+    safety
+    performance analysis
+    swarm coordination
+
+
+===============================================================================
+XLIII. HARPE / NEURAJL / NIRA-PRIME OWNERSHIP BOUNDARY
+===============================================================================
+
+This boundary should be explicit now.
+
+HARPE
+-----
+
+Owns mechanism.
+
+    agent execution primitives
+    task graph
+    inference scheduling
+    cross-agent batching
+    budgets
+    priorities
+    cancellation
+    lifecycle
+    shared model resources
+    hardware resources
+    receipts
+    runtime semantics
+
+
+NEURAJL
+-------
+
+Owns expression.
+
+NeuraJL should expose a CONDENSED agent-friendly surface over Harpe.
+
+Potential conceptual syntax:
+
+    @agents begin
+        planner  = agent(:planner)
+        coder    = agent(:coder)
+        reviewer = agent(:reviewer)
+
+        planner --> coder
+        coder   --> reviewer
+    end
+
+or:
+
+    @parallel begin
+        inspect(repo)
+        benchmark(model)
+        search(topic)
+    end
+
+NeuraJL lowers concise intent into Harpe runtime structures.
+
+NeuraJL should NOT duplicate Harpe's scheduler.
+
+
+NIRA-PRIME
+----------
+
+Owns policy and cognition.
+
+    when to spawn agents
+    roles
+    modes
+    cognitive architecture
+    memory strategy
+    tool policy
+    domain mode selection
+    planning behavior
+    critic behavior
+
+Rule:
+
+    Harpe     = mechanism
+    NeuraJL   = expression
+    NIRA      = policy
+
+
+===============================================================================
+XLIV. NIRA-PRIME AS FIRST HARPE-NATIVE HARNESS
+===============================================================================
+
+NIRA-Prime becomes Harpe's first demanding native consumer.
+
+This is strategically excellent.
+
+Prime stresses:
+
+    long-lived inference
+    tool use
+    structured outputs
+    multi-agent execution
+    repeated context
+    agent modes
+    background work
+    tool latency
+    scheduling
+    shared model usage
+
+Harpe should dogfood through Prime.
+
+But Harpe must remain usable WITHOUT Prime.
+
+
+===============================================================================
+XLV. NIRA PYTHON REDUCTION
+===============================================================================
+
+Moving NIRA toward Harpe will likely justify removing Python orchestration where it provides no
+unique value.
+
+Target architecture:
+
+    Julia
+        Harpe
+        NeuraJL
+        NIRA orchestration
+
+    Rust
+        existing authority/services where appropriate
+
+    C ABI
+        stable Julia ↔ Rust boundary where needed
+
+Do NOT rewrite good Rust code merely to become "all Julia."
+
+Rust can expose:
+
+    extern "C"
+
+Julia can call via:
+
+    @ccall
+
+Clang tooling may help generate Julia bindings for C APIs.
+
+Goal:
+
+    remove unnecessary Python hops,
+    NOT conduct a language purity crusade.
+
+
+===============================================================================
+XLVI. C ABI
+===============================================================================
+
+Harpe should eventually expose a boring stable C interface.
+
+This is an ADOPTION SURFACE.
+
+Not the internal architecture.
+
+Possible opaque types:
+
+    harpe_runtime_t
+    harpe_model_t
+    harpe_context_t
+    harpe_request_t
+
+Possible operations:
+
+    harpe_runtime_create
+    harpe_model_load
+    harpe_context_create
+    harpe_tokenize
+    harpe_prefill
+    harpe_decode
+    harpe_sample
+    harpe_cancel
+    harpe_context_destroy
+    harpe_model_destroy
+
+All semantic/compiler complexity stays behind opaque handles.
+
+
+===============================================================================
+XLVII. LLAMA.CPP COMPATIBILITY
+===============================================================================
+
+The C ABI exists for users who are stubbornly embedded in existing C/C++ inference software.
+
+Compatibility direction:
+
+    existing application
+          ↓
+    compatibility adapter
+          ↓
+    libharpe
+          ↓
+    Harpe native runtime
+
+Do NOT architect Harpe around llama.cpp internals.
+
+Rule:
+
+    compatibility adapts TO Harpe.
+
+Harpe does NOT adapt its ontology TO compatibility.
+
+This gives a migration ladder:
+
+    LEVEL 1
+        keep existing app
+        use compatibility bridge
+
+    LEVEL 2
+        use Harpe C ABI directly
+
+    LEVEL 3
+        native Julia / Harpe semantics
+
+
+===============================================================================
+XLVIII. BACKEND-INDEPENDENT PUBLIC API
+===============================================================================
+
+User-facing Harpe code should avoid hardcoding backend assumptions.
+
+Concept:
+
+    runtime = Harpe.Runtime(device)
+
+    model = Harpe.load(path)
+
+    deployed = Harpe.materialize(
+        model,
+        runtime;
+        objective = MinLatency()
+    )
+
+Harpe decides backend-specific realization underneath.
+
+Advanced users may override policies explicitly.
+
+
+===============================================================================
+XLIX. PERFORMANCE OBSERVABILITY
+===============================================================================
+
+Harpe needs first-class telemetry.
+
+Track:
+
+    kernel latency
+    launch latency
+    bandwidth
+    occupancy
+    allocation
+    synchronization
+    compilation time
+    specialization count
+    cache hit rate
+    VRAM use
+    host memory
+    transfers
+    prefill throughput
+    TTFT
+    decode tokens/sec
+    per-token latency
+    batching efficiency
+    KV footprint
+    scheduler queue time
+    agent idle time
+    tool wait time
+    swarm GPU utilization
+
+Harpe must explain performance.
+
+
+===============================================================================
+L. PERFORMANCE FAILURE TAXONOMY
+===============================================================================
+
+Every gap should be classifiable:
+
+    kernel quality
+    layout
+    quantization
+    memory transfer
+    synchronization
+    allocation
+    compiler issue
+    missing specialization
+    excessive specialization
+    scheduler
+    batching
+    cache policy
+    backend
+    hardware limitation
+    algorithm
+    semantic conversion overhead
+
+"No idea why it is slow" is unacceptable.
+
+
+===============================================================================
+LI. BENCHMARK MATRIX
+===============================================================================
+
+Compare equivalent workloads across:
+
+    reference Python execution
+    compiled Python execution
+    strong existing inference runtime
+    Harpe + CUDA.jl
+    Harpe + Lava
+
+Where applicable:
+
+    llama.cpp baseline
+    other strong serving engines
+
+Measure:
+
+    correctness
+    TTFT
+    prefill tokens/sec
+    decode tokens/sec
+    latency distribution
+    VRAM
+    RAM
+    power where available
+    compile/startup time
+    throughput under concurrency
+    multi-agent throughput
+
+Harpe + CUDA is particularly important for separating:
+
+    Harpe architecture
+
+from:
+
+    Lava/kernel maturity.
+
+
+===============================================================================
+LII. MODEL-CAPABILITY BENCHMARKS
+===============================================================================
+
+Do not benchmark only raw token throughput.
+
+Measure effective-system advantages.
+
+Examples:
+
+    maximum context under fixed VRAM
+    largest model under fixed hardware
+    agents served concurrently
+    reasoning tokens / second
+    throughput under mixed prefill+decode
+    structured tool workloads
+    memory-pressure behavior
+    performance after profile-guided specialization
+
+
+===============================================================================
+LIII. MULTI-AGENT BENCHMARKS
+===============================================================================
+
+Compare:
+
+    independent model requests
+
+vs.
+
+    Harpe semantic swarm execution.
+
+Scenarios:
+
+    2 agents
+    4 agents
+    8 agents
+    16 agents
+
+Mixed states:
+
+    decode
+    prefill
+    blocked on tool
+    background critic
+    user-facing response
+
+Measure:
+
+    GPU occupancy
+    queue delay
+    tokens/sec aggregate
+    user-facing latency
+    VRAM
+    shared-prefix savings
+    batching efficiency
+
+
+===============================================================================
+LIV. FIRST RESEARCH WIN REQUIREMENT
+===============================================================================
+
+Harpe does not need to outperform everything immediately.
+
+It needs ONE clean, reproducible semantic win.
+
+Example candidates:
+
+    phase-specific materialization
+    semantic quantization choice
+    cross-agent batching
+    shared-prefix agent execution
+    workload specialization
+    memory-plan advantage
+    profile-guided kernel choice
+
+Requirement:
+
+    same model
+    same hardware
+    same correctness
+    measurable advantage
+    reproducible benchmark
+
+One such result validates the direction.
+
+
+===============================================================================
+LV. SPECULATIVE EXECUTION
+===============================================================================
+
+Longer-term research.
+
+Question:
+
+    Can speculation become a general runtime/compiler capability rather than a single
+    draft-model trick?
+
+Potential directions:
+
+    candidate branch execution
+    semantic verification
+    confidence-aware paths
+    partial computation
+    decode-plan speculation
+    workflow speculation
+    agent-branch speculation
+
+Do NOT promise:
+
+    draft models are obsolete
+    guaranteed acceleration
+    solved speculative decoding
+
+Research only until benchmarked.
+
+
+===============================================================================
+LVI. NEUROSYMBOLIC PARAMETER DIRECTION
+===============================================================================
+
+Future possibility:
+
+    parameters carry richer semantic state than numeric value alone.
+
+Near-term interpretation:
+
+    logical parameter
+        +
+    semantic metadata/traits
+        ↓
+    representation and execution decisions
+
+NOT:
+
+    every individual scalar is a symbolic object.
+
+Long-term this may become fertile ground for:
+
+    stateful parameters
+    lifecycle-aware parameters
+    symbolic constraints
+    semantic learning rules
+
+
+===============================================================================
+LVII. PLASTICWEIGHTS / FLUIDGEMM SEAM
+===============================================================================
+
+Harpe must NOT depend on PlasticWeights.
+
+But Harpe should preserve extension points for:
+
+    lifecycle-aware representation
+    mutable/frozen transitions
+    state-specific precision
+    state-specific storage
+    state-aware kernels
+    FluidGEMM
+
+Future possibility:
+
+    learning consolidation event
+            ↓
+    compute representation transition
+
+Example:
+
+    plastic FP32/BF16 region
+            ↓
+    consolidated
+            ↓
+    packed/quantized/frozen execution form
+
+This remains future research.
+
+
+===============================================================================
+LVIII. TRAINING BOUNDARY — NOT OUR PROBLEM
+===============================================================================
+
+    Harpe is an inference, execution, materialization, and orchestration stack.
+    Training is somebody else's problem.
+
+This is not a deferral. There is no training phase coming after the inference phases.
+Nothing in Harpe — no AD mode, no optimizer, no gradient path, no training loop —
+is being reserved for later. If a Julia-native training stack ever exists, Harpe will
+consume its checkpoints exactly like every other checkpoint. The interchange point is
+weights-on-disk, which is standardized and which Harpe already depends on.
+
+The full training obligation list that is explicitly OUT of scope:
+
+    distributed training
+    optimizer zoo
+    gradient accumulation
+    training checkpoint orchestration
+    data pipelines
+    FSDP equivalents
+    training schedulers
+    training-time fault tolerance
+    pretraining infrastructure
+    RLHF pipelines
+    forward/backward execution
+    Enzyme / AD integration
+    activation checkpointing
+
+Only three inferences of training remain in Harpe, and they are consumption-side:
+
+    fine-tune consumption   LoRA/adapter deltas are served materializations
+                            (see AdapterDelta, Section XI). Trained elsewhere,
+                            loaded like any weights.
+
+    calibration passes      Activation statistics for representation planning
+                            (Section XV). Read-only measurement, not learning.
+
+    inference resiliency    Request recovery, KV durability under preemption,
+                            scheduler crash-recovery. This is serving behavior,
+                            not "training-time fault tolerance."
+
+If the training problem is ever picked up — inside this ecosystem or outside it —
+the natural Julia-native starting point is WGPU.jl, not Harpe.
+
+One preserved rule for that future: if a training stack ever wants inference-time
+co-design, it must REUSE Harpe semantic representations. Do NOT create
+"Harpe Training Framework 2" beside Harpe, and do NOT bolt an unrelated training
+architecture INTO Harpe.
+
+
+===============================================================================
+LIX. NUMERICS BESIDE THE MODEL (SEAM, NOT SCOPE)
+===============================================================================
+
+Long-term Julia advantage:
+
+    ODE/PDE solvers
+    symbolic transforms
+    simulations
+    iterative numerical methods
+
+may coexist inside one program with model inference.
+
+Harpe itself builds NO differentiation machinery. Gradient computation, optimizer
+execution, and training of any kind belong to the training stack (Section LVIII).
+
+The one in-scope numeric-adjacent activity is calibration:
+
+    activation statistics passes used by representation planning
+    (quantization scales, sensitivity estimates)
+
+Calibration runs as a read-only workload over the inference engine's own operator set.
+It is measurement, not learning.
+
+If a future Harpe-native runtime feature ever legitimately requires differentiating
+something, that requirement must be re-litigated explicitly at that time. It does not
+quietly reopen training scope.
+
+
+===============================================================================
+LX. STRUCTURALLY DYNAMIC MODELS
+===============================================================================
+
+Preserve space for models that:
+
+    add experts
+    remove experts
+    alter routing
+    freeze/thaw regions
+    change representation
+    redistribute capacity
+    change residency
+
+Do not implement early.
+
+Do not architect them out.
+
+
+===============================================================================
+LXI. POLICY-DRIVEN COMPILATION
+===============================================================================
+
+Long-term public interface may support:
+
+    MinLatency()
+    MaxThroughput()
+    MinMemory()
+    Deterministic()
+    AccuracyBound(ε)
+
+plus constraints:
+
+    memory_budget
+    precision_floor
+    latency_budget
+    device_set
+    context_requirement
+
+Harpe then constructs a legal plan satisfying policy.
+
+
+===============================================================================
+LXII. CLOSED-LOOP HARPE
+===============================================================================
+
+Long-term picture:
+
+    MODEL SEMANTICS
+         ↓
+    PARAMETER SEMANTICS
+         ↓
+    WORKLOAD SEMANTICS
+         ↓
+    AGENT SEMANTICS
+         ↓
+    REPRESENTATION PLAN
+         ↓
+    EXECUTION PLAN
+         ↓
+    KERNEL SPECIALIZATION
+         ↓
+    RUNTIME EXECUTION
+         ↓
+    PROFILING
+         ↓
+    AUTOTUNING
+         ↓
+    REMATERIALIZATION
+         └───────────────────┐
+                             ↓
+                           repeat
+
+This is the conceptual unifier.
+
+
+===============================================================================
+LXIII. WHAT HARPE IS NOT
+===============================================================================
+
+Harpe is NOT:
+
+    PyTorch rewritten in Julia
+    llama.cpp rewritten in Julia
+    LangChain rewritten in Julia
+    a training stack (training is somebody else's problem — Section LVIII)
+    Lava wrapper
+    CUDA wrapper
+    transformer-only runtime
+    quantization tool
+    PlasticWeights runtime
+    NIRA-specific package
+    kernel collection
+
+Harpe may interact with all of those concerns.
+
+It is broader:
+
+    semantic ML + inference + execution runtime.
+
+
+===============================================================================
+LXIV. DIFFERENTIATION FROM PYSTACK™
+===============================================================================
+
+The useful question is NOT:
+
+    "Can PyTorch theoretically implement this?"
+
+PyTorch is extensible.
+
+The question is:
+
+    "Does Harpe make this a natural system composition rule where PyStack™ would require
+     bespoke graph rewriting, tensor subclasses, compiler plugins, custom kernels,
+     hooks, metadata plumbing, multiple runtimes, and application-level orchestration?"
+
+Harpe advantage:
+
+    advanced behavior should become ordinary.
+
+Not heroic.
+
+
+===============================================================================
+LXV. THE SECOND SEMANTIC PRINCIPLE
+===============================================================================
+
+Original rule:
+
+    Do not discard what the MODEL means.
+
+New rule:
+
+    Do not discard what the REQUEST means.
+
+An inference request may be:
+
+    interactive user decode
+    bulk prefill
+    critic pass
+    tool-selection pass
+    speculative branch
+    low-priority background reasoning
+
+That meaning should survive into scheduling.
+
+
+===============================================================================
+LXVI. THE THIRD SEMANTIC PRINCIPLE
+===============================================================================
+
+Do not discard what the AGENT COMPUTATION means.
+
+A collection of model calls is not necessarily independent traffic.
+
+It may be:
+
+    planner → coder → reviewer
+
+Harpe should understand dependencies.
+
+This enables system-wide scheduling rather than blind request serving.
+
+
+===============================================================================
+LXVII. API DESIGN LAW
+===============================================================================
+
+Simple things must remain simple.
+
+Ordinary use:
+
+    using Harpe, Lava
+
+    model = Harpe.load("model")
+    session = Harpe.Session(model)
+    generate(session, "Hello")
+
+Advanced users may expose:
+
+    policies
+    representations
+    device capabilities
+    execution plans
+    scheduling
+    swarm execution
+
+Do not require users to understand compiler internals merely to run a model.
+
+
+===============================================================================
+LXVIII. INTERNAL DEBUGGING
+===============================================================================
+
+Harpe must expose:
+
+    plan inspection
+    IR inspection
+    representation inspection
+    kernel selection
+    materialization report
+    scheduler trace
+    agent trace
+    memory plan
+    autotune results
+
+Potential developer UX:
+
+    explain(model)
+    explain(plan)
+    explain(request)
+    explain(materialization)
+
+Harpe should make optimization decisions auditable.
+
+
+===============================================================================
+LXIX. DETERMINISM
+===============================================================================
+
+Where requested, deterministic behavior must be first-class.
+
+Record:
+
+    backend
+    materialization
+    kernel specialization
+    seed
+    sampling policy
+    model digest
+    configuration
+    autotune cache version
+
+Agent execution will include external nondeterminism, but Harpe should distinguish:
+
+    deterministic internal computation
+
+from:
+
+    external side effects.
+
+
+===============================================================================
+LXX. FAILURE BEHAVIOR
+===============================================================================
+
+Harpe must fail explicitly.
+
+No silent:
+
+    representation downgrade
+    backend switch
+    quantization mismatch
+    memory-plan violation
+    kernel substitution
+
+unless policy explicitly permits it.
+
+If fallback occurs:
+
+    record it.
+
+
+===============================================================================
+LXXI. SWARM IMPLEMENTATION RULE
+===============================================================================
+
+Harpe development will likely involve many coding agents.
+
+Every task should be:
+
+    bounded
+    independently testable
+    benchmarkable where relevant
+    revertible
+
+Agent work item format:
+
+    objective
+    permitted files
+    interfaces
+    invariants
+    tests
+    performance target
+    expected artifact
+
+
+===============================================================================
+LXXII. ENGINEERING RECEIPTS
+===============================================================================
+
+Every meaningful optimization should report:
+
+    what changed
+    why
+    tests
+    numerical delta
+    before benchmark
+    after benchmark
+    compile-time impact
+    memory impact
+    hardware
+    workload
+    model
+    backend
+
+Agent confidence is not evidence.
+
+The harness decides.
+
+
+===============================================================================
+LXXIII. PHASE 0 — REPOSITORY FOUNDATION   [STATUS: COMPLETE 2026-09-28]
+===============================================================================
+
+GOAL:
+    establish Harpe without inherited project debris.
+
+Tasks:
+
+    clean Project.toml
+    package skeleton
+    CI
+    formatting
+    test harness
+    benchmark harness
+    logging/telemetry conventions
+    backend interface draft
+
+Exit:
+
+    package loads
+    tests pass
+    dependency graph intentional
+    no unrelated NIRA / PlasticWeights / WGE dependencies
+
+
+===============================================================================
+LXXIV. PHASE 1 — SEMANTIC CORE
+===============================================================================
+
+Build:
+
+    model semantics
+    parameter semantics
+    operator semantics
+    basic semantic IR
+    traits
+    backend capability abstraction
+
+No GPU heroics required.
+
+Exit:
+
+    tiny reference model expressible entirely through semantic core.
+
+
+===============================================================================
+LXXV. PHASE 2 — REFERENCE EXECUTION
+===============================================================================
+
+Build:
+
+    CPU/reference operators
+    deterministic model execution
+    tokenizer/import fixtures
+    logit oracle
+    generation harness
+
+Exit:
+
+    toy model forward pass
+    known logits
+    deterministic generation
+
+
+===============================================================================
+LXXVI. PHASE 3 — FIRST REAL MODEL IMPORT
+===============================================================================
+
+Choose one modern open model.
+
+Build:
+
+    config importer
+    tokenizer path
+    safetensors loading
+    parameter mapping
+    architecture composition
+
+Exit:
+
+    Harpe logits match reference within declared tolerance.
+
+
+===============================================================================
+LXXVII. PHASE 4 — CUDA.JL EXECUTION
+===============================================================================
+
+Use CUDA.jl to establish high-performance backend quickly.
+
+Build:
+
+    device mapping
+    parameter transfer
+    backend lowering
+    basic GPU inference
+
+Exit:
+
+    full generation on NVIDIA GPU
+    reference correctness
+    baseline performance measurements
+
+
+===============================================================================
+LXXVIII. PHASE 5 — NATIVE INFERENCE ENGINE
+===============================================================================
+
+Build:
+
+    prefill
+    decode
+    KV cache
+    sampling
+    scheduler
+    streaming
+    sessions
+
+Exit:
+
+    Harpe no longer relies on another inference engine.
+
+
+===============================================================================
+LXXIX. PHASE 6 — PERFORMANCE OBSERVABILITY
+===============================================================================
+
+Instrument everything.
+
+Exit:
+
+    every major latency component attributable
+    memory accounting trustworthy
+    profiler reports stable
+
+
+===============================================================================
+LXXX. PHASE 7 — FIRST SEMANTIC OPTIMIZATION
+===============================================================================
+
+Choose ONE.
+
+Recommended candidates:
+
+    phase-specific prefill/decode realization
+
+or:
+
+    semantic quantization
+
+or:
+
+    workload specialization
+
+Exit:
+
+    reproducible win against equivalent generic execution.
+
+
+===============================================================================
+LXXXI. PHASE 8 — LAVA BACKEND
+===============================================================================
+
+Integrate Lava through backend contract.
+
+Start portable.
+
+Then tune.
+
+Exit:
+
+    same logical model
+    same Harpe API
+    Lava execution correct on supported Vulkan hardware
+
+
+===============================================================================
+LXXXII. PHASE 9 — AUTOTUNING
+===============================================================================
+
+Build:
+
+    candidate interface
+    benchmark runner
+    correctness gate
+    result cache
+    invalidation
+
+Exit:
+
+    at least one operator automatically selects device-specific winning implementation.
+
+
+===============================================================================
+LXXXIII. PHASE 10 — QUANTIZATION / REPRESENTATION PLANNER
+===============================================================================
+
+Build:
+
+    logical/physical separation
+    multiple representations
+    planner
+    conversion
+    matching kernels
+
+Exit:
+
+    same logical model materializes into at least two valid execution representations.
+
+
+===============================================================================
+LXXXIV. PHASE 11 — MEMORY PLANNER
+===============================================================================
+
+Build:
+
+    lifetimes
+    residency
+    workspace planning
+    KV accounting
+    pressure response
+
+Exit:
+
+    model fitting / memory behavior measurably improved versus naive allocation.
+
+
+===============================================================================
+LXXXV. PHASE 12 — HARPE AGENT RUNTIME
+===============================================================================
+
+Build minimal:
+
+    Agent
+    Task
+    Dependency
+    Channel
+    Budget
+    Priority
+    Cancellation
+    Receipt
+
+Exit:
+
+    several agents share one model runtime cleanly.
+
+
+===============================================================================
+LXXXVI. PHASE 13 — CROSS-AGENT INFERENCE SCHEDULING
+===============================================================================
+
+Integrate agent scheduler and inference scheduler.
+
+Exit:
+
+    mixed multi-agent workload
+    automatic batching
+    priority enforcement
+    measurable utilization improvement
+
+
+===============================================================================
+LXXXVII. PHASE 14 — NEURAJL SURFACE
+===============================================================================
+
+Add condensed orchestration language.
+
+NeuraJL must lower to Harpe.
+
+Exit:
+
+    simple agent graph expressed compactly
+    execution identical to direct Harpe plan
+
+
+===============================================================================
+LXXXVIII. PHASE 15 — NIRA-PRIME MIGRATION
+===============================================================================
+
+Make NIRA-Prime first native Harpe harness.
+
+Tasks:
+
+    replace unnecessary Python orchestration
+    retain useful Rust services
+    establish C ABI where required
+    connect NeuraJL
+    connect Harpe inference
+    benchmark real workloads
+
+Exit:
+
+    Prime runs meaningfully on Harpe.
+
+
+===============================================================================
+LXXXIX. PHASE 16 — C ABI
+===============================================================================
+
+Stabilize libharpe.
+
+Exit:
+
+    external C/C++ program can:
+        load model
+        create context
+        prefill
+        decode
+        sample
+        destroy resources
+
+
+===============================================================================
+XC. PHASE 17 — LLAMA.CPP COMPATIBILITY ADAPTER
+===============================================================================
+
+Build adapter only after Harpe API is stable enough.
+
+Exit:
+
+    selected existing software can use Harpe without native rewrite.
+
+Compatibility remains subordinate to Harpe architecture.
+
+
+===============================================================================
+XCI. PHASE 18 — PROFILE-GUIDED SPECIALIZATION
+===============================================================================
+
+Build:
+
+    workload signatures
+    profiling
+    specialization proposal
+    benchmark validation
+    specialization cache
+
+Exit:
+
+    runtime can improve after observing stable workload behavior.
+
+
+===============================================================================
+XCII. PHASE 19 — PROFILE-GUIDED REMATERIALIZATION
+===============================================================================
+
+Allow physical model representation to adapt to observed use.
+
+Exit:
+
+    measurable workload-driven representation change with semantic equivalence.
+
+
+===============================================================================
+XCIII. PHASE 20 — GENERALIZED SPECULATION RESEARCH
+===============================================================================
+
+Only now.
+
+Prototype.
+
+Measure.
+
+Kill bad ideas quickly.
+
+
+===============================================================================
+XCIV. PHASE 21 — CONTRIBUTOR APB: THE TRAINING STACK
+===============================================================================
+
+Harpe does not include training. This phase is an open call, not a work item.
+
+    WANTED: A JULIA-NATIVE TRAINING STACK.
+
+    Public position of the Harpe project: if you want to contribute to the Julia ML
+    ecosystem and want a job with real scope, build the training stack. Harpe will load
+    its checkpoints like everyone else's. The natural place to start is WGPU.jl.
+
+The contract at the seam is already satisfied by standard formats:
+
+    train elsewhere
+        ↓
+    standard checkpoint formats (safetensors etc.)
+        ↓
+    Harpe importer (already Harpe's job)
+        ↓
+    Harpe inference
+
+    checkpoints carry the architecture semantics Harpe imports
+    no Harpe-side training dependency, ever
+    fine-tunes and LoRA adapters arrive as weights-on-disk deltas (AdapterDelta)
+
+One standing rule for that future: it must REUSE Harpe semantic representations if it
+wants inference-time co-design. Do NOT create "Harpe Training Framework 2" beside
+Harpe, and do NOT bolt an unrelated training architecture INTO Harpe.
+
+
+===============================================================================
+XCV. PHASE 22 — PLASTIC / LIFECYCLE COMPUTE RESEARCH
+===============================================================================
+
+Revisit:
+
+    PlasticWeights
+    semantic parameter lifecycle
+    FluidGEMM
+    consolidation-aware representation
+    adaptive storage
+
+
+===============================================================================
+XCVI. SUCCESS CRITERIA — V0
+===============================================================================
+
+Harpe can:
+
+    load one real model
+    preserve semantics
+    run reference-correct inference
+    execute through CUDA.jl
+    generate text
+    profile itself
+
+
+===============================================================================
+XCVII. SUCCESS CRITERIA — V1
+===============================================================================
+
+Harpe can:
+
+    support several real model architectures
+    run complete inference
+    prefill/decode properly
+    manage KV
+    stream
+    schedule
+    quantize/materialize
+    execute through CUDA and Lava paths
+    expose C API
+    demonstrate at least one semantic-performance advantage
+
+
+===============================================================================
+XCVIII. SUCCESS CRITERIA — V1.5
+===============================================================================
+
+Harpe can:
+
+    orchestrate multiple agents
+    batch across agents
+    enforce budgets/priorities
+    share model resources
+    expose NeuraJL orchestration surface
+    run NIRA-Prime natively
+
+
+===============================================================================
+XCIX. SUCCESS CRITERIA — V2
+===============================================================================
+
+Harpe begins demonstrating:
+
+    hardware-aware materialization
+    automated kernel selection
+    profile-guided specialization
+    whole-model memory planning
+    workload-specific representation
+    materially differentiated execution from PyStack™
+
+
+===============================================================================
+C. NORTH-STAR EXPERIMENT
+===============================================================================
+
+Eventually run:
+
+    SAME CHECKPOINT
+    SAME PROMPT
+    SAME HARDWARE
+    SAME QUALITY REQUIREMENT
+
+Compare:
+
+    conventional execution
+
+vs.
+
+    Harpe generic execution
+
+vs.
+
+    Harpe specialized execution
+
+vs.
+
+    Harpe native multi-agent execution
+
+Measure:
+
+    latency
+    memory
+    throughput
+    practical context
+    concurrent agents
+    total work completed per second
+
+
+===============================================================================
+CI. CENTRAL ARCHITECTURAL QUESTIONS
+===============================================================================
+
+For every new abstraction ask:
+
+    Does this preserve meaning?
+
+    Can lower layers exploit that meaning?
+
+    Is logical identity separate from physical representation?
+
+    Can multiple physical realizations exist?
+
+    Is the property stable enough for specialization?
+
+    Can this be measured?
+
+    Can Harpe explain the decision?
+
+    Does this unnecessarily bind Harpe to one hardware vendor?
+
+    Does this unnecessarily bind Harpe to one model architecture?
+
+    Does this unnecessarily bind Harpe to NIRA?
+
+    Does this duplicate machinery Julia already gives us?
+
+
+===============================================================================
+CII. CENTRAL PRODUCT QUESTION
+===============================================================================
+
+At every milestone ask:
+
+    "Does this help Harpe execute existing models more effectively?"
+
+If not, determine whether it belongs in V1.
+
+
+===============================================================================
+CIII. CURRENT CORE THESIS
+===============================================================================
+
+Harpe is a semantic compiler/runtime for machine learning where:
+
+    model meaning
+    parameter meaning
+    request meaning
+    workload meaning
+    agent meaning
+
+survive deeply enough into execution to influence:
+
+    representation
+    precision
+    memory
+    scheduling
+    batching
+    quantization
+    specialization
+    kernels
+    hardware placement
+
+
+===============================================================================
+CIV. CURRENT DIFFERENTIATOR
+===============================================================================
+
+The difference is NOT:
+
+    Julia syntax.
+
+The difference is NOT:
+
+    Vulkan.
+
+The difference is NOT:
+
+    multiple dispatch by itself.
+
+The difference is the COMBINATION:
+
+    Julia multiple dispatch
+    semantic model IR
+    semantic tensors
+    logical/physical separation
+    generated specialization
+    quantization as lowering
+    hardware-aware materialization
+    phase-specific inference
+    execution-plan synthesis
+    whole-model memory planning
+    autotuning
+    profile-guided rematerialization
+    inference-aware agent scheduling
+    native multi-agent orchestration
+
+all operating inside one coherent runtime.
+
+
+===============================================================================
+CV. CURRENT ONE-SENTENCE DEFINITION
+===============================================================================
+
+    Harpe is a Julia-native semantic ML and agent execution runtime that loads existing
+    models, preserves what they mean, and uses that information to determine how they
+    should physically exist and execute on the hardware and workload actually present.
+
+
+===============================================================================
+CVI. THE STACK
+===============================================================================
+
+For ordinary users:
+
+    using Harpe
+    using Lava
+
+That is the stack.
+
+For NVIDIA:
+
+    using Harpe
+    using CUDA
+
+Also valid.
+
+For NIRA:
+
+    NIRA-Prime
+        ↓
+    NeuraJL
+        ↓
+    Harpe
+        ↓
+    CUDA / Lava
+
+
+===============================================================================
+CVII. FINAL DEVELOPMENT RULE
+===============================================================================
+
+DO NOT BUILD THE ENTIRE VISION AT ONCE.
+
+Build the shortest vertical slice that proves the next architectural claim.
+
+The intended progression is:
+
+    RUN ONE MODEL
+        ↓
+    RUN IT CORRECTLY
+        ↓
+    UNDERSTAND IT SEMANTICALLY
+        ↓
+    MEASURE IT
+        ↓
+    EXECUTE IT WELL
+        ↓
+    MATERIALIZE IT DIFFERENTLY
+        ↓
+    PROVE ONE ADVANTAGE
+        ↓
+    GENERALIZE THE ADVANTAGE
+        ↓
+    RUN MANY MODELS
+        ↓
+    RUN MANY AGENTS
+        ↓
+    OPTIMIZE THE WHOLE MACHINE
+        ↓
+    THEN DO THE TERRIFYING SHIT
+
+
+===============================================================================
+CVIII. FINAL NORTH STAR
+===============================================================================
+
+PyStack™ largely asks:
+
+    "How efficiently can we execute this graph?"
+
+Harpe should ultimately ask:
+
+    "Given what this model is,
+     why it is being invoked,
+     what hardware exists,
+     what constraints matter,
+     and what the surrounding agents are trying to accomplish...
+
+     WHAT SHOULD THE MACHINE ACTUALLY DO?"
+
+That is Harpe.

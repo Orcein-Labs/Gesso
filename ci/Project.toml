@@ -1,0 +1,5 @@
+[deps]
+Harpe = "05f31162-62af-44f0-af37-0e48a49f1899"
+
+[sources]
+Harpe = {path = ".."}

@@ -1,0 +1,14 @@
+# Julia
+Manifest.toml
+**/Manifest.toml
+
+# Local dev sources (Lava checkout etc.) — never part of the package
+libs/
+
+# Freeze bundles are snapshots, not source
+*.zip
+
+# Editor / OS
+.vscode/
+.idea/
+.DS_Store
