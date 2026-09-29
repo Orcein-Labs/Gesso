@@ -10,6 +10,7 @@ using Test
 
 @testset "Harpe" begin
     include("test_foundation.jl")
+    include("test_receipts.jl")
 
     @testset "package loads" begin
         @test Harpe.Log isa Module

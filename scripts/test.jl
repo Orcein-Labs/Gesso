@@ -13,4 +13,7 @@ Pkg.instantiate(; io=devnull)
 # Pkg.test prints normally: `make test` must show the test summary, not
 # swallow it into devnull (a silent green run is indistinguishable from
 # nothing happening).
-Pkg.test()
+#
+# -t 2: concurrency surfaces (receipt sink) must be exercised with more than
+# one thread; CI runs tests directly and still covers them single-threaded.
+Pkg.test(; julia_args=`-t 2`)

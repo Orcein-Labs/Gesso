@@ -68,14 +68,20 @@ abstract type ReceiptSink end
 
 Bounded ring of receipts kept in memory. `emit!` drops the oldest receipt
 past capacity (and logs that it did — a dropped receipt is itself notable).
+
+Thread-safe: `emit!` holds a lock for the whole push/drop/log sequence, so
+concurrent emitters cannot interleave ring updates or the `dropped` counter.
+(receipt ids are atomic and independent of this lock; ids stay strictly
+monotonic across threads.)
 """
 mutable struct InMemorySink <: ReceiptSink
     const buf::Vector{Receipt}
     const capacity::Int
+    const lock::ReentrantLock
     dropped::UInt64
     function InMemorySink(capacity::Int=10_000)
         capacity > 0 || throw(ArgumentError("capacity must be positive"))
-        new(Vector{Receipt}(undef, 0), capacity, UInt64(0))
+        new(Vector{Receipt}(undef, 0), capacity, ReentrantLock(), UInt64(0))
     end
 end
 
@@ -92,23 +98,25 @@ failure must not fail the action it is auditing; problems are logged instead
 (and if logging itself fails, that is swallowed too).
 """
 function emit!(sink::InMemorySink, r::Receipt)
-    try
-        # Order matters: the incoming receipt is pushed FIRST. Overflow
-        # bookkeeping (dropping the oldest) happens after it is safely
-        # stored, and logging happens last — a log failure must never cost
-        # us the receipt we are currently auditing.
-        push!(sink.buf, r)
-        while length(sink.buf) > sink.capacity
-            deleteat!(sink.buf, 1)
-            sink.dropped += UInt64(1)
-        end
-        sink.dropped == 1 &&
-            hlog(Log.LOG_WARN, :receipt_sink_overflow; capacity=sink.capacity)
-    catch err
+    lock(sink.lock) do
         try
-            hlog(Log.LOG_ERROR, :receipt_emit_failed; error=repr(err))
-        catch
-            # nothing more we can do; auditing must not take the host down
+            # Order matters: the incoming receipt is pushed FIRST. Overflow
+            # bookkeeping (dropping the oldest) happens after it is safely
+            # stored, and logging happens last — a log failure must never cost
+            # us the receipt we are currently auditing.
+            push!(sink.buf, r)
+            while length(sink.buf) > sink.capacity
+                deleteat!(sink.buf, 1)
+                sink.dropped += UInt64(1)
+            end
+            sink.dropped == 1 &&
+                hlog(Log.LOG_WARN, :receipt_sink_overflow; capacity=sink.capacity)
+        catch err
+            try
+                hlog(Log.LOG_ERROR, :receipt_emit_failed; error=repr(err))
+            catch
+                # nothing more we can do; auditing must not take the host down
+            end
         end
     end
     return r

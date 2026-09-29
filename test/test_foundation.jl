@@ -24,24 +24,5 @@ end
     @test Harpe.ERR_APPROXIMATION_BUDGET_EXCEEDED isa Harpe.ErrorCode
 end
 
-@testset "receipts (§XLII)" begin
-    sink = Harpe.InMemorySink(4)
-    ids = UInt64[]
-    for i in 1:6
-        r = Harpe.new_receipt(task="t$i", output_digest="digest$i")
-        push!(ids, r.id)
-        Harpe.emit!(sink, r)
-    end
-    # monotonic ids
-    @test all(diff(ids) .> 0)
-    # bounded ring keeps the newest, drops the oldest
-    @test length(sink.buf) == 4
-    @test sink.buf[1].task == "t3"
-    @test sink.buf[end].task == "t6"
-    @test sink.dropped == UInt64(2)
-    # schema stamping
-    @test sink.buf[end].schema_version == Harpe.RECEIPT_SCHEMA_VERSION
-    # §XLII: receipts carry structured context, never prose-only
-    r = Harpe.new_receipt(; context=Dict(:op => :rmsnorm, :backend => :cpu))
-    @test r.context[:op] === :rmsnorm
-end
+# Receipt tests moved to test_receipts.jl (per-area harness convention).
+# Nothing else tested here yet beyond runtests.jl's package-level laws.

@@ -1,6 +1,9 @@
 [deps]
 Harpe = "05f31162-62af-44f0-af37-0e48a49f1899"
 Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
+# stdlib: receipt timestamp assertions (the package itself depends on Dates
+# for the same reason; this is the test env, not the core package)
+Dates = "ade2ca70-3891-5945-98fb-dc099432e06a"
 
 [sources]
 Harpe = {path = ".."}
