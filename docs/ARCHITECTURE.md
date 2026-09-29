@@ -17,8 +17,8 @@ is the fast orientation layer; the canon is the law.
 | `Log` | `src/logging.jl` | §XLII receipts vocabulary, §LXX fallback recording, §XLIX events | 0 ✓ |
 | `versions` | `src/versions.jl` | §LXIX determinism, North Star §34 schema versioning | 0 ✓ |
 | `backends` | `src/backends.jl` | §XX capabilities, §XXI tiers, backend contract + lowering stubs | 0 ✓ (draft) |
-| `errors` | `src/errors.jl` | §LXX explicit failure, North Star §22 taxonomy + `APPROXIMATION_BUDGET_EXCEEDED` | BONES ✓ |
-| `receipts` | `src/receipts.jl` | §XLII audit records + sink interface | BONES ✓ |
+| `errors` | `src/errors.jl` | §LXX explicit failure, North Star §22 taxonomy + `APPROXIMATION_BUDGET_EXCEEDED` | hardening ✓ |
+| `receipts` | `src/receipts.jl` | §XLII audit records + sink interface (thread-safe sink, §CIX identity) | hardening ✓ |
 | `Semantics` | `src/Semantics/` | §I, §XI, §XIII, **§CIX** — meaning vocabulary; encoding law | 1 |
 | `ModelIR` | `src/ModelIR/` | §VII, §VIII, **§CIX** — immutable semantic composition graph | 1 |
 | `Parameters` | `src/Parameters/` | §XI, **§CIX** — family types + traits + metadata; §LVIII forbids Gradient/OptimizerState | 1/3 |
@@ -69,6 +69,12 @@ Phase 1 implements this encoding. It does not choose another.
 | Receipt id | process-local `UInt64` until persistence/swarm schema bump | `receipts.jl` |
 
 The four Phase 1 modules stay contract-only until a Phase 1 work item fills them (`test/test_empty_core.jl`).
+
+Foundation-hardening status: receipts, errors, versions, backends contract,
+freeze/bench/CI machinery, and the test-side correctness laboratory are
+hardened and pinned by tests (`test/`, per-area). The four Phase 1 modules
+are the frontier; the toy fixture pack (`test/fixtures/toy/`) is the
+laboratory Phase 2's CPU oracle will consume.
 
 ## Hard fences (violations are law violations, not style choices)
 

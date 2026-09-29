@@ -14,17 +14,20 @@ hardware and workload actually present.
 **Requires Julia 1.12** (`julia = "1.12"` compat; CI runs 1.12 only).
 
 **Phase 0 — repository foundation: COMPLETE** (incl. the BONES swarm-readiness
-sprint: agent charter, module skeleton, receipts, dev tooling). Currently in
-foundation hardening: stress-testing the audit/receipt/failure substrate
-before the semantic core lands. Nothing here runs models yet.
+sprint and the foundation-hardening sprint: receipts/failure-taxonomy/freeze
+infrastructure stress-tested, correctness laboratory established).
+**Next gate: Phase 1 — the semantic core**, which implements the
+object-model encoding decided in canon (§CIX). Nothing here runs models yet.
 
 - [x] Clean `Project.toml`, no third-party dependencies (§VII: *Harpe earns every hard dependency*; only the `Dates` stdlib, enforced by test)
 - [x] Package skeleton: logging conventions, backend interface draft
 - [x] Test harness with dependency-law enforcement
-- [x] CI (tests + format + bench-smoke)
+- [x] CI (tests + format + bench-smoke, dev-loop entry included)
 - [x] Benchmark harness with benchmark-integrity conventions (§XXXIII)
 - [x] Research program: [docs/research/KV_MEMORY_PROGRAM.md](docs/research/KV_MEMORY_PROGRAM.md)
 - [x] BONES sprint (agent charter, module skeleton, receipts types, tooling)
+- [x] Foundation hardening (receipt stress tests, taxonomy pins, freeze evidence, lab fixtures, empty-core fence)
+- [ ] Phase 1: semantic core per §CIX
 - [ ] Telemetry collection (Phase 6)
 
 ## The stack
@@ -47,7 +50,7 @@ Current phases (docs/Harpe_Stack.md §LXXIII ff.):
 | Phase | Deliverable | Status |
 |------:|-------------|--------|
 | 0 | Repository foundation | **COMPLETE** |
-| 1 | Semantic core | |
+| 1 | Semantic core (§CIX encoding) | **next gate** |
 | 2 | Reference execution (CPU oracle) | |
 | 3 | First real model import | |
 | 4 | CUDA.jl execution | |
