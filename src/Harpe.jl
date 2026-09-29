@@ -39,4 +39,38 @@ include("Planning/Planning.jl")             # Phase 7
 include("Agents/Agents.jl")                 # Phase 12
 include("CAPI/CAPI.jl")                     # Phase 16
 
+# --- public semantic vocabulary (§CIX; Phase 1 item A) ----------------------
+# Re-exported so `using Harpe` sees the core vocabulary. Each module owns its
+# names; the root only forwards them.
+using .Semantics: PrefillWorkload, DecodeWorkload
+export PrefillWorkload, DecodeWorkload
+
+using .Parameters:
+    SemanticTensor,
+    ProjectionWeight,
+    KVCache,
+    EmbeddingTable,
+    ExpertWeight,
+    FrozenParameter,
+    QuantizedParameter,
+    Activation,
+    TemporaryWorkspace,
+    RoutingState,
+    DecodeState,
+    AdapterDelta,
+    frozen
+export SemanticTensor,
+    ProjectionWeight,
+    KVCache,
+    EmbeddingTable,
+    ExpertWeight,
+    FrozenParameter,
+    QuantizedParameter,
+    Activation,
+    TemporaryWorkspace,
+    RoutingState,
+    DecodeState,
+    AdapterDelta,
+    frozen
+
 end

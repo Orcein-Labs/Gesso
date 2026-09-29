@@ -12,6 +12,8 @@ using Test
     include("test_foundation.jl")
     include("test_errors.jl")
     include("test_receipts.jl")
+    include("test_semantics.jl")
+    include("test_parameters.jl")
     include("test_empty_core.jl")
     include("test_backends.jl")
 

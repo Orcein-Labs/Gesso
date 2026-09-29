@@ -19,9 +19,9 @@ is the fast orientation layer; the canon is the law.
 | `backends` | `src/backends.jl` | §XX capabilities, §XXI tiers, backend contract + lowering stubs | 0 ✓ (draft) |
 | `errors` | `src/errors.jl` | §LXX explicit failure, North Star §22 taxonomy + `APPROXIMATION_BUDGET_EXCEEDED` | hardening ✓ |
 | `receipts` | `src/receipts.jl` | §XLII audit records + sink interface (thread-safe sink, §CIX identity) | hardening ✓ |
-| `Semantics` | `src/Semantics/` | §I, §XI, §XIII, **§CIX** — meaning vocabulary; encoding law | 1 |
-| `ModelIR` | `src/ModelIR/` | §VII, §VIII, **§CIX** — immutable semantic composition graph | 1 |
-| `Parameters` | `src/Parameters/` | §XI, **§CIX** — family types + traits + metadata; §LVIII forbids Gradient/OptimizerState | 1/3 |
+| `Semantics` | `src/Semantics/` | §I, §XI, §XIII, **§CIX** — meaning vocabulary; workload dispatch types | 1 — item A ✓ |
+| `ModelIR` | `src/ModelIR/` | §VII, §VIII, **§CIX** — immutable semantic composition graph | 1 — item B |
+| `Parameters` | `src/Parameters/` | §XI, **§CIX** — family types + traits + metadata; §LVIII forbids Gradient/OptimizerState | 1/3 — item A ✓ |
 | `Operators` | `src/Operators/` | §XII, **§CIX** — operators are functions; dispatch is execution | 1/2 |
 | `Lowering` | `src/Lowering/` | §XXII–XXIII backend routing; mixed-backend is ordinary | 4 |
 | `Inference` | `src/Inference/` | §XXIX engine, §XXX prefill/decode split, KV manager hooks | 5 |

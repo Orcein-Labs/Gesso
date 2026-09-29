@@ -1,43 +1,60 @@
-# Empty-core fence (Phase 1 ready-room law).
+# Empty-core fence (Phase 1).
 #
-# Semantics, ModelIR, Parameters, Operators are CONTRACT-ONLY modules: they
-# export nothing and define nothing until their owning phase fills them
-# (docs/ARCHITECTURE.md; §LXXIII exit rule — no speculative implementation).
-# This file is the fence the next eager agent hits when they "just add a
-# struct": the fence fails, and the failure message says where the decision
-# actually belongs.
+# Semantics, ModelIR, Parameters, Operators are §CIX modules: the fence
+# tracks what each module may contain as Phase 1 items land. After item A,
+# Semantics/Parameters carry exactly the §CIX vocabulary; ModelIR/Operators
+# stay empty until items B and C. This file is what the next eager agent
+# hits when they "just add a struct": the fence fails, and the failure
+# message says where the decision actually belongs.
 #
 # It also pins two deeper fences:
 #   * the §LVIII training boundary: no AD/training machinery identifiers
 #     anywhere in src/;
 #   * architecture packets 1–2 are resolved in canon (§CIX) and stay
-#     unimplemented in code until a Phase 1 work item fills them.
+#     unimplemented beyond what a landed Phase 1 item added — no
+#     ExecutionPhase / WorkloadKind mega-enum, no global receipt ids.
 
 const CORE_MODULES = (:Semantics, :ModelIR, :Parameters, :Operators)
 
-@testset "empty-core fence: contract-only modules stay empty" begin
-    for name in CORE_MODULES
+# Exports each filled module is allowed after Phase 1 item A.
+const ITEM_A_EXPORTS = Dict(
+    :Semantics => [:PrefillWorkload, :DecodeWorkload],
+    :Parameters => [
+        :SemanticTensor,
+        :ProjectionWeight,
+        :KVCache,
+        :EmbeddingTable,
+        :ExpertWeight,
+        :FrozenParameter,
+        :QuantizedParameter,
+        :Activation,
+        :TemporaryWorkspace,
+        :RoutingState,
+        :DecodeState,
+        :AdapterDelta,
+        :frozen,
+    ],
+)
+const STILL_EMPTY_MODULES = (:ModelIR, :Operators)
+
+@testset "empty-core fence: filled modules export exactly the §CIX item-A vocabulary" begin
+    for (name, allowed) in ITEM_A_EXPORTS
         m = getfield(Harpe, name)
         @test m isa Module
         exported = setdiff(names(m), [name])
-        @test isempty(exported) ||
-              "module $name exports $exported — it is " *
-              "contract-only until its phase fills it (docs/ARCHITECTURE.md); " *
-              "if a real phase fills it, update this fence WITH that phase" == ""
+        @test Set(exported) == Set(allowed) ||
+              "module $name exports $exported — " *
+              "item A pins exactly $allowed (§CIX); extending it is a work item" == ""
+    end
+end
 
-        # nothing type-like or callable is defined inside, not even unexported
-        additions = Symbol[]
-        for n in names(m; all=true)
-            n in (:eval, :include, name) && continue
-            isdefined(m, n) || continue
-            v = getfield(m, n)
-            (v isa Module) && continue
-            push!(additions, n)
-        end
-        @test isempty(additions) ||
-              "module $name defines $additions — the " *
-              "semantic object model is an open architecture decision " *
-              "(docs/DECISION_PACKETS.md); do not answer it with a struct" == ""
+@testset "empty-core fence: ModelIR/Operators stay empty until items B/C" begin
+    for name in STILL_EMPTY_MODULES
+        m = getfield(Harpe, name)
+        exported = setdiff(names(m), [name])
+        @test isempty(exported) ||
+              "module $name exports $exported — it stays " *
+              "empty until its Phase 1 item (B: ModelIR, C: Operators) lands" == ""
     end
 end
 
@@ -83,12 +100,13 @@ end
     @test occursin("## Status", md)
     @test occursin("RESOLVED INTO CANON", md)
 
-    # Packet 1 (§CIX): PrefillWorkload / DecodeWorkload are the types; they
-    # land with a Phase 1 work item. No mega-enum in the meantime.
+    # Packet 1 (§CIX): the two-level law. The dispatch types exist (item A
+    # landed them); no mega-enum does, and the singleton cuts are distinct.
     @test !isdefined(Harpe, :ExecutionPhase)
     @test !isdefined(Harpe, :WorkloadKind)
-    @test !isdefined(Harpe, :PrefillWorkload)
-    @test !isdefined(Harpe, :DecodeWorkload)
+    @test isdefined(Harpe, :PrefillWorkload)
+    @test isdefined(Harpe, :DecodeWorkload)
+    @test typeof(Harpe.PrefillWorkload()) !== typeof(Harpe.DecodeWorkload())
 
     # Packet 2 (§CIX / §XLII): ids stay process-local UInt64 until the
     # persistence/swarm schema bump.
