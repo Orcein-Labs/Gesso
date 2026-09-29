@@ -131,6 +131,7 @@ curated = String[
     ".github/PULL_REQUEST_TEMPLATE.md",
 ]
 src_dirs = [
+    "ext",
     "src/Semantics",
     "src/ModelIR",
     "src/Parameters",

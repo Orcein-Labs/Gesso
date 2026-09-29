@@ -33,7 +33,13 @@ Mmap = "a63ad114-7e13-5084-954f-fe012c677804"
 JSON = "682c06a0-de6a-54ab-a142-c8b1cf79cde6"
 
 [weakdeps]
-# Intentionally empty. See above.
+# Phase 4 (§LXXVII): CUDA.jl is a package EXTENSION, never a core dep (§VII).
+# ext/GessoCUDAExt.jl is the only file allowed to `using CUDA`; core compiles
+# and tests with CUDA not loaded.
+CUDA = "052768ef-5323-5732-b1bb-66c8b64840ba"
+
+[extensions]
+GessoCUDAExt = "CUDA"
 
 [compat]
 julia = "1.12"

@@ -61,6 +61,11 @@ using Gesso: reference_prefill, reference_generate
     # GESSO_SMOLLM2_DIR points at a local snapshot; it never downloads
     include("test_smollm2.jl")
 
+    # Phase 4 (§LXXVII item A): the CUDA backend seam — manifest law, ext
+    # binding, explicit no-device failure. Load-order-sensitive: BEFORE/AFTER
+    # the CUDA import. Device tests live in their own files (B/C/D).
+    include("test_cuda_seam.jl")
+
     @testset "package loads" begin
         @test Gesso.Log isa Module
         @test isdefined(Gesso, :CPUBackend)
@@ -99,8 +104,17 @@ using Gesso: reference_prefill, reference_generate
             [d for d in get(declared, "deps", String[]) if !haskey(stdlib_allowlist, d)]
         @test isempty(unexpected) ||
               "undeclared hard deps: $unexpected — justify them here or remove them" == ""
-        @test isempty(get(declared, "weakdeps", String[])) ||
-              "weakdeps must be justified in this test when introduced" == ""
+        # weakdeps: backends arrive as package extensions (§VII). Each entry
+        # is justified here; the extension is the ONLY code allowed to load it.
+        weakdeps_allowlist = Dict{String, String}( # name => justification
+            "CUDA" => "Phase 4 backend (§LXXVII), package extension GessoCUDAExt — never a core dep",
+        )
+        unjustified_weak = [
+            d for d in get(declared, "weakdeps", String[]) if !haskey(weakdeps_allowlist, d)
+        ]
+        @test isempty(unjustified_weak) ||
+              "unjustified weakdeps: $unjustified_weak — justify them here or remove them" ==
+              ""
     end
 
     @testset "logging conventions (§LXX, §XLII)" begin

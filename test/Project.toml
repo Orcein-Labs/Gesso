@@ -19,6 +19,11 @@ Mmap = "a63ad114-7e13-5084-954f-fe012c677804"
 # parsing; the test sandbox needs it declared too (it is not a stdlib, so
 # the sandbox rule bites even harder)
 JSON = "682c06a0-de6a-54ab-a142-c8b1cf79cde6"
+# Phase 4 (§LXXVII): CUDA in the TEST env so Pkg.test can load the
+# GessoCUDAExt extension. This is the test env, not core — core [deps]
+# stays CUDA-free (§VII). Device-absent machines still pass: the CUDA
+# tests are named skips when CUDA.functional() is false.
+CUDA = "052768ef-5323-5732-b1bb-66c8b64840ba"
 
 [sources]
 Gesso = {path = ".."}
