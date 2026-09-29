@@ -2697,7 +2697,9 @@ Exit:
 LXXV. PHASE 2 — REFERENCE EXECUTION
 ===============================================================================
 
-Implementation goal: `docs/goals/PHASE2_CPU_ORACLE.md`.
+Status: COMPLETE 2026-09-29 (prefill oracle + known logits + greedy KV
+decode; receipt in the Phase 2 close note). Implementation goal:
+`docs/goals/PHASE2_CPU_ORACLE.md`.
 
 Build:
 

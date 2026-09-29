@@ -98,6 +98,7 @@ curated = String[
     "test/test_phase1_exit.jl",
     "test/test_cpu_ops.jl",
     "test/test_reference_prefill.jl",
+    "test/test_reference_generate.jl",
     "test/testhelpers.jl",
     "test/test_helpers.jl",
     "test/toyfixtures.jl",

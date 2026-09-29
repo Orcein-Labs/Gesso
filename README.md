@@ -28,8 +28,8 @@ object-model encoding decided in canon (§CIX). Nothing here runs models yet.
 - [x] BONES sprint (agent charter, module skeleton, receipts types, tooling)
 - [x] Foundation hardening (receipt stress tests, taxonomy pins, freeze evidence, lab fixtures, empty-core fence)
 - [x] Phase 1: semantic core per §CIX — types exist, `toy2` expressible end to end, **no execution yet**
-- [x] Phase 2 (prefill): CPU oracle — `toy2` runs on `CPUBackend`; deterministic forward pass; known logits persisted with provenance
-- [ ] Phase 2 (generate): greedy decode with a real KV append (item C)
+- [x] Phase 2: CPU oracle COMPLETE — deterministic prefill with known logits (persisted + provenance) and greedy KV-cached decode; `toy2` runs on `CPUBackend`
+- [ ] Phase 3: first real model import
 - [ ] Telemetry collection (Phase 6)
 
 ## The stack
@@ -53,7 +53,7 @@ Current phases (docs/Harpe_Stack.md §LXXIII ff.):
 |------:|-------------|--------|
 | 0 | Repository foundation | **COMPLETE** |
 | 1 | Semantic core (§CIX encoding) | **COMPLETE** — expressible, not executable |
-| 2 | Reference execution (CPU oracle) | **next gate** |
+| 2 | Reference execution (CPU oracle) | **COMPLETE** — prefill + greedy KV decode |
 | 3 | First real model import | |
 | 4 | CUDA.jl execution | |
 

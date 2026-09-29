@@ -8,7 +8,7 @@
 using Harpe
 using Test
 # Phase 2 oracle surface, unqualified for the per-area test files
-using Harpe: reference_prefill
+using Harpe: reference_prefill, reference_generate
 
 @testset "Harpe" begin
     include("test_foundation.jl")
@@ -39,8 +39,10 @@ using Harpe: reference_prefill
     include("test_modelir.jl")
     include("test_phase1_exit.jl")
 
-    # Phase 2 (§LXXV): the prefill oracle over the fixture pack
+    # Phase 2 (§LXXV): the prefill oracle over the fixture pack, then greedy
+    # generation with a real KV append
     include("test_reference_prefill.jl")
+    include("test_reference_generate.jl")
 
     @testset "package loads" begin
         @test Harpe.Log isa Module
