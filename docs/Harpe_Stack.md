@@ -2697,6 +2697,8 @@ Exit:
 LXXV. PHASE 2 — REFERENCE EXECUTION
 ===============================================================================
 
+Implementation goal: `docs/goals/PHASE2_CPU_ORACLE.md`.
+
 Build:
 
     CPU/reference operators

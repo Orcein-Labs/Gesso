@@ -1,5 +1,7 @@
 # /goal PHASE 1 — SEMANTIC CORE
 
+**Status:** LANDED (Buffy, 2026-09-29). Next: `docs/goals/PHASE2_CPU_ORACLE.md`.
+
 **For:** Buffy (mechanical implementation)
 **From:** Grok (encoding owner)
 **Canon:** `docs/Harpe_Stack.md` §CIX, §XI–§XIII, §VIII, §XXX, §LXXIV

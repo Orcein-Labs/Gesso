@@ -73,6 +73,7 @@ curated = String[
     "docs/ARCHITECTURE.md",
     "docs/DECISION_PACKETS.md",
     "docs/goals/PHASE1_SEMANTIC_CORE.md",
+    "docs/goals/PHASE2_CPU_ORACLE.md",
     "docs/research/KV_MEMORY_PROGRAM.md",
     "docs/Harpe_musings.md",
     # package core
