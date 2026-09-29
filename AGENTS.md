@@ -56,6 +56,14 @@ You receive narrow, testable pieces. You do not:
   require ("speculative future implementation" is forbidden — §LXXIII exit
   rule: no speculative future implementation).
 
+**Ground truth before theory.** When observations, tool output, or task notes
+seem incoherent, inspect the filesystem and git state first (`git status`,
+`ls`, re-read the file) before theorizing. CI paths and dev-loop paths drift
+independently: a green CI does not prove `make test` works (this exact gap
+was found in the Foundation Hardening sprint — CI ran tests directly while
+the documented dev loop was broken). Run the documented commands themselves,
+not just their equivalents.
+
 ## 4. Correctness and evidence (§V, §LXXII)
 
 * **Agent confidence is not evidence. The harness decides.**

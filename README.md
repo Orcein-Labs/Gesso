@@ -11,17 +11,18 @@ hardware and workload actually present.
 
 ## Status
 
-**Phase 0 — repository foundation: COMPLETE.** Currently in the BONES sprint
-(swarm-readiness scaffolding: agent charter, module skeleton, receipts types,
-dev tooling). Nothing here runs models yet.
+**Phase 0 — repository foundation: COMPLETE** (incl. the BONES swarm-readiness
+sprint: agent charter, module skeleton, receipts, dev tooling). Currently in
+foundation hardening: stress-testing the audit/receipt/failure substrate
+before the semantic core lands. Nothing here runs models yet.
 
 - [x] Clean `Project.toml`, no third-party dependencies (§VII: *Harpe earns every hard dependency*; only the `Dates` stdlib, enforced by test)
 - [x] Package skeleton: logging conventions, backend interface draft
 - [x] Test harness with dependency-law enforcement
-- [x] CI (tests + format)
+- [x] CI (tests + format + bench-smoke)
 - [x] Benchmark harness with benchmark-integrity conventions (§XXXIII)
 - [x] Research program: [docs/research/KV_MEMORY_PROGRAM.md](docs/research/KV_MEMORY_PROGRAM.md)
-- [ ] BONES sprint (agent charter, module skeleton, receipts types, tooling)
+- [x] BONES sprint (agent charter, module skeleton, receipts types, tooling)
 - [ ] Telemetry collection (Phase 6)
 
 ## The stack
@@ -43,7 +44,7 @@ Current phases (docs/Harpe_Stack.md §LXXIII ff.):
 
 | Phase | Deliverable | Status |
 |------:|-------------|--------|
-| 0 | Repository foundation | **in progress** |
+| 0 | Repository foundation | **COMPLETE** |
 | 1 | Semantic core | |
 | 2 | Reference execution (CPU oracle) | |
 | 3 | First real model import | |
@@ -58,19 +59,36 @@ Harpe will load its checkpoints like everyone else's.
 ## Layout
 
 ```
-src/           package core (zero deps; logging, backend interface)
-test/          test harness (workspace member)
-benchmark/     benchmark harness (workspace member)
-ci/            CI environment (workspace member)
-docs/          architecture: Harpe_Stack.md is canon
-libs/          local dev sources (gitignored; Lava lives here)
+src/           package core (zero deps; logging, receipts, errors, backends)
+test/          test harness (workspace member; per-area test files)
+benchmark/     benchmark harness (workspace member; results/ accrues)
+docs/          architecture: Harpe_Stack.md is canon; ARCHITECTURE.md is the map
+libs/          local dev sources (gitignored; Lava lives here) — DO NOT TOUCH
 ```
+
+## Working here
+
+- `AGENTS.md` is the **binding agent charter** — read it before your first edit.
+- `docs/ARCHITECTURE.md` maps every module to its canon section and phase.
+- Work items follow `.github/ISSUE_TEMPLATE/work-item.md` (§LXXI format);
+  PRs are receipts per `.github/PULL_REQUEST_TEMPLATE.md` (§LXXII).
 
 ## Commands
 
 ```bash
-julia --project=. -e 'using Pkg; Pkg.instantiate(); Pkg.instantiate("test"); Pkg.instantiate("benchmark")'
-julia --project=test -e 'using Pkg; Pkg.test()'       # test suite
-julia --project=benchmark benchmark/runbenchmarks.jl  # benchmark suite
-julia -e 'using JuliaFormatter; format(".", verbose=true)'  # format
+make test          # test suite (workspace root; runs with -t 2)
+make bench         # benchmarks (append to benchmark/results/)
+make format        # format the repo
+make format-check  # CI's formatting gate
+make freeze        # curated context-freeze bundle (evidence, not ceremony)
+```
+
+Under the hood (Julia 1.12 workspace — activate the root, then let Pkg
+discover the members; do NOT `Pkg.instantiate("test")`, positional
+instantiate is not valid API):
+
+```bash
+julia --project=. -e 'using Pkg; Pkg.instantiate(); Pkg.activate("test"); Pkg.instantiate(); Pkg.activate("benchmark"); Pkg.instantiate()'
+julia --project=test --check-bounds=yes test/runtests.jl
+julia --project=benchmark benchmark/runbenchmarks.jl
 ```

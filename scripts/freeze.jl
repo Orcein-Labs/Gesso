@@ -96,7 +96,6 @@ curated = String[
     "scripts/format.jl",
     "scripts/freeze.jl",
     # process surface
-    "ci/Project.toml",
     ".github/workflows/ci.yml",
     ".github/ISSUE_TEMPLATE/work-item.md",
     ".github/PULL_REQUEST_TEMPLATE.md",
