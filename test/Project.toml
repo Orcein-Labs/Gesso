@@ -4,6 +4,11 @@ Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
 # stdlib: receipt timestamp assertions (the package itself depends on Dates
 # for the same reason; this is the test env, not the core package)
 Dates = "ade2ca70-3891-5945-98fb-dc099432e06a"
+# stdlib: deterministic fixtures (test/testhelpers.jl). Julia 1.12 stdlibs
+# are packages: they must be DECLARED here to be loadable — direct runs
+# resolve Random through the workspace manifest (BenchmarkTools dep), but
+# Pkg.test's sandbox env exposes only declared deps.
+Random = "9a3f8284-a2c9-5f02-9a11-845980a1fd5c"
 
 [sources]
 Harpe = {path = ".."}
