@@ -1,0 +1,11 @@
+schema	date_utc	julia_version	benchmark	samples	median_ns
+bench-result-v1	2026-09-29 T00:07:13Z	1.12.6	backend_tag_construction	10000	1.952
+bench-result-v1	2026-09-29 T00:07:13Z	1.12.6	capability_probe	10000	1.952
+bench-result-v1	2026-09-29 T00:07:13Z	1.12.6	lowering_not_implemented_throw	10000	1.752
+bench-result-v1	2026-09-29 T00:07:13Z	1.12.6	receipt_emit_inmemory	10000	303.11592920353985
+bench-result-v1	2026-09-29 T00:07:13Z	1.12.6	structured_log_event	10000	1310.45
+0.2.0	2026-09-29 T00:29:46Z	1.12.6	cachyos-x8664	x86_64	1	9bce084	true	backend_tag_construction	10000	1.536	1.6898684000000002	1.408	0	0	§XX: tag construction must stay free
+0.2.0	2026-09-29 T00:29:46Z	1.12.6	cachyos-x8664	x86_64	1	9bce084	true	capability_probe	10000	1.534	1.6834062	1.408	0	0	§XX: capability probing is always safe, never throws
+0.2.0	2026-09-29 T00:29:46Z	1.12.6	cachyos-x8664	x86_64	1	9bce084	true	lowering_not_implemented_throw	10000	1.535	1.6719064000000001	1.407	0	0	§LXX: explicit failure must be affordable
+0.2.0	2026-09-29 T00:29:46Z	1.12.6	cachyos-x8664	x86_64	1	9bce084	true	receipt_emit_inmemory	10000	272.1235849056604	339.3212550943396	213.27735849056603	7	848	§XLII: audited actions pay for receipts; keep it negligible
+0.2.0	2026-09-29 T00:29:46Z	1.12.6	cachyos-x8664	x86_64	1	9bce084	true	structured_log_event	10000	1023.08	1266.074972	919.44	31	1264	§XLII: logging must never be the reason to skip logging

@@ -15,4 +15,11 @@ const HARPE_SCHEMA_VERSION = v"0.1.0"
 const RECEIPT_SCHEMA_VERSION = v"0.1.0"
 
 """Benchmark result file schema (benchmark/results/*.tsv). Bump on format change."""
-const BENCH_RESULT_SCHEMA_VERSION = v"0.1.0"
+# v0.1.0: schema,date_utc,julia_version,benchmark,samples,median_ns
+#         (rows carry the literal schema tag "bench-result-v1")
+# v0.2.0: adds host,arch,nthreads,commit,dirty,bench_note columns and
+#         mean_ns,min_ns,allocs,bytes statistics; rows carry the schema
+#         version string itself (e.g. "0.2.0"). Result files are append-only
+#         (§LXIX): a file may mix row schemas — group by the schema column
+#         when comparing; never silently reinterpret old rows.
+const BENCH_RESULT_SCHEMA_VERSION = v"0.2.0"
