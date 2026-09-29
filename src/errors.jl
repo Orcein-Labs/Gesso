@@ -1,16 +1,16 @@
-# Explicit-failure vocabulary (Harpe_Stack.md §LXX; North Star §22 taxonomy).
+# Explicit-failure vocabulary (Gesso_Stack.md §LXX; North Star §22 taxonomy).
 #
-# Law: Harpe fails explicitly. No silent representation downgrade, backend
+# Law: Gesso fails explicitly. No silent representation downgrade, backend
 # switch, quantization mismatch, memory-plan violation, or kernel substitution
 # unless policy explicitly permits it. If fallback occurs, it is recorded
-# (see logging.jl @hfallback).
+# (see logging.jl @gfallback).
 #
-# All Harpe exceptions live here so every module throws typed errors instead
+# All Gesso exceptions live here so every module throws typed errors instead
 # of ad-hoc strings. Error CODES mirror the failure taxonomy so records can
 # classify failures uniformly.
 
-export HarpeException,
-    HarpeError, ErrorCode, LoweringNotImplemented, lowering_not_implemented, harpe_error
+export GessoException,
+    GessoError, ErrorCode, LoweringNotImplemented, lowering_not_implemented, gesso_error
 export ERR_INTERNAL,
     ERR_INVALID_PLAN,
     ERR_CONSTRAINT_REJECTED,
@@ -26,8 +26,8 @@ export ERR_INTERNAL,
     ERR_CACHE,
     ERR_APPROXIMATION_BUDGET_EXCEEDED
 
-"Supertype of all Harpe exceptions (§LXX: failures are typed and explicit)."
-abstract type HarpeException <: Exception end
+"Supertype of all Gesso exceptions (§LXX: failures are typed and explicit)."
+abstract type GessoException <: Exception end
 
 """
     ErrorCode
@@ -37,7 +37,7 @@ Failure records carry one code, a diagnostic, and whether the surrounding
 search/session may continue.
 """
 @enum ErrorCode begin
-    ERR_INTERNAL = 0                 # Harpe bug; session should not continue
+    ERR_INTERNAL = 0                 # Gesso bug; session should not continue
     ERR_INVALID_PLAN = 1             # malformed plan rejected before any work
     ERR_CONSTRAINT_REJECTED = 2      # candidate legally skipped, not failed
     ERR_COMPILE = 3                  # specialization/compilation failed
@@ -82,27 +82,27 @@ end
 # break — test/test_errors.jl pins them.
 
 """
-    HarpeError <: HarpeException
+    GessoError <: GessoException
 
-The general Harpe failure. `code` classifies it per the taxonomy, `detail`
+The general Gesso failure. `code` classifies it per the taxonomy, `detail`
 carries structured context that must survive into receipts.
 """
-struct HarpeError <: HarpeException
+struct GessoError <: GessoException
     code::ErrorCode
     message::String
     detail::Dict{Symbol, Any}
 end
 
-harpe_error(code::ErrorCode, message::AbstractString; kw...) =
-    HarpeError(code, String(message), Dict{Symbol, Any}(kw...))
+gesso_error(code::ErrorCode, message::AbstractString; kw...) =
+    GessoError(code, String(message), Dict{Symbol, Any}(kw...))
 
-function Base.showerror(io::IO, e::HarpeError)
-    print(io, "HarpeError(", e.code, "): ", e.message)
+function Base.showerror(io::IO, e::GessoError)
+    print(io, "GessoError(", e.code, "): ", e.message)
     isempty(e.detail) || print(io, "  detail = ", e.detail)
 end
 
 """
-    LoweringNotImplemented <: HarpeException
+    LoweringNotImplemented <: GessoException
 
 Raised when an operation is lowered to a backend that does not implement it
 (§LXX: failure must be explicit — no silent substitution, no silent fallback).
@@ -110,9 +110,9 @@ Raised when an operation is lowered to a backend that does not implement it
 This is the *only* legal way for a lowering method to decline work. Returning
 `nothing`, a sibling backend's result, or a CPU result instead is a law
 violation. Policy-permitted degradation is a planner decision, recorded via
-`@hfallback` — never a lowering-side surprise.
+`@gfallback` — never a lowering-side surprise.
 """
-struct LoweringNotImplemented <: HarpeException
+struct LoweringNotImplemented <: GessoException
     op::Symbol
     backend::Symbol
 end
@@ -123,7 +123,7 @@ Base.showerror(io::IO, e::LoweringNotImplemented) = print(
     e.op,
     " has no lowering for backend :",
     e.backend,
-    " (explicit failure per Harpe_Stack.md §LXX — no silent substitution)",
+    " (explicit failure per Gesso_Stack.md §LXX — no silent substitution)",
 )
 
 """
@@ -132,6 +132,6 @@ Base.showerror(io::IO, e::LoweringNotImplemented) = print(
 Throw [`LoweringNotImplemented`](@ref) for `op` on `backend`. Standard body of
 every lowering stub.
 """
-function lowering_not_implemented(op::Symbol, backend::AbstractHarpeBackend)
+function lowering_not_implemented(op::Symbol, backend::AbstractGessoBackend)
     throw(LoweringNotImplemented(op, backend_name(backend)))
 end

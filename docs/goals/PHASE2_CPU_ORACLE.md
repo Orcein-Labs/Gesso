@@ -2,7 +2,7 @@
 
 **For:** Buffy (mechanical implementation)
 **From:** Grok (encoding owner)
-**Canon:** `docs/Harpe_Stack.md` §LXXV, §X, §XII, §XXX, §CIX
+**Canon:** `docs/Gesso_Stack.md` §LXXV, §X, §XII, §XXX, §CIX
 **Map:** `docs/ARCHITECTURE.md`
 **Depends on:** Phase 1 complete (`docs/goals/PHASE1_SEMANTIC_CORE.md`)
 **Packets:** 1 and 2 stay closed. Do not reopen them.
@@ -50,7 +50,7 @@ All CPU math is **Float64**. Arrays are dense `Array{Float64}` in `storage`.
 Phase 1's 4-arg methods stay as the generic decline:
 
 ```
-op!(::AbstractHarpeBackend, ::SemanticTensor, ::SemanticTensor, ::Workload)
+op!(::AbstractGessoBackend, ::SemanticTensor, ::SemanticTensor, ::Workload)
     -> LoweringNotImplemented
 ```
 
@@ -154,7 +154,7 @@ shapes in that test except to match this walk if the test would otherwise
 lie.
 
 Any change to this order is a fixture protocol break: bump
-`harpe-toy-fixture-v1` and the README together.
+`gesso-toy-fixture-v1` and the README together.
 
 ### Prompt for known logits
 
@@ -200,7 +200,7 @@ arrays.
 src/Operators/Operators.jl
 src/Operators/*.jl              # split CPU methods out if the file grows
 src/backends.jl                 # supports(::CPUBackend, cap) only
-src/Harpe.jl
+src/Gesso.jl
 Project.toml                    # LinearAlgebra stdlib, if you `using` it
 test/runtests.jl
 test/test_cpu_ops.jl
@@ -246,7 +246,7 @@ written into `expected_logits.toml` and re-read by tests.
 
 ```
 src/Inference/Inference.jl      # reference prefill interpreter
-src/Harpe.jl
+src/Gesso.jl
 test/test_reference_prefill.jl
 test/test_toyfixtures.jl        # loader must ACCEPT a filled slot
 test/toyfixtures.jl             # stop refusing values; validate schema
@@ -269,7 +269,7 @@ checkpoint format.
 reference_prefill(model, tensors, tokens) -> Matrix{Float64}
 ```
 
-- `model` is `Harpe.Model`
+- `model` is `Gesso.Model`
 - `tokens` is `Vector{Int}` (0-based)
 - result shape `(vocab_size, seq_len)`
 - uses `CPUBackend()` + `PrefillWorkload()` only
@@ -312,12 +312,12 @@ and a real KV append. Prefill the prompt, then one token at a time.
 ```
 src/Inference/Inference.jl
 src/Operators/Operators.jl      # DecodeWorkload methods if not already shared
-src/Harpe.jl
+src/Gesso.jl
 test/test_reference_generate.jl
 test/runtests.jl
 docs/ARCHITECTURE.md
 README.md
-docs/Harpe_Stack.md             # §LXXV status line only: COMPLETE + date
+docs/Gesso_Stack.md             # §LXXV status line only: COMPLETE + date
 ```
 
 **Interfaces**
@@ -360,7 +360,7 @@ truthful.
 - No silent fallback. Missing CPU coverage still throws
   `LoweringNotImplemented`.
 - §CIX fence: Operators still exports nothing (functions live on
-  `Harpe`). Inference may start exporting `reference_prefill` /
+  `Gesso`). Inference may start exporting `reference_prefill` /
   `reference_generate`. Do not punch new names through Semantics /
   ModelIR / Parameters without a packet.
 - Formatter: `make format` before close.

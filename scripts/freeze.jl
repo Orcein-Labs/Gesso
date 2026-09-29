@@ -27,7 +27,7 @@ phase = get(ENV, "PHASE", "manual")
 force = get(ENV, "FORCE", "0") == "1"
 date = Dates.format(Dates.now(UTC), dateformat"yyyy-mm-dd")
 root = dirname(@__DIR__)
-zip_path = joinpath(root, "Harpe_$(phase)_Freeze_$(date).zip")
+zip_path = joinpath(root, "Gesso_$(phase)_Freeze_$(date).zip")
 
 # --- duplicate protection: never silently clobber a historical snapshot ----
 if isfile(zip_path) && !force
@@ -67,7 +67,7 @@ curated = String[
     "Project.toml",
     ".gitignore",
     ".JuliaFormatter.toml",
-    "docs/Harpe_Stack.md",
+    "docs/Gesso_Stack.md",
     "docs/Harpe_Stack_old.md",
     "docs/Native_Julia_Kernel_Autotuning_North_Star_README.md",
     "docs/ARCHITECTURE.md",
@@ -75,9 +75,9 @@ curated = String[
     "docs/goals/PHASE1_SEMANTIC_CORE.md",
     "docs/goals/PHASE2_CPU_ORACLE.md",
     "docs/research/KV_MEMORY_PROGRAM.md",
-    "docs/Harpe_musings.md",
+    "docs/Gesso_musings.md",
     # package core
-    "src/Harpe.jl",
+    "src/Gesso.jl",
     "src/logging.jl",
     "src/versions.jl",
     "src/backends.jl",
@@ -138,7 +138,7 @@ src_dirs = [
     "src/CAPI",
 ]
 
-stage = joinpath(tempdir(), "harpe-freeze-$(rand(UInt32))")
+stage = joinpath(tempdir(), "gesso-freeze-$(rand(UInt32))")
 mkpath(stage)
 missing_files = String[]
 for rel in curated
@@ -181,7 +181,7 @@ skipped_block =
     "\n```\n"
 
 briefing = """
-# Harpe — Context Freeze: $(phase)
+# Gesso — Context Freeze: $(phase)
 
 **Freeze date:** $date (UTC)
 **Snapshot of:** $git_line
@@ -191,12 +191,12 @@ per-phase baseline snapshot.
 
 ## How to read this bundle
 
-1. `docs/Harpe_Stack.md` — CANON (sections are Roman numerals; §LXXIII+
+1. `docs/Gesso_Stack.md` — CANON (sections are Roman numerals; §LXXIII+
    is the phase plan).
 2. `docs/research/KV_MEMORY_PROGRAM.md` — the KV/working-memory research
    program (extends §XXXI/§X/§LIX; feeds Phases 5/9/10).
 3. `docs/ARCHITECTURE.md` — module map for orientation.
-4. `docs/Harpe_musings.md` — the dangerous research notebook. Parking lot,
+4. `docs/Gesso_musings.md` — the dangerous research notebook. Parking lot,
    not canon. Promotions from it are deliberate.
 5. `AGENTS.md` — the binding agent charter.
 6. `FREEZE_MANIFEST.txt` — file list + SHA-256 checksums
@@ -206,8 +206,8 @@ $skipped_block
 ## Laws any advice must respect
 
 * Training is OUT of scope permanently (§LVIII) — settled product decision.
-* Harpe owns mechanism; NeuraJL owns expression; NIRA owns policy (§XLIII).
-* NIRA decides what memory means; Harpe decides how it lives (KV program §8).
+* Gesso owns mechanism; Palette owns expression; Cyan owns policy (§XLIII).
+* Cyan (NIRA) decides what memory means; Gesso decides how it lives (KV program §8).
 * No public performance claims without benchmark data from this repo.
 * Citation = claim of having read it (KV program §4.3).
 """
@@ -229,7 +229,7 @@ cd(stage) do
     end
     files = sort(files)
     open("FREEZE_MANIFEST.txt", "w") do io
-        println(io, "# Harpe freeze manifest — phase: $(phase), date: $(date) UTC")
+        println(io, "# Gesso freeze manifest — phase: $(phase), date: $(date) UTC")
         println(io, "# snapshot of: $git_line")
         println(io, "# verify: sha256sum -c FREEZE_MANIFEST.txt")
         for f in files

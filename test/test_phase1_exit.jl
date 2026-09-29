@@ -16,9 +16,9 @@ using .ToyFixtures: load_toy_fixture
     fx = load_toy_fixture()
 
     # 2. build ModelIR from it (test-side builder maps fixture data onto
-    #    primitives; the TOML schema is not a Harpe type)
+    #    primitives; the TOML schema is not a Gesso type)
     m = toy2_modelir()
-    @test m isa Harpe.Model
+    @test m isa Gesso.Model
     @test m.vocab_size == fx.vocab_size
     @test m.embedding.dim == fx.dim
     @test length(m.blocks) == 2
@@ -31,26 +31,26 @@ using .ToyFixtures: load_toy_fixture
     #    ExpertWeight/RoutingState (no MoE), NO AdapterDelta (no adapters),
     #    NO QuantizedParameter (no quantization) — skipped, not invented.
     dim = m.embedding.dim
-    tensors = Harpe.SemanticTensor[]
+    tensors = Gesso.SemanticTensor[]
 
-    push!(tensors, Harpe.EmbeddingTable(; shape=(m.vocab_size, dim)))
+    push!(tensors, Gesso.EmbeddingTable(; shape=(m.vocab_size, dim)))
     for blk in m.blocks
         h, hd = blk.attention.n_heads, div(dim, blk.attention.n_heads)
-        push!(tensors, Harpe.ProjectionWeight(; shape=(dim, dim)))        # Q
-        push!(tensors, Harpe.ProjectionWeight(; shape=(hd, dim)))         # K (MHA: full)
-        push!(tensors, Harpe.ProjectionWeight(; shape=(hd, dim)))         # V (MHA: full)
-        push!(tensors, Harpe.ProjectionWeight(; shape=(dim, dim)))        # O
-        push!(tensors, Harpe.ProjectionWeight(; shape=(blk.ffn.hidden, dim)))  # gate
-        push!(tensors, Harpe.ProjectionWeight(; shape=(blk.ffn.hidden, dim)))  # up
-        push!(tensors, Harpe.ProjectionWeight(; shape=(dim, blk.ffn.hidden)))  # down
-        push!(tensors, Harpe.FrozenParameter(; shape=(dim,)))             # RMSNorm scale
+        push!(tensors, Gesso.ProjectionWeight(; shape=(dim, dim)))        # Q
+        push!(tensors, Gesso.ProjectionWeight(; shape=(hd, dim)))         # K (MHA: full)
+        push!(tensors, Gesso.ProjectionWeight(; shape=(hd, dim)))         # V (MHA: full)
+        push!(tensors, Gesso.ProjectionWeight(; shape=(dim, dim)))        # O
+        push!(tensors, Gesso.ProjectionWeight(; shape=(blk.ffn.hidden, dim)))  # gate
+        push!(tensors, Gesso.ProjectionWeight(; shape=(blk.ffn.hidden, dim)))  # up
+        push!(tensors, Gesso.ProjectionWeight(; shape=(dim, blk.ffn.hidden)))  # down
+        push!(tensors, Gesso.FrozenParameter(; shape=(dim,)))             # RMSNorm scale
     end
     n_layers = length(m.blocks)
     kv_heads = m.blocks[1].attention.n_kv_heads
     head_dim = div(dim, m.blocks[1].attention.n_heads)
-    push!(tensors, Harpe.KVCache(; shape=(n_layers, kv_heads, head_dim, 0)))  # empty cache
-    push!(tensors, Harpe.Activation(; shape=(0, dim)))             # hidden states
-    push!(tensors, Harpe.TemporaryWorkspace(; shape=(m.blocks[1].attention.n_heads, 0, 0)))
+    push!(tensors, Gesso.KVCache(; shape=(n_layers, kv_heads, head_dim, 0)))  # empty cache
+    push!(tensors, Gesso.Activation(; shape=(0, dim)))             # hidden states
+    push!(tensors, Gesso.TemporaryWorkspace(; shape=(m.blocks[1].attention.n_heads, 0, 0)))
 
     @test all(t -> t.storage === nothing, tensors)   # nothing materialized
 
@@ -58,11 +58,11 @@ using .ToyFixtures: load_toy_fixture
     weights = filter(
         t ->
             t isa
-            Union{Harpe.ProjectionWeight, Harpe.EmbeddingTable, Harpe.FrozenParameter},
+            Union{Gesso.ProjectionWeight, Gesso.EmbeddingTable, Gesso.FrozenParameter},
         tensors,
     )
-    @test all(Harpe.frozen, weights)
-    @test !Harpe.frozen(only(t for t in tensors if t isa Harpe.KVCache))
+    @test all(Gesso.frozen, weights)
+    @test !Gesso.frozen(only(t for t in tensors if t isa Gesso.KVCache))
 
     # 4. name the operators the blocks would call (§CIX: operators are the
     #    existing functions; the dispatch surface from item C routes them)
@@ -91,23 +91,23 @@ using .ToyFixtures: load_toy_fixture
     # and every named op HAS the semantic dispatch surface (item C): it
     # resolves a method on (backend, SemanticTensor, SemanticTensor, workload)
     for op in ops_called
-        f = getglobal(Harpe, op)
+        f = getglobal(Gesso, op)
         @test hasmethod(
             f,
             (
-                Harpe.CPUBackend,
-                Harpe.SemanticTensor,
-                Harpe.SemanticTensor,
-                Harpe.PrefillWorkload,
+                Gesso.CPUBackend,
+                Gesso.SemanticTensor,
+                Gesso.SemanticTensor,
+                Gesso.PrefillWorkload,
             ),
         )
         @test hasmethod(
             f,
             (
-                Harpe.CPUBackend,
-                Harpe.SemanticTensor,
-                Harpe.SemanticTensor,
-                Harpe.DecodeWorkload,
+                Gesso.CPUBackend,
+                Gesso.SemanticTensor,
+                Gesso.SemanticTensor,
+                Gesso.DecodeWorkload,
             ),
         )
     end

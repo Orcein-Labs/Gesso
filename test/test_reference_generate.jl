@@ -8,7 +8,7 @@
 #   * decode path is bit-identical to re-prefilling (cache correctness)
 
 using .ToyFixtures: load_toy_fixture, toy_weights
-using .HarpeTestHelpers: approx_eq
+using .GessoTestHelpers: approx_eq
 
 const PROMPT = [1, 3, 4, 5]
 

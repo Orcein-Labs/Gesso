@@ -38,7 +38,7 @@ const PHASE1_EXPORTS = Dict(
 
 @testset "§CIX fence: modules export exactly the Phase 1 vocabulary" begin
     for (name, allowed) in PHASE1_EXPORTS
-        m = getfield(Harpe, name)
+        m = getfield(Gesso, name)
         @test m isa Module
         exported = setdiff(names(m), [name])
         @test Set(exported) == Set(allowed) ||
@@ -50,16 +50,16 @@ end
 
 @testset "§CIX fence: no speculative additions inside the core modules" begin
     # known non-goals (§CIX "WHAT PHASE 1 DOES NOT IMPLEMENT") must not appear
-    @test !isdefined(Harpe, :ExecutionPhase)
-    @test !isdefined(Harpe, :WorkloadKind)
-    @test !isdefined(Harpe, :LlamaModel)
-    @test !isdefined(Harpe.ModelIR, :LlamaModel)
-    @test !isdefined(Harpe, :Quantized)          # no representation lattice
-    @test !isdefined(Harpe.Parameters, :Quantized)
-    @test !isdefined(Harpe, :Gradient)
-    @test !isdefined(Harpe, :OptimizerState)
-    @test !isdefined(Harpe.Parameters, :Gradient)
-    @test !isdefined(Harpe.Parameters, :OptimizerState)
+    @test !isdefined(Gesso, :ExecutionPhase)
+    @test !isdefined(Gesso, :WorkloadKind)
+    @test !isdefined(Gesso, :LlamaModel)
+    @test !isdefined(Gesso.ModelIR, :LlamaModel)
+    @test !isdefined(Gesso, :Quantized)          # no representation lattice
+    @test !isdefined(Gesso.Parameters, :Quantized)
+    @test !isdefined(Gesso, :Gradient)
+    @test !isdefined(Gesso, :OptimizerState)
+    @test !isdefined(Gesso.Parameters, :Gradient)
+    @test !isdefined(Gesso.Parameters, :OptimizerState)
 end
 
 @testset "§CIX fence: training boundary in src/ (§LVIII)" begin
@@ -73,7 +73,7 @@ end
         r"\bZygote\b",
         r"\bEnzyme\b",
     ]
-    src_root = joinpath(pkgdir(Harpe), "src")
+    src_root = joinpath(pkgdir(Gesso), "src")
     violations = Tuple{String, String}[]
     for (dir, _, files) in walkdir(src_root)
         for f in files
@@ -99,20 +99,20 @@ end
 end
 
 @testset "§CIX fence: packet resolutions stay law in code" begin
-    @test isfile(joinpath(pkgdir(Harpe), "docs", "DECISION_PACKETS.md"))
-    md = read(joinpath(pkgdir(Harpe), "docs", "DECISION_PACKETS.md"), String)
+    @test isfile(joinpath(pkgdir(Gesso), "docs", "DECISION_PACKETS.md"))
+    md = read(joinpath(pkgdir(Gesso), "docs", "DECISION_PACKETS.md"), String)
     @test occursin("## Status", md)
     @test occursin("RESOLVED INTO CANON", md)
 
     # Packet 1 (§CIX): the two-level law. The dispatch types exist; no
     # mega-enum does, and the singleton cuts are distinct.
-    @test !isdefined(Harpe, :ExecutionPhase)
-    @test !isdefined(Harpe, :WorkloadKind)
-    @test isdefined(Harpe, :PrefillWorkload)
-    @test isdefined(Harpe, :DecodeWorkload)
-    @test typeof(Harpe.PrefillWorkload()) !== typeof(Harpe.DecodeWorkload())
+    @test !isdefined(Gesso, :ExecutionPhase)
+    @test !isdefined(Gesso, :WorkloadKind)
+    @test isdefined(Gesso, :PrefillWorkload)
+    @test isdefined(Gesso, :DecodeWorkload)
+    @test typeof(Gesso.PrefillWorkload()) !== typeof(Gesso.DecodeWorkload())
 
     # Packet 2 (§CIX / §XLII): ids stay process-local UInt64 until the
     # persistence/swarm schema bump.
-    @test Harpe.next_receipt_id() isa UInt64
+    @test Gesso.next_receipt_id() isa UInt64
 end

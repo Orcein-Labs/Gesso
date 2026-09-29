@@ -1,5 +1,5 @@
 [deps]
-Harpe = "05f31162-62af-44f0-af37-0e48a49f1899"
+Gesso = "05f31162-62af-44f0-af37-0e48a49f1899"
 Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
 # stdlib: receipt timestamp assertions (the package itself depends on Dates
 # for the same reason; this is the test env, not the core package)
@@ -14,4 +14,4 @@ Random = "9a3f8284-a2c9-5f02-9a11-845980a1fd5c"
 TOML = "fa267f1f-6049-4f14-aa54-33bafae1ed76"
 
 [sources]
-Harpe = {path = ".."}
+Gesso = {path = ".."}

@@ -1,5 +1,5 @@
-name: Harpe PR
-description: Pull request receipt (Harpe_Stack.md §LXXII)
+name: Gesso PR
+description: Pull request receipt (Gesso_Stack.md §LXXII)
 body:
   - type: textarea
     id: what-why

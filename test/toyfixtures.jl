@@ -2,7 +2,7 @@
 #
 # Loads the data-only fixture pack, enforces the documented contract, and
 # exposes the deterministic weight-derivation protocol. This is test-side
-# equipment: no Harpe types, no IR preview, no operator semantics. Block
+# equipment: no Gesso types, no IR preview, no operator semantics. Block
 # `kind` strings are data the Phase 2 oracle math will interpret.
 #
 # Every violation fails LOUDLY with a message that says which contract was
@@ -11,14 +11,14 @@
 module ToyFixtures
 
 using TOML
-using ..HarpeTestHelpers: deterministic_rng
+using ..GessoTestHelpers: deterministic_rng
 
 export load_toy_fixture, toy_weights
 
 const FIXTURE_DIR = joinpath(@__DIR__, "fixtures", "toy")
-const MODEL_SCHEMA = "harpe-toy-fixture-v1"
-const TOKENIZER_SCHEMA = "harpe-toy-tokenizer-v1"
-const LOGITS_SCHEMA = "harpe-toy-expected-logits-v1"
+const MODEL_SCHEMA = "gesso-toy-fixture-v1"
+const TOKENIZER_SCHEMA = "gesso-toy-tokenizer-v1"
+const LOGITS_SCHEMA = "gesso-toy-expected-logits-v1"
 
 # Fields each block kind carries. Unknown kinds and unknown keys are
 # contract violations — a typo'd parameter must not be silently ignored by

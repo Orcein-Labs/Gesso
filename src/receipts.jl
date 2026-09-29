@@ -1,4 +1,4 @@
-# Receipts (Harpe_Stack.md §XLII; engineering receipts §LXXII).
+# Receipts (Gesso_Stack.md §XLII; engineering receipts §LXXII).
 #
 # Law: significant actions are auditable. Every receipt answers what happened,
 # in what context, at what cost, and with what result — well enough for
@@ -12,7 +12,7 @@
 
 export Receipt, ReceiptSink, InMemorySink, emit!, next_receipt_id, new_receipt
 # RECEIPT_SCHEMA_VERSION is owned and exported by versions.jl — re-exporting
-# it here too would make `names(Harpe)` ambiguous about ownership.
+# it here too would make `names(Gesso)` ambiguous about ownership.
 
 using Dates
 
@@ -48,7 +48,7 @@ Base.@kwdef struct Receipt
     timing::Any = nothing                     # ns-precision timing record
     token_usage::Any = nothing
     memory_usage::Any = nothing
-    failure::Any = nothing                    # HarpeError or taxonomy record
+    failure::Any = nothing                    # GessoError or taxonomy record
     retry::Any = nothing
     cancellation::Any = nothing
     output_digest::Any = nothing
@@ -111,10 +111,10 @@ function emit!(sink::InMemorySink, r::Receipt)
                 sink.dropped += UInt64(1)
             end
             sink.dropped == 1 &&
-                hlog(Log.LOG_WARN, :receipt_sink_overflow; capacity=sink.capacity)
+                glog(Log.LOG_WARN, :receipt_sink_overflow; capacity=sink.capacity)
         catch err
             try
-                hlog(Log.LOG_ERROR, :receipt_emit_failed; error=repr(err))
+                glog(Log.LOG_ERROR, :receipt_emit_failed; error=repr(err))
             catch
                 # nothing more we can do; auditing must not take the host down
             end

@@ -29,9 +29,9 @@ using ..Parameters: SemanticTensor
 # them (Julia 1.12 enforces this; a plain `using` would define shadow
 # functions inside Operators — a second vocabulary, which §CIX forbids and
 # the test suite pins).
-import ..Harpe:
+import ..Gesso:
     rmsnorm!, rope!, softmax!, swiglu!, matmul!, embedding_lookup!, quantize!, dequantize!
-using ..Harpe: AbstractHarpeBackend, lowering_not_implemented
+using ..Gesso: AbstractGessoBackend, lowering_not_implemented
 
 # dst/src are SemanticTensor values (§XI families); the workload singleton
 # is the last positional dispatch argument (§CIX). Bodies decline explicitly.
@@ -48,7 +48,7 @@ for op in (
     wl in (:PrefillWorkload, :DecodeWorkload)
 
     @eval function $op(
-        backend::AbstractHarpeBackend,
+        backend::AbstractGessoBackend,
         dst::SemanticTensor,
         src::SemanticTensor,
         ::$wl,

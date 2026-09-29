@@ -16,7 +16,7 @@
 # Residuals are interpreter-level storage addition; there is no `add!`.
 
 using LinearAlgebra: mul!
-using ..Harpe: CPUBackend
+using ..Gesso: CPUBackend
 using ..Parameters:
     Activation, EmbeddingTable, FrozenParameter, ProjectionWeight, TemporaryWorkspace
 

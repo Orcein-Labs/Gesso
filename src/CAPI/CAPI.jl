@@ -1,11 +1,11 @@
-# CAPI — libharpe stable C interface (§XLVI; Phase 16).
+# CAPI — libgesso stable C interface (§XLVI; Phase 16).
 #
-# Owns: the boring, stable C ABI — opaque handles (harpe_runtime_t,
-# harpe_model_t, harpe_context_t, harpe_request_t) and lifecycle operations.
+# Owns: the boring, stable C ABI — opaque handles (gesso_runtime_t,
+# gesso_model_t, gesso_context_t, gesso_request_t) and lifecycle operations.
 # An ADOPTION SURFACE, not the internal architecture; all semantic/compiler
 # complexity stays behind the handles.
 #
-# Compatibility direction (§XLVII): adapters adapt TO Harpe. Harpe does not
+# Compatibility direction (§XLVII): adapters adapt TO Gesso. Gesso does not
 # adapt its ontology to compatibility.
 module CAPI
 

@@ -1,20 +1,20 @@
 """
-    Harpe
+    Gesso
 
 Julia-native semantic ML and agent execution runtime.
 
-Harpe loads existing open-weight models, preserves what they mean, and uses that
+Gesso loads existing open-weight models, preserves what they mean, and uses that
 information to determine how they should physically exist and execute on the
-hardware and workload actually present (docs/Harpe_Stack.md §CV).
+hardware and workload actually present (docs/Gesso_Stack.md §CV).
 
-The package has zero third-party dependencies by law (§VII: "Harpe earns every
+The package has zero third-party dependencies by law (§VII: "Gesso earns every
 hard dependency"). Backend lowering (CUDA.jl, Lava) arrives as package
 extensions in later phases, never as core dependencies. Training is out of
 scope permanently (§LVIII: TRAINING BOUNDARY).
 
 Module map: docs/ARCHITECTURE.md. Agent rules: AGENTS.md.
 """
-module Harpe
+module Gesso
 
 # --- foundation (always loaded) ---------------------------------------------
 include("logging.jl")      # §XLII/§LXX  structured events, fallback recording
@@ -41,7 +41,7 @@ include("Agents/Agents.jl")                 # Phase 12
 include("CAPI/CAPI.jl")                     # Phase 16
 
 # --- public semantic vocabulary (§CIX; Phase 1 item A) ----------------------
-# Re-exported so `using Harpe` sees the core vocabulary. Each module owns its
+# Re-exported so `using Gesso` sees the core vocabulary. Each module owns its
 # names; the root only forwards them.
 using .Semantics: PrefillWorkload, DecodeWorkload
 export PrefillWorkload, DecodeWorkload

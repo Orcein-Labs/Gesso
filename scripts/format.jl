@@ -11,8 +11,17 @@ catch
     Base.require(Main, :JuliaFormatter)
 end
 JF = Base.require(Main, :JuliaFormatter)
-ok = JF.format(dirname(@__DIR__); verbose=(!run_check))
-if run_check
-    ok || error("formatting check FAILED — run `make format` and commit")
-    println("formatting OK")
+# Never walk libs/ (local Lava checkout, not the package). Format only the
+# package surfaces agents are allowed to touch.
+let
+    root = dirname(@__DIR__)
+    targets = ("src", "test", "benchmark", "scripts")
+    ok = true
+    for t in targets
+        ok &= JF.format(joinpath(root, t); verbose=(!run_check))
+    end
+    if run_check
+        ok || error("formatting check FAILED — run `make format` and commit")
+        println("formatting OK")
+    end
 end

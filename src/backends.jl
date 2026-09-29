@@ -1,4 +1,4 @@
-# Backend interface (Harpe_Stack.md §XX, §XXI, §XXII-XXIII; §LXXIII draft).
+# Backend interface (Gesso_Stack.md §XX, §XXI, §XXII-XXIII; §LXXIII draft).
 #
 # This is the seam every backend lowering implements — CUDA.jl in Phase 4,
 # Lava in Phase 8 — written now so later phases cannot quietly design their
@@ -6,7 +6,7 @@
 #
 # Laws encoded here:
 #
-#   §I / §XXII-XXIII  Harpe decides what should execute; the backend determines
+#   §I / §XXII-XXIII  Gesso decides what should execute; the backend determines
 #                     how. Backends are capability surfaces, not identities.
 #                     "What can this device legally and efficiently execute?",
 #                     not "Is this NVIDIA?"
@@ -22,28 +22,28 @@
 # Scope here: backend types, traits, and the lowering-operation contract
 # signatures only. Concrete execution arrives with Phase 2 (CPU reference).
 
-export AbstractHarpeBackend, CPUBackend
+export AbstractGessoBackend, CPUBackend
 export backend_name, execution_tier, supports
 
 """
-    AbstractHarpeBackend
+    AbstractGessoBackend
 
-Supertype of Harpe backend tags. A backend instance is an *intent* — the
+Supertype of Gesso backend tags. A backend instance is an *intent* — the
 concrete device is resolved from it at lowering time.
 
-Concrete implementations live in package extensions (`HarpeCUDAExt`,
-`HarpeLavaExt`) or in core for the CPU reference path. Core Harpe defines only
+Concrete implementations live in package extensions (`GessoCUDAExt`,
+`GessoLavaExt`) or in core for the CPU reference path. Core Gesso defines only
 [`CPUBackend`](@ref) and knows nothing else about specific vendors (§I).
 """
-abstract type AbstractHarpeBackend end
+abstract type AbstractGessoBackend end
 
 """
-    CPUBackend <: AbstractHarpeBackend
+    CPUBackend <: AbstractGessoBackend
 
 The Tier 0 backend (§XXI, PORTABLE_CORRECTNESS). Always available, always
 correct, performance explicitly secondary. The bottom of every fallback chain.
 """
-struct CPUBackend <: AbstractHarpeBackend end
+struct CPUBackend <: AbstractGessoBackend end
 
 """
     backend_name(b) -> Symbol

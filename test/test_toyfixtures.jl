@@ -42,7 +42,7 @@ end
     # the protocol is ONE master stream, so earlier draws never shift later ones
     @test toy_weights(fx, 160)[1:128] == w1
     # independent re-derivation from the documented seed matches
-    rng = HarpeTestHelpers.deterministic_rng(fx.seed)
+    rng = GessoTestHelpers.deterministic_rng(fx.seed)
     @test [randn(rng) for _ in 1:128] == w1
 end
 
@@ -53,7 +53,7 @@ end
     write(
         joinpath(dir, "model.toml"),
         """
-        schema = "harpe-toy-fixture-v1"
+        schema = "gesso-toy-fixture-v1"
         name = "mini"
 
         [vocab]
@@ -74,7 +74,7 @@ end
     write(
         joinpath(dir, "tokenizer.toml"),
         """
-        schema = "harpe-toy-tokenizer-v1"
+        schema = "gesso-toy-tokenizer-v1"
 
         [ids]
         PAD = 0
@@ -98,7 +98,7 @@ end
     write(
         joinpath(dir, "expected_logits.toml"),
         """
-        schema = "harpe-toy-expected-logits-v1"
+        schema = "gesso-toy-expected-logits-v1"
 
         [provenance]
         oracle = "cpu"
@@ -164,7 +164,7 @@ end
     write(
         joinpath(dir3, "expected_logits.toml"),
         """
-        schema = "harpe-toy-expected-logits-v1"
+        schema = "gesso-toy-expected-logits-v1"
 
         [provenance]
         oracle = "cpu"
@@ -189,7 +189,7 @@ end
     write(
         joinpath(dir4, "expected_logits.toml"),
         """
-        schema = "harpe-toy-expected-logits-v1"
+        schema = "gesso-toy-expected-logits-v1"
 
         [provenance]
         oracle = ""
@@ -219,7 +219,7 @@ end
     write(
         joinpath(dir5, "expected_logits.toml"),
         """
-        schema = "harpe-toy-expected-logits-v1"
+        schema = "gesso-toy-expected-logits-v1"
 
         [provenance]
         oracle = "cpu"

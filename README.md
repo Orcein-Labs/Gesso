@@ -1,8 +1,8 @@
-# Harpe.jl
+# Gesso.jl
 
 **Julia-native semantic ML and agent execution runtime.**
 
-Harpe loads existing open-weight models, preserves what they mean, and uses that
+Gesso loads existing open-weight models, preserves what they mean, and uses that
 information to determine how they should physically exist and execute on the
 hardware and workload actually present.
 
@@ -16,10 +16,10 @@ hardware and workload actually present.
 **Phase 0 — repository foundation: COMPLETE** (incl. the BONES swarm-readiness
 sprint and the foundation-hardening sprint: receipts/failure-taxonomy/freeze
 infrastructure stress-tested, correctness laboratory established).
-**Next gate: Phase 1 — the semantic core**, which implements the
-object-model encoding decided in canon (§CIX). Nothing here runs models yet.
+**Phase 1 (semantic core) and Phase 2 (CPU oracle) are COMPLETE.**
+Next gate: Phase 3 — first real model import. `toy2` runs on `CPUBackend`.
 
-- [x] Clean `Project.toml`, no third-party dependencies (§VII: *Harpe earns every hard dependency*; only the `Dates` stdlib, enforced by test)
+- [x] Clean `Project.toml`, no third-party dependencies (§VII: *Gesso earns every hard dependency*; stdlibs `Dates` and `LinearAlgebra`, enforced by test)
 - [x] Package skeleton: logging conventions, backend interface draft
 - [x] Test harness with dependency-law enforcement
 - [x] CI (tests + format + bench-smoke, dev-loop entry included)
@@ -35,7 +35,7 @@ object-model encoding decided in canon (§CIX). Nothing here runs models yet.
 ## The stack
 
 ```julia
-using Harpe
+using Gesso
 using Lava   # Phase 8 — portable/Vulkan path
 # or
 using CUDA   # Phase 4 — strategic fast path
@@ -47,7 +47,7 @@ using CUDA   # Phase 4 — strategic fast path
 MAKE IT WORK → MAKE IT COMPLETE → MAKE IT MEASURABLE → MAKE IT FAST
 ```
 
-Current phases (docs/Harpe_Stack.md §LXXIII ff.):
+Current phases (docs/Gesso_Stack.md §LXXIII ff.):
 
 | Phase | Deliverable | Status |
 |------:|-------------|--------|
@@ -57,11 +57,11 @@ Current phases (docs/Harpe_Stack.md §LXXIII ff.):
 | 3 | First real model import | |
 | 4 | CUDA.jl execution | |
 
-Training is **not** part of Harpe — by explicit, permanent decision
-([docs/Harpe_Stack.md §LVIII](docs/Harpe_Stack.md)). If you want to contribute
+Training is **not** part of Gesso — by explicit, permanent decision
+([docs/Gesso_Stack.md §LVIII](docs/Gesso_Stack.md)). If you want to contribute
 to the Julia ML ecosystem and want a job with real scope: **build the training
 stack.** The natural place to start is [WGPU.jl](https://github.com/JuliaGPU/WGPU.jl).
-Harpe will load its checkpoints like everyone else's.
+Gesso will load its checkpoints like everyone else's.
 
 ## Layout
 
@@ -69,7 +69,7 @@ Harpe will load its checkpoints like everyone else's.
 src/           package core (zero deps; logging, receipts, errors, backends)
 test/          test harness (workspace member; per-area test files)
 benchmark/     benchmark harness (workspace member; results/ accrues)
-docs/          architecture: Harpe_Stack.md is canon; ARCHITECTURE.md is the map
+docs/          architecture: Gesso_Stack.md is canon; ARCHITECTURE.md is the map
 libs/          local dev sources (gitignored; Lava lives here) — DO NOT TOUCH
 ```
 

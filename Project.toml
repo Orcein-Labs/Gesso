@@ -1,20 +1,20 @@
-name = "Harpe"
+name = "Gesso"
 uuid = "05f31162-62af-44f0-af37-0e48a49f1899"
 version = "0.1.0"
 authors = ["Matt <liravossai@gmail.com>"]
 
 [deps]
-# Intentionally minimal (Phase 0, Harpe_Stack.md §LXXIII).
+# Intentionally minimal (Phase 0, Gesso_Stack.md §LXXIII).
 #
-# Harpe earns every hard dependency (§VII). The only allowed entries are
+# Gesso earns every hard dependency (§VII). The only allowed entries are
 # Julia stdlibs, and each one must be added together with an entry in the
 # dependency-law test (test/runtests.jl) justifying it:
 #   Dates  — timestamps for structured log events (§XLII receipts vocabulary)
 #
 # Backend lowering arrives as package extensions when their phases call for
 # it — never as core dependencies:
-#   CUDA.jl → ext/HarpeCUDAExt.jl   (Phase 4)
-#   Lava    → ext/HarpeLavaExt.jl   (Phase 8)
+#   CUDA.jl → ext/GessoCUDAExt.jl   (Phase 4)
+#   Lava    → ext/GessoLavaExt.jl   (Phase 8)
 #
 # Lava lives at libs/Lava as a local development source; it is NOT a dependency
 # of this package yet and must not become one before Phase 8.

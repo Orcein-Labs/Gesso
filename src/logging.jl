@@ -1,4 +1,4 @@
-# Logging & telemetry conventions (Phase 0, Harpe_Stack.md §LXXIII).
+# Logging & telemetry conventions (Phase 0, Gesso_Stack.md §LXXIII).
 #
 # Laws this file exists to enforce (before the machinery that will enforce them
 # better exists):
@@ -12,24 +12,24 @@
 #          timestamp; domain code attaches structured key-value context, never
 #          prose-only messages.
 #
-#   §XLIX  Performance observability. Harpe must explain performance. Phase 0
+#   §XLIX  Performance observability. Gesso must explain performance. Phase 0
 #          only fixes the event vocabulary; collection comes with Phase 6.
 #
-# Conventions for all future Harpe code:
+# Conventions for all future Gesso code:
 #
-#   * Log through `hlog(level, event, pairs...)` — never bare `@info` in
+#   * Log through `glog(level, event, pairs...)` — never bare `@info` in
 #     library code, so events remain structured and greppable.
 #   * `event` is a short snake_case symbol naming the event kind
 #     (e.g. :backend_fallback, :plan_selected).
 #   * Context is key-value pairs. Values should be primitives or strings that
 #     survive serialization into future receipts.
-#   * Nothing in Harpe logs model weights, prompts, or generated text by
+#   * Nothing in Gesso logs model weights, prompts, or generated text by
 #     default. Content belongs in receipts, not logs.
 
 module Log
 
-export hlog, HarpeLogConfig, min_level!, current_config
-export @hfallback
+export glog, GessoLogConfig, min_level!, current_config
+export @gfallback
 
 using Dates
 
@@ -40,13 +40,13 @@ using Dates
     LOG_ERROR = 3
 end
 
-Base.@kwdef mutable struct HarpeLogConfig
+Base.@kwdef mutable struct GessoLogConfig
     min_level::LogLevel = LOG_INFO
     io::IO = stderr
     timestamps::Bool = true
 end
 
-const GLOBAL_CONFIG = HarpeLogConfig()
+const GLOBAL_CONFIG = GessoLogConfig()
 
 current_config() = GLOBAL_CONFIG
 
@@ -69,17 +69,17 @@ const LEVEL_TAG = Dict{LogLevel, String}(
 )
 
 """
-    hlog([io], level, event; kw...) -> Nothing
+    glog([io], level, event; kw...) -> Nothing
 
-Emit one structured Harpe event.
+Emit one structured Gesso event.
 
 ```julia
-hlog(LOG_WARN, :backend_fallback; requested = :lava, actual = :cuda, reason = "no device")
+glog(LOG_WARN, :backend_fallback; requested = :lava, actual = :cuda, reason = "no device")
 ```
 
 Events below the configured minimum level are dropped. `event` must be a Symbol.
 """
-function hlog(io::IO, level::LogLevel, event::Symbol; kw...)
+function glog(io::IO, level::LogLevel, event::Symbol; kw...)
     GLOBAL_CONFIG.min_level <= level || return nothing
     prefix = LEVEL_TAG[level]
     if GLOBAL_CONFIG.timestamps
@@ -102,14 +102,14 @@ function hlog(io::IO, level::LogLevel, event::Symbol; kw...)
     return nothing
 end
 
-hlog(level::LogLevel, event::Symbol; kw...) = hlog(GLOBAL_CONFIG.io, level, event; kw...)
+glog(level::LogLevel, event::Symbol; kw...) = glog(GLOBAL_CONFIG.io, level, event; kw...)
 
 _render(x) = repr(x)
 _render(x::AbstractString) = x
 _render(x::Symbol) = string(x)
 
 """
-    @hfallback(allowed, actual, [kw...])
+    @gfallback(allowed, actual, [kw...])
 
 Record a policy-permitted fallback (§LXX). A fallback that is not logged through
 this macro is a law violation waiting to be found. Emits a `LOG_WARN` event
@@ -117,19 +117,19 @@ this macro is a law violation waiting to be found. Emits a `LOG_WARN` event
 evaluates to the fallback value so call sites can write:
 
 ```julia
-dev = lava_device_or_nothing() === nothing ? @hfallback(:lava, :cuda) : lava_device()
+dev = lava_device_or_nothing() === nothing ? @gfallback(:lava, :cuda) : lava_device()
 ```
 """
-macro hfallback(requested, actual)
+macro gfallback(requested, actual)
     res = gensym(:fallback_result)
     quote
         $res = $(esc(actual))
-        $(hlog)($(LOG_WARN), :fallback; requested=($(esc(requested))), actual=($res))
+        $(glog)($(LOG_WARN), :fallback; requested=($(esc(requested))), actual=($res))
         $res
     end
 end
 
 end # module Log
 
-using .Log: hlog, HarpeLogConfig, min_level!, current_config, @hfallback
-export hlog, HarpeLogConfig, min_level!, current_config, @hfallback
+using .Log: glog, GessoLogConfig, min_level!, current_config, @gfallback
+export glog, GessoLogConfig, min_level!, current_config, @gfallback

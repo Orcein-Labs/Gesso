@@ -4,7 +4,7 @@
 
 **For:** Buffy (mechanical implementation)
 **From:** Grok (encoding owner)
-**Canon:** `docs/Harpe_Stack.md` §CIX, §XI–§XIII, §VIII, §XXX, §LXXIV
+**Canon:** `docs/Gesso_Stack.md` §CIX, §XI–§XIII, §VIII, §XXX, §LXXIV
 **Map:** `docs/ARCHITECTURE.md` (Object model)
 **Packets:** 1 and 2 are already law in §CIX. Do not reopen them.
 
@@ -65,7 +65,7 @@ workload types exist and can be constructed.
 ```
 src/Semantics/Semantics.jl
 src/Parameters/Parameters.jl
-src/Harpe.jl
+src/Gesso.jl
 test/test_semantics.jl
 test/test_parameters.jl
 test/runtests.jl
@@ -87,7 +87,7 @@ docs/ARCHITECTURE.md
   trait this item adds.
 - Metadata is a small struct or named fields (`shape`, `storage=nothing`).
   Volatile facts are not type parameters.
-- Re-export the public names from `Harpe` so `using Harpe` sees them.
+- Re-export the public names from `Gesso` so `using Gesso` sees them.
 
 **Invariants**
 
@@ -120,7 +120,7 @@ runtime type (`LlamaRuntime` etc.).
 ```
 src/ModelIR/ModelIR.jl
 src/ModelIR/*.jl          # split files if the single file gets large
-src/Harpe.jl
+src/Gesso.jl
 test/test_modelir.jl
 test/runtests.jl
 docs/ARCHITECTURE.md
@@ -128,7 +128,7 @@ docs/ARCHITECTURE.md
 
 You may *read* `test/fixtures/toy/` and `test/toyfixtures.jl`. You may
 add a builder in `test/` that uses ModelIR constructors. Do not make the
-TOML schema a Harpe type. Fixture `kind` strings (`attention`, `mlp`)
+TOML schema a Gesso type. Fixture `kind` strings (`attention`, `mlp`)
 stay fixture data; the builder maps them onto primitives.
 
 **Interfaces to expose**
@@ -174,7 +174,7 @@ met: `toy2` is expressible entirely through the semantic core.
 ```
 src/Operators/Operators.jl
 src/backends.jl            # only if you must add methods / keep stubs coherent
-src/Harpe.jl
+src/Gesso.jl
 test/test_operators.jl
 test/test_empty_core.jl
 test/test_phase1_exit.jl

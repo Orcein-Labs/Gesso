@@ -1,7 +1,7 @@
-# AGENTS.md — Harpe Agent Charter
+# AGENTS.md — Gesso Agent Charter
 
 **Every agent working in this repository operates under this charter.**
-It transcribes laws from `docs/Harpe_Stack.md` (canon, sections referenced
+It transcribes laws from `docs/Gesso_Stack.md` (canon, sections referenced
 as §NNN). Reading the charter is not a substitute for reading the canon —
 but the charter is binding even if you have not read the canon.
 
@@ -10,15 +10,15 @@ but the charter is binding even if you have not read the canon.
 ## 0. Read order (before your first edit)
 
 1. This file.
-2. `docs/Harpe_Stack.md` — at minimum §II (first principle), §III
+2. `docs/Gesso_Stack.md` — at minimum §II (first principle), §III
    (development law), §LXXI–§LXXII (swarm rules, receipts).
 3. `docs/ARCHITECTURE.md` — the module map.
 4. The work item you were assigned, which must follow the template in
    `.github/ISSUE_TEMPLATE/work-item.md`.
 
-## 1. What Harpe is (so you do not build the wrong thing)
+## 1. What Gesso is (so you do not build the wrong thing)
 
-Harpe is a Julia-native semantic ML and agent execution runtime: it loads
+Gesso is a Julia-native semantic ML and agent execution runtime: it loads
 existing models, preserves what they mean, and uses that meaning to decide
 how they physically exist and execute.
 
@@ -33,12 +33,13 @@ Do not build ahead of the phase plan. Do not build "the whole vision."
   gradient paths, training loops — not deferred, *out of scope*. If you
   find yourself writing a backward pass, stop.
 * **Do not touch `libs/`** — local dev checkouts, never part of the package.
-* **Lava and CUDA are extensions, not dependencies** (§VII). Core Harpe
+* **Lava and CUDA are extensions, not dependencies** (§VII). Core Gesso
   earns every hard dependency; the dependency-law test enforces this and
   you must edit that test (with a justification) to add anything.
-* **NIRA/NeuraJL boundaries** (§XLIII): Harpe owns mechanism. Do not
-  implement policy or cognition. L3+ memory (semantic/episodic) is a seam,
-  not a component.
+* **Palette/Cyan boundaries** (§XLIII): Gesso owns mechanism. Palette owns
+  expression. Cyan owns policy and cognition (internal: NIRA). Do not
+  implement policy or cognition here. L3+ memory (semantic/episodic) is a
+  seam, not a component.
 
 ## 3. How you work (§LXXI)
 
@@ -81,9 +82,9 @@ memory impact · hardware · workload · model · backend
 
 ## 5. Failure and fallback (§LXX)
 
-Harpe fails explicitly. No silent representation downgrade, backend switch,
+Gesso fails explicitly. No silent representation downgrade, backend switch,
 quantization mismatch, memory-plan violation, or kernel substitution. If a
-policy permits a fallback, it goes through `@hfallback` — logged, or it
+policy permits a fallback, it goes through `@gfallback` — logged, or it
 did not happen. Lowerings decline work ONLY by throwing
 `LoweringNotImplemented`; returning `nothing` or a substitute result is a
 law violation.
@@ -108,7 +109,7 @@ run in this repo produced.
 src/           package core (see docs/ARCHITECTURE.md for the module map)
 test/          test harness — per-area files included from runtests.jl
 benchmark/     benchmark harness — results land in benchmark/results/
-docs/          Harpe_Stack.md is CANON; docs/research/ is research program
+docs/          Gesso_Stack.md is CANON; docs/research/ is research program
 libs/          DO NOT TOUCH (local dev checkouts)
 scripts/       dev commands (test/bench/format/freeze)
 ```
@@ -117,8 +118,8 @@ Open architecture questions (decisions deliberately NOT made locally) are
 recorded as decision packets in `docs/DECISION_PACKETS.md`. Do not resolve
 a packet by implementing one option — resolution happens in canon.
 Packets 1 (workload) and 2 (receipt identity) are resolved in
-`docs/Harpe_Stack.md` §CIX; the semantic core still stays empty until a
-Phase 1 work item fills it.
+`docs/Gesso_Stack.md` §CIX. Phase 1 and Phase 2 have landed; do not reopen
+the object-model encoding.
 
 ## 9. Exit checklist for every work item
 

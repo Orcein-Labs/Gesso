@@ -2,7 +2,7 @@
 # itself be tested — a tolerance helper with a broken comparison would
 # silently certify wrong results.
 
-using .HarpeTestHelpers: deterministic_rng, approx_eq, parity_report, assert_parity
+using .GessoTestHelpers: deterministic_rng, approx_eq, parity_report, assert_parity
 
 @testset "test helpers: deterministic_rng" begin
     r1 = deterministic_rng()

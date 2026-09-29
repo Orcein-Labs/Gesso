@@ -5,7 +5,7 @@
 # materializes SemanticTensors the interpreter runs on.
 
 using .ToyFixtures: load_toy_fixture, toy_weights
-using .HarpeTestHelpers: approx_eq, deterministic_rng
+using .GessoTestHelpers: approx_eq, deterministic_rng
 
 """
     toy2_tensors() -> NamedTuple
@@ -39,30 +39,30 @@ function toy2_tensors()
     E = take(vocab, dim)
     blocks = map(m.blocks) do b
         (
-            wq=Harpe.ProjectionWeight(; shape=(dim, dim), storage=take(dim, dim)),
+            wq=Gesso.ProjectionWeight(; shape=(dim, dim), storage=take(dim, dim)),
             # packed MHA: n_kv_heads * d_head == dim for toy2 (goal's walk)
-            wk=Harpe.ProjectionWeight(; shape=(dim, dim), storage=take(dim, dim)),
-            wv=Harpe.ProjectionWeight(; shape=(dim, dim), storage=take(dim, dim)),
-            wo=Harpe.ProjectionWeight(; shape=(dim, dim), storage=take(dim, dim)),
-            wgate=Harpe.ProjectionWeight(;
+            wk=Gesso.ProjectionWeight(; shape=(dim, dim), storage=take(dim, dim)),
+            wv=Gesso.ProjectionWeight(; shape=(dim, dim), storage=take(dim, dim)),
+            wo=Gesso.ProjectionWeight(; shape=(dim, dim), storage=take(dim, dim)),
+            wgate=Gesso.ProjectionWeight(;
                 shape=(b.ffn.hidden, dim),
                 storage=take(b.ffn.hidden, dim),
             ),
-            wup=Harpe.ProjectionWeight(;
+            wup=Gesso.ProjectionWeight(;
                 shape=(b.ffn.hidden, dim),
                 storage=take(b.ffn.hidden, dim),
             ),
-            wdown=Harpe.ProjectionWeight(;
+            wdown=Gesso.ProjectionWeight(;
                 shape=(dim, b.ffn.hidden),
                 storage=take(dim, b.ffn.hidden),
             ),
-            attn_rms=Harpe.FrozenParameter(; shape=(dim,), storage=take(dim)),
-            ffn_rms=Harpe.FrozenParameter(; shape=(dim,), storage=take(dim)),
+            attn_rms=Gesso.FrozenParameter(; shape=(dim,), storage=take(dim)),
+            ffn_rms=Gesso.FrozenParameter(; shape=(dim,), storage=take(dim)),
         )
     end
     @test pos < length(stream)   # the walk must consume a prefix, not exhaust
 
-    embedding = Harpe.EmbeddingTable(; shape=(vocab, dim), storage=E)
+    embedding = Gesso.EmbeddingTable(; shape=(vocab, dim), storage=E)
     return (fixture=fx, model=m, embedding=embedding, blocks=blocks, lm_head=embedding)
 end
 

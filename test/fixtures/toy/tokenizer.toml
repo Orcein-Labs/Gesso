@@ -1,7 +1,7 @@
 # Toy tokenizer table (vocabulary as data; see fixtures README). Ids are
 # dense 0..31 matching model.toml [vocab] size. Three control tokens; the
 # rest are placeholder strings — a real tokenizer is NOT being previewed.
-schema = "harpe-toy-tokenizer-v1"
+schema = "gesso-toy-tokenizer-v1"
 
 [ids]
 PAD = 0

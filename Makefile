@@ -1,4 +1,4 @@
-# Harpe dev commands (wrappers over scripts/ — see AGENTS.md §8)
+# Gesso dev commands (wrappers over scripts/ — see AGENTS.md §8)
 
 .PHONY: test bench format format-check freeze clean
 
@@ -18,4 +18,4 @@ freeze:
 	julia scripts/freeze.jl
 
 clean:
-	rm -f Harpe_*_Freeze_*.zip
+	rm -f Gesso_*_Freeze_*.zip

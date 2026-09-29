@@ -2,24 +2,24 @@
 
 @testset "semantic families (§XI): construction + metadata fields" begin
     families = [
-        Harpe.ProjectionWeight,
-        Harpe.KVCache,
-        Harpe.EmbeddingTable,
-        Harpe.ExpertWeight,
-        Harpe.FrozenParameter,
-        Harpe.QuantizedParameter,
-        Harpe.Activation,
-        Harpe.TemporaryWorkspace,
-        Harpe.RoutingState,
-        Harpe.DecodeState,
-        Harpe.AdapterDelta,
+        Gesso.ProjectionWeight,
+        Gesso.KVCache,
+        Gesso.EmbeddingTable,
+        Gesso.ExpertWeight,
+        Gesso.FrozenParameter,
+        Gesso.QuantizedParameter,
+        Gesso.Activation,
+        Gesso.TemporaryWorkspace,
+        Gesso.RoutingState,
+        Gesso.DecodeState,
+        Gesso.AdapterDelta,
     ]
     @test length(families) == 11   # the §XI list, complete
 
     for F in families
         # every family is a SemanticTensor and constructs kwarg-style
         x = F(; shape=(2, 3))
-        @test x isa Harpe.SemanticTensor
+        @test x isa Gesso.SemanticTensor
         @test x isa F
         @test x.shape == (2, 3)
 
@@ -33,7 +33,7 @@
 end
 
 @testset "semantic families (§XI): immutability" begin
-    w = Harpe.ProjectionWeight(; shape=(2, 3))
+    w = Gesso.ProjectionWeight(; shape=(2, 3))
     err = try
         w.shape = (5, 5)
         nothing
@@ -45,35 +45,35 @@ end
 
 @testset "frozen trait (§CIX: the only trait)" begin
     frozen_families = [
-        Harpe.ProjectionWeight,
-        Harpe.EmbeddingTable,
-        Harpe.FrozenParameter,
-        Harpe.ExpertWeight,
-        Harpe.AdapterDelta,
+        Gesso.ProjectionWeight,
+        Gesso.EmbeddingTable,
+        Gesso.FrozenParameter,
+        Gesso.ExpertWeight,
+        Gesso.AdapterDelta,
     ]
     volatile_families = [
-        Harpe.KVCache,
-        Harpe.QuantizedParameter,
-        Harpe.Activation,
-        Harpe.TemporaryWorkspace,
-        Harpe.RoutingState,
-        Harpe.DecodeState,
+        Gesso.KVCache,
+        Gesso.QuantizedParameter,
+        Gesso.Activation,
+        Gesso.TemporaryWorkspace,
+        Gesso.RoutingState,
+        Gesso.DecodeState,
     ]
     for F in frozen_families
-        @test Harpe.frozen(F) == true      # on the type
-        @test Harpe.frozen(F(; shape=(1,))) == true   # on the value
+        @test Gesso.frozen(F) == true      # on the type
+        @test Gesso.frozen(F(; shape=(1,))) == true   # on the value
     end
     for F in volatile_families
-        @test Harpe.frozen(F) == false
-        @test Harpe.frozen(F(; shape=(1,))) == false
+        @test Gesso.frozen(F) == false
+        @test Gesso.frozen(F(; shape=(1,))) == false
     end
     # default for anything else: not frozen (traits default closed)
-    @test Harpe.frozen(Harpe.CPUBackend) == false
+    @test Gesso.frozen(Gesso.CPUBackend) == false
 end
 
 @testset "no quantization lattice beyond the family type (§CIX stop line)" begin
-    @test Harpe.QuantizedParameter isa Type
-    @test !isdefined(Harpe.Parameters, :Quantized)
-    @test !isdefined(Harpe, :Quantized)
-    @test !isdefined(Harpe.Parameters, :Representation)
+    @test Gesso.QuantizedParameter isa Type
+    @test !isdefined(Gesso.Parameters, :Quantized)
+    @test !isdefined(Gesso, :Quantized)
+    @test !isdefined(Gesso.Parameters, :Representation)
 end

@@ -11,7 +11,7 @@ using Dates
     # Schema stability: the §XLII field vocabulary is a persisted schema
     # (RECEIPT_SCHEMA_VERSION). Changing its fields without bumping the
     # version is a §LXIX violation — this list is the tripwire.
-    fields = sort(collect(fieldnames(Harpe.Receipt)))
+    fields = sort(collect(fieldnames(Gesso.Receipt)))
     @test fields == sort([
         :agent,
         :cancellation,
@@ -37,12 +37,12 @@ using Dates
     # Deterministic field presence: every §XLII slot exists and defaults to
     # nothing (nothing = "not applicable to this action"); ids are fresh and
     # the timestamp is UTC.
-    before = Harpe.next_receipt_id()
+    before = Gesso.next_receipt_id()
     t0 = Dates.now(Dates.UTC)
-    r = Harpe.new_receipt(task="audit me")
+    r = Gesso.new_receipt(task="audit me")
     t1 = Dates.now(Dates.UTC)
     @test r.id > before
-    @test r.schema_version == Harpe.RECEIPT_SCHEMA_VERSION
+    @test r.schema_version == Gesso.RECEIPT_SCHEMA_VERSION
     @test r.task == "audit me"
     # the t0/t1 window is against Dates.now(Dates.UTC): a wall-clock in any
     # other zone would fall outside it — this IS the UTC assertion (DateTime
@@ -55,9 +55,9 @@ using Dates
 end
 
 @testset "receipts (§XLII): bounded ring saturation" begin
-    sink = Harpe.InMemorySink(3)
-    rs = [Harpe.new_receipt(task=i) for i in 1:7]
-    foreach(r -> Harpe.emit!(sink, r), rs)
+    sink = Gesso.InMemorySink(3)
+    rs = [Gesso.new_receipt(task=i) for i in 1:7]
+    foreach(r -> Gesso.emit!(sink, r), rs)
 
     # after saturation the sink is a window over the LAST capacity receipts,
     # oldest-first, and dropped counts exactly what overflowed
@@ -66,8 +66,8 @@ end
     @test sink.dropped == UInt64(4)
 
     # exactly-at-capacity and below: nothing dropped
-    sink2 = Harpe.InMemorySink(2)
-    foreach(r -> Harpe.emit!(sink2, r), rs[1:2])
+    sink2 = Gesso.InMemorySink(2)
+    foreach(r -> Gesso.emit!(sink2, r), rs[1:2])
     @test length(sink2.buf) == 2
     @test sink2.dropped == UInt64(0)
 end
@@ -80,14 +80,14 @@ end
     # fields) still land: emit! is payload-agnostic. Typed fields (id,
     # timestamp, schema_version) make malformed identity unrepresentable by
     # construction.
-    sink = Harpe.InMemorySink(2)
-    bad = Harpe.new_receipt(
+    sink = Gesso.InMemorySink(2)
+    bad = Gesso.new_receipt(
         task=Dict(:nested => :junk),
-        failure="not a HarpeError",   # wrong type for the slot
+        failure="not a GessoError",   # wrong type for the slot
         timing=123,                   # not a timing record
         context=Dict(:k => BigFloat(π)),
     )
-    @test Harpe.emit!(sink, bad) === bad
+    @test Gesso.emit!(sink, bad) === bad
     @test sink.buf[end] === bad
 
     # Nested failure: even with LOGGING ITSELF broken (config io replaced by
@@ -97,14 +97,14 @@ end
     struct ExplodingIO <: IO end
     Base.write(io::ExplodingIO, args...) = error("log I/O is broken")
 
-    sink = Harpe.InMemorySink(4)
-    cfg = Harpe.current_config()
+    sink = Gesso.InMemorySink(4)
+    cfg = Gesso.current_config()
     old_io, old_level = cfg.io, cfg.min_level
     try
         cfg.io = ExplodingIO()
-        cfg.min_level = Harpe.Log.LOG_DEBUG  # force the hlog calls to format
-        rs = [Harpe.new_receipt(task=i) for i in 1:6]
-        @test Harpe.emit!.(Ref(sink), rs) == rs  # no throw despite broken logger
+        cfg.min_level = Gesso.Log.LOG_DEBUG  # force the glog calls to format
+        rs = [Gesso.new_receipt(task=i) for i in 1:6]
+        @test Gesso.emit!.(Ref(sink), rs) == rs  # no throw despite broken logger
         @test length(sink.buf) == 4    # push-first ordering survived
         @test sink.dropped == UInt64(2)
     finally
@@ -115,20 +115,20 @@ end
 @testset "receipts (§XLII): concurrency" begin
     # concurrent emitters cannot lose receipts or corrupt the ring; the
     # dropped counter is exact (stored == emitted - dropped)
-    sink = Harpe.InMemorySink(256)
+    sink = Gesso.InMemorySink(256)
     per_thread = 2_000
     @sync begin
         for t in 1:4
             Threads.@spawn begin
                 for i in 1:per_thread
-                    Harpe.emit!(sink, Harpe.new_receipt(task="t$t-$i"))
+                    Gesso.emit!(sink, Gesso.new_receipt(task="t$t-$i"))
                 end
             end
         end
     end
     @test length(sink.buf) == 256
     @test sink.dropped == UInt64(4 * per_thread - 256)
-    @test all(r -> r isa Harpe.Receipt, sink.buf)
+    @test all(r -> r isa Gesso.Receipt, sink.buf)
 
     # ids are atomic: strictly monotonic across threads (duplicates would
     # break parent_dependency references — §XLII)
@@ -138,7 +138,7 @@ end
             Threads.@spawn begin
                 local seen = UInt64[]
                 for i in 1:1_000
-                    push!(seen, Harpe.next_receipt_id())
+                    push!(seen, Gesso.next_receipt_id())
                 end
                 ids[t] = seen
             end

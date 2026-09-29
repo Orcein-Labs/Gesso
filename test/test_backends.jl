@@ -9,7 +9,7 @@
 # the vocabulary grows when a phase's work item requires it.
 
 @testset "lowering-stub inventory: vocabulary is pinned" begin
-    src = read(joinpath(pkgdir(Harpe), "src", "backends.jl"), String)
+    src = read(joinpath(pkgdir(Gesso), "src", "backends.jl"), String)
     # the stub loop: `for op in ( :name!, :other!, ... )` — a bare symbol
     # ending in `!` inside that block is a vocabulary entry
     # `s` flag: dotall — the formatter lays the tuple out across lines
@@ -34,7 +34,7 @@
 end
 
 @testset "lowering-stub inventory: every stub present and explicitly failing" begin
-    cpu = Harpe.CPUBackend()
+    cpu = Gesso.CPUBackend()
     for op in (
         :rmsnorm!,
         :rope!,
@@ -45,15 +45,15 @@ end
         :quantize!,
         :dequantize!,
     )
-        @test isdefined(Harpe, op)
+        @test isdefined(Gesso, op)
         err = try
-            getglobal(Harpe, op)(cpu, nothing, nothing)
+            getglobal(Gesso, op)(cpu, nothing, nothing)
             nothing
         catch e
             e
         end
         # §LXX: the ONLY legal way to decline work
-        @test err isa Harpe.LoweringNotImplemented
+        @test err isa Gesso.LoweringNotImplemented
         @test err.op === op          # identifies the operation
         @test err.backend === :cpu   # identifies the backend
     end
@@ -63,11 +63,11 @@ end
     # Phase 2 (§LXXV): true exactly where a CPU method computes. This fence
     # keeps supports honest in both directions — no silent capability
     # invention, and no false denial of implemented coverage.
-    cpu = Harpe.CPUBackend()
+    cpu = Gesso.CPUBackend()
     for cap in (:rmsnorm, :rope, :softmax, :swiglu, :matmul, :embedding_lookup)
-        @test Harpe.supports(cpu, cap) == true
+        @test Gesso.supports(cpu, cap) == true
     end
-    @test Harpe.supports(cpu, :quantize) == false
-    @test Harpe.supports(cpu, :dequantize) == false
-    @test Harpe.supports(cpu, :anything_at_all) == false   # unknown: still false, never throws
+    @test Gesso.supports(cpu, :quantize) == false
+    @test Gesso.supports(cpu, :dequantize) == false
+    @test Gesso.supports(cpu, :anything_at_all) == false   # unknown: still false, never throws
 end

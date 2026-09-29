@@ -5,10 +5,10 @@
 # The provenance (commit, fixture seed) is filled automatically; the file is
 # deterministic — re-running produces an identical file.
 
-using Harpe
+using Gesso
 
 include(joinpath(@__DIR__, "..", "test", "testhelpers.jl"))
-using .HarpeTestHelpers
+using .GessoTestHelpers
 
 include(joinpath(@__DIR__, "..", "test", "toyfixtures.jl"))
 import .ToyFixtures
@@ -17,7 +17,7 @@ import .ToyFixtures
 # rebuild it here without the test harness by re-including its builder part.
 # Simpler and truthful: call the same mapping directly.
 function toy2_modelir(fx)
-    blocks = Harpe.Block[]
+    blocks = Gesso.Block[]
     i = 1
     while i <= length(fx.blocks)
         b = fx.blocks[i]
@@ -26,9 +26,9 @@ function toy2_modelir(fx)
                 error("toy2 builder: attention block not followed by mlp")
             push!(
                 blocks,
-                Harpe.Block(
-                    Harpe.Attention(; n_heads=b.n_heads),
-                    Harpe.SwiGLU(; hidden=fx.blocks[i+1].hidden),
+                Gesso.Block(
+                    Gesso.Attention(; n_heads=b.n_heads),
+                    Gesso.SwiGLU(; hidden=fx.blocks[i+1].hidden),
                 ),
             )
             i += 2
@@ -36,9 +36,9 @@ function toy2_modelir(fx)
             error("toy2 builder: unexpected leading block kind :$(b.kind)")
         end
     end
-    return Harpe.Model(;
+    return Gesso.Model(;
         vocab_size=fx.vocab_size,
-        embedding=Harpe.Embedding(; dim=fx.dim),
+        embedding=Gesso.Embedding(; dim=fx.dim),
         blocks=Tuple(blocks),
     )
 end
@@ -62,31 +62,31 @@ end
 E = take(vocab, dim)
 blocks = map(m.blocks) do b
     (
-        wq=Harpe.ProjectionWeight(; shape=(dim, dim), storage=take(dim, dim)),
-        wk=Harpe.ProjectionWeight(; shape=(dim, dim), storage=take(dim, dim)),
-        wv=Harpe.ProjectionWeight(; shape=(dim, dim), storage=take(dim, dim)),
-        wo=Harpe.ProjectionWeight(; shape=(dim, dim), storage=take(dim, dim)),
-        wgate=Harpe.ProjectionWeight(;
+        wq=Gesso.ProjectionWeight(; shape=(dim, dim), storage=take(dim, dim)),
+        wk=Gesso.ProjectionWeight(; shape=(dim, dim), storage=take(dim, dim)),
+        wv=Gesso.ProjectionWeight(; shape=(dim, dim), storage=take(dim, dim)),
+        wo=Gesso.ProjectionWeight(; shape=(dim, dim), storage=take(dim, dim)),
+        wgate=Gesso.ProjectionWeight(;
             shape=(b.ffn.hidden, dim),
             storage=take(b.ffn.hidden, dim),
         ),
-        wup=Harpe.ProjectionWeight(;
+        wup=Gesso.ProjectionWeight(;
             shape=(b.ffn.hidden, dim),
             storage=take(b.ffn.hidden, dim),
         ),
-        wdown=Harpe.ProjectionWeight(;
+        wdown=Gesso.ProjectionWeight(;
             shape=(dim, b.ffn.hidden),
             storage=take(dim, b.ffn.hidden),
         ),
-        attn_rms=Harpe.FrozenParameter(; shape=(dim,), storage=take(dim)),
-        ffn_rms=Harpe.FrozenParameter(; shape=(dim,), storage=take(dim)),
+        attn_rms=Gesso.FrozenParameter(; shape=(dim,), storage=take(dim)),
+        ffn_rms=Gesso.FrozenParameter(; shape=(dim,), storage=take(dim)),
     )
 end
-embedding = Harpe.EmbeddingTable(; shape=(vocab, dim), storage=E)
+embedding = Gesso.EmbeddingTable(; shape=(vocab, dim), storage=E)
 tensors = (embedding=embedding, blocks=blocks, lm_head=embedding)
 
 prompt = [1, 3, 4, 5]
-L = Harpe.reference_prefill(model, tensors, prompt)
+L = Gesso.reference_prefill(model, tensors, prompt)
 println("oracle logits: ", size(L), "   max_abs = ", maximum(abs, L))
 println("last-position argmax (0-based): ", argmax(@view L[:, end]) - 1)
 
@@ -102,7 +102,7 @@ println(
     io,
     "# Column t = next-token logits after consuming tokens 1..t. Dense (vocab, seq).",
 )
-println(io, "schema = \"harpe-toy-expected-logits-v1\"")
+println(io, "schema = \"gesso-toy-expected-logits-v1\"")
 println(io)
 println(io, "[provenance]")
 println(io, "oracle = \"cpu\"")

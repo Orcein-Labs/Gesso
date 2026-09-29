@@ -1,5 +1,5 @@
 name: Work Item
-description: A bounded, testable swarm task (Harpe_Stack.md §LXXI format)
+description: A bounded, testable swarm task (Gesso_Stack.md §LXXI format)
 labels: ["work-item"]
 body:
   - type: textarea

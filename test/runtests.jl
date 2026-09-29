@@ -1,16 +1,16 @@
-# Harpe test harness (Harpe_Stack.md §LXXIII).
+# Gesso test harness (Gesso_Stack.md §LXXIII).
 #
 # Structure: this file owns the package-level laws (dependency law, load,
 # foundation contracts) and includes per-area test files. Tests are cheap,
 # CPU-only, and deterministic — GPU/differential tests arrive with their
 # phases, gated on hardware availability.
 
-using Harpe
+using Gesso
 using Test
 # Phase 2 oracle surface, unqualified for the per-area test files
-using Harpe: reference_prefill, reference_generate
+using Gesso: reference_prefill, reference_generate
 
-@testset "Harpe" begin
+@testset "Gesso" begin
     include("test_foundation.jl")
     include("test_errors.jl")
     include("test_receipts.jl")
@@ -45,13 +45,13 @@ using Harpe: reference_prefill, reference_generate
     include("test_reference_generate.jl")
 
     @testset "package loads" begin
-        @test Harpe.Log isa Module
-        @test isdefined(Harpe, :CPUBackend)
-        @test isdefined(Harpe, :hlog)
-        @test isdefined(Harpe, Symbol("@hfallback"))
+        @test Gesso.Log isa Module
+        @test isdefined(Gesso, :CPUBackend)
+        @test isdefined(Gesso, :glog)
+        @test isdefined(Gesso, Symbol("@gfallback"))
     end
 
-    @testset "dependency law (§VII: Harpe earns every hard dependency)" begin
+    @testset "dependency law (§VII: Gesso earns every hard dependency)" begin
         # Phase 0 law: the core package has NO third-party hard dependencies.
         # Julia stdlibs are permitted one at a time, each with a justification
         # entry here. Backends arrive as package extensions (CUDA → Phase 4,
@@ -61,7 +61,7 @@ using Harpe: reference_prefill, reference_generate
             "Dates" => "timestamps for structured log events (§XLII)",
             "LinearAlgebra" => "CPU reference matmul (§LXXV Phase 2)",
         )
-        project = joinpath(pkgdir(Harpe), "Project.toml")
+        project = joinpath(pkgdir(Gesso), "Project.toml")
         section = ""
         declared = Dict{String, Vector{String}}()
         for line in eachline(project)
@@ -83,18 +83,18 @@ using Harpe: reference_prefill, reference_generate
     end
 
     @testset "logging conventions (§LXX, §XLII)" begin
-        cfg = Harpe.current_config()
+        cfg = Gesso.current_config()
         old_io, old_level = cfg.io, cfg.min_level
         buf = IOBuffer()
         try
             cfg.io = buf
 
             # debug dropped at default min level (§: events below min are gone)
-            Harpe.hlog(Harpe.Log.LOG_DEBUG, :should_be_dropped; x=1)
+            Gesso.glog(Gesso.Log.LOG_DEBUG, :should_be_dropped; x=1)
             @test isempty(take!(buf))
 
             # structured events carry event name + key=value context
-            Harpe.hlog(Harpe.Log.LOG_INFO, :plan_selected; op=:rmsnorm, backend=:cpu)
+            Gesso.glog(Gesso.Log.LOG_INFO, :plan_selected; op=:rmsnorm, backend=:cpu)
             s = String(take!(buf))
             @test occursin("[info]", s)
             @test occursin("plan_selected", s)
@@ -102,14 +102,14 @@ using Harpe: reference_prefill, reference_generate
             @test occursin("backend=cpu", s)
 
             # min_level! returns the previous level
-            prev = Harpe.min_level!(Harpe.Log.LOG_DEBUG)
-            @test prev === Harpe.Log.LOG_INFO
-            Harpe.hlog(Harpe.Log.LOG_DEBUG, :now_visible; k=42)
+            prev = Gesso.min_level!(Gesso.Log.LOG_DEBUG)
+            @test prev === Gesso.Log.LOG_INFO
+            Gesso.glog(Gesso.Log.LOG_DEBUG, :now_visible; k=42)
             @test occursin("now_visible", String(take!(buf)))
-            Harpe.min_level!(Harpe.Log.LOG_INFO)
+            Gesso.min_level!(Gesso.Log.LOG_INFO)
 
             # §LXX: fallbacks are recorded, and the macro returns the fallback
-            val = Harpe.@hfallback(:lava, :cuda)
+            val = Gesso.@gfallback(:lava, :cuda)
             @test val === :cuda
             s = String(take!(buf))
             @test occursin("[warn]", s)
@@ -122,27 +122,27 @@ using Harpe: reference_prefill, reference_generate
     end
 
     @testset "backend interface (§XX, §XXI, §LXX)" begin
-        cpu = Harpe.CPUBackend()
-        @test cpu isa Harpe.AbstractHarpeBackend
-        @test Harpe.backend_name(cpu) === :cpu
-        @test Harpe.execution_tier(cpu) == 0   # tier 0: PORTABLE_CORRECTNESS
+        cpu = Gesso.CPUBackend()
+        @test cpu isa Gesso.AbstractGessoBackend
+        @test Gesso.backend_name(cpu) === :cpu
+        @test Gesso.execution_tier(cpu) == 0   # tier 0: PORTABLE_CORRECTNESS
 
         # §XX: capability probing is always safe; unknown capabilities are
         # false, never an error
-        @test Harpe.supports(cpu, :definitely_unknown_capability) == false
+        @test Gesso.supports(cpu, :definitely_unknown_capability) == false
 
         # §LXX: lowering stubs fail explicitly and identify themselves —
         # no silent substitution, ever
-        @test_throws Harpe.LoweringNotImplemented Harpe.rmsnorm!(cpu, nothing)
-        @test_throws Harpe.LoweringNotImplemented Harpe.matmul!(cpu, nothing)
+        @test_throws Gesso.LoweringNotImplemented Gesso.rmsnorm!(cpu, nothing)
+        @test_throws Gesso.LoweringNotImplemented Gesso.matmul!(cpu, nothing)
 
         err = try
-            Harpe.softmax!(cpu, nothing)
+            Gesso.softmax!(cpu, nothing)
             nothing
         catch e
             e
         end
-        @test err isa Harpe.LoweringNotImplemented
+        @test err isa Gesso.LoweringNotImplemented
         @test err.op === :softmax!
         @test err.backend === :cpu
         @test occursin("explicit failure", sprint(showerror, err))

@@ -18,7 +18,7 @@ In PyStack™, once you get beyond one GPU, you fall into a swamp of:
 - model-specific placement assumptions,
 - framework-specific distributed wrappers.
 
-Harpe could potentially make a lot of that much more declarative:
+Gesso could potentially make a lot of that much more declarative:
 
 ```julia
 materialize(
@@ -42,7 +42,7 @@ offload
 
 as **lowering choices**, exactly like quantization.
 
-That fits Harpe almost suspiciously well:
+That fits Gesso almost suspiciously well:
 
 ```text
 logical model
@@ -65,11 +65,11 @@ That is one candidate I'd put a huge star beside.
 But there are a few other **“wait, why have we not talked about this?”** candidates that could plausibly be what hit you:
 
 - **Model/state traversal and transformation** — PyTorch has `Module`, parameter registration, buffers, `state_dict`, `.to(device)`, recursive mutation, etc. Julia's structural programming + multiple dispatch + things like `Adapt`-style transformations can make "move this entire semantic model into representation X" extremely clean.
-- **Shape/layout semantics** — not just tensor meaning, but dimensions themselves: batch, sequence, head, expert, channel, shard. Harpe could stop treating `[B,S,H,D]` as anonymous integers and make layout transformations much safer and more optimizable.
-- **Serving** — no giant Python API/inference-server sandwich. Julia `Task`s + Harpe scheduler + HTTP/WebSocket surface could make serving almost embarrassingly direct.
+- **Shape/layout semantics** — not just tensor meaning, but dimensions themselves: batch, sequence, head, expert, channel, shard. Gesso could stop treating `[B,S,H,D]` as anonymous integers and make layout transformations much safer and more optimizable.
+- **Serving** — no giant Python API/inference-server sandwich. Julia `Task`s + Gesso scheduler + HTTP/WebSocket surface could make serving almost embarrassingly direct.
 - **Checkpoint/state loading** — semantic parameter mapping instead of giant string-key dictionaries and brittle naming conventions.
 - **Mixed-backend execution** — one model where some operators lower to CUDA, some Lava, some CPU, without treating backend boundaries as an exceptional condition.
-- **Automatic memory lifetime / arena planning** — Julia/compiler-visible lifetimes + Harpe semantic graph could potentially eliminate a lot of allocator thrash and manual caching.
+- **Automatic memory lifetime / arena planning** — Julia/compiler-visible lifetimes + Gesso semantic graph could potentially eliminate a lot of allocator thrash and manual caching.
 
 If I had to bet on the thought you lost, though, I’d put my money on **distributed inference / sharding**.
 
@@ -79,7 +79,7 @@ Because it has exactly the properties you described:
 2. we somehow haven't really dug into it,
 3. PyStack™ makes it notoriously complicated,
 4. Julia has unusually good primitives for expressing the orchestration,
-5. and Harpe’s existing “representation is a lowering decision” thesis almost automatically generalizes to:
+5. and Gesso’s existing “representation is a lowering decision” thesis almost automatically generalizes to:
 
 > **distribution is a lowering decision.**
 
@@ -98,14 +98,14 @@ Me: KV! THAT'S WHAT IT WAS! I was thinking this opens up so many possibilities o
 But everything else you said was gold too
 
 
-Chat: YES. **KV is probably the missing bridge between Harpe’s inference runtime and NIRA’s working-memory architecture.**
+Chat: YES. **KV is probably the missing bridge between Gesso’s inference runtime and NIRA’s working-memory architecture.**
 
 And the important distinction is:
 
 > A KV cache is not *by itself* working memory.  
 > It is the model’s **live computational state for prior context**.
 
-But once Harpe understands that state semantically instead of treating it as “two giant tensors per layer,” you suddenly get a ridiculous amount of control over the model’s effective working-memory system.
+But once Gesso understands that state semantically instead of treating it as “two giant tensors per layer,” you suddenly get a ridiculous amount of control over the model’s effective working-memory system.
 
 Right now the conventional abstraction is basically:
 
@@ -117,7 +117,7 @@ K/V tensors
 append forever until memory hurts
 ```
 
-Harpe could instead treat KV as a **managed semantic object**:
+Gesso could instead treat KV as a **managed semantic object**:
 
 ```text
 SemanticKV
@@ -178,7 +178,7 @@ Transformers don't intrinsically say:
 
 > “These last 500 tokens are probably hotter than these 40,000-token-old instructions.”
 
-Harpe knows execution context and could expose that distinction to policy.
+Gesso knows execution context and could expose that distinction to policy.
 
 Conceptually:
 
@@ -213,11 +213,11 @@ All four might share:
 - project description,
 - tool definitions,
 - repository summary,
-- Harpe/NIRA operating doctrine.
+- Gesso/NIRA operating doctrine.
 
 Why have four independent physical copies?
 
-Harpe could conceptualize:
+Gesso could conceptualize:
 
 ```text
               shared immutable prefix KV
@@ -231,11 +231,11 @@ Harpe could conceptualize:
 
 That makes multi-agent execution substantially cheaper.
 
-And because Harpe owns the orchestration runtime, it actually **knows these agents share ancestry**.
+And because Gesso owns the orchestration runtime, it actually **knows these agents share ancestry**.
 
 A generic model server sees four requests.
 
-Harpe sees a tree.
+Gesso sees a tree.
 
 That semantic difference is valuable.
 
@@ -285,7 +285,7 @@ Suppose three research agents fork from the same context, do different work, and
 
 Their raw KV states probably cannot simply be mathematically glued together and expected to behave sensibly.
 
-But Harpe/NIRA can distinguish:
+But Gesso/NIRA can distinguish:
 
 ```text
 physical KV state
@@ -305,7 +305,7 @@ Then materialize a **new** KV tail from the merged state.
 
 That's a much saner neurosymbolic boundary.
 
-Harpe manages computational state.
+Gesso manages computational state.
 
 NIRA manages cognitive meaning.
 
@@ -360,7 +360,7 @@ page hot?
 page cold?
 ```
 
-Harpe could potentially know:
+Gesso could potentially know:
 
 ```text
 this page contains system prompt
@@ -392,7 +392,7 @@ Not literally necessarily that formula, but that kind of policy.
 The endgame starts looking almost CPU-like:
 
 ```text
-                     Harpe/NIRA Memory Hierarchy
+                     Gesso/NIRA Memory Hierarchy
 
 L0  current attention state
     ultra-hot KV / GPU
@@ -415,7 +415,7 @@ L5  source artifacts
 
 Now NIRA decides **what should be remembered**.
 
-Harpe decides **how the computational representation of that memory should exist**.
+Gesso decides **how the computational representation of that memory should exist**.
 
 That separation is beautiful.
 
@@ -443,7 +443,7 @@ Perfect fit.
 
 ## Profile-guided KV materialization
 
-Harpe could observe that:
+Gesso could observe that:
 
 ```text
 this prefix appears in 73% of requests
@@ -474,7 +474,7 @@ That is **profile-guided rematerialization applied directly to working state**.
 
 ---
 
-And this might be one of the strongest early Harpe research areas because you don't have to invent a new model.
+And this might be one of the strongest early Gesso research areas because you don't have to invent a new model.
 
 Take an existing checkpoint.
 
@@ -485,7 +485,7 @@ Compare:
 ```text
 baseline KV management
 vs.
-Harpe semantic KV
+Gesso semantic KV
 ```
 
 Measure:
@@ -500,11 +500,11 @@ Measure:
 - quality degradation under compression
 - recovery under memory pressure
 
-If Harpe can fit significantly more useful working state into the same machine **without wrecking model behavior**, that's a brutally concrete win.
+If Gesso can fit significantly more useful working state into the same machine **without wrecking model behavior**, that's a brutally concrete win.
 
 And it meshes perfectly with NIRA:
 
-> **NIRA decides what memory means. Harpe decides how that memory lives.**
+> **NIRA decides what memory means. Gesso decides how that memory lives.**
 
 That sentence should probably go straight into the roadmap.
 
@@ -514,7 +514,7 @@ Me: Lol what if Magenta:TM: was actually the key to subquadratic attention scali
 
 Chat: That is exactly the kind of thought worth pulling on, because **Magenta™ doesn’t magically make ordinary dense attention subquadratic**—if every query must interact with every prior key, you still have the fundamental all-pairs cost.
 
-But the semantic-memory machinery we just described gives Harpe a way to ask a more important question:
+But the semantic-memory machinery we just described gives Gesso a way to ask a more important question:
 
 > **Why are we making every token attend equally blindly to the entire historical KV state in the first place?**
 
@@ -570,7 +570,7 @@ Over an entire sequence, that starts looking much closer to linear or `n log n` 
 
 Not guaranteed, not exact dense attention—but architecturally plausible.
 
-And **Harpe has an unusual advantage because it can make this a runtime property rather than requiring a completely different model architecture**.
+And **Gesso has an unusual advantage because it can make this a runtime property rather than requiring a completely different model architecture**.
 
 Imagine KV pages carrying semantic metadata:
 
@@ -611,7 +611,7 @@ attention over selected set
 
 That is **semantic sparse attention**.
 
-The really interesting part is that NIRA could give Harpe semantic hints that a plain transformer runtime simply doesn't possess.
+The really interesting part is that NIRA could give Gesso semantic hints that a plain transformer runtime simply doesn't possess.
 
 For example:
 
@@ -630,11 +630,11 @@ probably irrelevant:
     completed unrelated task traces
 ```
 
-Harpe could use that to decide which KV regions deserve consideration.
+Gesso could use that to decide which KV regions deserve consideration.
 
 That’s where:
 
-> **NIRA decides what memory means. Harpe decides how memory participates in computation.**
+> **NIRA decides what memory means. Gesso decides how memory participates in computation.**
 
 starts becoming much more than a nice abstraction boundary.
 
@@ -717,7 +717,7 @@ You're changing **attention resolution**.
 
 **Tier 5: Learned or profile-guided routing**
 
-Harpe observes:
+Gesso observes:
 
 > When queries of semantic class X occur, memory regions of class Y are usually attended.
 
@@ -745,7 +745,7 @@ The logical operation might be:
 Attend(query, memory)
 ```
 
-Harpe lowers it differently depending on the regime:
+Gesso lowers it differently depending on the regime:
 
 ```text
 short context
@@ -765,7 +765,7 @@ Same logical model interface.
 
 Different physical execution.
 
-That is extremely Harpe.
+That is extremely Gesso.
 
 There is, however, a hard scientific line we should keep visible:
 
@@ -798,7 +798,7 @@ Same hardware
 
 A: normal dense KV attention
 B: sliding attention
-C: Harpe semantic KV hierarchy
+C: Gesso semantic KV hierarchy
 ```
 
 Then measure:
@@ -831,7 +831,7 @@ RotorQuant is already evidence for that direction. Its original formulation uses
 
 And there are already several 2026 results pointing beyond pure rotation+scalar quantization. Attention-Aware Transform Coding explicitly optimizes the transform and bit allocation for **attention distortion rather than KV reconstruction error**, reporting near-lossless behavior around 5.8× compression on its tested models/tasks. :chatgpt-content-reference{index="2"} CommVQ instead uses additive vector quantization with RoPE-commutative codebooks and reports 2-bit cache at 87.5% memory reduction, plus a 1-bit regime with relatively small accuracy loss in its experiments. :chatgpt-content-reference{index="3"} And the very recent KV-COBRA work co-optimizes **rank and bit-width per attention head**, arguing that budget allocation—not one universal compression primitive—is the real bottleneck at extreme bit rates. :chatgpt-content-reference{index="4"}
 
-That last one is particularly Harpe-shaped.
+That last one is particularly Gesso-shaped.
 
 ### The key mathematical observation
 
@@ -879,7 +879,7 @@ That's likely where the serious next compression jump lives.
 
 ---
 
-And this produces what I think is a genuinely nasty Harpe research direction:
+And this produces what I think is a genuinely nasty Gesso research direction:
 
 ## Attention-functional KV compression
 
@@ -892,7 +892,7 @@ same bits
 same representation
 ```
 
-Let Harpe determine:
+Let Gesso determine:
 
 ```text
 layer 7 / head 3:
@@ -921,7 +921,7 @@ We're synthesizing a compression program.
 
 And the literature already suggests these axes compose. GEAR, for example, combines low-bit quantization with low-rank correction and sparse outlier correction. :chatgpt-content-reference{index="5"} PuzzleKV finds page-local low-rank structure and reports that its factorization can be combined further with quantization, while xKV exploits shared low-rank structure across layers. :chatgpt-content-reference{index="6"}
 
-So a future Harpe representation might conceptually be:
+So a future Gesso representation might conceptually be:
 
 ```text
 KV page
@@ -958,7 +958,7 @@ There are a few candidates, but I'd rank them by usefulness rather than exoticne
 
 **Tensor decompositions**—Tucker, tensor trains, page-wise SVD, shared cross-layer bases—attack redundancy in an entirely different dimension from quantization. They're orthogonal to RotorQuant, which is why combining them is so interesting.
 
-**Predictive coding across time** is another relatively unexplored Harpe-ish direction. Consecutive KV vectors are not arbitrary IID samples. If some heads exhibit predictable local evolution, you could potentially store:
+**Predictive coding across time** is another relatively unexplored Gesso-ish direction. Consecutive KV vectors are not arbitrary IID samples. If some heads exhibit predictable local evolution, you could potentially store:
 
 ```text
 predictor state + quantized residual
@@ -966,11 +966,11 @@ predictor state + quantized residual
 
 rather than each KV independently. Random access and error accumulation become problems, so you'd probably do this page-wise with periodic anchors.
 
-And then there's the truly Harpe-specific one:
+And then there's the truly Gesso-specific one:
 
 ## Semantic compression above numerical compression
 
-Once NIRA/Harpe knows:
+Once NIRA/Gesso knows:
 
 ```text
 these 256 tokens are one tool result
@@ -1001,7 +1001,7 @@ And none of that requires altering model weights.
 
 ---
 
-So if I were putting a flag into the Harpe roadmap, I would not write:
+So if I were putting a flag into the Gesso roadmap, I would not write:
 
 > **Research algebra beyond Clifford.**
 
@@ -1025,7 +1025,7 @@ transform
 × workload
 ```
 
-And let Harpe search that space.
+And let Gesso search that space.
 
 That's much scarier.
 
@@ -1033,7 +1033,7 @@ Because RotorQuant asks:
 
 > “What's a better way to represent these vectors?”
 
-Harpe could ask:
+Gesso could ask:
 
 > **“What is the minimum information this particular attention computation actually needs from this particular piece of history?”**
 
@@ -1059,15 +1059,15 @@ where \(\pi\) is the entire KV representation policy, \(M\) is memory, \(L\) is 
 
 That is much broader than “what bit width should K and V use?”
 
-I’d make this an actual Harpe research campaign.
+I’d make this an actual Gesso research campaign.
 
-## Harpe KV Memory Campaign
+## Gesso KV Memory Campaign
 
 The central object is no longer a `KVCache`.
 
 It is:
 
-> **a logical attention-memory object that Harpe is free to physically realize in multiple ways.**
+> **a logical attention-memory object that Gesso is free to physically realize in multiple ways.**
 
 Then we attack it across independent axes.
 
@@ -1221,7 +1221,7 @@ K and V
 
 deserve identical bit budgets.
 
-Harpe could assign:
+Gesso could assign:
 
 ```text
 Layer 3, head 7, K:
@@ -1256,7 +1256,7 @@ So errors perpendicular to likely queries can be almost harmless while errors al
 
 Likewise, value error matters in proportion to how strongly that value is actually read.
 
-Therefore Harpe can optimize:
+Therefore Gesso can optimize:
 
 > Preserve what future attention operations are sensitive to.
 
@@ -1304,7 +1304,7 @@ L4: reconstructible source
 
 Promote and demote dynamically.
 
-Harpe already has the right conceptual machinery for that because representation and residency are both lowering decisions.
+Gesso already has the right conceptual machinery for that because representation and residency are both lowering decisions.
 
 ---
 
@@ -1365,17 +1365,17 @@ doesn't automatically mean 12× in reality, but **that's precisely what we exper
 
 And some mechanisms will interfere. A transform that is great for scalar quantization might destroy the structure a low-rank factorization was exploiting. That's why the search needs to operate over **pipelines**, not isolated techniques.
 
-Which leads to the extremely Harpe answer:
+Which leads to the extremely Gesso answer:
 
 ## Compile the KV compressor
 
 Don't ultimately hard-code:
 
 ```text
-Harpe uses compression algorithm X.
+Gesso uses compression algorithm X.
 ```
 
-Give Harpe a library of lawful transformations:
+Give Gesso a library of lawful transformations:
 
 ```text
 SharePrefix
@@ -1412,7 +1412,7 @@ Cold pages:
     → HostResident
 ```
 
-Now we're back to Harpe's deepest thesis.
+Now we're back to Gesso's deepest thesis.
 
 **KV compression becomes a materialization problem.**
 

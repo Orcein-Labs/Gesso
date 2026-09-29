@@ -1,4 +1,4 @@
-# Harpe benchmark harness (Harpe_Stack.md §LXXIII; §XXXIII integrity rules).
+# Gesso benchmark harness (Gesso_Stack.md §LXXIII; §XXXIII integrity rules).
 #
 # Conventions:
 #
@@ -9,7 +9,7 @@
 #            tunes), and never gates on absolute numbers — CI only checks
 #            the harness runs and persists.
 #
-#   §XLIX    Harpe must explain performance. Results print structured facts —
+#   §XLIX    Gesso must explain performance. Results print structured facts —
 #            name, samples, median, allocations — and persist them with
 #            environment metadata (host, arch, threads, commit, dirty state).
 #
@@ -28,14 +28,14 @@
 # Run with:
 #   make bench   (or: julia --project=benchmark benchmark/runbenchmarks.jl)
 
-using Harpe
+using Gesso
 using BenchmarkTools
 using Dates
 using Sockets
 
 # The schema tag is IMPORTED, not hardcoded: the persisted format and the
 # schema constant in src/versions.jl cannot drift apart silently (§LXIX).
-const BENCH_RESULT_SCHEMA = string(Harpe.BENCH_RESULT_SCHEMA_VERSION)
+const BENCH_RESULT_SCHEMA = string(Gesso.BENCH_RESULT_SCHEMA_VERSION)
 
 const RESULTS = []
 
@@ -79,17 +79,17 @@ suite = Dict{String, Tuple{Function, String}}()   # name => (f, bench_note)
 
 # Constructing backend tags must be free — planners probe constantly (§XX).
 suite["backend_tag_construction"] =
-    (() -> Harpe.CPUBackend(), "§XX: tag construction must stay free")
+    (() -> Gesso.CPUBackend(), "§XX: tag construction must stay free")
 
 suite["capability_probe"] = (
-    () -> Harpe.supports(Harpe.CPUBackend(), :some_capability),
+    () -> Gesso.supports(Gesso.CPUBackend(), :some_capability),
     "§XX: capability probing is always safe, never throws",
 )
 
 # Structured event emission (§XLII) must be cheap enough that code never
 # avoids logging to save time.
 suite["structured_log_event"] = (
-    () -> Harpe.hlog(devnull, Harpe.Log.LOG_INFO, :bench_event; op=:noop, backend=:cpu),
+    () -> Gesso.glog(devnull, Gesso.Log.LOG_INFO, :bench_event; op=:noop, backend=:cpu),
     "§XLII: logging must never be the reason to skip logging",
 )
 
@@ -97,8 +97,8 @@ suite["structured_log_event"] = (
 # must stay cheap and must never throw.
 suite["receipt_emit_inmemory"] = (
     () -> begin
-        sink = Harpe.InMemorySink(64)
-        Harpe.emit!(sink, Harpe.new_receipt(task=:bench))
+        sink = Gesso.InMemorySink(64)
+        Gesso.emit!(sink, Gesso.new_receipt(task=:bench))
     end,
     "§XLII: audited actions pay for receipts; keep it negligible",
 )
@@ -107,10 +107,10 @@ suite["receipt_emit_inmemory"] = (
 suite["lowering_not_implemented_throw"] = (
     () -> begin
         try
-            Harpe.rmsnorm!(Harpe.CPUBackend(), nothing)
+            Gesso.rmsnorm!(Gesso.CPUBackend(), nothing)
             error("expected LoweringNotImplemented")
         catch e
-            e isa Harpe.LoweringNotImplemented || rethrow()
+            e isa Gesso.LoweringNotImplemented || rethrow()
         end
     end,
     "§LXX: explicit failure must be affordable",
@@ -124,7 +124,7 @@ catch
 end
 commit, dirty = git_meta()
 
-println("Harpe benchmark suite (foundation cost)")
+println("Gesso benchmark suite (foundation cost)")
 println("=" ^ 72)
 println(
     "date: ",

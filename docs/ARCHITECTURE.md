@@ -1,19 +1,23 @@
-# Harpe Architecture Map
+# Gesso Architecture Map
 
 > **Upkeep rule: a stale map is worse than no map. Update this file in the
 > same PR that changes what it maps.** Verified against the tree by the BONES
 > sprint; if this note and the tree disagree, the tree wins and this file is
 > a bug (file it).
 
-Harpe is a Julia-native semantic ML and agent execution runtime. Canon:
-`docs/Harpe_Stack.md` (Roman-numeral sections, referenced as §NNN). This map
+Gesso is a Julia-native semantic ML and agent execution runtime. Canon:
+`docs/Gesso_Stack.md` (Roman-numeral sections, referenced as §NNN). This map
 is the fast orientation layer; the canon is the law.
+
+Stack names (§I, §XLIII): **Gesso** = mechanism (this package, formerly Harpe);
+**Palette** = expression (palette.jl, formerly NeuraJL); **Cyan** = harness /
+policy (internal: NIRA); **Lava** = Vulkan substrate.
 
 ## Layer map: module → canon → phase
 
 | Module | Path | Governs (canon) | Phase |
 |---|---|---|---|
-| `Harpe` (root) | `src/Harpe.jl` | include order, package docstring | — |
+| `Gesso` (root) | `src/Gesso.jl` | include order, package docstring | — |
 | `Log` | `src/logging.jl` | §XLII receipts vocabulary, §LXX fallback recording, §XLIX events | 0 ✓ |
 | `versions` | `src/versions.jl` | §LXIX determinism, North Star §34 schema versioning | 0 ✓ |
 | `backends` | `src/backends.jl` | §XX capabilities, §XXI tiers, backend contract + lowering stubs | 0 ✓ (draft) |
@@ -31,18 +35,18 @@ is the fast orientation layer; the canon is the law.
 | `Autotune` | `src/Autotune/` | §XXVI; KV program §7 — realization search (kernel-first) | 9 |
 | `Representation` | `src/Representation/` | §XIV materialization, §XV quantization-as-lowering; KV program §5 lattice | 10 |
 | `Agents` | `src/Agents/` | §XXXIII–XLII agent primitives; JSON is wire format, not ontology | 12 |
-| `CAPI` | `src/CAPI/` | §XLVI–XLVII libharpe; adoption surface, not architecture | 16 |
+| `CAPI` | `src/CAPI/` | §XLVI–XLVII libgesso; adoption surface, not architecture | 16 |
 
 ## Research layer
 
 | Document | Role |
 |---|---|
-| `docs/Harpe_Stack.md` | **CANON.** Everything else is subordinate. |
+| `docs/Gesso_Stack.md` | **CANON.** Everything else is subordinate. |
 | `docs/research/KV_MEMORY_PROGRAM.md` | KV/working-memory research program; extends §XXXI/§X/§LIX; feeds Phases 5/9/10. |
-| `docs/Harpe_musings.md` | The dangerous notebook. Parking lot — promote deliberately, never wholesale. |
+| `docs/Gesso_musings.md` | The dangerous notebook. Parking lot — promote deliberately, never wholesale. |
 | `docs/DECISION_PACKETS.md` | Architecture escalations (decision-packet format). Packets 1–2 resolved into §CIX; remaining packets follow the same rule: resolved INTO canon, never in code. |
-| `docs/Harpe_Stack_old.md` | Predecessor vision, archived. Superseded where they disagree. |
-| `docs/Native_Julia_Kernel_Autotuning_North_Star_README.md` | Companion project spec (standalone autotuner). Harpe's Phase 9 consumes it. |
+| `docs/Harpe_Stack_old.md` | Predecessor vision (Harpe-era), archived. Superseded where they disagree. |
+| `docs/Native_Julia_Kernel_Autotuning_North_Star_README.md` | Companion project spec (standalone autotuner). Gesso's Phase 9 consumes it. |
 
 ## Process surface
 
@@ -80,7 +84,7 @@ laboratory Phase 2's CPU oracle will consume.
 
 * Training is out of scope permanently (§LVIII).
 * `libs/` is not part of the package; backends are extensions (§VII).
-* No silent fallbacks — `@hfallback` or it did not happen (§LXX).
+* No silent fallbacks — `@gfallback` or it did not happen (§LXX).
 * No dependency without editing the dependency-law test (§VII).
 * L3+ memory is a seam, not a component (KV program §8, §XLIII).
 * Semantic-core encoding is §CIX. Do not collapse Operator / ModelIR / SemanticTensor onto one encoding.

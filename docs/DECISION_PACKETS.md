@@ -1,4 +1,4 @@
-# Harpe Decision Packets
+# Gesso Decision Packets
 
 Escalations from the Foundation Hardening sprint (2026-09-29), in the
 §6 decision-packet format of that sprint's goal. These are the points
@@ -6,11 +6,11 @@ where local engineering stops and a stronger architectural reasoning
 pass should take over.
 
 Consumption rule: a packet is resolved by writing the decision INTO canon
-(`docs/Harpe_Stack.md` or the owning research program), never by silently
+(`docs/Gesso_Stack.md` or the owning research program), never by silently
 implementing one option in code. Until resolved, the safe move is to
 keep the seam undecided.
 
-Both packets below are RESOLVED INTO CANON (`docs/Harpe_Stack.md` §CIX,
+Both packets below are RESOLVED INTO CANON (`docs/Gesso_Stack.md` §CIX,
 2026-09-29). The option analysis is kept as the record of the choice.
 Code still does not implement either resolution — Phase 1 work items do.
 
@@ -19,7 +19,7 @@ Code still does not implement either resolution — Phase 1 work items do.
 ## PACKET 1 — Workload/execution-phase vocabulary
 
 **QUESTION**
-Should Harpe define an explicit `ExecutionPhase`/workload enum (or type
+Should Gesso define an explicit `ExecutionPhase`/workload enum (or type
 lattice) now, and if so, what is in it?
 
 **Why does it need deciding now?**
@@ -32,14 +32,14 @@ tags, the more painful a later normalization becomes. The next sprint
 **CURRENT FACTS**
 What canon/repo already constrain:
 - Canon §XVI ("Phase-specific materialization"): prefill and decode are
-  different workloads; Harpe may choose distinct layouts, kernel families,
+  different workloads; Gesso may choose distinct layouts, kernel families,
   quantization, cache strategies, scheduling, memory policies for:
   *prompt prefill, batch-1 decode, batched decode, long-context execution,
   structured/tool output, swarm inference*. This is a taxonomy of
   CATEGORIES, not a frozen enum.
 - Canon §XXX (referenced by ARCHITECTURE.md as "prefill/decode split") is
   the Inference-engine phase; the split is a Phase-5 concern.
-- `Harpe_musings.md` muses about workload tags but is parking-lot, not law.
+- `Gesso_musings.md` muses about workload tags but is parking-lot, not law.
 - The repo currently has NO workload type anywhere (deliberately: this
   sprint refused to freeze one — see the gate).
 - Receipts are `Any`-typed per field, so no existing persisted type blocks
@@ -53,7 +53,7 @@ Enum (`@enum WorkloadKind prefill batch1_decode batched_decode ...`)
   (12+) and the KV program (hinting, re-prefill) may need kinds the enum
   lacks; enum extension renumbers nothing but still needs a taxonomy
   review; a closed enum can push legitimate categories into stringly-typed
-  side channels (the thing Harpe hates).
+  side channels (the thing Gesso hates).
 
 **OPTION B**
 Free-form symbols/strings with a registry convention (like log `event`:
@@ -185,7 +185,7 @@ is rejected: §XLII already names it as a receipt id.
 
 ## Status
 
-Both packets are RESOLVED INTO CANON (`docs/Harpe_Stack.md` §CIX).
+Both packets are RESOLVED INTO CANON (`docs/Gesso_Stack.md` §CIX).
 No code in the repo implements either resolution. Phase 1 work items
 live in `docs/goals/PHASE1_SEMANTIC_CORE.md` and implement
 PrefillWorkload / DecodeWorkload and the semantic family types.

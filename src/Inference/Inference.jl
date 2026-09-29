@@ -17,7 +17,7 @@
 
 module Inference
 
-using ..Harpe:
+using ..Gesso:
     CPUBackend,
     PrefillWorkload,
     DecodeWorkload,
@@ -41,7 +41,7 @@ Run the toy reference model's forward pass over `tokens` (0-based ids) and
 return logits with shape `(vocab_size, seq_len)` — column `t` holds the
 next-token logits after consuming tokens `1..t`.
 
-`model` is a `Harpe.Model`; `tensors` is the materialized tensor set
+`model` is a `Gesso.Model`; `tensors` is the materialized tensor set
 (weight walk per the fixture protocol — see test/fixtures/toy/README.md):
 
     (embedding, blocks, lm_head)

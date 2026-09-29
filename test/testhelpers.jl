@@ -1,10 +1,10 @@
 # Test helpers — the correctness laboratory's reusable fixtures (goal §H).
 #
-# These live in test/ deliberately: they are LABORATORY EQUIPMENT, not Harpe
+# These live in test/ deliberately: they are LABORATORY EQUIPMENT, not Gesso
 # API. Nothing here decides ModelIR shape, tolerance POLICY, or the KV
 # program's oracle ladder — it only provides deterministic mechanics that
 # Phase 2's CPU-oracle differential tests (and any earlier parity checks)
-# will reuse. When Harpe adopts declared approximation contracts
+# will reuse. When Gesso adopts declared approximation contracts
 # (BoundedApproximation{metric, ε, oracle_tier}, KV program §6), the
 # default tolerances here should be replaced by values THOSE contracts
 # declare — the helpers take tolerances as arguments precisely so no
@@ -16,7 +16,7 @@
 # across Julia versions. If Julia ever changes Xoshiro's stream, seeded
 # fixture tests fail loudly and this file is the place to record the bump.
 
-module HarpeTestHelpers
+module GessoTestHelpers
 
 using Random
 
@@ -160,4 +160,4 @@ function assert_parity(rep; context=())
     error(msg)
 end
 
-end # module HarpeTestHelpers
+end # module GessoTestHelpers

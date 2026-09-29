@@ -1,11 +1,11 @@
-/goal HARPE — SEMANTIC ML + AGENT RUNTIME
+/goal GESSO — SEMANTIC ML + AGENT RUNTIME
 
 STATUS
 ======
 
-Harpe is no longer being conceived as "a Julia replacement for PyTorch."
+Gesso is no longer being conceived as "a Julia replacement for PyTorch."
 
-Harpe is a Julia-native semantic machine-learning compiler/runtime whose first practical mission is:
+Gesso is a Julia-native semantic machine-learning compiler/runtime whose first practical mission is:
 
     TAKE EXISTING MODELS
     UNDERSTAND THEM BETTER
@@ -17,11 +17,11 @@ The primary and only target is inference.
 
     TRAINING IS NOT OUR PROBLEM.
 
-Harpe is not a training stack, does not ship one, and does not reserve one. Training the
-models Harpe serves is — by deliberate, explicit decision — somebody else's project.
+Gesso is not a training stack, does not ship one, and does not reserve one. Training the
+models Gesso serves is — by deliberate, explicit decision — somebody else's project.
 See TRAINING BOUNDARY (Section LVIII).
 
-Harpe should be able to consume models trained elsewhere, preserve their architectural meaning,
+Gesso should be able to consume models trained elsewhere, preserve their architectural meaning,
 compile/materialize them for actual hardware and workloads, and expose an inference and
 multi-agent execution runtime substantially more integrated than conventional Python-first stacks.
 
@@ -50,11 +50,20 @@ I. PROJECT IDENTITY
 
 Canonical project:
 
-    Harpe.jl
+    Gesso.jl
 
 Ecosystem shorthand:
 
-    Harpe Stack™
+    Gesso Stack™
+
+Public names:
+
+    Gesso     this package — Julia semantic ML compiler/runtime (formerly Harpe)
+    Palette   operator surface (palette.jl; formerly NeuraJL)
+    Cyan      harness / agent personality (internal policy codename: NIRA)
+    Lava      portable Vulkan compute/graphics substrate
+
+Gesso is the ground. Palette is the surface. Cyan is the hand. Lava is the kiln.
 
 Conventional competing ecosystem shorthand used internally:
 
@@ -62,10 +71,10 @@ Conventional competing ecosystem shorthand used internally:
 
 Core practical pairing:
 
-    using Harpe
+    using Gesso
     using Lava
 
-Harpe:
+Gesso:
     semantic ML compiler/runtime
     model representation
     inference runtime
@@ -81,15 +90,15 @@ Lava:
     portable machine/GPU substrate
     Vulkan-oriented hardware execution path
     major portability layer
-    NOT authored by Harpe
+    NOT authored by Gesso
 
 CUDA.jl:
     mature NVIDIA execution path
     performance control
     strategic fast path
-    proof that Harpe's semantic architecture can be developed independently of Lava maturity
+    proof that Gesso's semantic architecture can be developed independently of Lava maturity
 
-Harpe should not demand ideological backend purity.
+Gesso should not demand ideological backend purity.
 
 If CUDA is the strongest lowering for a workload:
 
@@ -99,7 +108,7 @@ If Lava enables competitive execution on broader hardware:
 
     USE LAVA.
 
-Harpe decides what should execute.
+Gesso decides what should execute.
 
 The backend determines how that decision reaches the machine.
 
@@ -126,7 +135,7 @@ Conventional execution frequently trends toward:
       ↓
     backend
 
-Harpe should prefer:
+Gesso should prefer:
 
     logical model
         ↓
@@ -146,7 +155,7 @@ Harpe should prefer:
         ↓
     hardware backend
 
-The compiler should not need to rediscover information that Harpe possessed earlier.
+The compiler should not need to rediscover information that Gesso possessed earlier.
 
 Examples:
 
@@ -209,7 +218,7 @@ V1 does NOT require:
 
 V1 DOES require a credible inference system.
 
-There is no training stack to earn. Training is out of Harpe's scope permanently;
+There is no training stack to earn. Training is out of Gesso's scope permanently;
 see TRAINING BOUNDARY (Section LVIII).
 
 
@@ -217,15 +226,15 @@ see TRAINING BOUNDARY (Section LVIII).
 IV. V1 PRODUCT DEFINITION
 ===============================================================================
 
-Harpe V1 is:
+Gesso V1 is:
 
     AN INFERENCE-FIRST SEMANTIC COMPILER/RUNTIME
     FOR EXISTING OPEN-WEIGHT MODELS.
 
 Primary question:
 
-    Can Harpe take a checkpoint that already exists and extract materially better
-    practical execution from it because Harpe understands more about the model?
+    Can Gesso take a checkpoint that already exists and extract materially better
+    practical execution from it because Gesso understands more about the model?
 
 "Better" may include:
 
@@ -241,7 +250,7 @@ Primary question:
     better quantization decisions
     efficient multi-agent execution
 
-Harpe cannot magically add learned knowledge to unchanged weights.
+Gesso cannot magically add learned knowledge to unchanged weights.
 
 Therefore distinguish:
 
@@ -251,7 +260,7 @@ from:
 
     effective deployed capability.
 
-Harpe targets the second.
+Gesso targets the second.
 
 A model that can run:
 
@@ -269,8 +278,8 @@ is a more capable practical system even if its checkpoint is unchanged.
 V. V1 NON-GOALS
 ===============================================================================
 
-Do NOT build, ever, as Harpe scope — these are the training stack's problem, not
-deferred Harpe features (see TRAINING BOUNDARY):
+Do NOT build, ever, as Gesso scope — these are the training stack's problem, not
+deferred Gesso features (see TRAINING BOUNDARY):
 
     distributed training
     optimizer zoo
@@ -283,7 +292,7 @@ deferred Harpe features (see TRAINING BOUNDARY):
     pretraining infrastructure
     RLHF pipelines
     every AD mode
-    Harpe-native model training
+    Gesso-native model training
 
 Do NOT begin by building:
 
@@ -306,7 +315,7 @@ Do NOT begin by replacing:
 
 Reuse machinery where it is already good.
 
-Harpe's value is architecture and semantics, not gratuitous reinvention.
+Gesso's value is architecture and semantics, not gratuitous reinvention.
 
 
 ===============================================================================
@@ -317,13 +326,13 @@ VI. HIGH-LEVEL STACK
                             │
           ┌─────────────────┼─────────────────┐
           │                 │                 │
-       NIRA-Prime      Native Julia       C / C++ users
+       Cyan      Native Julia       C / C++ users
           │                 │                 │
-          │                 │              libharpe
+          │                 │              libgesso
           │                 │                 │
           └─────────────────┼─────────────────┘
                             ▼
-                    HARPE PUBLIC API
+                    GESSO PUBLIC API
                             │
                             ▼
                   SEMANTIC MODEL LAYER
@@ -365,13 +374,13 @@ VI. HIGH-LEVEL STACK
 VII. PACKAGE PHILOSOPHY
 ===============================================================================
 
-Harpe core should remain relatively lean.
+Gesso core should remain relatively lean.
 
 Avoid importing the entire Julia ML ecosystem merely because it exists.
 
 Initial Project.toml philosophy:
 
-    Harpe earns every hard dependency.
+    Gesso earns every hard dependency.
 
 Prefer:
 
@@ -382,9 +391,9 @@ Prefer:
 
 Potential package organization:
 
-    Harpe/
+    Gesso/
     ├── src/
-    │   ├── Harpe.jl
+    │   ├── Gesso.jl
     │   ├── Semantics/
     │   ├── ModelIR/
     │   ├── Parameters/
@@ -400,8 +409,8 @@ Potential package organization:
     │   └── CAPI/
     │
     ├── ext/
-    │   ├── HarpeLavaExt.jl
-    │   └── HarpeCUDAExt.jl
+    │   ├── GessoLavaExt.jl
+    │   └── GessoCUDAExt.jl
     │
     ├── test/
     ├── benchmark/
@@ -417,7 +426,7 @@ Do not prematurely split everything into separate repositories.
 VIII. MODEL IMPORT
 ===============================================================================
 
-Harpe must accept existing models without requiring retraining.
+Gesso must accept existing models without requiring retraining.
 
 Target:
 
@@ -425,19 +434,19 @@ Target:
     tokenizer definition
     safetensors / equivalent checkpoint
               ↓
-        Harpe importer
+        Gesso importer
               ↓
       canonical architecture
               +
       semantic parameter map
               ↓
-       executable Harpe model
+       executable Gesso model
 
 Checkpoint format is transport.
 
 Architecture semantics are execution information.
 
-Harpe should understand concepts such as:
+Gesso should understand concepts such as:
 
     embeddings
     RMSNorm
@@ -541,7 +550,7 @@ X. CORRECTNESS CONTRACT
 
 No performance claim without correctness.
 
-Harpe needs:
+Gesso needs:
 
     CPU/reference implementation
     deterministic fixtures
@@ -574,13 +583,13 @@ Autotuning must NEVER select a faster implementation that silently violates:
 XI. SEMANTIC PARAMETERS AND TENSORS
 ===============================================================================
 
-Harpe should distinguish storage from meaning.
+Gesso should distinguish storage from meaning.
 
 Conventional:
 
     Tensor{Float16}
 
-Harpe conceptually:
+Gesso conceptually:
 
     ProjectionWeight
     KVCache
@@ -629,10 +638,10 @@ Phase 1 implements that encoding; it does not choose another.
 
 Boundary notes:
 
-    Gradient and OptimizerState are training-side concepts and are NOT Harpe semantic
-    types. Harpe parameters are inference-resident objects.
+    Gradient and OptimizerState are training-side concepts and are NOT Gesso semantic
+    types. Gesso parameters are inference-resident objects.
 
-    AdapterDelta (LoRA-style) IS a Harpe semantic type. Serving adapters is a
+    AdapterDelta (LoRA-style) IS a Gesso semantic type. Serving adapters is a
     materialization problem — base model plus hot-swappable deltas trained elsewhere.
     Consuming fine-tunes is in scope; producing them is not. The interchange point is
     weights-on-disk, which already exists and is standardized.
@@ -691,7 +700,7 @@ Do NOT encode every property in Julia types.
 
 Otherwise:
 
-    HARPE = compile-latency benchmark.
+    GESSO = compile-latency benchmark.
 
 Use approximately:
 
@@ -730,7 +739,7 @@ Runtime:
     free memory
     queue pressure
 
-Harpe should decide when runtime facts deserve promotion into specialization.
+Gesso should decide when runtime facts deserve promotion into specialization.
 
 This promotion can eventually become profile-guided.
 
@@ -748,7 +757,7 @@ CORE HEAVYWEIGHT IDEA #1
 
 Logical model ≠ physical model.
 
-Harpe should answer:
+Gesso should answer:
 
     Given:
 
@@ -800,7 +809,7 @@ Quantization is NOT merely:
        ↓
     new checkpoint
 
-Harpe:
+Gesso:
 
     logical parameter
         +
@@ -841,7 +850,7 @@ Prefill and decode are different workloads.
 
 Do not pretend otherwise.
 
-Harpe may choose distinct:
+Gesso may choose distinct:
 
     layouts
     kernel families
@@ -876,7 +885,7 @@ CORE HEAVYWEIGHT IDEA #2
 
 Execution need not be one fixed tensor graph.
 
-Harpe may synthesize among legal plans involving:
+Gesso may synthesize among legal plans involving:
 
     fusion
     staging
@@ -907,7 +916,7 @@ Concept:
 XVIII. SEMANTIC PARTIAL EVALUATION
 ===============================================================================
 
-Harpe should eventually exploit known stable facts:
+Gesso should eventually exploit known stable facts:
 
     frozen weights
     fixed architecture
@@ -936,9 +945,8 @@ This can support:
     fusion
     smaller runtime surface
 
-This is one of the areas where "Harpe" as a name is conceptually perfect.
-
-The stack cuts away computation and generality that deployment no longer requires.
+Gesso is the ground: partial evaluation leaves only what deployment still
+needs for Palette to paint.
 
 
 ===============================================================================
@@ -975,14 +983,14 @@ Long-term interface concept:
         memory_budget = GiB(16)
     )
 
-Harpe should be able to explain why a plan fits.
+Gesso should be able to explain why a plan fits.
 
 
 ===============================================================================
 XX. HARDWARE CAPABILITY MODEL
 ===============================================================================
 
-Harpe should target capabilities, not vendor names.
+Gesso should target capabilities, not vendor names.
 
 Represent capabilities such as:
 
@@ -1011,7 +1019,7 @@ Not:
 XXI. EXECUTION TIERS
 ===============================================================================
 
-Harpe should degrade gracefully.
+Gesso should degrade gracefully.
 
 TIER 0 — PORTABLE CORRECTNESS
 
@@ -1045,7 +1053,7 @@ XXII. CUDA.jl STRATEGY
 
 CUDA.jl is strategically valuable.
 
-Early Harpe can prove:
+Early Gesso can prove:
 
     semantic architecture
     model import
@@ -1059,7 +1067,7 @@ without simultaneously solving Vulkan kernel parity.
 
 Path:
 
-    Harpe
+    Gesso
       ↓
     CUDA.jl
       ↓
@@ -1067,11 +1075,11 @@ Path:
 
 This creates a mature control backend.
 
-If Harpe + CUDA wins against conventional execution:
+If Gesso + CUDA wins against conventional execution:
 
-    Harpe architecture is doing useful work.
+    Gesso architecture is doing useful work.
 
-If Harpe + CUDA performs well but Lava lags:
+If Gesso + CUDA performs well but Lava lags:
 
     improve Lava/kernel path.
 
@@ -1084,9 +1092,9 @@ XXIII. LAVA STRATEGY
 
 Lava provides the portable/native machine path.
 
-Harpe should build against a capability-oriented backend contract.
+Gesso should build against a capability-oriented backend contract.
 
-Harpe should NOT force Lava to understand:
+Gesso should NOT force Lava to understand:
 
     model architecture
     agent roles
@@ -1102,7 +1110,7 @@ Lava should expose:
     execution
     low-level capabilities
 
-Harpe owns ML semantics.
+Gesso owns ML semantics.
 
 This separation prevents mutual contamination.
 
@@ -1134,11 +1142,11 @@ Eventually required kernel families include:
     dequantize
     sampling
 
-But Harpe should not begin by rewriting every kernel.
+But Gesso should not begin by rewriting every kernel.
 
 Use available performant kernels where possible.
 
-Generate/tune where Harpe has evidence of opportunity.
+Generate/tune where Gesso has evidence of opportunity.
 
 
 ===============================================================================
@@ -1177,9 +1185,9 @@ Prefer:
 XXVI. AUTOTUNING
 ===============================================================================
 
-Autotuning is a first-class Harpe concern.
+Autotuning is a first-class Gesso concern.
 
-Harpe should survey and integrate existing Julia autotuning/kernel-generation work before
+Gesso should survey and integrate existing Julia autotuning/kernel-generation work before
 creating redundant infrastructure.
 
 Generic loop:
@@ -1234,7 +1242,7 @@ Example:
         head_dim 128
         context 8k–24k
 
-Harpe may conclude:
+Gesso may conclude:
 
     these properties are stable enough to justify specialized execution.
 
@@ -1261,7 +1269,7 @@ CORE HEAVYWEIGHT IDEA #3
 
 The learned weights do not need to change.
 
-Harpe may alter their physical realization.
+Gesso may alter their physical realization.
 
 Examples:
 
@@ -1298,12 +1306,12 @@ Closed loop:
 
 
 ===============================================================================
-XXIX. HARPE INFERENCE ENGINE
+XXIX. GESSO INFERENCE ENGINE
 ===============================================================================
 
 Inference is NOT an adapter around llama.cpp.
 
-Harpe requires a native inference stack.
+Gesso requires a native inference stack.
 
 Main components:
 
@@ -1327,7 +1335,7 @@ Main components:
 
 Concept:
 
-                    HARPE INFERENCE
+                    GESSO INFERENCE
 
      semantic model
           │
@@ -1379,7 +1387,7 @@ XXXI. KV CACHE AS A SEMANTIC OBJECT
 
 KV cache should not simply be "some tensors."
 
-Harpe should understand:
+Gesso should understand:
 
     ownership
     request identity
@@ -1406,7 +1414,7 @@ Potential future optimizations:
 XXXII. SCHEDULER
 ===============================================================================
 
-Harpe requires its own inference-aware scheduler.
+Gesso requires its own inference-aware scheduler.
 
 Inputs include:
 
@@ -1428,7 +1436,7 @@ Scheduler can distinguish:
     speculative work
     blocked agents
 
-This is necessary before Harpe can fully exploit multi-agent workloads.
+This is necessary before Gesso can fully exploit multi-agent workloads.
 
 
 ===============================================================================
@@ -1437,7 +1445,7 @@ XXXIII. MULTI-AGENT ORCHESTRATION
 
 NEW MAJOR PILLAR
 
-Harpe should treat multi-agent orchestration as a SYSTEMS RUNTIME problem.
+Gesso should treat multi-agent orchestration as a SYSTEMS RUNTIME problem.
 
 Do NOT build:
 
@@ -1450,7 +1458,7 @@ Do NOT reproduce:
     serialization everywhere
     one inference API call per conceptual agent action
 
-Harpe should expose a small set of composable primitives around:
+Gesso should expose a small set of composable primitives around:
 
     agents
     tasks
@@ -1467,10 +1475,10 @@ Harpe should expose a small set of composable primitives around:
 
 
 ===============================================================================
-XXXIV. WHY ORCHESTRATION BELONGS IN HARPE
+XXXIV. WHY ORCHESTRATION BELONGS IN GESSO
 ===============================================================================
 
-Harpe can know BOTH:
+Gesso can know BOTH:
 
     what the model computation means
 
@@ -1522,7 +1530,7 @@ Again:
 
     JSON may remain a wire format.
 
-JSON should NOT become Harpe's ontology.
+JSON should NOT become Gesso's ontology.
 
 
 ===============================================================================
@@ -1531,7 +1539,7 @@ XXXVI. SHARED MODEL EXECUTION
 
 Five agents using one model should not require five conceptual model installations.
 
-Harpe should share when safe:
+Gesso should share when safe:
 
     model weights
     materialized representations
@@ -1563,7 +1571,7 @@ Example runtime state:
     Agent F → blocked
     Agent G → short prefill
 
-Harpe may construct:
+Gesso may construct:
 
     decode batch:
         A, C, E
@@ -1591,7 +1599,7 @@ Example:
     background critic               = low
     speculative research branch     = very low
 
-Harpe can optimize global system latency rather than only per-request throughput.
+Gesso can optimize global system latency rather than only per-request throughput.
 
 
 ===============================================================================
@@ -1608,7 +1616,7 @@ Potential API direction:
         objective = MaximizeQuality()
     )
 
-Harpe may decide:
+Gesso may decide:
 
     number of concurrent agents
     model assignment
@@ -1680,7 +1688,7 @@ Example:
       ↓
     commit
 
-Harpe should NOT compile away model reasoning.
+Gesso should NOT compile away model reasoning.
 
 But it may optimize the surrounding machinery:
 
@@ -1700,7 +1708,7 @@ This is the agent analogue of semantic partial evaluation.
 XLII. RECEIPTS
 ===============================================================================
 
-Harpe agent execution should be auditable.
+Gesso agent execution should be auditable.
 
 Each significant action may record:
 
@@ -1741,12 +1749,12 @@ old ids (§LXIX).
 
 
 ===============================================================================
-XLIII. HARPE / NEURAJL / NIRA-PRIME OWNERSHIP BOUNDARY
+XLIII. GESSO / PALETTE / CYAN OWNERSHIP BOUNDARY
 ===============================================================================
 
 This boundary should be explicit now.
 
-HARPE
+GESSO
 -----
 
 Owns mechanism.
@@ -1765,12 +1773,12 @@ Owns mechanism.
     runtime semantics
 
 
-NEURAJL
+PALETTE
 -------
 
 Owns expression.
 
-NeuraJL should expose a CONDENSED agent-friendly surface over Harpe.
+Palette should expose a CONDENSED agent-friendly surface over Gesso.
 
 Potential conceptual syntax:
 
@@ -1791,15 +1799,15 @@ or:
         search(topic)
     end
 
-NeuraJL lowers concise intent into Harpe runtime structures.
+Palette lowers concise intent into Gesso runtime structures.
 
-NeuraJL should NOT duplicate Harpe's scheduler.
+Palette should NOT duplicate Gesso's scheduler.
 
 
-NIRA-PRIME
-----------
+CYAN
+----
 
-Owns policy and cognition.
+Owns policy and cognition (internal codename: NIRA).
 
     when to spawn agents
     roles
@@ -1813,20 +1821,20 @@ Owns policy and cognition.
 
 Rule:
 
-    Harpe     = mechanism
-    NeuraJL   = expression
-    NIRA      = policy
+    Gesso     = mechanism
+    Palette   = expression
+    Cyan      = policy and cognition (internal: NIRA)
 
 
 ===============================================================================
-XLIV. NIRA-PRIME AS FIRST HARPE-NATIVE HARNESS
+XLIV. CYAN AS FIRST GESSO-NATIVE HARNESS
 ===============================================================================
 
-NIRA-Prime becomes Harpe's first demanding native consumer.
+Cyan becomes Gesso's first demanding native consumer.
 
 This is strategically excellent.
 
-Prime stresses:
+Cyan stresses:
 
     long-lived inference
     tool use
@@ -1839,23 +1847,23 @@ Prime stresses:
     scheduling
     shared model usage
 
-Harpe should dogfood through Prime.
+Gesso should dogfood through Prime.
 
-But Harpe must remain usable WITHOUT Prime.
+But Gesso must remain usable WITHOUT Prime.
 
 
 ===============================================================================
 XLV. NIRA PYTHON REDUCTION
 ===============================================================================
 
-Moving NIRA toward Harpe will likely justify removing Python orchestration where it provides no
+Moving NIRA toward Gesso will likely justify removing Python orchestration where it provides no
 unique value.
 
 Target architecture:
 
     Julia
-        Harpe
-        NeuraJL
+        Gesso
+        Palette
         NIRA orchestration
 
     Rust
@@ -1886,7 +1894,7 @@ Goal:
 XLVI. C ABI
 ===============================================================================
 
-Harpe should eventually expose a boring stable C interface.
+Gesso should eventually expose a boring stable C interface.
 
 This is an ADOPTION SURFACE.
 
@@ -1894,23 +1902,23 @@ Not the internal architecture.
 
 Possible opaque types:
 
-    harpe_runtime_t
-    harpe_model_t
-    harpe_context_t
-    harpe_request_t
+    gesso_runtime_t
+    gesso_model_t
+    gesso_context_t
+    gesso_request_t
 
 Possible operations:
 
-    harpe_runtime_create
-    harpe_model_load
-    harpe_context_create
-    harpe_tokenize
-    harpe_prefill
-    harpe_decode
-    harpe_sample
-    harpe_cancel
-    harpe_context_destroy
-    harpe_model_destroy
+    gesso_runtime_create
+    gesso_model_load
+    gesso_context_create
+    gesso_tokenize
+    gesso_prefill
+    gesso_decode
+    gesso_sample
+    gesso_cancel
+    gesso_context_destroy
+    gesso_model_destroy
 
 All semantic/compiler complexity stays behind opaque handles.
 
@@ -1927,17 +1935,17 @@ Compatibility direction:
           ↓
     compatibility adapter
           ↓
-    libharpe
+    libgesso
           ↓
-    Harpe native runtime
+    Gesso native runtime
 
-Do NOT architect Harpe around llama.cpp internals.
+Do NOT architect Gesso around llama.cpp internals.
 
 Rule:
 
-    compatibility adapts TO Harpe.
+    compatibility adapts TO Gesso.
 
-Harpe does NOT adapt its ontology TO compatibility.
+Gesso does NOT adapt its ontology TO compatibility.
 
 This gives a migration ladder:
 
@@ -1946,31 +1954,31 @@ This gives a migration ladder:
         use compatibility bridge
 
     LEVEL 2
-        use Harpe C ABI directly
+        use Gesso C ABI directly
 
     LEVEL 3
-        native Julia / Harpe semantics
+        native Julia / Gesso semantics
 
 
 ===============================================================================
 XLVIII. BACKEND-INDEPENDENT PUBLIC API
 ===============================================================================
 
-User-facing Harpe code should avoid hardcoding backend assumptions.
+User-facing Gesso code should avoid hardcoding backend assumptions.
 
 Concept:
 
-    runtime = Harpe.Runtime(device)
+    runtime = Gesso.Runtime(device)
 
-    model = Harpe.load(path)
+    model = Gesso.load(path)
 
-    deployed = Harpe.materialize(
+    deployed = Gesso.materialize(
         model,
         runtime;
         objective = MinLatency()
     )
 
-Harpe decides backend-specific realization underneath.
+Gesso decides backend-specific realization underneath.
 
 Advanced users may override policies explicitly.
 
@@ -1979,7 +1987,7 @@ Advanced users may override policies explicitly.
 XLIX. PERFORMANCE OBSERVABILITY
 ===============================================================================
 
-Harpe needs first-class telemetry.
+Gesso needs first-class telemetry.
 
 Track:
 
@@ -2006,7 +2014,7 @@ Track:
     tool wait time
     swarm GPU utilization
 
-Harpe must explain performance.
+Gesso must explain performance.
 
 
 ===============================================================================
@@ -2044,8 +2052,8 @@ Compare equivalent workloads across:
     reference Python execution
     compiled Python execution
     strong existing inference runtime
-    Harpe + CUDA.jl
-    Harpe + Lava
+    Gesso + CUDA.jl
+    Gesso + Lava
 
 Where applicable:
 
@@ -2066,9 +2074,9 @@ Measure:
     throughput under concurrency
     multi-agent throughput
 
-Harpe + CUDA is particularly important for separating:
+Gesso + CUDA is particularly important for separating:
 
-    Harpe architecture
+    Gesso architecture
 
 from:
 
@@ -2105,7 +2113,7 @@ Compare:
 
 vs.
 
-    Harpe semantic swarm execution.
+    Gesso semantic swarm execution.
 
 Scenarios:
 
@@ -2137,7 +2145,7 @@ Measure:
 LIV. FIRST RESEARCH WIN REQUIREMENT
 ===============================================================================
 
-Harpe does not need to outperform everything immediately.
+Gesso does not need to outperform everything immediately.
 
 It needs ONE clean, reproducible semantic win.
 
@@ -2224,9 +2232,9 @@ Long-term this may become fertile ground for:
 LVII. PLASTICWEIGHTS / FLUIDGEMM SEAM
 ===============================================================================
 
-Harpe must NOT depend on PlasticWeights.
+Gesso must NOT depend on PlasticWeights.
 
-But Harpe should preserve extension points for:
+But Gesso should preserve extension points for:
 
     lifecycle-aware representation
     mutable/frozen transitions
@@ -2256,14 +2264,14 @@ This remains future research.
 LVIII. TRAINING BOUNDARY — NOT OUR PROBLEM
 ===============================================================================
 
-    Harpe is an inference, execution, materialization, and orchestration stack.
+    Gesso is an inference, execution, materialization, and orchestration stack.
     Training is somebody else's problem.
 
 This is not a deferral. There is no training phase coming after the inference phases.
-Nothing in Harpe — no AD mode, no optimizer, no gradient path, no training loop —
-is being reserved for later. If a Julia-native training stack ever exists, Harpe will
+Nothing in Gesso — no AD mode, no optimizer, no gradient path, no training loop —
+is being reserved for later. If a Julia-native training stack ever exists, Gesso will
 consume its checkpoints exactly like every other checkpoint. The interchange point is
-weights-on-disk, which is standardized and which Harpe already depends on.
+weights-on-disk, which is standardized and which Gesso already depends on.
 
 The full training obligation list that is explicitly OUT of scope:
 
@@ -2281,7 +2289,7 @@ The full training obligation list that is explicitly OUT of scope:
     Enzyme / AD integration
     activation checkpointing
 
-Only three inferences of training remain in Harpe, and they are consumption-side:
+Only three inferences of training remain in Gesso, and they are consumption-side:
 
     fine-tune consumption   LoRA/adapter deltas are served materializations
                             (see AdapterDelta, Section XI). Trained elsewhere,
@@ -2295,12 +2303,12 @@ Only three inferences of training remain in Harpe, and they are consumption-side
                             not "training-time fault tolerance."
 
 If the training problem is ever picked up — inside this ecosystem or outside it —
-the natural Julia-native starting point is WGPU.jl, not Harpe.
+the natural Julia-native starting point is WGPU.jl, not Gesso.
 
 One preserved rule for that future: if a training stack ever wants inference-time
-co-design, it must REUSE Harpe semantic representations. Do NOT create
-"Harpe Training Framework 2" beside Harpe, and do NOT bolt an unrelated training
-architecture INTO Harpe.
+co-design, it must REUSE Gesso semantic representations. Do NOT create
+"Gesso Training Framework 2" beside Gesso, and do NOT bolt an unrelated training
+architecture INTO Gesso.
 
 
 ===============================================================================
@@ -2316,7 +2324,7 @@ Long-term Julia advantage:
 
 may coexist inside one program with model inference.
 
-Harpe itself builds NO differentiation machinery. Gradient computation, optimizer
+Gesso itself builds NO differentiation machinery. Gradient computation, optimizer
 execution, and training of any kind belong to the training stack (Section LVIII).
 
 The one in-scope numeric-adjacent activity is calibration:
@@ -2327,7 +2335,7 @@ The one in-scope numeric-adjacent activity is calibration:
 Calibration runs as a read-only workload over the inference engine's own operator set.
 It is measurement, not learning.
 
-If a future Harpe-native runtime feature ever legitimately requires differentiating
+If a future Gesso-native runtime feature ever legitimately requires differentiating
 something, that requirement must be re-litigated explicitly at that time. It does not
 quietly reopen training scope.
 
@@ -2371,11 +2379,11 @@ plus constraints:
     device_set
     context_requirement
 
-Harpe then constructs a legal plan satisfying policy.
+Gesso then constructs a legal plan satisfying policy.
 
 
 ===============================================================================
-LXII. CLOSED-LOOP HARPE
+LXII. CLOSED-LOOP GESSO
 ===============================================================================
 
 Long-term picture:
@@ -2409,10 +2417,10 @@ This is the conceptual unifier.
 
 
 ===============================================================================
-LXIII. WHAT HARPE IS NOT
+LXIII. WHAT GESSO IS NOT
 ===============================================================================
 
-Harpe is NOT:
+Gesso is NOT:
 
     PyTorch rewritten in Julia
     llama.cpp rewritten in Julia
@@ -2426,7 +2434,7 @@ Harpe is NOT:
     NIRA-specific package
     kernel collection
 
-Harpe may interact with all of those concerns.
+Gesso may interact with all of those concerns.
 
 It is broader:
 
@@ -2445,11 +2453,11 @@ PyTorch is extensible.
 
 The question is:
 
-    "Does Harpe make this a natural system composition rule where PyStack™ would require
+    "Does Gesso make this a natural system composition rule where PyStack™ would require
      bespoke graph rewriting, tensor subclasses, compiler plugins, custom kernels,
      hooks, metadata plumbing, multiple runtimes, and application-level orchestration?"
 
-Harpe advantage:
+Gesso advantage:
 
     advanced behavior should become ordinary.
 
@@ -2492,7 +2500,7 @@ It may be:
 
     planner → coder → reviewer
 
-Harpe should understand dependencies.
+Gesso should understand dependencies.
 
 This enables system-wide scheduling rather than blind request serving.
 
@@ -2505,10 +2513,10 @@ Simple things must remain simple.
 
 Ordinary use:
 
-    using Harpe, Lava
+    using Gesso, Lava
 
-    model = Harpe.load("model")
-    session = Harpe.Session(model)
+    model = Gesso.load("model")
+    session = Gesso.Session(model)
     generate(session, "Hello")
 
 Advanced users may expose:
@@ -2527,7 +2535,7 @@ Do not require users to understand compiler internals merely to run a model.
 LXVIII. INTERNAL DEBUGGING
 ===============================================================================
 
-Harpe must expose:
+Gesso must expose:
 
     plan inspection
     IR inspection
@@ -2546,7 +2554,7 @@ Potential developer UX:
     explain(request)
     explain(materialization)
 
-Harpe should make optimization decisions auditable.
+Gesso should make optimization decisions auditable.
 
 
 ===============================================================================
@@ -2566,7 +2574,7 @@ Record:
     configuration
     autotune cache version
 
-Agent execution will include external nondeterminism, but Harpe should distinguish:
+Agent execution will include external nondeterminism, but Gesso should distinguish:
 
     deterministic internal computation
 
@@ -2579,7 +2587,7 @@ from:
 LXX. FAILURE BEHAVIOR
 ===============================================================================
 
-Harpe must fail explicitly.
+Gesso must fail explicitly.
 
 No silent:
 
@@ -2600,7 +2608,7 @@ If fallback occurs:
 LXXI. SWARM IMPLEMENTATION RULE
 ===============================================================================
 
-Harpe development will likely involve many coding agents.
+Gesso development will likely involve many coding agents.
 
 Every task should be:
 
@@ -2649,7 +2657,7 @@ LXXIII. PHASE 0 — REPOSITORY FOUNDATION   [STATUS: COMPLETE 2026-09-28]
 ===============================================================================
 
 GOAL:
-    establish Harpe without inherited project debris.
+    establish Gesso without inherited project debris.
 
 Tasks:
 
@@ -2732,7 +2740,7 @@ Build:
 
 Exit:
 
-    Harpe logits match reference within declared tolerance.
+    Gesso logits match reference within declared tolerance.
 
 
 ===============================================================================
@@ -2771,7 +2779,7 @@ Build:
 
 Exit:
 
-    Harpe no longer relies on another inference engine.
+    Gesso no longer relies on another inference engine.
 
 
 ===============================================================================
@@ -2823,7 +2831,7 @@ Then tune.
 Exit:
 
     same logical model
-    same Harpe API
+    same Gesso API
     Lava execution correct on supported Vulkan hardware
 
 
@@ -2879,7 +2887,7 @@ Exit:
 
 
 ===============================================================================
-LXXXV. PHASE 12 — HARPE AGENT RUNTIME
+LXXXV. PHASE 12 — GESSO AGENT RUNTIME
 ===============================================================================
 
 Build minimal:
@@ -2913,44 +2921,44 @@ Exit:
 
 
 ===============================================================================
-LXXXVII. PHASE 14 — NEURAJL SURFACE
+LXXXVII. PHASE 14 — PALETTE SURFACE
 ===============================================================================
 
 Add condensed orchestration language.
 
-NeuraJL must lower to Harpe.
+Palette must lower to Gesso.
 
 Exit:
 
     simple agent graph expressed compactly
-    execution identical to direct Harpe plan
+    execution identical to direct Gesso plan
 
 
 ===============================================================================
-LXXXVIII. PHASE 15 — NIRA-PRIME MIGRATION
+LXXXVIII. PHASE 15 — CYAN MIGRATION
 ===============================================================================
 
-Make NIRA-Prime first native Harpe harness.
+Make Cyan first native Gesso harness.
 
 Tasks:
 
     replace unnecessary Python orchestration
     retain useful Rust services
     establish C ABI where required
-    connect NeuraJL
-    connect Harpe inference
+    connect Palette
+    connect Gesso inference
     benchmark real workloads
 
 Exit:
 
-    Prime runs meaningfully on Harpe.
+    Cyan runs meaningfully on Gesso.
 
 
 ===============================================================================
 LXXXIX. PHASE 16 — C ABI
 ===============================================================================
 
-Stabilize libharpe.
+Stabilize libgesso.
 
 Exit:
 
@@ -2967,13 +2975,13 @@ Exit:
 XC. PHASE 17 — LLAMA.CPP COMPATIBILITY ADAPTER
 ===============================================================================
 
-Build adapter only after Harpe API is stable enough.
+Build adapter only after Gesso API is stable enough.
 
 Exit:
 
-    selected existing software can use Harpe without native rewrite.
+    selected existing software can use Gesso without native rewrite.
 
-Compatibility remains subordinate to Harpe architecture.
+Compatibility remains subordinate to Gesso architecture.
 
 
 ===============================================================================
@@ -3021,12 +3029,12 @@ Kill bad ideas quickly.
 XCIV. PHASE 21 — CONTRIBUTOR APB: THE TRAINING STACK
 ===============================================================================
 
-Harpe does not include training. This phase is an open call, not a work item.
+Gesso does not include training. This phase is an open call, not a work item.
 
     WANTED: A JULIA-NATIVE TRAINING STACK.
 
-    Public position of the Harpe project: if you want to contribute to the Julia ML
-    ecosystem and want a job with real scope, build the training stack. Harpe will load
+    Public position of the Gesso project: if you want to contribute to the Julia ML
+    ecosystem and want a job with real scope, build the training stack. Gesso will load
     its checkpoints like everyone else's. The natural place to start is WGPU.jl.
 
 The contract at the seam is already satisfied by standard formats:
@@ -3035,17 +3043,17 @@ The contract at the seam is already satisfied by standard formats:
         ↓
     standard checkpoint formats (safetensors etc.)
         ↓
-    Harpe importer (already Harpe's job)
+    Gesso importer (already Gesso's job)
         ↓
-    Harpe inference
+    Gesso inference
 
-    checkpoints carry the architecture semantics Harpe imports
-    no Harpe-side training dependency, ever
+    checkpoints carry the architecture semantics Gesso imports
+    no Gesso-side training dependency, ever
     fine-tunes and LoRA adapters arrive as weights-on-disk deltas (AdapterDelta)
 
-One standing rule for that future: it must REUSE Harpe semantic representations if it
-wants inference-time co-design. Do NOT create "Harpe Training Framework 2" beside
-Harpe, and do NOT bolt an unrelated training architecture INTO Harpe.
+One standing rule for that future: it must REUSE Gesso semantic representations if it
+wants inference-time co-design. Do NOT create "Gesso Training Framework 2" beside
+Gesso, and do NOT bolt an unrelated training architecture INTO Gesso.
 
 
 ===============================================================================
@@ -3065,7 +3073,7 @@ Revisit:
 XCVI. SUCCESS CRITERIA — V0
 ===============================================================================
 
-Harpe can:
+Gesso can:
 
     load one real model
     preserve semantics
@@ -3079,7 +3087,7 @@ Harpe can:
 XCVII. SUCCESS CRITERIA — V1
 ===============================================================================
 
-Harpe can:
+Gesso can:
 
     support several real model architectures
     run complete inference
@@ -3097,21 +3105,21 @@ Harpe can:
 XCVIII. SUCCESS CRITERIA — V1.5
 ===============================================================================
 
-Harpe can:
+Gesso can:
 
     orchestrate multiple agents
     batch across agents
     enforce budgets/priorities
     share model resources
-    expose NeuraJL orchestration surface
-    run NIRA-Prime natively
+    expose Palette orchestration surface
+    run Cyan natively
 
 
 ===============================================================================
 XCIX. SUCCESS CRITERIA — V2
 ===============================================================================
 
-Harpe begins demonstrating:
+Gesso begins demonstrating:
 
     hardware-aware materialization
     automated kernel selection
@@ -3138,15 +3146,15 @@ Compare:
 
 vs.
 
-    Harpe generic execution
+    Gesso generic execution
 
 vs.
 
-    Harpe specialized execution
+    Gesso specialized execution
 
 vs.
 
-    Harpe native multi-agent execution
+    Gesso native multi-agent execution
 
 Measure:
 
@@ -3176,13 +3184,13 @@ For every new abstraction ask:
 
     Can this be measured?
 
-    Can Harpe explain the decision?
+    Can Gesso explain the decision?
 
-    Does this unnecessarily bind Harpe to one hardware vendor?
+    Does this unnecessarily bind Gesso to one hardware vendor?
 
-    Does this unnecessarily bind Harpe to one model architecture?
+    Does this unnecessarily bind Gesso to one model architecture?
 
-    Does this unnecessarily bind Harpe to NIRA?
+    Does this unnecessarily bind Gesso to NIRA?
 
     Does this duplicate machinery Julia already gives us?
 
@@ -3193,7 +3201,7 @@ CII. CENTRAL PRODUCT QUESTION
 
 At every milestone ask:
 
-    "Does this help Harpe execute existing models more effectively?"
+    "Does this help Gesso execute existing models more effectively?"
 
 If not, determine whether it belongs in V1.
 
@@ -3202,7 +3210,7 @@ If not, determine whether it belongs in V1.
 CIII. CURRENT CORE THESIS
 ===============================================================================
 
-Harpe is a semantic compiler/runtime for machine learning where:
+Gesso is a semantic compiler/runtime for machine learning where:
 
     model meaning
     parameter meaning
@@ -3263,7 +3271,7 @@ all operating inside one coherent runtime.
 CV. CURRENT ONE-SENTENCE DEFINITION
 ===============================================================================
 
-    Harpe is a Julia-native semantic ML and agent execution runtime that loads existing
+    Gesso is a Julia-native semantic ML and agent execution runtime that loads existing
     models, preserves what they mean, and uses that information to determine how they
     should physically exist and execute on the hardware and workload actually present.
 
@@ -3274,25 +3282,25 @@ CVI. THE STACK
 
 For ordinary users:
 
-    using Harpe
+    using Gesso
     using Lava
 
 That is the stack.
 
 For NVIDIA:
 
-    using Harpe
+    using Gesso
     using CUDA
 
 Also valid.
 
-For NIRA:
+For Cyan:
 
-    NIRA-Prime
+    Cyan
         ↓
-    NeuraJL
+    Palette
         ↓
-    Harpe
+    Gesso
         ↓
     CUDA / Lava
 
@@ -3340,7 +3348,7 @@ PyStack™ largely asks:
 
     "How efficiently can we execute this graph?"
 
-Harpe should ultimately ask:
+Gesso should ultimately ask:
 
     "Given what this model is,
      why it is being invoked,
@@ -3350,7 +3358,7 @@ Harpe should ultimately ask:
 
      WHAT SHOULD THE MACHINE ACTUALLY DO?"
 
-That is Harpe.
+That is Gesso.
 
 
 ===============================================================================

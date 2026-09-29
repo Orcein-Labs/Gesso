@@ -6,7 +6,7 @@
 # MECHANISM primitives (tasks, dependencies, channels, budgets, priorities,
 # cancellation — §XXXIII) and cross-agent inference scheduling (Phase 13).
 #
-# Boundary (§XLIII): Harpe owns mechanism. Expression is NeuraJL's, policy is
+# Boundary (§XLIII): Gesso owns mechanism. Expression is Palette's, policy is
 # NIRA's. No LangChain.jl.
 module Runtime
 

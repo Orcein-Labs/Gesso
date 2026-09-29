@@ -1,3 +1,7 @@
+# Archived predecessor vision (Harpe-era).
+# Current canon is `docs/Gesso_Stack.md`. Gesso is the public name of this
+# runtime. This file is historical text; where they disagree, Gesso_Stack.md wins.
+
 ```text
 HARPE — SEMANTIC JULIA ML STACK
 

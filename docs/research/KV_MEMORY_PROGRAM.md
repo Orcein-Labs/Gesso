@@ -1,30 +1,30 @@
-# HARPE MEMORY PROGRAM
+# GESSO MEMORY PROGRAM
 ## Attention-Memory Rate–Distortion Compilation
 
     Internal codename:  Magenta Memory™
     Document class:     research program / phase-5–10 specification seed
     Status:             accepted direction, pre-data
                     (external paper: BLOCKED until first composition
-                     experiment produces numbers — Harpe_Stack.md §XLII,
+                     experiment produces numbers — Gesso_Stack.md §XLII,
                      North Star §42: no paper before there is data)
-    Derived from:       Harpe_musings.md (repo root — the dangerous
+    Derived from:       Gesso_musings.md (repo root — the dangerous
                         notebook — do not sanitize; promote from it,
                         never wholesale)
-    Canon:              docs/Harpe_Stack.md remains canon; this document
+    Canon:              docs/Gesso_Stack.md remains canon; this document
                         extends §XXXI, §X, §LIX and feeds Phases 5/9/10.
 
 ---
 
 ## 0. ABSTRACT
 
-Harpe's thesis — *representation is a lowering decision* — has now generated
+Gesso's thesis — *representation is a lowering decision* — has now generated
 the same decomposition four independent times: quantization (§XV), placement
 and sharding, attention domain, and now working state (KV). This document
 promotes the fourth instance from musing to program.
 
 The central object is no longer `KVCache`. It is:
 
-> **a logical attention-memory object that Harpe is free to physically
+> **a logical attention-memory object that Gesso is free to physically
 > realize in multiple ways, searched, verified, and cached like any other
 > lowering.**
 
@@ -37,7 +37,7 @@ bounded-search machinery the kernel autotuning project already specifies.
 The boundary that keeps this sane:
 
 > **NIRA decides what memory means.
-> Harpe decides how that memory lives and participates in computation.**
+> Gesso decides how that memory lives and participates in computation.**
 
 ---
 
@@ -181,7 +181,7 @@ maps almost directly onto per-head/token bit allocation (§5, Layer 7).
 Codec lessons transfer, including the failure modes: transforms that flatter
 one stage can destroy structure another stage exploits (§5.1).
 
-### 4.3 Citation hygiene (binding for all Harpe documents)
+### 4.3 Citation hygiene (binding for all Gesso documents)
 
 In a written artifact, citation = claim of having read it.
 
@@ -299,7 +299,7 @@ measurement table (§9), never an afterthought.
 ## 6. APPROXIMATION CLASSES (correctness contract extension)
 
 The musings stated the hard line; here it becomes contract vocabulary,
-extending Harpe_Stack.md §X:
+extending Gesso_Stack.md §X:
 
     ExactLowering
         byte-identical semantics to the reference operator.
@@ -371,21 +371,21 @@ exactly when Phase 10 earns the generalization — not before.
 
 ## 8. THE OWNERSHIP SEAM
 
-    Harpe/NIRA memory hierarchy:
+    Gesso/NIRA memory hierarchy:
 
-        L0  current attention state         Harpe
-        L1  recent session working context  Harpe
-        L2  compressed session context      Harpe
+        L0  current attention state         Gesso
+        L1  recent session working context  Gesso
+        L2  compressed session context      Gesso
         L3  semantic working memory         SEAM (contract only)
-        L4  episodic / long-term memory     NOT HARPE
-        L5  source artifacts                NOT HARPE
+        L4  episodic / long-term memory     NOT GESSO
+        L5  source artifacts                NOT GESSO
 
     NIRA decides what memory means.
-    Harpe decides how that memory lives and participates in computation.
+    Gesso decides how that memory lives and participates in computation.
 
-Harpe owns L0–L2 and the L2↔L3 contract. Semantic/episodic cognition above
+Gesso owns L0–L2 and the L2↔L3 contract. Semantic/episodic cognition above
 the seam is NIRA's, exactly as training is somebody else's (§LVIII). If
-Harpe ever builds L3+, it has quietly become an opinionated cognition
+Gesso ever builds L3+, it has quietly become an opinionated cognition
 framework, and the project has failed its own boundary law (§XLIII).
 
 The merge rule at the seam (from the musings, promoted): raw KV states of
@@ -431,7 +431,7 @@ not assume (§5.1).
 
         A  normal dense KV management
         B  sliding-window baseline
-        C  Harpe semantic KV hierarchy
+        C  Gesso semantic KV hierarchy
 
     measure: task accuracy · effective context retention ·
              decode latency · prefill cost · VRAM · attention work
@@ -449,10 +449,10 @@ alone is the difference between a swarm fitting on one card or not.
 ### 9.4 Declared vs discovered sharing (the differentiator)
 
 RadixAttention-style prefix caching DISCOVERS sharing after the fact by
-exact token match. Harpe DECLARES sharing before the fact by identity —
+exact token match. Gesso DECLARES sharing before the fact by identity —
 agents share the system prefix because the runtime constructed them that
 way. No n-gram matching, no cache warming, no misses from re-serialized
-tool schemas. A generic server sees four requests; Harpe sees a tree.
+tool schemas. A generic server sees four requests; Gesso sees a tree.
 This is a mechanism difference, not a rebrand, and it is the claim an
 external paper would eventually hang on.
 
@@ -504,9 +504,9 @@ Steps 2–3 are first-semantic-win candidates in the Phase 7 class
     Not a Phase plan.        Phasing remains §LXXIII+. This seeds 5/9/10.
     Not an implementation.   No code exists. Phase 5 earns the first.
     Not a public paper.      Blocked until §9.1 produces numbers.
-    Not canon-overriding.    Harpe_Stack.md remains canon; this extends
+    Not canon-overriding.    Gesso_Stack.md remains canon; this extends
                              §XXXI/§X/§LIX and is subordinate to it.
-    Not the notebook.        Harpe_musings.md (repo root) stays the
+    Not the notebook.        Gesso_musings.md (repo root) stays the
                              dangerous notebook. Promotions from it are
                              deliberate and recorded here.
 
