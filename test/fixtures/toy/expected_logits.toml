@@ -5,7 +5,7 @@ schema = "harpe-toy-expected-logits-v1"
 
 [provenance]
 oracle = "cpu"
-commit = "953b374"
+commit = "b8a5988"
 fixture_seed = "14625882002354481486"
 
 [[value]]
