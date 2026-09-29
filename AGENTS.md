@@ -113,6 +113,10 @@ libs/          DO NOT TOUCH (local dev checkouts)
 scripts/       dev commands (test/bench/format/freeze)
 ```
 
+Open architecture questions (decisions deliberately NOT made locally) are
+recorded as decision packets in `docs/DECISION_PACKETS.md`. Do not resolve
+a packet by implementing one option — resolution happens in canon.
+
 ## 9. Exit checklist for every work item
 
 * [ ] tests pass (`scripts/test.jl` or `make test`)

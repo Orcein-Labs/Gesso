@@ -72,6 +72,9 @@ libs/          local dev sources (gitignored; Lava lives here) — DO NOT TOUCH
 - `docs/ARCHITECTURE.md` maps every module to its canon section and phase.
 - Work items follow `.github/ISSUE_TEMPLATE/work-item.md` (§LXXI format);
   PRs are receipts per `.github/PULL_REQUEST_TEMPLATE.md` (§LXXII).
+- Open architecture decisions are quarantined in
+  [docs/DECISION_PACKETS.md](docs/DECISION_PACKETS.md) — not settled by
+  local engineering alone.
 
 ## Commands
 
