@@ -2728,7 +2728,8 @@ Exit:
 LXXVI. PHASE 3 — FIRST REAL MODEL IMPORT
 ===============================================================================
 
-Choose one modern open model.
+Chosen model: HuggingFaceTB/SmolLM2-135M (LlamaForCausalLM).
+Implementation goal: `docs/goals/PHASE3_FIRST_IMPORT.md`.
 
 Build:
 

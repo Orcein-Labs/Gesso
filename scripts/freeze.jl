@@ -74,6 +74,7 @@ curated = String[
     "docs/DECISION_PACKETS.md",
     "docs/goals/PHASE1_SEMANTIC_CORE.md",
     "docs/goals/PHASE2_CPU_ORACLE.md",
+    "docs/goals/PHASE3_FIRST_IMPORT.md",
     "docs/research/KV_MEMORY_PROGRAM.md",
     "docs/Gesso_musings.md",
     # package core
