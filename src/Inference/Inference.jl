@@ -14,6 +14,12 @@
 #     (the definition of a tied head); no second table is created.
 #   * Float64 end to end. Deterministic: same inputs ⇒ bit-identical outputs
 #     in-process.
+#
+# Phase 3 slice (§LXXVI item A): GQA (repeat KV heads for the score/value
+# contraction only; the cache stays at n_kv_heads), an optional `final_rms`
+# in `tensors` (applied before the tied head; absent ⇒ toy2 path untouched),
+# and `eps` / `theta` threaded as keyword defaults — never hardcoded config
+# constants.
 
 module Inference
 
@@ -53,19 +59,41 @@ Block recipe (pre-norm, §LXXV): rmsnorm → q/k/v projections → split heads
 → rope → scaled scores → causal softmax → attention @ v → merge heads →
 output projection → residual; then rmsnorm → gate/up → swiglu → down →
 residual. Tied embedding head: `logits = h * transpose(E)`.
+
+Phase 3 (§LXXVI item A): `eps` (default 1e-6) and `theta` (default
+10000.0) thread into `rmsnorm!` / `rope!` — toy2's values, unchanged. If
+`tensors` carries a non-`nothing` `final_rms::FrozenParameter`, a final
+RMSNorm is applied after the last block, before the tied head (Llama's
+`model.norm`; toy2 omits it). GQA models (`n_kv_heads < n_heads`) are
+supported: K/V are cached at `n_kv_heads` and repeated per query head
+only for the score/value contraction.
 """
-function reference_prefill(model, tensors, tokens::AbstractVector{Int})
+function reference_prefill(
+    model,
+    tensors,
+    tokens::AbstractVector{Int};
+    eps::Real=1e-6,
+    theta::Real=10000.0,
+)
     isempty(tokens) && error("reference_prefill: token sequence is empty")
     cpu = CPUBackend()
     wl = PrefillWorkload()
     seq = length(tokens)
     dim = model.embedding.dim
     n_heads = model.blocks[1].attention.n_heads
+    n_kv_heads = model.blocks[1].attention.n_kv_heads
     d_head = div(dim, n_heads)
     dim == n_heads * d_head ||
         error("reference_prefill: dim $dim is not divisible by n_heads $n_heads")
-    all(b -> b.attention.n_heads == n_heads, model.blocks) ||
-        error("reference_prefill: uniform n_heads across blocks required (toy2 is uniform)")
+    group = div(n_heads, n_kv_heads)
+    n_heads == n_kv_heads * group ||
+        error("reference_prefill: n_kv_heads $n_kv_heads does not divide n_heads $n_heads")
+    all(
+        b -> b.attention.n_heads == n_heads && b.attention.n_kv_heads == n_kv_heads,
+        model.blocks,
+    ) || error(
+        "reference_prefill: uniform head counts across blocks required (toy2 is uniform)",
+    )
 
     positions = collect(0:(seq-1))            # 0-based (§LXXV)
 
@@ -76,11 +104,18 @@ function reference_prefill(model, tensors, tokens::AbstractVector{Int})
     # scratch — allocated once per forward, written in place
     normed = Activation(; shape=(seq, dim), storage=zeros(seq, dim))
     q = Activation(; shape=(seq, dim), storage=zeros(seq, dim))
-    k = Activation(; shape=(seq, dim), storage=zeros(seq, dim))
-    v = Activation(; shape=(seq, dim), storage=zeros(seq, dim))
+    kdim = n_kv_heads * d_head
+    k = Activation(; shape=(seq, kdim), storage=zeros(seq, kdim))
+    v = Activation(; shape=(seq, kdim), storage=zeros(seq, kdim))
     qh = Activation(; shape=(seq, n_heads, d_head), storage=zeros(seq, n_heads, d_head))
-    kh = Activation(; shape=(seq, n_heads, d_head), storage=zeros(seq, n_heads, d_head))
-    vh = Activation(; shape=(seq, n_heads, d_head), storage=zeros(seq, n_heads, d_head))
+    kh = Activation(;
+        shape=(seq, n_kv_heads, d_head),
+        storage=zeros(seq, n_kv_heads, d_head),
+    )
+    vh = Activation(;
+        shape=(seq, n_kv_heads, d_head),
+        storage=zeros(seq, n_kv_heads, d_head),
+    )
     attn = Activation(; shape=(seq, n_heads, d_head), storage=zeros(seq, n_heads, d_head))
     merged = Activation(; shape=(seq, dim), storage=zeros(seq, dim))
     sub = Activation(; shape=(seq, dim), storage=zeros(seq, dim))
@@ -105,7 +140,7 @@ function reference_prefill(model, tensors, tokens::AbstractVector{Int})
         bt = tensors.blocks[bi]
 
         # --- attention sublayer (pre-norm) -----------------------------------
-        rmsnorm!(cpu, normed, h, bt.attn_rms, wl)
+        rmsnorm!(cpu, normed, h, bt.attn_rms, wl; eps)
         matmul!(cpu, q, normed, bt.wq, wl)
         matmul!(cpu, k, normed, bt.wk, wl)
         matmul!(cpu, v, normed, bt.wv, wl)
@@ -113,23 +148,27 @@ function reference_prefill(model, tensors, tokens::AbstractVector{Int})
         # split heads: feature f (0-based) = head * d_head + j (head-major
         # packing, matching the packed Wk/Wv rows of the weight walk)
         _split_heads!(qh, q, n_heads, d_head)
-        _split_heads!(kh, k, n_heads, d_head)
-        _split_heads!(vh, v, n_heads, d_head)
+        _split_heads!(kh, k, n_kv_heads, d_head)
+        _split_heads!(vh, v, n_kv_heads, d_head)
 
-        rope!(cpu, qh, kh, positions, wl)
+        rope!(cpu, qh, kh, positions, wl; theta)
+
+        # repeat KV heads for the contraction only (identity when MHA)
+        kx = _repeat_heads(kh, group)
+        vx = _repeat_heads(vh, group)
 
         # scores per head: (seq, seq), scaled by √d_head
         fill!(scores.storage, 0.0)
         for t in 1:seq, u in 1:seq, hh in 1:n_heads, j in 1:d_head
             scores.storage[t, u] +=
-                qh.storage[t, hh, j] * kh.storage[u, hh, j] / sqrt(d_head)
+                qh.storage[t, hh, j] * kx.storage[u, hh, j] / sqrt(d_head)
         end
         softmax!(cpu, scores_out, scores, wl)   # causal mask applied inside
 
         # attention @ v, per head
         fill!(attn.storage, 0.0)
         for t in 1:seq, hh in 1:n_heads, j in 1:d_head, u in 1:seq
-            attn.storage[t, hh, j] += scores_out.storage[t, u] * vh.storage[u, hh, j]
+            attn.storage[t, hh, j] += scores_out.storage[t, u] * vx.storage[u, hh, j]
         end
 
         # merge heads back to (seq, dim), then output projection + residual
@@ -138,7 +177,7 @@ function reference_prefill(model, tensors, tokens::AbstractVector{Int})
         h.storage .+= sub.storage               # residual (interpreter add)
 
         # --- ffn sublayer (pre-norm) -----------------------------------------
-        rmsnorm!(cpu, normed2, h, bt.ffn_rms, wl)
+        rmsnorm!(cpu, normed2, h, bt.ffn_rms, wl; eps)
         matmul!(cpu, gate, normed2, bt.wgate, wl)
         matmul!(cpu, up, normed2, bt.wup, wl)
         swiglu!(cpu, act, gate, up, wl)
@@ -146,7 +185,17 @@ function reference_prefill(model, tensors, tokens::AbstractVector{Int})
         h.storage .+= down.storage              # residual
     end
 
-    # tied embedding head: logits(t, :) = h(t, :) * Eᵀ → (seq, vocab).
+    # Llama applies a final RMSNorm before the head (§LXXVI); toy2 has none
+    # and skips this branch entirely.
+    final_rms = haskey(tensors, :final_rms) ? tensors.final_rms : nothing
+    hhead = h
+    if final_rms !== nothing
+        finaln = Activation(; shape=(seq, dim), storage=zeros(seq, dim))
+        rmsnorm!(cpu, finaln, h, final_rms, wl; eps)
+        hhead = finaln
+    end
+
+    # tied embedding head: logits(t, :) = hhead(t, :) * Eᵀ → (seq, vocab).
     # The head's weight IS the embedding table (tied) — same bytes, viewed
     # as the lm_head projection; no second table is materialized.
     lm_head = tensors.lm_head
@@ -154,7 +203,7 @@ function reference_prefill(model, tensors, tokens::AbstractVector{Int})
         shape=(seq, size(lm_head.storage, 1)),
         storage=zeros(seq, size(lm_head.storage, 1)),
     )
-    matmul!(cpu, seqvocab, h, lm_head, wl)
+    matmul!(cpu, seqvocab, hhead, lm_head, wl)
     return permutedims(seqvocab.storage)        # (vocab, seq)
 end
 
@@ -171,6 +220,20 @@ function _merge_heads!(dst, src, n_heads, d_head)
         dst.storage[t, (hh-1)*d_head+j] = src.storage[t, hh, j]
     end
     return dst
+end
+
+# GQA (§LXXVI): query head h attends kv head div(h-1, group) + 1 — repeat
+# each kv head `group` times for the score/value contraction ONLY. RoPE and
+# the KV cache stay at n_kv_heads. `group == 1` (MHA) returns the input
+# unchanged, so toy2's arithmetic and allocation profile are untouched.
+function _repeat_heads(kv::Activation, group::Int)
+    group == 1 && return kv
+    seq, nk, d = size(kv.storage)
+    out = Activation(; shape=(seq, nk * group, d), storage=zeros(seq, nk * group, d))
+    for t in 1:seq, h in 1:nk, g in 1:group, j in 1:d
+        out.storage[t, (h-1)*group+g, j] = kv.storage[t, h, j]
+    end
+    return out
 end
 
 export reference_prefill
@@ -194,6 +257,11 @@ Returns the full 0-based id sequence (prompt + new tokens). Stops at EOS
 `info`: pass a `Ref{NamedTuple}` to receive `(kv_len, steps)` — the
 diagnostic channel the KV-length invariant is tested through. KV length
 equals prefix length: `kv_len == length(prompt) + steps`.
+
+Phase 3 (§LXXVI item A): `eps` / `theta` thread through as in
+`reference_prefill`; `tensors.final_rms` (when present) is applied before
+the tied head on every argmax step; GQA models cache K/V at `n_kv_heads`
+and repeat per query head only inside the attention contraction.
 """
 function reference_generate(
     model,
@@ -201,15 +269,21 @@ function reference_generate(
     prompt::AbstractVector{Int};
     max_new_tokens::Int=8,
     info=nothing,
+    eps::Real=1e-6,
+    theta::Real=10000.0,
 )
     isempty(prompt) && error("reference_generate: prompt is empty")
     cpu = CPUBackend()
     wp, wd = PrefillWorkload(), DecodeWorkload()
     dim = model.embedding.dim
     n_heads = model.blocks[1].attention.n_heads
+    n_kv_heads = model.blocks[1].attention.n_kv_heads
     d_head = div(dim, n_heads)
     dim == n_heads * d_head ||
         error("reference_generate: dim $dim is not divisible by n_heads $n_heads")
+    group = div(n_heads, n_kv_heads)
+    n_heads == n_kv_heads * group ||
+        error("reference_generate: n_kv_heads $n_kv_heads does not divide n_heads $n_heads")
     P = length(prompt)
     cap = max(max_new_tokens, 0)
     vocab = size(tensors.embedding.storage, 1)
@@ -218,14 +292,14 @@ function reference_generate(
     # (the cache is runtime state, not a weight — no fixture-walk entries)
     kc = [
         Activation(;
-            shape=(P + cap, n_heads, d_head),
-            storage=zeros(P + cap, n_heads, d_head),
+            shape=(P + cap, n_kv_heads, d_head),
+            storage=zeros(P + cap, n_kv_heads, d_head),
         ) for _ in 1:length(model.blocks)
     ]
     vc = [
         Activation(;
-            shape=(P + cap, n_heads, d_head),
-            storage=zeros(P + cap, n_heads, d_head),
+            shape=(P + cap, n_kv_heads, d_head),
+            storage=zeros(P + cap, n_kv_heads, d_head),
         ) for _ in 1:length(model.blocks)
     ]
 
@@ -234,12 +308,13 @@ function reference_generate(
     # immutable, §CIX; storage CONTENT is what the interpreter owns)
     h = Activation(; shape=(P + cap, dim), storage=zeros(P + cap, dim))
     normed = Activation(; shape=(P, dim), storage=zeros(P, dim))
+    kdim = n_kv_heads * d_head
     q = Activation(; shape=(P, dim), storage=zeros(P, dim))
-    k = Activation(; shape=(P, dim), storage=zeros(P, dim))
-    v = Activation(; shape=(P, dim), storage=zeros(P, dim))
+    k = Activation(; shape=(P, kdim), storage=zeros(P, kdim))
+    v = Activation(; shape=(P, kdim), storage=zeros(P, kdim))
     qh = Activation(; shape=(P, n_heads, d_head), storage=zeros(P, n_heads, d_head))
-    kh = Activation(; shape=(P, n_heads, d_head), storage=zeros(P, n_heads, d_head))
-    vh = Activation(; shape=(P, n_heads, d_head), storage=zeros(P, n_heads, d_head))
+    kh = Activation(; shape=(P, n_kv_heads, d_head), storage=zeros(P, n_kv_heads, d_head))
+    vh = Activation(; shape=(P, n_kv_heads, d_head), storage=zeros(P, n_kv_heads, d_head))
     attn = Activation(; shape=(P, n_heads, d_head), storage=zeros(P, n_heads, d_head))
     merged = Activation(; shape=(P, dim), storage=zeros(P, dim))
     sub = Activation(; shape=(P, dim), storage=zeros(P, dim))
@@ -261,32 +336,36 @@ function reference_generate(
     embedding_lookup!(cpu, hp, tensors.embedding, prompt, wp)
     for (bi, blk) in enumerate(model.blocks)
         bt = tensors.blocks[bi]
-        rmsnorm!(cpu, normed, hp, bt.attn_rms, wp)
+        rmsnorm!(cpu, normed, hp, bt.attn_rms, wp; eps)
         matmul!(cpu, q, normed, bt.wq, wp)
         matmul!(cpu, k, normed, bt.wk, wp)
         matmul!(cpu, v, normed, bt.wv, wp)
         _split_heads!(qh, q, n_heads, d_head)
-        _split_heads!(kh, k, n_heads, d_head)
-        _split_heads!(vh, v, n_heads, d_head)
-        rope!(cpu, qh, kh, positions, wp)
-        # KV APPEND: the prefill's post-rope K/V become cache rows 1..P
+        _split_heads!(kh, k, n_kv_heads, d_head)
+        _split_heads!(vh, v, n_kv_heads, d_head)
+        rope!(cpu, qh, kh, positions, wp; theta)
+        # KV APPEND: the prefill's post-rope K/V become cache rows 1..P,
+        # stored at n_kv_heads (GQA caches the small side, §LXXVI)
         kc[bi].storage[1:P, :, :] .= kh.storage
         vc[bi].storage[1:P, :, :] .= vh.storage
+        # repeat KV heads for the contraction only (identity when MHA)
+        kx = _repeat_heads(kh, group)
+        vx = _repeat_heads(vh, group)
         # attention over the cache (identical math/order to reference_prefill)
         fill!(scores.storage, 0.0)
         for t in 1:P, u in 1:P, hh in 1:n_heads, j in 1:d_head
             scores.storage[t, u] +=
-                qh.storage[t, hh, j] * kc[bi].storage[u, hh, j] / sqrt(d_head)
+                qh.storage[t, hh, j] * kx.storage[u, hh, j] / sqrt(d_head)
         end
         softmax!(cpu, scores_out, scores, wp)
         fill!(attn.storage, 0.0)
         for t in 1:P, hh in 1:n_heads, j in 1:d_head, u in 1:P
-            attn.storage[t, hh, j] += scores_out.storage[t, u] * vc[bi].storage[u, hh, j]
+            attn.storage[t, hh, j] += scores_out.storage[t, u] * vx.storage[u, hh, j]
         end
         _merge_heads!(merged, attn, n_heads, d_head)
         matmul!(cpu, sub, merged, bt.wo, wp)
         hp.storage .+= sub.storage
-        rmsnorm!(cpu, normed2, hp, bt.ffn_rms, wp)
+        rmsnorm!(cpu, normed2, hp, bt.ffn_rms, wp; eps)
         matmul!(cpu, gate, normed2, bt.wgate, wp)
         matmul!(cpu, up, normed2, bt.wup, wp)
         swiglu!(cpu, act, gate, up, wp)
@@ -298,7 +377,7 @@ function reference_generate(
     steps = 0
     while steps < cap
         # greedy argmax at the current last position (row P + steps)
-        logits_row = _last_logits(model, tensors, h, cpu, wd, vocab, P + steps)
+        logits_row = _last_logits(model, tensors, h, cpu, wd, vocab, P + steps; eps)
         next = argmax(logits_row) - 1                 # 0-based id
         push!(ids, next)
         steps += 1
@@ -312,9 +391,13 @@ function reference_generate(
             P + steps,
             cpu,
             wd,
+            h;
             n_heads,
+            n_kv_heads,
             d_head,
-            h,
+            group,
+            eps,
+            theta,
         )
     end
 
@@ -322,20 +405,26 @@ function reference_generate(
     return ids
 end
 
-# tied head over hidden row `row`: returns the (vocab,) logits row
-function _last_logits(model, tensors, h, cpu, wl, vocab, row::Int)
-    lastrow = Activation(;
-        shape=(1, size(h.storage, 2)),
-        storage=reshape(h.storage[row, :], (1, :)),
-    )
+# tied head over hidden row `row`: returns the (vocab,) logits row. Applies
+# the final RMSNorm first when `tensors` carries one (§LXXVI).
+function _last_logits(model, tensors, h, cpu, wl, vocab, row::Int; eps::Real=1e-6)
+    dim = size(h.storage, 2)
+    lastrow = Activation(; shape=(1, dim), storage=reshape(h.storage[row, :], (1, :)))
+    final_rms = haskey(tensors, :final_rms) ? tensors.final_rms : nothing
+    if final_rms !== nothing
+        normed = Activation(; shape=(1, dim), storage=zeros(1, dim))
+        rmsnorm!(cpu, normed, lastrow, final_rms, wl; eps)
+        lastrow = normed
+    end
     out = Activation(; shape=(1, vocab), storage=zeros(1, vocab))
     matmul!(cpu, out, lastrow, tensors.lm_head, wl)
     return vec(out.storage)
 end
 
-# one DecodeWorkload step: embed `tok` at 0-based `pos`, append K/V per
-# layer, attend over the WHOLE cache (no re-prefill), residual + FFN, and
-# leave the new last-position hidden state in `h`'s single row slot
+# one DecodeWorkload step: embed `tok` at 0-based `pos0`, append K/V per
+# layer at n_kv_heads, attend over the WHOLE cache with KV heads repeated
+# per query head (no re-prefill), residual + FFN, and leave the new
+# last-position hidden state in `h`'s single row slot
 function _decode_step!(
     model,
     tensors,
@@ -345,20 +434,25 @@ function _decode_step!(
     pos0::Int,
     cpu,
     wl,
+    h;
     n_heads,
+    n_kv_heads,
     d_head,
-    h,
+    group,
+    eps,
+    theta,
 )
     dim = model.embedding.dim
+    kdim = n_kv_heads * d_head
     hp = Activation(; shape=(1, dim), storage=zeros(1, dim))
     embedding_lookup!(cpu, hp, tensors.embedding, [tok], wl)
     normed = Activation(; shape=(1, dim), storage=zeros(1, dim))
     q = Activation(; shape=(1, dim), storage=zeros(1, dim))
-    k = Activation(; shape=(1, dim), storage=zeros(1, dim))
-    v = Activation(; shape=(1, dim), storage=zeros(1, dim))
+    k = Activation(; shape=(1, kdim), storage=zeros(1, kdim))
+    v = Activation(; shape=(1, kdim), storage=zeros(1, kdim))
     qh = Activation(; shape=(1, n_heads, d_head), storage=zeros(1, n_heads, d_head))
-    kh = Activation(; shape=(1, n_heads, d_head), storage=zeros(1, n_heads, d_head))
-    vh = Activation(; shape=(1, n_heads, d_head), storage=zeros(1, n_heads, d_head))
+    kh = Activation(; shape=(1, n_kv_heads, d_head), storage=zeros(1, n_kv_heads, d_head))
+    vh = Activation(; shape=(1, n_kv_heads, d_head), storage=zeros(1, n_kv_heads, d_head))
     attn = Activation(; shape=(1, n_heads, d_head), storage=zeros(1, n_heads, d_head))
     merged = Activation(; shape=(1, dim), storage=zeros(1, dim))
     sub = Activation(; shape=(1, dim), storage=zeros(1, dim))
@@ -374,32 +468,36 @@ function _decode_step!(
 
     for (bi, blk) in enumerate(model.blocks)
         bt = tensors.blocks[bi]
-        rmsnorm!(cpu, normed, hp, bt.attn_rms, wl)
+        rmsnorm!(cpu, normed, hp, bt.attn_rms, wl; eps)
         matmul!(cpu, q, normed, bt.wq, wl)
         matmul!(cpu, k, normed, bt.wk, wl)
         matmul!(cpu, v, normed, bt.wv, wl)
         _split_heads!(qh, q, n_heads, d_head)
-        _split_heads!(kh, k, n_heads, d_head)
-        _split_heads!(vh, v, n_heads, d_head)
-        rope!(cpu, qh, kh, [pos0 - 1], wl)      # 0-based position of this token
-        # KV APPEND: exactly one row per layer per step
+        _split_heads!(kh, k, n_kv_heads, d_head)
+        _split_heads!(vh, v, n_kv_heads, d_head)
+        rope!(cpu, qh, kh, [pos0 - 1], wl; theta)  # 0-based position of this token
+        # KV APPEND: exactly one row per layer per step, at n_kv_heads
         kc[bi].storage[pos0, :, :] .= kh.storage[1, :, :]
         vc[bi].storage[pos0, :, :] .= vh.storage[1, :, :]
-        # the query is the LAST position: it attends to the whole cache
+        # the query is the LAST position: it attends to the whole cache —
+        # repeat the CACHE rows per query head (kh above is the single
+        # new row; it was consumed by the append)
+        kx = _repeat_heads(kc[bi], group)
+        vx = _repeat_heads(vc[bi], group)
         fill!(scores.storage, 0.0)
         for u in 1:K, hh in 1:n_heads, j in 1:d_head
             scores.storage[1, u] +=
-                qh.storage[1, hh, j] * kc[bi].storage[u, hh, j] / sqrt(d_head)
+                qh.storage[1, hh, j] * kx.storage[u, hh, j] / sqrt(d_head)
         end
         softmax!(cpu, scores_out, scores, wl)   # offset mask: nothing masked
         fill!(attn.storage, 0.0)
         for hh in 1:n_heads, j in 1:d_head, u in 1:K
-            attn.storage[1, hh, j] += scores_out.storage[1, u] * vc[bi].storage[u, hh, j]
+            attn.storage[1, hh, j] += scores_out.storage[1, u] * vx.storage[u, hh, j]
         end
         _merge_heads!(merged, attn, n_heads, d_head)
         matmul!(cpu, sub, merged, bt.wo, wl)
         hp.storage .+= sub.storage              # residual
-        rmsnorm!(cpu, normed2, hp, bt.ffn_rms, wl)
+        rmsnorm!(cpu, normed2, hp, bt.ffn_rms, wl; eps)
         matmul!(cpu, gate, normed2, bt.wgate, wl)
         matmul!(cpu, up, normed2, bt.wup, wl)
         swiglu!(cpu, act, gate, up, wl)

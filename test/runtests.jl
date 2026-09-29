@@ -44,6 +44,10 @@ using Gesso: reference_prefill, reference_generate
     include("test_reference_prefill.jl")
     include("test_reference_generate.jl")
 
+    # Phase 3 (§LXXVI item A): GQA interpreter, final RMSNorm, eps/theta knobs
+    # — defaults are the Phase 2 constants, so every earlier gate is unchanged
+    include("test_gqa.jl")
+
     @testset "package loads" begin
         @test Gesso.Log isa Module
         @test isdefined(Gesso, :CPUBackend)

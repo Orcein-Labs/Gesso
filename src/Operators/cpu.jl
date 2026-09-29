@@ -13,6 +13,13 @@
 #     fixes decode math as identical elementwise/matmul work. KV append is
 #     the interpreter's job (item C), never matmul!'s.
 #
+# Phase 3 (§LXXVI): `rmsnorm!` and `rope!` gained keyword knobs — `eps` and
+# `theta`. Defaults are exactly the Phase 2 constants, so toy2 arithmetic is
+# bit-identical; real checkpoints thread their config values through the
+# interpreter. No SmolLM2 constant is hardcoded here. RoPE also rotates K
+# over K's OWN head axis (GQA: fewer K heads than Q heads) — for MHA the
+# counts are equal and the arithmetic is unchanged.
+#
 # Residuals are interpreter-level storage addition; there is no `add!`.
 
 using LinearAlgebra: mul!
@@ -38,15 +45,14 @@ function _cpu_embedding_lookup!(dst, table, tokens)
     return dst
 end
 
-function _cpu_rmsnorm!(dst, x, scale)
-    ε = 1e-6
+function _cpu_rmsnorm!(dst, x, scale; eps=1e-6)
     xs = x.storage
     d = size(xs, ndims(xs))                     # last dim is the feature dim
     scale.storage === nothing && _unmaterialized(:rmsnorm!, :scale)
     length(scale.storage) == d ||
         error("rmsnorm!: scale length $(length(scale.storage)) ≠ feature dim $d")
     # rms per row (Base-only: sum of squares / width — no Statistics dep)
-    rms = sqrt.(sum(abs2, xs; dims=ndims(xs)) ./ d .+ ε)
+    rms = sqrt.(sum(abs2, xs; dims=ndims(xs)) ./ d .+ eps)
     # scale indexes FEATURES (the last axis): reshape so it broadcasts
     # along the trailing axis — a bare vector would broadcast along axis 1
     stail = reshape(scale.storage, (ntuple(_ -> 1, ndims(xs) - 1)..., d))
@@ -54,19 +60,24 @@ function _cpu_rmsnorm!(dst, x, scale)
     return dst
 end
 
-function _cpu_rope!(q, k, positions)
-    for t in axes(q.storage, 1), h in axes(q.storage, 2)
-        m = Float64(positions[t])               # 0-based position
-        d = size(q.storage, 3)                  # d_head, even by contract
-        for i in 0:(d÷2-1)
-            θ = m * 10000.0^(-2i / d)
-            c, s = cos(θ), sin(θ)
-            x1, x2 = q.storage[t, h, 2i+1], q.storage[t, h, 2i+2]
-            q.storage[t, h, 2i+1] = x1 * c - x2 * s
-            q.storage[t, h, 2i+2] = x1 * s + x2 * c
-            k1, k2 = k.storage[t, h, 2i+1], k.storage[t, h, 2i+2]
-            k.storage[t, h, 2i+1] = k1 * c - k2 * s
-            k.storage[t, h, 2i+2] = k1 * s + k2 * c
+function _cpu_rope!(q, k, positions; theta=10000.0)
+    tθ = Float64(theta)
+    size(q.storage, 3) == size(k.storage, 3) ||
+        error("rope!: q d_head $(size(q.storage, 3)) ≠ k d_head $(size(k.storage, 3))")
+    # Q rotates over Q's head axis, K over K's own — under GQA, K has fewer
+    # heads than Q; the old shared loop silently skipped K heads (MHA never
+    # noticed because the counts are equal).
+    for x in (q, k)
+        for t in axes(x.storage, 1), h in axes(x.storage, 2)
+            m = Float64(positions[t])           # 0-based position
+            d = size(x.storage, 3)              # d_head, even by contract
+            for i in 0:(d÷2-1)
+                θ = m * tθ^(-2i / d)
+                c, s = cos(θ), sin(θ)
+                x1, x2 = x.storage[t, h, 2i+1], x.storage[t, h, 2i+2]
+                x.storage[t, h, 2i+1] = x1 * c - x2 * s
+                x.storage[t, h, 2i+2] = x1 * s + x2 * c
+            end
         end
     end
     return q
@@ -138,9 +149,10 @@ for wl in (:PrefillWorkload, :DecodeWorkload)
             dst::Activation,
             x::Activation,
             scale::FrozenParameter,
-            ::Semantics.$wl,
+            ::Semantics.$wl;
+            eps::Real=1e-6,
         )
-            return _cpu_rmsnorm!(dst, x, scale)
+            return _cpu_rmsnorm!(dst, x, scale; eps)
         end
 
         function rope!(
@@ -148,9 +160,10 @@ for wl in (:PrefillWorkload, :DecodeWorkload)
             q::Activation,
             k::Activation,
             positions::AbstractVector{Int},
-            ::Semantics.$wl,
+            ::Semantics.$wl;
+            theta::Real=10000.0,
         )
-            return _cpu_rope!(q, k, positions)
+            return _cpu_rope!(q, k, positions; theta)
         end
 
         function matmul!(
