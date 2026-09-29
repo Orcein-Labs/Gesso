@@ -78,10 +78,8 @@ end
 suite = Dict{String, Tuple{Function, String}}()   # name => (f, bench_note)
 
 # Constructing backend tags must be free — planners probe constantly (§XX).
-suite["backend_tag_construction"] = (
-    () -> Harpe.CPUBackend(),
-    "§XX: tag construction must stay free",
-)
+suite["backend_tag_construction"] =
+    (() -> Harpe.CPUBackend(), "§XX: tag construction must stay free")
 
 suite["capability_probe"] = (
     () -> Harpe.supports(Harpe.CPUBackend(), :some_capability),
@@ -230,4 +228,10 @@ open(tsv, "a") do io
         )
     end
 end
-println("results appended to ", relpath(tsv, dirname(@__DIR__)), " (schema ", BENCH_RESULT_SCHEMA, ")")
+println(
+    "results appended to ",
+    relpath(tsv, dirname(@__DIR__)),
+    " (schema ",
+    BENCH_RESULT_SCHEMA,
+    ")",
+)
