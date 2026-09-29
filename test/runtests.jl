@@ -53,6 +53,10 @@ using Gesso: reference_prefill, reference_generate
     # mirrors the reader byte-for-byte
     include("test_import_llama.jl")
 
+    # Phase 3 (§LXXVI item C): GPT-2 byte-level BPE against a tiny data-only
+    # fixture (golden ids traced from the merge table in the file header)
+    include("test_tokenizer_gpt2.jl")
+
     @testset "package loads" begin
         @test Gesso.Log isa Module
         @test isdefined(Gesso, :CPUBackend)

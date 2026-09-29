@@ -519,4 +519,8 @@ export reference_generate
 # safetensors reader, name map. Transport, not architecture (§VIII).
 include("llama_import.jl")
 
+# Phase 3 (§LXXVI item C): GPT-2 byte-level BPE — the tokenizer path, in
+# Gesso (no Tokenizers.jl; JSON is already the sanctioned dependency).
+include("gpt2_tokenizer.jl")
+
 end # module Inference

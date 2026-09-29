@@ -58,14 +58,20 @@ using .Inference:
     config_to_model,
     load_safetensors,
     materialize_llama,
-    load_llama
+    load_llama,
+    GPT2BPE,
+    load_gpt2_tokenizer,
+    encode
 export reference_prefill,
     reference_generate,
     load_llama_config,
     config_to_model,
     load_safetensors,
     materialize_llama,
-    load_llama
+    load_llama,
+    GPT2BPE,
+    load_gpt2_tokenizer,
+    encode
 
 using .Parameters:
     SemanticTensor,
