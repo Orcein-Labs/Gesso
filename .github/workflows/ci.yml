@@ -24,6 +24,11 @@ jobs:
         run: julia --project=. -e 'using Pkg; Pkg.instantiate(); Pkg.activate("test"); Pkg.instantiate(); Pkg.activate("benchmark"); Pkg.instantiate()'
       - name: Run tests
         run: julia --project=test --check-bounds=yes test/runtests.jl
+      - name: Run dev-loop test entry (make test)
+        # Pkg.test's sandbox env exposes only DECLARED dependencies, unlike a
+        # direct run — the two paths can and did drift apart independently.
+        # CI runs both so neither can silently rot.
+        run: make test
 
   format:
     runs-on: ubuntu-latest
