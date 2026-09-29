@@ -12,6 +12,7 @@ using Test
     include("test_foundation.jl")
     include("test_errors.jl")
     include("test_receipts.jl")
+    include("test_empty_core.jl")
 
     # correctness-laboratory fixtures (goal §H): equipment, not API —
     # deterministic seeds, tolerance mechanics, parity diagnostics.
