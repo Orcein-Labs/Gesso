@@ -46,7 +46,8 @@ using Gesso:
     DecodeWorkload,
     GessoError,
     gesso_error,
-    ERR_RESOURCE_LIMIT
+    ERR_RESOURCE_LIMIT,
+    ERR_INVALID_PLAN
 
 using CUDA
 
@@ -102,6 +103,10 @@ const CUDA_SUPPORTED_CAPS = Set([
 supports(::CUDABackend, cap::Symbol) = cap in CUDA_SUPPORTED_CAPS
 supports(::Type{CUDABackend}, cap::Symbol) = cap in CUDA_SUPPORTED_CAPS
 
+# Phase 4 item B (§LXXVII): the CUDA operator methods on CuArray{Float32}
+# + explicit to_device transfer. Same op names, more-specific methods (§CIX).
+include("cuda_ops.jl")
+
 # Bind the backend into the package's namespace: after this ext triggers,
 # `Gesso.CUDABackend` resolves to the type defined HERE — while a CUDA-less
 # load of core leaves the name entirely absent (both directions are pinned
@@ -115,6 +120,7 @@ supports(::Type{CUDABackend}, cap::Symbol) = cap in CUDA_SUPPORTED_CAPS
 # __init__ is for.
 function __init__()
     Core.eval(Gesso, :(const CUDABackend = $CUDABackend))
+    Core.eval(Gesso, :(const to_device = $to_device))
     nothing
 end
 

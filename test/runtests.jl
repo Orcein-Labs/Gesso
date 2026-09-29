@@ -66,6 +66,10 @@ using Gesso: reference_prefill, reference_generate
     # the CUDA import. Device tests live in their own files (B/C/D).
     include("test_cuda_seam.jl")
 
+    # Phase 4 (§LXXVII item B): CUDA operator methods on CuArray{Float32} vs
+    # the CPU oracle at declared atol — one named skip without a device
+    include("test_cuda_ops.jl")
+
     @testset "package loads" begin
         @test Gesso.Log isa Module
         @test isdefined(Gesso, :CPUBackend)
