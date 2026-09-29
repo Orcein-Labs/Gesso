@@ -1,19 +1,67 @@
 # scripts/freeze.jl — build a curated context-freeze bundle (ChatGPT handoff
-# + baseline snapshot). Entry: `make freeze PHASE=phaseN`.
+# + baseline snapshot). Entry: `make freeze PHASE=phaseN` (FORCE=1 to overwrite
+# an existing same-day bundle).
 #
 # Reproduces the manual Phase-0 freeze process: stage curated files, write a
-# FREEZE.md briefing + SHA-256 manifest, zip. Excluded: libs/ (local dev
-# checkouts), .git, .freebuff, Manifest.toml files, previous bundles.
+# FREEZE.md briefing + SHA-256 manifest, zip.
+#
+# A freeze is EVIDENCE, not ceremony:
+#   * it records which commit it was taken from and whether the tree was
+#     dirty (with the dirty file list) — an unmarked dirty freeze would lie;
+#   * its manifest is `sha256sum -c`-compatible and generated with the stdlib
+#     SHA package (no external checksum tool); ordering is sorted, so the
+#     manifest itself is reproducible;
+#   * it refuses to silently overwrite an existing bundle (same phase+date);
+#     pass FORCE=1 to deliberately replace one;
+#   * files missing from the curated list are printed AND recorded in the
+#     bundle's FREEZE.md, so a reader knows what the snapshot lacks.
+#
+# Excluded: libs/ (local dev checkouts), .git, .freebuff, Manifest.toml files,
+# previous bundles. The zip stores filesystem mtimes, so the ARCHIVE is not
+# bit-reproducible — the manifest content is.
 
 using Dates
+using SHA
 
 phase = get(ENV, "PHASE", "manual")
+force = get(ENV, "FORCE", "0") == "1"
 date = Dates.format(Dates.now(UTC), dateformat"yyyy-mm-dd")
 root = dirname(@__DIR__)
-stage = joinpath(tempdir(), "harpe-freeze-$(rand(UInt32))")
 zip_path = joinpath(root, "Harpe_$(phase)_Freeze_$(date).zip")
 
+# --- duplicate protection: never silently clobber a historical snapshot ----
+if isfile(zip_path) && !force
+    error(
+        "freeze: $zip_path already exists.\n" *
+        "  Refusing to overwrite a freeze silently (it is a historical artifact).\n" *
+        "  To deliberately replace it:  make freeze PHASE=$phase FORCE=1",
+    )
+end
+
+# --- git context: what does this freeze actually snapshot? ------------------
+function git_context(root::String)
+    head = dirty_files = nothing
+    try
+        head = strip(read(setenv(`git log -1 --format=%h\ %s`; dir=root), String))
+        dirty_files = String.(
+            split(
+                strip(read(setenv(`git status --porcelain`; dir=root), String)),
+                '\n';
+                keepempty=false,
+            ),
+        )
+    catch
+        return nothing, String[]  # git unavailable — say so, don't guess
+    end
+    return head, dirty_files
+end
+
+head, dirty_files = git_context(root)
+is_dirty = head !== nothing && !isempty(dirty_files)
+
+# --- stage -------------------------------------------------------------------
 curated = String[
+    # charter + canon + research + maps
     "AGENTS.md",
     "README.md",
     "Project.toml",
@@ -25,19 +73,33 @@ curated = String[
     "docs/ARCHITECTURE.md",
     "docs/research/KV_MEMORY_PROGRAM.md",
     "Harpe_musings.md",
+    # package core
     "src/Harpe.jl",
     "src/logging.jl",
     "src/versions.jl",
     "src/backends.jl",
     "src/errors.jl",
     "src/receipts.jl",
+    # test harness (per-area files are part of the contract)
     "test/Project.toml",
     "test/runtests.jl",
     "test/test_foundation.jl",
+    "test/test_errors.jl",
+    "test/test_receipts.jl",
+    # benchmark harness
     "benchmark/Project.toml",
     "benchmark/runbenchmarks.jl",
+    # dev loop (a cold reader must be able to run what we run)
+    "Makefile",
+    "scripts/test.jl",
+    "scripts/bench.jl",
+    "scripts/format.jl",
+    "scripts/freeze.jl",
+    # process surface
     "ci/Project.toml",
     ".github/workflows/ci.yml",
+    ".github/ISSUE_TEMPLATE/work-item.md",
+    ".github/PULL_REQUEST_TEMPLATE.md",
 ]
 src_dirs = [
     "src/Semantics",
@@ -55,6 +117,7 @@ src_dirs = [
     "src/CAPI",
 ]
 
+stage = joinpath(tempdir(), "harpe-freeze-$(rand(UInt32))")
 mkpath(stage)
 missing_files = String[]
 for rel in curated
@@ -64,7 +127,7 @@ for rel in curated
         mkpath(dirname(dst))
         cp(src, dst; force=true)
     else
-        push!(missing_files, rel)   # e.g. ARCHITECTURE.md on first run: fine
+        push!(missing_files, rel)   # recorded in FREEZE.md — the snapshot knows its gaps
     end
 end
 for d in src_dirs
@@ -77,11 +140,31 @@ for d in src_dirs
     end
 end
 
-# FREEZE.md briefing — regenerated each time so it reflects the live state.
+# --- FREEZE.md briefing — regenerated each time so it reflects the live state
+git_line = head === nothing ? "UNKNOWN (git not available at freeze time)" : head
+dirty_block = if head === nothing
+    ""
+elseif is_dirty
+    "\n**⚠ TREE WAS DIRTY at freeze time.** Uncommitted changes are NOT\n" *
+    "captured by the HEAD hash above; they are whatever the staged files show.\n\n" *
+    "Dirty files (git status --porcelain):\n\n```\n" *
+    join(dirty_files, '\n') *
+    "\n```\n"
+else
+    "\nTree was CLEAN at freeze time (all staged content matches $head).\n"
+end
+skipped_block =
+    isempty(missing_files) ? "" :
+    "\n## Files missing from the curated list (skipped)\n\n```\n" *
+    join(missing_files, '\n') *
+    "\n```\n"
+
 briefing = """
 # Harpe — Context Freeze: $(phase)
 
 **Freeze date:** $date (UTC)
+**Snapshot of:** $git_line
+$dirty_block
 **Purpose:** drop-in context bundle for external AI consultation and a
 per-phase baseline snapshot.
 
@@ -95,8 +178,10 @@ per-phase baseline snapshot.
 4. `Harpe_musings.md` — the dangerous research notebook. Parking lot,
    not canon. Promotions from it are deliberate.
 5. `AGENTS.md` — the binding agent charter.
-6. `FREEZE_MANIFEST.txt` — file list + SHA-256 checksums.
-
+6. `FREEZE_MANIFEST.txt` — file list + SHA-256 checksums
+   (verify: `sha256sum -c FREEZE_MANIFEST.txt` from inside the extracted
+   folder).
+$skipped_block
 ## Laws any advice must respect
 
 * Training is OUT of scope permanently (§LVIII) — settled product decision.
@@ -104,19 +189,14 @@ per-phase baseline snapshot.
 * NIRA decides what memory means; Harpe decides how it lives (KV program §8).
 * No public performance claims without benchmark data from this repo.
 * Citation = claim of having read it (KV program §4.3).
-
-## Verify
-
-```
-sha256sum -c FREEZE_MANIFEST.txt   # from inside the extracted folder
-julia --project=test test/runtests.jl
-```
 """
 open(joinpath(stage, "FREEZE.md"), "w") do io
     write(io, briefing)
 end
 
-# SHA-256 manifest over everything staged so far (manifest excluded itself).
+# --- SHA-256 manifest over everything staged (manifest excludes itself) -----
+# Format matches GNU sha256sum (`<hash>  <path>`) so `sha256sum -c` works.
+# Leading `#` lines are comments accepted by `sha256sum -c`.
 cd(stage) do
     files = String[]
     for (dirpath, dirs, filenames) in walkdir(stage)
@@ -128,13 +208,26 @@ cd(stage) do
     end
     files = sort(files)
     open("FREEZE_MANIFEST.txt", "w") do io
+        println(io, "# Harpe freeze manifest — phase: $(phase), date: $(date) UTC")
+        println(io, "# snapshot of: $git_line")
+        println(io, "# verify: sha256sum -c FREEZE_MANIFEST.txt")
         for f in files
-            write(io, read(`sha256sum $f`, String))
+            hash = bytes2hex(open(sha256, f))
+            println(io, hash, "  ", f)
         end
     end
-    run(`zip -r -q $zip_path .`)
+    # --- zip -----------------------------------------------------------------
+    zip_bin = Sys.which("zip")
+    zip_bin === nothing && error(
+        "freeze: `zip` was not found on PATH — it is needed to build the bundle.\n" *
+        "  Install it (e.g. `sudo apt install zip`) and re-run. Staged files: $stage",
+    )
+    run(`$zip_bin -r -q $zip_path .`)
 end
 
 println("freeze:   ", zip_path)
+println("snapshot: ", git_line)
+is_dirty &&
+    println("WARNING:  tree was DIRTY — dirty file list recorded in the bundle's FREEZE.md")
 isempty(missing_files) || println("skipped:  ", join(missing_files, ", "))
 println("hint:     move the zip wherever you hand context to external models")
