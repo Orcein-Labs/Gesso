@@ -9,6 +9,9 @@
 #
 # Exit criterion of the owning phase (§LXXIV): a tiny reference model
 # expressible entirely through the semantic core.
+#
+# Encoding is law under §CIX: this module owns the vocabulary, not a third
+# object model. Phase 1 implements §CIX; it does not choose another encoding.
 module Semantics
 
 # Phase 1 fills this module. Contract only — no speculative implementation.

@@ -72,6 +72,7 @@ curated = String[
     "docs/Native_Julia_Kernel_Autotuning_North_Star_README.md",
     "docs/ARCHITECTURE.md",
     "docs/DECISION_PACKETS.md",
+    "docs/goals/PHASE1_SEMANTIC_CORE.md",
     "docs/research/KV_MEMORY_PROGRAM.md",
     "Harpe_musings.md",
     # package core

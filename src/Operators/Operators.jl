@@ -9,6 +9,9 @@
 #
 # The dispatch question (§XII): "What implementation is appropriate for this
 # interaction among these objects?"
+#
+# Encoding (§CIX): an Operator is a function. Adding an operator means adding
+# a function and methods, never a graph-node class.
 module Operators
 
 # Phase 1/2 fill this module. Contract only — no speculative implementation.

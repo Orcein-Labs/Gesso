@@ -19,10 +19,10 @@ is the fast orientation layer; the canon is the law.
 | `backends` | `src/backends.jl` | §XX capabilities, §XXI tiers, backend contract + lowering stubs | 0 ✓ (draft) |
 | `errors` | `src/errors.jl` | §LXX explicit failure, North Star §22 taxonomy + `APPROXIMATION_BUDGET_EXCEEDED` | BONES ✓ |
 | `receipts` | `src/receipts.jl` | §XLII audit records + sink interface | BONES ✓ |
-| `Semantics` | `src/Semantics/` | §I, §XI, §XIII — meaning vocabulary, traits/types/metadata discipline | 1 |
-| `ModelIR` | `src/ModelIR/` | §VII, §VIII — semantic model graph (not a tensor graph) | 1 |
-| `Parameters` | `src/Parameters/` | §XI semantic tensor classes; §LVIII forbids Gradient/OptimizerState | 1/3 |
-| `Operators` | `src/Operators/` | §XII dispatch-as-execution, §XIX operator semantics | 1/2 |
+| `Semantics` | `src/Semantics/` | §I, §XI, §XIII, **§CIX** — meaning vocabulary; encoding law | 1 |
+| `ModelIR` | `src/ModelIR/` | §VII, §VIII, **§CIX** — immutable semantic composition graph | 1 |
+| `Parameters` | `src/Parameters/` | §XI, **§CIX** — family types + traits + metadata; §LVIII forbids Gradient/OptimizerState | 1/3 |
+| `Operators` | `src/Operators/` | §XII, **§CIX** — operators are functions; dispatch is execution | 1/2 |
 | `Lowering` | `src/Lowering/` | §XXII–XXIII backend routing; mixed-backend is ordinary | 4 |
 | `Inference` | `src/Inference/` | §XXIX engine, §XXX prefill/decode split, KV manager hooks | 5 |
 | `Runtime` | `src/Runtime/` | §XXXII scheduler, §XXXIII+ agent mechanism; mechanism-only (§XLIII) | 5+/12 |
@@ -40,7 +40,7 @@ is the fast orientation layer; the canon is the law.
 | `docs/Harpe_Stack.md` | **CANON.** Everything else is subordinate. |
 | `docs/research/KV_MEMORY_PROGRAM.md` | KV/working-memory research program; extends §XXXI/§X/§LIX; feeds Phases 5/9/10. |
 | `Harpe_musings.md` (root) | The dangerous notebook. Parking lot — promote deliberately, never wholesale. |
-| `docs/DECISION_PACKETS.md` | Open architecture escalations (decision-packet format). Resolved INTO canon, never in code. |
+| `docs/DECISION_PACKETS.md` | Architecture escalations (decision-packet format). Packets 1–2 resolved into §CIX; remaining packets follow the same rule: resolved INTO canon, never in code. |
 | `docs/Harpe_Stack_old.md` | Predecessor vision, archived. Superseded where they disagree. |
 | `docs/Native_Julia_Kernel_Autotuning_North_Star_README.md` | Companion project spec (standalone autotuner). Harpe's Phase 9 consumes it. |
 
@@ -50,10 +50,25 @@ is the fast orientation layer; the canon is the law.
 |---|---|
 | `AGENTS.md` | **Binding agent charter** (transcribes §LXXI/§LXXII/§LXX). |
 | `.github/ISSUE_TEMPLATE/work-item.md` | §LXXI work-item format. |
+| `docs/goals/` | Sprint goals handed to implementing agents. Phase 1: `PHASE1_SEMANTIC_CORE.md`. |
 | `.github/PULL_REQUEST_TEMPLATE.md` | §LXXII receipt-as-PR. |
 | `scripts/` + `Makefile` | `make test / bench / format / format-check / freeze`. |
 | `benchmark/results/*.tsv` | Regression corpus (accrues from every bench run). |
 | `test/` | Per-area test files, included from `runtests.jl`; dependency-law test lives there. |
+
+## Object model (§CIX)
+
+Phase 1 implements this encoding. It does not choose another.
+
+| Object | Encoding | Owns |
+|---|---|---|
+| Operator | function; methods are implementations | `Operators` |
+| ModelIR node | immutable value; composition of primitives | `ModelIR` |
+| SemanticTensor / Parameter | family TYPE + optimization TRAITS + runtime METADATA | `Parameters` (+ `Semantics` vocabulary) |
+| Workload | `PrefillWorkload` / `DecodeWorkload` types; §XVI names are tags | dispatch surface; receipts |
+| Receipt id | process-local `UInt64` until persistence/swarm schema bump | `receipts.jl` |
+
+The four Phase 1 modules stay contract-only until a Phase 1 work item fills them (`test/test_empty_core.jl`).
 
 ## Hard fences (violations are law violations, not style choices)
 
@@ -62,3 +77,4 @@ is the fast orientation layer; the canon is the law.
 * No silent fallbacks — `@hfallback` or it did not happen (§LXX).
 * No dependency without editing the dependency-law test (§VII).
 * L3+ memory is a seam, not a component (KV program §8, §XLIII).
+* Semantic-core encoding is §CIX. Do not collapse Operator / ModelIR / SemanticTensor onto one encoding.

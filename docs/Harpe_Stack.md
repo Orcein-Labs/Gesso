@@ -624,6 +624,9 @@ A parameter may carry:
 
 Physical bytes are one realization of that logical object.
 
+How those families are encoded as Julia objects is law under §CIX.
+Phase 1 implements that encoding; it does not choose another.
+
 Boundary notes:
 
     Gradient and OptimizerState are training-side concepts and are NOT Harpe semantic
@@ -676,6 +679,9 @@ The semantic question becomes:
 
     What implementation is appropriate for this interaction among these objects?
 
+An Operator is a function. Dispatch is the execution mechanism.
+An operator is not a ModelIR node. Encoding: §CIX.
+
 
 ===============================================================================
 XIII. SPECIALIZATION DISCIPLINE
@@ -727,6 +733,11 @@ Runtime:
 Harpe should decide when runtime facts deserve promotion into specialization.
 
 This promotion can eventually become profile-guided.
+
+This three-way split is the allocation rule for the semantic core.
+The Phase 1 object-model encoding (§CIX) is that rule applied to
+SemanticTensor, ModelIR node, and Operator. Do not collapse the three
+objects onto one encoding.
 
 
 ===============================================================================
@@ -847,6 +858,12 @@ for:
     long-context execution
     structured/tool output
     swarm inference
+
+This list is a taxonomy of CATEGORIES, not a frozen enum.
+
+Prefill and decode are dispatch types (§CIX, Packet 1).
+The finer names are documented tags for receipts and plans until a
+lowering actually dispatches on them.
 
 This is one of the earliest semantic advantages worth testing.
 
@@ -1352,6 +1369,9 @@ Decode:
 
 Never force both through one "generic generate()" implementation internally.
 
+PrefillWorkload and DecodeWorkload are therefore types in the operator
+dispatch surface from Phase 1/2 (§CIX). They are not metadata.
+
 
 ===============================================================================
 XXXI. KV CACHE AS A SEMANTIC OBJECT
@@ -1708,6 +1728,16 @@ Receipts matter for:
     safety
     performance analysis
     swarm coordination
+
+Identity scheme (§CIX, Packet 2):
+
+    until receipts persist or cross process, id is a process-local UInt64
+    parent_dependency is a receipt id in the same process
+    `task` remains its own field
+
+A globally unique id is minted at the first persistence or cross-process
+boundary, by bumping RECEIPT_SCHEMA_VERSION. Never silently reinterpret
+old ids (§LXIX).
 
 
 ===============================================================================
@@ -2644,6 +2674,9 @@ Exit:
 LXXIV. PHASE 1 — SEMANTIC CORE
 ===============================================================================
 
+Encoding is decided (§CIX). This phase implements that encoding.
+It does not reopen the object-model question in code.
+
 Build:
 
     model semantics
@@ -3314,3 +3347,148 @@ Harpe should ultimately ask:
      WHAT SHOULD THE MACHINE ACTUALLY DO?"
 
 That is Harpe.
+
+
+===============================================================================
+CIX. OBJECT MODEL ENCODING
+===============================================================================
+
+Resolved 2026-09-29. Phase 1 gate. Closes the Foundation Hardening stop line
+and decision packets 1 and 2.
+
+The three objects of the semantic core are not one encoding.
+
+Do not pick "immutable values" or "mutable graph handles" or
+"trait/metadata layering" for the whole core. Each object uses the
+encoding its job requires. §XIII is the allocation rule:
+
+    TYPES      = stable structural identity that dispatch may see
+    TRAITS     = optimization-relevant properties that dispatch may see
+    METADATA   = volatile facts dispatch must not see
+
+
+OPERATOR
+--------
+
+An Operator is a function. Multiple dispatch is the execution mechanism (§XII).
+
+The operator vocabulary is the set of operation names
+(rmsnorm!, rope!, matmul!, embedding_lookup!, ...). Adding an operator
+means adding a function and methods, never a graph-node class.
+
+An operator is not a ModelIR node. ModelIR refers to operators by composing
+semantic primitives that lower to those functions.
+
+
+MODELIR NODE
+------------
+
+A ModelIR node is an immutable value.
+
+ModelIR is a semantic composition graph of architecture primitives
+(embeddings, RMSNorm, RoPE, attention families, FFN families, MoE, ...),
+NOT a tensor graph, NOT a per-family runtime (no LlamaRuntime, §VIII).
+
+Identity is structural: same primitive, same children, same logical
+parameter bindings ⇒ same node. Rewrites construct a new graph.
+Runtime mutation (KV append, workspace fill) does not live on ModelIR nodes.
+
+The importer parses config + parameter map INTO this graph (§VIII).
+A new architecture is a new composition, usually not a new node type.
+
+
+SEMANTICTENSOR / PARAMETER
+--------------------------
+
+Three layers, always.
+
+    TYPE     semantic family, closed, slow-changing (§XI):
+             ProjectionWeight, KVCache, EmbeddingTable, ExpertWeight,
+             FrozenParameter, QuantizedParameter, Activation,
+             TemporaryWorkspace, RoutingState, DecodeState, AdapterDelta
+             Gradient and OptimizerState remain forbidden (§LVIII).
+
+    TRAITS   optimization-relevant properties:
+             frozen, quantized, layout family, representation family,
+             decode-hot, sparse, ...
+             Holy traits or equivalent. NOT stacked type parameters
+             for every axis (that is the compile-latency failure §XIII forbids).
+
+    METADATA runtime-volatile facts:
+             batch, sequence length, request count, free memory,
+             queue pressure, actual storage pointer, device residency.
+             Fields or a small metadata struct. Never type parameters.
+
+Physical bytes are a realization of the logical object (Representation,
+Phase 10). Working-state representation is a lowering decision
+(KV memory program).
+
+
+WORKLOAD (Packet 1)
+-------------------
+
+Two levels.
+
+    TYPE     PrefillWorkload, DecodeWorkload
+             These participate in operator dispatch from Phase 1/2.
+             Required by §XII examples and §XXX.
+
+    TAG      §XVI finer categories, as documented symbols, for receipts
+             and plans until a lowering actually dispatches on them:
+
+                 prompt_prefill
+                 batch1_decode
+                 batched_decode
+                 long_context
+                 structured_tool_output
+                 swarm_inference
+
+Do not freeze the six §XVI names as an enum. Promotion of a tag to a
+type is allowed when a real method signature needs it; that promotion
+is a work item, not a drive-by. Tool/swarm kinds may become types in
+their owning phases (12+).
+
+
+RECEIPT IDENTITY (Packet 2)
+---------------------------
+
+Until receipts persist or cross process:
+
+    id is a process-local UInt64, monotonic, atomic
+    parent_dependency is a receipt id in the same process
+    `task` remains its own field; parent_dependency is not a task id
+
+When the first persistence or cross-process consumer lands:
+
+    bump RECEIPT_SCHEMA_VERSION
+    mint a globally unique, time-ordered id at that boundary
+    (ULID / UUIDv7 / (host, session, counter) — chosen in that phase's
+    work item; the escape hatch is the bump, not a silent reinterpret)
+
+In-memory sinks keep the UInt64. Hybrid is the law: local now, global at
+the serialization/swarm boundary. §LXIX: never silently reinterpret old ids.
+
+
+WHAT PHASE 1 IMPLEMENTS
+-----------------------
+
+    semantic family types (§XI list)
+    ModelIR immutable primitive nodes + composition
+    operator functions for the existing lowering-stub vocabulary
+    PrefillWorkload and DecodeWorkload types
+    trait hooks sufficient for frozen vs not; no representation lattice yet
+
+WHAT PHASE 1 DOES NOT IMPLEMENT
+-------------------------------
+
+    mutable IR handles
+    Dict-ontology for semantic roles
+    ExecutionPhase mega-enum
+    global receipt ids
+    LlamaRuntime-shaped types
+    Gradient / OptimizerState
+    storage as the meaning of a tensor
+
+PHASE 1 EXIT (unchanged, now operational):
+
+    a tiny reference model expressible entirely through this encoding.

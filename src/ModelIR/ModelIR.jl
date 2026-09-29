@@ -8,6 +8,9 @@
 #
 # Canon: "Supporting a new architecture should mean describing how it composes
 # existing semantics" (§VIII) — the IR is what makes composition possible.
+#
+# Encoding (§CIX): a ModelIR node is an immutable value. Rewrites construct
+# a new graph. Runtime mutation does not live here.
 module ModelIR
 
 # Phase 1 fills this module. Contract only — no speculative implementation.

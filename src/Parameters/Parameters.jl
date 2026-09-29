@@ -5,9 +5,11 @@
 # QuantizedParameter, Activation, TemporaryWorkspace, RoutingState,
 # DecodeState, AdapterDelta — distinguishing STORAGE from MEANING.
 #
-# Discipline (§XI, §XIII): semantic richness at parameter/tensor level; do NOT
-# make every scalar symbolic; do NOT encode volatile runtime facts as types.
-# Gradient/OptimizerState are training-side and forbidden (§LVIII).
+# Discipline (§XI, §XIII, §CIX): semantic richness at parameter/tensor level;
+# family is a TYPE, optimization properties are TRAITS, volatile facts are
+# METADATA. Do NOT make every scalar symbolic. Do NOT encode volatile runtime
+# facts as types. Gradient/OptimizerState are training-side and forbidden
+# (§LVIII).
 module Parameters
 
 # Phase 1/3 fill this module. Contract only — no speculative implementation.

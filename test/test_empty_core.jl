@@ -10,8 +10,8 @@
 # It also pins two deeper fences:
 #   * the §LVIII training boundary: no AD/training machinery identifiers
 #     anywhere in src/;
-#   * architecture packets stay unresolved IN CODE
-#     (docs/DECISION_PACKETS.md is where they get resolved).
+#   * architecture packets 1–2 are resolved in canon (§CIX) and stay
+#     unimplemented in code until a Phase 1 work item fills them.
 
 const CORE_MODULES = (:Semantics, :ModelIR, :Parameters, :Operators)
 
@@ -77,18 +77,20 @@ end
           "(§LVIII: training is NOT our problem): $violations" == ""
 end
 
-@testset "empty-core fence: packets stay unresolved in code" begin
+@testset "empty-core fence: packets resolved in canon, unimplemented in code" begin
     @test isfile(joinpath(pkgdir(Harpe), "docs", "DECISION_PACKETS.md"))
     md = read(joinpath(pkgdir(Harpe), "docs", "DECISION_PACKETS.md"), String)
     @test occursin("## Status", md)
-    @test occursin("Both packets are OPEN", md)
+    @test occursin("RESOLVED INTO CANON", md)
 
-    # Packet 1 (workload vocabulary): no ExecutionPhase/WorkloadKind type
-    # exists until the reasoning pass resolves it into canon.
+    # Packet 1 (§CIX): PrefillWorkload / DecodeWorkload are the types; they
+    # land with a Phase 1 work item. No mega-enum in the meantime.
     @test !isdefined(Harpe, :ExecutionPhase)
     @test !isdefined(Harpe, :WorkloadKind)
+    @test !isdefined(Harpe, :PrefillWorkload)
+    @test !isdefined(Harpe, :DecodeWorkload)
 
-    # Packet 2 (receipt identity): ids are still process-local UInt64
-    # counters — a global-id scheme arrives only with the schema bump.
+    # Packet 2 (§CIX / §XLII): ids stay process-local UInt64 until the
+    # persistence/swarm schema bump.
     @test Harpe.next_receipt_id() isa UInt64
 end

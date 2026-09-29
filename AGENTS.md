@@ -116,6 +116,9 @@ scripts/       dev commands (test/bench/format/freeze)
 Open architecture questions (decisions deliberately NOT made locally) are
 recorded as decision packets in `docs/DECISION_PACKETS.md`. Do not resolve
 a packet by implementing one option — resolution happens in canon.
+Packets 1 (workload) and 2 (receipt identity) are resolved in
+`docs/Harpe_Stack.md` §CIX; the semantic core still stays empty until a
+Phase 1 work item fills it.
 
 ## 9. Exit checklist for every work item
 

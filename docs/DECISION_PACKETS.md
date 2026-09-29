@@ -3,12 +3,16 @@
 Escalations from the Foundation Hardening sprint (2026-09-29), in the
 §6 decision-packet format of that sprint's goal. These are the points
 where local engineering stops and a stronger architectural reasoning
-pass should take over. Consumed by the next reasoning pass (Grok/Claude).
+pass should take over.
 
 Consumption rule: a packet is resolved by writing the decision INTO canon
 (`docs/Harpe_Stack.md` or the owning research program), never by silently
 implementing one option in code. Until resolved, the safe move is to
-keep the seam undecided — which is what this sprint did.
+keep the seam undecided.
+
+Both packets below are RESOLVED INTO CANON (`docs/Harpe_Stack.md` §CIX,
+2026-09-29). The option analysis is kept as the record of the choice.
+Code still does not implement either resolution — Phase 1 work items do.
 
 ---
 
@@ -82,6 +86,14 @@ documented vocabulary (symbols, documented in ARCHITECTURE.md) only if the
 next sprint needs workload tags in receipts before Phase 5. Confidence:
 moderate. The genuine choice — enum vs registry vs composite — deserves
 the reasoning pass.
+
+**RESOLUTION (2026-09-29, §CIX)**
+Two-level. PrefillWorkload and DecodeWorkload are TYPES (dispatch from
+Phase 1/2; required by §XII and §XXX). The six §XVI names are documented
+TAGS for receipts and plans until a lowering actually dispatches on them.
+No ExecutionPhase / WorkloadKind mega-enum. Promoting a tag to a type is
+a work item. Option A (closed enum of all six) is rejected; Option B
+(free-form forever) is rejected for the prefill/decode cut.
 
 ---
 
@@ -159,10 +171,23 @@ safe; low-to-moderate that A is the right end state. The END-STATE identity
 scheme (and task-vs-receipt parent semantics) belongs to the reasoning
 pass.
 
+**RESOLUTION (2026-09-29, §CIX / §XLII)**
+Hybrid, which is Option A plus the pre-planned bump. Process-local UInt64
+now; parent_dependency is a receipt id in the same process; `task` stays
+its own field. Global time-ordered ids (ULID / UUIDv7 / host-session-counter)
+are chosen in the work item that first persists receipts or crosses
+process — by bumping RECEIPT_SCHEMA_VERSION, never by silent reinterpret
+(§LXIX). Option B in core now is rejected (no consumer, hot-path cost,
+stdlib-only ULID would itself be a design). Task-scoped parent_dependency
+is rejected: §XLII already names it as a receipt id.
+
 ---
 
 ## Status
 
-Both packets are OPEN. No code in the repo depends on either resolution.
-The next reasoning pass should resolve them into canon (or explicit
-postponements with owners and phases) before or during Phase 1.
+Both packets are RESOLVED INTO CANON (`docs/Harpe_Stack.md` §CIX).
+No code in the repo implements either resolution. Phase 1 work items
+live in `docs/goals/PHASE1_SEMANTIC_CORE.md` and implement
+PrefillWorkload / DecodeWorkload and the semantic family types.
+Receipt identity stays process-local UInt64 until the persistence/swarm
+phase that owns the schema bump.
