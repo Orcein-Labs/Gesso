@@ -28,6 +28,9 @@ using Test
     include("toyfixtures.jl")
     include("test_toyfixtures.jl")
 
+    # CPU reference operator methods (§LXXV item A): needs the lab helpers
+    include("test_cpu_ops.jl")
+
     # ModelIR tests build toy2 from the fixture pack, so they come after it;
     # the Phase 1 exit test composes the whole chain (fixture → IR → tensors
     # → named operators) and therefore comes last
@@ -49,6 +52,7 @@ using Test
         # editing this test. That friction is the point.
         stdlib_allowlist = Dict{String, String}( # name => justification
             "Dates" => "timestamps for structured log events (§XLII)",
+            "LinearAlgebra" => "CPU reference matmul (§LXXV Phase 2)",
         )
         project = joinpath(pkgdir(Harpe), "Project.toml")
         section = ""

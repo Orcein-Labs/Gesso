@@ -75,7 +75,12 @@ Capability query (§XX). Answers "can this backend legally execute X?" — never
 operator family in later phases; unknown capabilities must return `false`
 rather than throw, so capability probing is always safe.
 """
-supports(::CPUBackend, ::Symbol) = false
+# Phase 2 (§LXXV): CPU reference coverage. `true` only where a CPU method
+# actually computes; :quantize/:dequantize stay false until Representation
+# lands their math; unknown capabilities stay false (probing is always safe).
+const CPU_SUPPORTED_CAPS =
+    Set([:rmsnorm, :rope, :softmax, :swiglu, :matmul, :embedding_lookup],)
+supports(::CPUBackend, cap::Symbol) = cap in CPU_SUPPORTED_CAPS
 
 # --- Lowering operation contract -------------------------------------------
 #

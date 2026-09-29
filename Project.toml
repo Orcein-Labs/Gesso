@@ -19,6 +19,9 @@ authors = ["Matt <liravossai@gmail.com>"]
 # Lava lives at libs/Lava as a local development source; it is NOT a dependency
 # of this package yet and must not become one before Phase 8.
 Dates = "ade2ca70-3891-5945-98fb-dc099432e06a"
+# Phase 2 (§LXXV): CPU reference matmul — matmul! lowers x * transpose(W)
+# through BLAS. Stdlib, justified in the dependency-law test.
+LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
 
 [weakdeps]
 # Intentionally empty. See above.

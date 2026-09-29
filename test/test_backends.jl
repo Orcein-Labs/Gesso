@@ -59,10 +59,15 @@ end
     end
 end
 
-@testset "lowering-stub inventory: supports stays false (no silent capability)" begin
-    # ready-room fence: do not make supports(::CPUBackend, _) suddenly true —
-    # capability vocabulary arrives with the operator family that owns it
+@testset "lowering-stub inventory: supports reflects real CPU coverage" begin
+    # Phase 2 (§LXXV): true exactly where a CPU method computes. This fence
+    # keeps supports honest in both directions — no silent capability
+    # invention, and no false denial of implemented coverage.
     cpu = Harpe.CPUBackend()
-    @test Harpe.supports(cpu, :rmsnorm) == false
-    @test Harpe.supports(cpu, :anything_at_all) == false
+    for cap in (:rmsnorm, :rope, :softmax, :swiglu, :matmul, :embedding_lookup)
+        @test Harpe.supports(cpu, cap) == true
+    end
+    @test Harpe.supports(cpu, :quantize) == false
+    @test Harpe.supports(cpu, :dequantize) == false
+    @test Harpe.supports(cpu, :anything_at_all) == false   # unknown: still false, never throws
 end

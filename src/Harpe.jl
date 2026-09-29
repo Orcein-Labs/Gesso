@@ -30,6 +30,7 @@ include("ModelIR/ModelIR.jl")               # Phase 1
 include("Parameters/Parameters.jl")         # Phase 1/3
 include("Operators/Operators.jl")           # Phase 1/2
 include("Lowering/Lowering.jl")             # Phase 4
+include("Operators/cpu.jl")                 # Phase 2: CPU reference methods (§LXXV)
 include("Inference/Inference.jl")           # Phase 5
 include("Runtime/Runtime.jl")               # Phase 5+
 include("Profiling/Profiling.jl")           # Phase 6

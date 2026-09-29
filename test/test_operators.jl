@@ -90,5 +90,7 @@ end
     # functions, extended with methods (generic function still owned by the
     # module that defined the stub)
     @test parentmodule(Harpe.rmsnorm!) === Harpe
-    @test length(methods(Harpe.rmsnorm!)) == 3   # stub + prefill + decode
+    # stub + generic prefill + generic decode (Phase 1) + cpu prefill +
+    # cpu decode (Phase 2 §LXXV) — count grows only when a method layer does
+    @test length(methods(Harpe.rmsnorm!)) == 5
 end

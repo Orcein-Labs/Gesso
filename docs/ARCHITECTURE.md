@@ -22,7 +22,7 @@ is the fast orientation layer; the canon is the law.
 | `Semantics` | `src/Semantics/` | §I, §XI, §XIII, **§CIX** — meaning vocabulary; workload dispatch types (`PrefillWorkload`/`DecodeWorkload`) | 1 — item A ✓ |
 | `ModelIR` | `src/ModelIR/` | §VII, §VIII, **§CIX** — immutable semantic composition graph (Embedding/RMSNorm/RoPE/Attention/SwiGLU/Block/Model; structural identity via Tuple composition) | 1 — item B ✓ |
 | `Parameters` | `src/Parameters/` | §XI, **§CIX** — §XI family types + `frozen` trait + metadata fields; §LVIII forbids Gradient/OptimizerState | 1/3 — item A ✓ |
-| `Operators` | `src/Operators/` | §XII, **§CIX** — operators are functions (owned by `backends.jl`); Operators adds the `SemanticTensor × workload` dispatch methods (explicit decline until Phase 2 math) | 1 — item C ✓ |
+| `Operators` | `src/Operators/` | §XII, **§CIX** — operators are functions (owned by `backends.jl`); dispatch methods on `SemanticTensor × workload`; `cpu.jl` = CPU reference math (§LXXV, Float64; `quantize!`/`dequantize!` still decline) | 1 — item C ✓; 2 — item A ✓ |
 | `Lowering` | `src/Lowering/` | §XXII–XXIII backend routing; mixed-backend is ordinary | 4 |
 | `Inference` | `src/Inference/` | §XXIX engine, §XXX prefill/decode split, KV manager hooks | 5 |
 | `Runtime` | `src/Runtime/` | §XXXII scheduler, §XXXIII+ agent mechanism; mechanism-only (§XLIII) | 5+/12 |
