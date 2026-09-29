@@ -27,6 +27,9 @@ using Test
     include("toyfixtures.jl")
     include("test_toyfixtures.jl")
 
+    # ModelIR tests build toy2 from the fixture pack, so they come after it
+    include("test_modelir.jl")
+
     @testset "package loads" begin
         @test Harpe.Log isa Module
         @test isdefined(Harpe, :CPUBackend)

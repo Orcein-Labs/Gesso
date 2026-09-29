@@ -45,6 +45,9 @@ include("CAPI/CAPI.jl")                     # Phase 16
 using .Semantics: PrefillWorkload, DecodeWorkload
 export PrefillWorkload, DecodeWorkload
 
+using .ModelIR: Embedding, RMSNorm, RoPE, Attention, SwiGLU, Block, Model
+export Embedding, RMSNorm, RoPE, Attention, SwiGLU, Block, Model
+
 using .Parameters:
     SemanticTensor,
     ProjectionWeight,

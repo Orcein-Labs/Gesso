@@ -35,7 +35,7 @@ const ITEM_A_EXPORTS = Dict(
         :frozen,
     ],
 )
-const STILL_EMPTY_MODULES = (:ModelIR, :Operators)
+const STILL_EMPTY_MODULES = (:Operators,)   # ModelIR filled by item B
 
 @testset "empty-core fence: filled modules export exactly the §CIX item-A vocabulary" begin
     for (name, allowed) in ITEM_A_EXPORTS
