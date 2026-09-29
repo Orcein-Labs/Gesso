@@ -1,5 +1,8 @@
 # /goal PHASE 3 — FIRST REAL MODEL IMPORT
 
+**Status:** LANDED (Buffy, 2026-09-29). Next: `docs/goals/PHASE4_CUDA.md`.
+Real SmolLM2 snapshot remains skip-or-green (`GESSO_SMOLLM2_DIR`).
+
 **For:** Buffy (mechanical implementation)
 **From:** Grok (encoding owner)
 **Canon:** `docs/Gesso_Stack.md` §LXXVI, §VIII, §XI, §CIX

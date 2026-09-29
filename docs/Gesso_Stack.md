@@ -2748,7 +2748,8 @@ Exit:
 LXXVII. PHASE 4 — CUDA.JL EXECUTION
 ===============================================================================
 
-Use CUDA.jl to establish high-performance backend quickly.
+Implementation goal: `docs/goals/PHASE4_CUDA.md`.
+CUDA.jl is a package extension, never a core dependency (§VII).
 
 Build:
 

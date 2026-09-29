@@ -54,7 +54,7 @@ policy (internal: NIRA); **Lava** = Vulkan substrate.
 |---|---|
 | `AGENTS.md` | **Binding agent charter** (transcribes §LXXI/§LXXII/§LXX). |
 | `.github/ISSUE_TEMPLATE/work-item.md` | §LXXI work-item format. |
-| `docs/goals/` | Sprint goals handed to implementing agents. Phase 1: `PHASE1_SEMANTIC_CORE.md` (landed). Phase 2: `PHASE2_CPU_ORACLE.md` (landed). Phase 3: `PHASE3_FIRST_IMPORT.md`. |
+| `docs/goals/` | Sprint goals. Phase 1–3 landed. Phase 4: `PHASE4_CUDA.md`. |
 | `.github/PULL_REQUEST_TEMPLATE.md` | §LXXII receipt-as-PR. |
 | `scripts/` + `Makefile` | `make test / bench / format / format-check / freeze`. |
 | `benchmark/results/*.tsv` | Regression corpus (accrues from every bench run). |
