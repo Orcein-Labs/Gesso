@@ -39,7 +39,7 @@ is the fast orientation layer; the canon is the law.
 |---|---|
 | `docs/Harpe_Stack.md` | **CANON.** Everything else is subordinate. |
 | `docs/research/KV_MEMORY_PROGRAM.md` | KV/working-memory research program; extends §XXXI/§X/§LIX; feeds Phases 5/9/10. |
-| `Harpe_musings.md` (root) | The dangerous notebook. Parking lot — promote deliberately, never wholesale. |
+| `docs/Harpe_musings.md` | The dangerous notebook. Parking lot — promote deliberately, never wholesale. |
 | `docs/DECISION_PACKETS.md` | Architecture escalations (decision-packet format). Packets 1–2 resolved into §CIX; remaining packets follow the same rule: resolved INTO canon, never in code. |
 | `docs/Harpe_Stack_old.md` | Predecessor vision, archived. Superseded where they disagree. |
 | `docs/Native_Julia_Kernel_Autotuning_North_Star_README.md` | Companion project spec (standalone autotuner). Harpe's Phase 9 consumes it. |

@@ -74,7 +74,7 @@ curated = String[
     "docs/DECISION_PACKETS.md",
     "docs/goals/PHASE1_SEMANTIC_CORE.md",
     "docs/research/KV_MEMORY_PROGRAM.md",
-    "Harpe_musings.md",
+    "docs/Harpe_musings.md",
     # package core
     "src/Harpe.jl",
     "src/logging.jl",
@@ -176,7 +176,7 @@ per-phase baseline snapshot.
 2. `docs/research/KV_MEMORY_PROGRAM.md` — the KV/working-memory research
    program (extends §XXXI/§X/§LIX; feeds Phases 5/9/10).
 3. `docs/ARCHITECTURE.md` — module map for orientation.
-4. `Harpe_musings.md` — the dangerous research notebook. Parking lot,
+4. `docs/Harpe_musings.md` — the dangerous research notebook. Parking lot,
    not canon. Promotions from it are deliberate.
 5. `AGENTS.md` — the binding agent charter.
 6. `FREEZE_MANIFEST.txt` — file list + SHA-256 checksums
