@@ -39,6 +39,9 @@ using ..Gesso:
     matmul!,
     softmax!,
     swiglu!
+# Phase 3 (§LXXVI item B): the importer composes ModelIR primitives — same
+# vocabulary, a new composition (§VIII: no LlamaModel type)
+using ..ModelIR: Embedding, RMSNorm, RoPE, Attention, SwiGLU, Block, Model
 
 """
     reference_prefill(model, tensors, tokens) -> Matrix{Float64}
@@ -511,5 +514,9 @@ function _decode_step!(
 end
 
 export reference_generate
+
+# Phase 3 (§LXXVI item B): Llama-family checkpoint import — config,
+# safetensors reader, name map. Transport, not architecture (§VIII).
+include("llama_import.jl")
 
 end # module Inference

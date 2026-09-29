@@ -12,6 +12,13 @@ Random = "9a3f8284-a2c9-5f02-9a11-845980a1fd5c"
 # stdlib: toy fixture pack is described as DATA in TOML files
 # (test/fixtures/toy/) — parsed by the loader in test/toyfixtures.jl
 TOML = "fa267f1f-6049-4f14-aa54-33bafae1ed76"
+# stdlib: the llama_micro fixture writer produces safetensors-layout files;
+# the core reader mmaps the byte region (same lesson as Random: declare it)
+Mmap = "a63ad114-7e13-5084-954f-fe012c677804"
+# Phase 3 (§LXXVI): the core package declares JSON for config/header
+# parsing; the test sandbox needs it declared too (it is not a stdlib, so
+# the sandbox rule bites even harder)
+JSON = "682c06a0-de6a-54ab-a142-c8b1cf79cde6"
 
 [sources]
 Gesso = {path = ".."}

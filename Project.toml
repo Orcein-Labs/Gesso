@@ -10,6 +10,9 @@ authors = ["Matt <liravossai@gmail.com>"]
 # Julia stdlibs, and each one must be added together with an entry in the
 # dependency-law test (test/runtests.jl) justifying it:
 #   Dates  — timestamps for structured log events (§XLII receipts vocabulary)
+#   LinearAlgebra — CPU reference matmul (§LXXV Phase 2)
+#   Mmap   — safetensors byte region (§LXXVI)
+#   JSON   — config.json + safetensors header parsing (§LXXVI)
 #
 # Backend lowering arrives as package extensions when their phases call for
 # it — never as core dependencies:
@@ -22,6 +25,12 @@ Dates = "ade2ca70-3891-5945-98fb-dc099432e06a"
 # Phase 2 (§LXXV): CPU reference matmul — matmul! lowers x * transpose(W)
 # through BLAS. Stdlib, justified in the dependency-law test.
 LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
+# Phase 3 (§LXXVI): safetensors byte region is mmapped, never copied
+# through a handle. Stdlib, justified in the dependency-law test.
+Mmap = "a63ad114-7e13-5084-954f-fe012c677804"
+# Phase 3 (§LXXVI): the ONE sanctioned third-party dependency — config.json
+# and the safetensors header are JSON. Justified in the dependency-law test.
+JSON = "682c06a0-de6a-54ab-a142-c8b1cf79cde6"
 
 [weakdeps]
 # Intentionally empty. See above.

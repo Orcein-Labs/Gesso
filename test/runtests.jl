@@ -48,6 +48,11 @@ using Gesso: reference_prefill, reference_generate
     # — defaults are the Phase 2 constants, so every earlier gate is unchanged
     include("test_gqa.jl")
 
+    # Phase 3 (§LXXVI item B): config → ModelIR, safetensors reader, Llama
+    # name map — the micro checkpoint is generated in-test by a writer that
+    # mirrors the reader byte-for-byte
+    include("test_import_llama.jl")
+
     @testset "package loads" begin
         @test Gesso.Log isa Module
         @test isdefined(Gesso, :CPUBackend)
@@ -61,9 +66,13 @@ using Gesso: reference_prefill, reference_generate
         # entry here. Backends arrive as package extensions (CUDA → Phase 4,
         # Lava → Phase 8), never as core deps. Adding a dependency requires
         # editing this test. That friction is the point.
+        # §LXXVI sanctioned the ONE third-party exception: JSON, for
+        # config.json + safetensors header parsing.
         stdlib_allowlist = Dict{String, String}( # name => justification
             "Dates" => "timestamps for structured log events (§XLII)",
             "LinearAlgebra" => "CPU reference matmul (§LXXV Phase 2)",
+            "Mmap" => "safetensors byte region (§LXXVI)",
+            "JSON" => "config.json + safetensors header parsing (§LXXVI)",
         )
         project = joinpath(pkgdir(Gesso), "Project.toml")
         section = ""

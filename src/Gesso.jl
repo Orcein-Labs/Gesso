@@ -50,8 +50,22 @@ using .ModelIR: Embedding, RMSNorm, RoPE, Attention, SwiGLU, Block, Model
 export Embedding, RMSNorm, RoPE, Attention, SwiGLU, Block, Model
 
 # Phase 2 (§LXXV): the reference interpreter is the first public engine slice
-using .Inference: reference_prefill, reference_generate
-export reference_prefill, reference_generate
+# Phase 3 (§LXXVI item B): the Llama import path rides the same surface
+using .Inference:
+    reference_prefill,
+    reference_generate,
+    load_llama_config,
+    config_to_model,
+    load_safetensors,
+    materialize_llama,
+    load_llama
+export reference_prefill,
+    reference_generate,
+    load_llama_config,
+    config_to_model,
+    load_safetensors,
+    materialize_llama,
+    load_llama
 
 using .Parameters:
     SemanticTensor,

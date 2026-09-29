@@ -101,6 +101,7 @@ curated = String[
     "test/test_reference_prefill.jl",
     "test/test_reference_generate.jl",
     "test/test_gqa.jl",
+    "test/test_import_llama.jl",
     "test/testhelpers.jl",
     "test/test_helpers.jl",
     "test/toyfixtures.jl",
