@@ -105,6 +105,7 @@ curated = String[
     "test/test_tokenizer_gpt2.jl",
     "test/fixtures/gpt2_tiny/vocab.json",
     "test/fixtures/gpt2_tiny/merges.txt",
+    "test/test_smollm2.jl",
     "test/testhelpers.jl",
     "test/test_helpers.jl",
     "test/toyfixtures.jl",

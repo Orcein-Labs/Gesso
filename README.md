@@ -54,7 +54,7 @@ Current phases (docs/Gesso_Stack.md §LXXIII ff.):
 | 0 | Repository foundation | **COMPLETE** |
 | 1 | Semantic core (§CIX encoding) | **COMPLETE** — expressible, not executable |
 | 2 | Reference execution (CPU oracle) | **COMPLETE** — prefill + greedy KV decode |
-| 3 | First real model import | |
+| 3 | First real model import | **IN PROGRESS** — items A/B/C landed (GQA interpreter, Llama import, GPT-2 BPE); item D is skip-or-green pending a local SmolLM2 snapshot |
 | 4 | CUDA.jl execution | |
 
 Training is **not** part of Gesso — by explicit, permanent decision
@@ -92,6 +92,23 @@ make format        # format the repo
 make format-check  # CI's formatting gate
 make freeze        # curated context-freeze bundle (evidence, not ceremony)
 ```
+
+### Real-model gate (Phase 3, §LXXVI)
+
+The test suite never downloads and never talks to huggingface.co. To run
+the real-model parity gate locally, point `GESSO_SMOLLM2_DIR` at a local
+snapshot of [HuggingFaceTB/SmolLM2-135M](https://huggingface.co/HuggingFaceTB/SmolLM2-135M)
+containing `config.json`, `model.safetensors` (or the shard index),
+`vocab.json`, and `merges.txt`:
+
+```bash
+GESSO_SMOLLM2_DIR=/path/to/SmolLM2-135M make test
+```
+
+Without the variable the gate is one named skip — CI stays green on a
+machine that has never seen SmolLM2 weights. The first successful run on
+a snapshot freezes `test/fixtures/smollm2/expected_logits.toml`
+(oracle `gesso-cpu`); that committed file is the regression oracle.
 
 Under the hood (Julia 1.12 workspace — activate the root, then let Pkg
 discover the members; do NOT `Pkg.instantiate("test")`, positional

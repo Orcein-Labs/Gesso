@@ -57,6 +57,10 @@ using Gesso: reference_prefill, reference_generate
     # fixture (golden ids traced from the merge table in the file header)
     include("test_tokenizer_gpt2.jl")
 
+    # Phase 3 (§LXXVI item D): the REAL-model gate — one named skip unless
+    # GESSO_SMOLLM2_DIR points at a local snapshot; it never downloads
+    include("test_smollm2.jl")
+
     @testset "package loads" begin
         @test Gesso.Log isa Module
         @test isdefined(Gesso, :CPUBackend)
