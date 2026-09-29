@@ -11,7 +11,8 @@
 # in-memory sink suffices. No dependencies added — the dependency law holds.
 
 export Receipt, ReceiptSink, InMemorySink, emit!, next_receipt_id, new_receipt
-export RECEIPT_SCHEMA_VERSION
+# RECEIPT_SCHEMA_VERSION is owned and exported by versions.jl — re-exporting
+# it here too would make `names(Harpe)` ambiguous about ownership.
 
 using Dates
 
