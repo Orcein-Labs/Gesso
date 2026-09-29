@@ -24,3 +24,8 @@ bench-result-v1	2026-09-29 T00:07:13Z	1.12.6	structured_log_event	10000	1310.45
 0.2.0	2026-09-29 T03:31:00Z	1.12.6	cachyos-x8664	x86_64	1	6164fe7	true	lowering_not_implemented_throw	10000	1.544	1.7246914	1.407	0	0	§LXX: explicit failure must be affordable
 0.2.0	2026-09-29 T03:31:00Z	1.12.6	cachyos-x8664	x86_64	1	6164fe7	true	receipt_emit_inmemory	10000	283.1443396226415	350.90961	214.3622641509434	7	848	§XLII: audited actions pay for receipts; keep it negligible
 0.2.0	2026-09-29 T03:31:00Z	1.12.6	cachyos-x8664	x86_64	1	6164fe7	true	structured_log_event	10000	1122.1515151515152	1376.8117393939394	917.8484848484849	31	1264	§XLII: logging must never be the reason to skip logging
+0.2.0	2026-09-29 T05:16:19Z	1.12.6	cachyos-x8664	x86_64	1	091ed0b	true	backend_tag_construction	10000	1.587	1.8200136000000002	1.407	0	0	§XX: tag construction must stay free
+0.2.0	2026-09-29 T05:16:19Z	1.12.6	cachyos-x8664	x86_64	1	091ed0b	true	capability_probe	10000	1.692	1.9042257000000002	1.489	0	0	§XX: capability probing is always safe, never throws
+0.2.0	2026-09-29 T05:16:19Z	1.12.6	cachyos-x8664	x86_64	1	091ed0b	true	lowering_not_implemented_throw	10000	1.814	1.9064358000000001	1.584	0	0	§LXX: explicit failure must be affordable
+0.2.0	2026-09-29 T05:16:19Z	1.12.6	cachyos-x8664	x86_64	1	091ed0b	true	receipt_emit_inmemory	10000	322.45454545454544	396.7541547785548	221.99067599067598	7	848	§XLII: audited actions pay for receipts; keep it negligible
+0.2.0	2026-09-29 T05:16:19Z	1.12.6	cachyos-x8664	x86_64	1	091ed0b	true	structured_log_event	10000	1175.967741935484	1447.918793548387	912.5806451612904	31	1264	§XLII: logging must never be the reason to skip logging
