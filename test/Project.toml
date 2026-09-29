@@ -9,6 +9,9 @@ Dates = "ade2ca70-3891-5945-98fb-dc099432e06a"
 # resolve Random through the workspace manifest (BenchmarkTools dep), but
 # Pkg.test's sandbox env exposes only declared deps.
 Random = "9a3f8284-a2c9-5f02-9a11-845980a1fd5c"
+# stdlib: toy fixture pack is described as DATA in TOML files
+# (test/fixtures/toy/) — parsed by the loader in test/toyfixtures.jl
+TOML = "fa267f1f-6049-4f14-aa54-33bafae1ed76"
 
 [sources]
 Harpe = {path = ".."}

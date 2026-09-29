@@ -1,0 +1,31 @@
+# Toy model architecture, described as DATA (test/fixtures/toy/README.md is
+# the contract). This is laboratory material for Phase 2's CPU-oracle
+# differential tests — NOT a Harpe type, NOT a ModelIR preview. The schema
+# tag is fixture-local and has no relation to Harpe's persisted-artifact
+# schema versions (src/versions.jl).
+schema = "harpe-toy-fixture-v1"
+name = "toy2"
+
+[vocab]
+size = 32
+
+[embedding]
+dim = 16
+
+# Ordered block list. `kind` strings are fixture data that Phase 2's oracle
+# math interprets; they name no Harpe type and define no operator semantics.
+[[block]]
+kind = "attention"
+n_heads = 2
+
+[[block]]
+kind = "mlp"
+hidden = 64
+
+[[block]]
+kind = "attention"
+n_heads = 2
+
+[[block]]
+kind = "mlp"
+hidden = 64

@@ -19,6 +19,11 @@ using Test
     include("testhelpers.jl")
     include("test_helpers.jl")
 
+    # toy-model fixture pack (Phase 1 ready-room): data-only laboratory
+    # material for Phase 2 — see test/fixtures/toy/README.md
+    include("toyfixtures.jl")
+    include("test_toyfixtures.jl")
+
     @testset "package loads" begin
         @test Harpe.Log isa Module
         @test isdefined(Harpe, :CPUBackend)

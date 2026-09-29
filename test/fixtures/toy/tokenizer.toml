@@ -1,0 +1,126 @@
+# Toy tokenizer table (vocabulary as data; see fixtures README). Ids are
+# dense 0..31 matching model.toml [vocab] size. Three control tokens; the
+# rest are placeholder strings — a real tokenizer is NOT being previewed.
+schema = "harpe-toy-tokenizer-v1"
+
+[ids]
+PAD = 0
+BOS = 1
+EOS = 2
+
+# literal token strings by id; ids 0-2 are the control tokens above
+[[token]]
+id = 3
+text = "tok3"
+
+[[token]]
+id = 4
+text = "tok4"
+
+[[token]]
+id = 5
+text = "tok5"
+
+[[token]]
+id = 6
+text = "tok6"
+
+[[token]]
+id = 7
+text = "tok7"
+
+[[token]]
+id = 8
+text = "tok8"
+
+[[token]]
+id = 9
+text = "tok9"
+
+[[token]]
+id = 10
+text = "tok10"
+
+[[token]]
+id = 11
+text = "tok11"
+
+[[token]]
+id = 12
+text = "tok12"
+
+[[token]]
+id = 13
+text = "tok13"
+
+[[token]]
+id = 14
+text = "tok14"
+
+[[token]]
+id = 15
+text = "tok15"
+
+[[token]]
+id = 16
+text = "tok16"
+
+[[token]]
+id = 17
+text = "tok17"
+
+[[token]]
+id = 18
+text = "tok18"
+
+[[token]]
+id = 19
+text = "tok19"
+
+[[token]]
+id = 20
+text = "tok20"
+
+[[token]]
+id = 21
+text = "tok21"
+
+[[token]]
+id = 22
+text = "tok22"
+
+[[token]]
+id = 23
+text = "tok23"
+
+[[token]]
+id = 24
+text = "tok24"
+
+[[token]]
+id = 25
+text = "tok25"
+
+[[token]]
+id = 26
+text = "tok26"
+
+[[token]]
+id = 27
+text = "tok27"
+
+[[token]]
+id = 28
+text = "tok28"
+
+[[token]]
+id = 29
+text = "tok29"
+
+[[token]]
+id = 30
+text = "tok30"
+
+[[token]]
+id = 31
+text = "tok31"

@@ -1,0 +1,22 @@
+# Expected-logits SLOT for the toy fixture pack (schema only — see the
+# fixtures README). Deliberately EMPTY of values: filling it requires the
+# Phase 2 CPU oracle math, which does not exist yet, and hand-computing
+# logits before an oracle exists would bake arithmetic errors into the
+# laboratory. The slot exists so Phase 2 inherits the format, not numbers.
+#
+# When filled: logits are Float64, shape [vocab_size, seq_len], row-major
+# over vocab, one column per BOS-prefixed position. Values are listed under
+# [[value]] with their indices, so the file stays human-diffable.
+schema = "harpe-toy-expected-logits-v1"
+
+[provenance]
+# how these numbers were produced. MUST be filled when values are:
+# e.g. oracle = "cpu", commit = "<hash>", fixture_seed = "<value>"
+oracle = ""
+commit = ""
+fixture_seed = ""
+
+# [[value]]
+# row = 0    # vocab index
+# col = 0    # position
+# v = 0.0
