@@ -13,6 +13,11 @@ using Test
     include("test_errors.jl")
     include("test_receipts.jl")
 
+    # correctness-laboratory fixtures (goal §H): equipment, not API —
+    # deterministic seeds, tolerance mechanics, parity diagnostics.
+    include("testhelpers.jl")
+    include("test_helpers.jl")
+
     @testset "package loads" begin
         @test Harpe.Log isa Module
         @test isdefined(Harpe, :CPUBackend)
