@@ -14,6 +14,7 @@ using Test
     include("test_receipts.jl")
     include("test_semantics.jl")
     include("test_parameters.jl")
+    include("test_operators.jl")
     include("test_empty_core.jl")
     include("test_backends.jl")
 
@@ -27,8 +28,11 @@ using Test
     include("toyfixtures.jl")
     include("test_toyfixtures.jl")
 
-    # ModelIR tests build toy2 from the fixture pack, so they come after it
+    # ModelIR tests build toy2 from the fixture pack, so they come after it;
+    # the Phase 1 exit test composes the whole chain (fixture → IR → tensors
+    # → named operators) and therefore comes last
     include("test_modelir.jl")
+    include("test_phase1_exit.jl")
 
     @testset "package loads" begin
         @test Harpe.Log isa Module

@@ -1,23 +1,21 @@
-# Empty-core fence (Phase 1).
+# §CIX encoding fence (formerly the empty-core fence).
 #
-# Semantics, ModelIR, Parameters, Operators are §CIX modules: the fence
-# tracks what each module may contain as Phase 1 items land. After item A,
-# Semantics/Parameters carry exactly the §CIX vocabulary; ModelIR/Operators
-# stay empty until items B and C. This file is what the next eager agent
-# hits when they "just add a struct": the fence fails, and the failure
-# message says where the decision actually belongs.
+# History: this file began as the ready-room fence (the four §CIX modules
+# must stay empty until their items land). Items A, B, C of Phase 1 landed
+# exactly the §CIX vocabulary, so the fence now does the opposite job with
+# the same spirit: it pins WHAT each module contains — no more, no less —
+# so nothing can be added to the semantic core outside a work item.
 #
 # It also pins two deeper fences:
 #   * the §LVIII training boundary: no AD/training machinery identifiers
 #     anywhere in src/;
-#   * architecture packets 1–2 are resolved in canon (§CIX) and stay
-#     unimplemented beyond what a landed Phase 1 item added — no
-#     ExecutionPhase / WorkloadKind mega-enum, no global receipt ids.
+#   * the §CIX decisions stay law: no ExecutionPhase / WorkloadKind
+#     mega-enum, receipt ids still process-local UInt64.
 
 const CORE_MODULES = (:Semantics, :ModelIR, :Parameters, :Operators)
 
-# Exports each filled module is allowed after Phase 1 item A.
-const ITEM_A_EXPORTS = Dict(
+# Exports each module is allowed now that items A, B, C have landed.
+const PHASE1_EXPORTS = Dict(
     :Semantics => [:PrefillWorkload, :DecodeWorkload],
     :Parameters => [
         :SemanticTensor,
@@ -34,31 +32,37 @@ const ITEM_A_EXPORTS = Dict(
         :AdapterDelta,
         :frozen,
     ],
+    :ModelIR => [:Embedding, :RMSNorm, :RoPE, :Attention, :SwiGLU, :Block, :Model],
+    :Operators => Symbol[],   # operators are functions owned by backends.jl (§CIX)
 )
-const STILL_EMPTY_MODULES = (:Operators,)   # ModelIR filled by item B
 
-@testset "empty-core fence: filled modules export exactly the §CIX item-A vocabulary" begin
-    for (name, allowed) in ITEM_A_EXPORTS
+@testset "§CIX fence: modules export exactly the Phase 1 vocabulary" begin
+    for (name, allowed) in PHASE1_EXPORTS
         m = getfield(Harpe, name)
         @test m isa Module
         exported = setdiff(names(m), [name])
         @test Set(exported) == Set(allowed) ||
               "module $name exports $exported — " *
-              "item A pins exactly $allowed (§CIX); extending it is a work item" == ""
+              "the §CIX fence pins exactly $allowed; extending the core is a " *
+              "work item, not a drive-by" == ""
     end
 end
 
-@testset "empty-core fence: ModelIR/Operators stay empty until items B/C" begin
-    for name in STILL_EMPTY_MODULES
-        m = getfield(Harpe, name)
-        exported = setdiff(names(m), [name])
-        @test isempty(exported) ||
-              "module $name exports $exported — it stays " *
-              "empty until its Phase 1 item (B: ModelIR, C: Operators) lands" == ""
-    end
+@testset "§CIX fence: no speculative additions inside the core modules" begin
+    # known non-goals (§CIX "WHAT PHASE 1 DOES NOT IMPLEMENT") must not appear
+    @test !isdefined(Harpe, :ExecutionPhase)
+    @test !isdefined(Harpe, :WorkloadKind)
+    @test !isdefined(Harpe, :LlamaModel)
+    @test !isdefined(Harpe.ModelIR, :LlamaModel)
+    @test !isdefined(Harpe, :Quantized)          # no representation lattice
+    @test !isdefined(Harpe.Parameters, :Quantized)
+    @test !isdefined(Harpe, :Gradient)
+    @test !isdefined(Harpe, :OptimizerState)
+    @test !isdefined(Harpe.Parameters, :Gradient)
+    @test !isdefined(Harpe.Parameters, :OptimizerState)
 end
 
-@testset "empty-core fence: training boundary in src/ (§LVIII)" begin
+@testset "§CIX fence: training boundary in src/ (§LVIII)" begin
     # Training is out of scope permanently (§LVIII): no AD machinery in the
     # package source. Scanned live so the fence cannot go stale.
     forbidden = [
@@ -94,14 +98,14 @@ end
           "(§LVIII: training is NOT our problem): $violations" == ""
 end
 
-@testset "empty-core fence: packets resolved in canon, unimplemented in code" begin
+@testset "§CIX fence: packet resolutions stay law in code" begin
     @test isfile(joinpath(pkgdir(Harpe), "docs", "DECISION_PACKETS.md"))
     md = read(joinpath(pkgdir(Harpe), "docs", "DECISION_PACKETS.md"), String)
     @test occursin("## Status", md)
     @test occursin("RESOLVED INTO CANON", md)
 
-    # Packet 1 (§CIX): the two-level law. The dispatch types exist (item A
-    # landed them); no mega-enum does, and the singleton cuts are distinct.
+    # Packet 1 (§CIX): the two-level law. The dispatch types exist; no
+    # mega-enum does, and the singleton cuts are distinct.
     @test !isdefined(Harpe, :ExecutionPhase)
     @test !isdefined(Harpe, :WorkloadKind)
     @test isdefined(Harpe, :PrefillWorkload)

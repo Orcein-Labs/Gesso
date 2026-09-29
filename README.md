@@ -27,7 +27,8 @@ object-model encoding decided in canon (§CIX). Nothing here runs models yet.
 - [x] Research program: [docs/research/KV_MEMORY_PROGRAM.md](docs/research/KV_MEMORY_PROGRAM.md)
 - [x] BONES sprint (agent charter, module skeleton, receipts types, tooling)
 - [x] Foundation hardening (receipt stress tests, taxonomy pins, freeze evidence, lab fixtures, empty-core fence)
-- [ ] Phase 1: semantic core per §CIX
+- [x] Phase 1: semantic core per §CIX — types exist, `toy2` expressible end to end, **no execution yet**
+- [ ] Phase 2: CPU oracle (reference execution) — fills the operators' math, fills `expected_logits.toml`
 - [ ] Telemetry collection (Phase 6)
 
 ## The stack
@@ -50,8 +51,8 @@ Current phases (docs/Harpe_Stack.md §LXXIII ff.):
 | Phase | Deliverable | Status |
 |------:|-------------|--------|
 | 0 | Repository foundation | **COMPLETE** |
-| 1 | Semantic core (§CIX encoding) | **next gate** |
-| 2 | Reference execution (CPU oracle) | |
+| 1 | Semantic core (§CIX encoding) | **COMPLETE** — expressible, not executable |
+| 2 | Reference execution (CPU oracle) | **next gate** |
 | 3 | First real model import | |
 | 4 | CUDA.jl execution | |
 
