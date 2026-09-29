@@ -11,6 +11,8 @@ hardware and workload actually present.
 
 ## Status
 
+**Requires Julia 1.12** (`julia = "1.12"` compat; CI runs 1.12 only).
+
 **Phase 0 — repository foundation: COMPLETE** (incl. the BONES swarm-readiness
 sprint: agent charter, module skeleton, receipts, dev tooling). Currently in
 foundation hardening: stress-testing the audit/receipt/failure substrate
