@@ -12,7 +12,7 @@ grows a Julia type outside `test/`, it has left its lane (see
 |---|---|---|
 | `model.toml` | `harpe-toy-fixture-v1` | architecture as data: dims, ordered block list, vocab size |
 | `tokenizer.toml` | `harpe-toy-tokenizer-v1` | vocabulary as data: dense ids 0..31, control tokens, placeholder strings |
-| `expected_logits.toml` | `harpe-toy-expected-logits-v1` | expected-outputs SLOT (schema + provenance only; values arrive with the Phase 2 oracle) |
+| `expected_logits.toml` | `harpe-toy-expected-logits-v1` | known logits for prompt `[1,3,4,5]`, produced by the Phase 2 CPU oracle (`scripts/fill_logits.jl`), with provenance |
 
 ## What this is not
 
@@ -20,10 +20,12 @@ grows a Julia type outside `test/`, it has left its lane (see
 * `kind` strings (`attention`, `mlp`) are fixture data that **Phase 2's
   oracle math interprets**; they name no Harpe operator type.
 * The tokenizer is placeholder strings, not a tokenizer design.
-* Filling `expected_logits.toml` **requires** the Phase 2 CPU oracle math
-  to exist first. Hand-computing logits before an oracle exists would bake
-  arithmetic errors into the laboratory. Until then the slot stays empty,
-  and the pack tests enforce exactly that.
+* `expected_logits.toml` is FILLED (Phase 2, §LXXV): the CPU oracle ran at
+  the commit in its provenance; the numbers are never hand-computed. The
+  loader accepts a fully filled slot, returns the `(vocab, seq)` matrix,
+  and rejects half-filled states loudly. Re-running `scripts/fill_logits.jl`
+  must reproduce the file exactly (deterministic oracle); a diff means the
+  math drifted — stop and investigate before committing.
 
 ## Weight derivation protocol (contract)
 

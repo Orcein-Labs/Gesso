@@ -112,7 +112,8 @@ using .ToyFixtures: load_toy_fixture
         )
     end
 
-    # 5. no forward pass, no expected logits: the slot is still empty and
-    #    nothing produced numbers (§CIX: execution is Phase 2)
-    @test fx.expected_logits === nothing
+    # 5. this test computes nothing itself: no forward pass, no logits
+    #    produced here (§CIX: execution is Phase 2). The expected-logits
+    #    slot was filled by the Phase 2 oracle (item B) — that state is
+    #    owned and tested there; expressibility does not depend on it.
 end

@@ -24,7 +24,11 @@ const FIXTURE_DIR = joinpath(@__DIR__, "fixtures", "toy")
     @test fx.tokenizer.id_text[4] == "tok3"
     @test fx.tokenizer.id_text[end] == "tok31"
     @test fx.seed isa UInt64                       # derived, run-stable
-    @test fx.expected_logits === nothing           # slot open until Phase 2 oracle
+    # §LXXV: the slot is now FILLED by the CPU oracle — the loader returns
+    # the known logits (empty-slot mechanics are covered by the mini fixture
+    # and the half-fill rejection tests)
+    @test fx.expected_logits isa Matrix{Float64}
+    @test size(fx.expected_logits) == (32, 4)
 end
 
 @testset "toy fixtures: seeded weights are reproducible" begin
@@ -40,6 +44,75 @@ end
     # independent re-derivation from the documented seed matches
     rng = HarpeTestHelpers.deterministic_rng(fx.seed)
     @test [randn(rng) for _ in 1:128] == w1
+end
+
+@testset "toy fixtures: filled logits slot loads as a matrix (§LXXV)" begin
+    # a compact but fully valid fixture: vocab 4, dim 2, one attention+mlp
+    # block, dense ids, slot filled with provenance and a dense 4×2 value set
+    dir = mktempdir()
+    write(
+        joinpath(dir, "model.toml"),
+        """
+        schema = "harpe-toy-fixture-v1"
+        name = "mini"
+
+        [vocab]
+        size = 4
+
+        [embedding]
+        dim = 2
+
+        [[block]]
+        kind = "attention"
+        n_heads = 1
+
+        [[block]]
+        kind = "mlp"
+        hidden = 2
+        """,
+    )
+    write(
+        joinpath(dir, "tokenizer.toml"),
+        """
+        schema = "harpe-toy-tokenizer-v1"
+
+        [ids]
+        PAD = 0
+        BOS = 1
+        EOS = 2
+
+        [[token]]
+        id = 3
+        text = "tok3"
+        """,
+    )
+    io = IOBuffer()
+    for r in 0:3, c in 0:1
+        println(io, "[[value]]")
+        println(io, "row = ", r)
+        println(io, "col = ", c)
+        println(io, "v = ", Float64(r * 10 + c))
+        println(io)
+    end
+    values = String(take!(io))
+    write(
+        joinpath(dir, "expected_logits.toml"),
+        """
+        schema = "harpe-toy-expected-logits-v1"
+
+        [provenance]
+        oracle = "cpu"
+        commit = "abc1234"
+        fixture_seed = "0x123"
+
+        """ * values,
+    )
+    fx = load_toy_fixture(dir)
+    @test fx.expected_logits isa Matrix{Float64}
+    @test size(fx.expected_logits) == (4, 2)
+    # (row, col) 0-based → matrix [row+1, col+1]; cell (3,1) = 31.0
+    @test fx.expected_logits[1, 1] == 0.0
+    @test fx.expected_logits[4, 2] == 31.0
 end
 
 @testset "toy fixtures: contract violations fail loudly" begin
@@ -82,15 +155,22 @@ end
     @test err2 isa ErrorException
     @test occursin("duplicate token id 5", err2.msg)
 
-    # logits slot: filled before an oracle exists
+    # logits slot: HALF-FILLED cases — built from scratch so they stay valid
+    # whether the shipped slot is empty or filled (post-§LXXV it is filled)
     dir3 = mktempdir()
-    for f in ("model.toml", "tokenizer.toml", "expected_logits.toml")
+    for f in ("model.toml", "tokenizer.toml")
         cp(joinpath(FIXTURE_DIR, f), joinpath(dir3, f))
     end
-    l = read(joinpath(dir3, "expected_logits.toml"), String)
     write(
         joinpath(dir3, "expected_logits.toml"),
-        replace(l, "oracle = \"\"" => "oracle = \"cpu\""),
+        """
+        schema = "harpe-toy-expected-logits-v1"
+
+        [provenance]
+        oracle = "cpu"
+        commit = "abc1234"
+        fixture_seed = "0x1"
+        """,
     )
     err3 = try
         load_toy_fixture(dir3)
@@ -99,5 +179,65 @@ end
         e
     end
     @test err3 isa ErrorException
-    @test occursin("Phase 2 CPU oracle", err3.msg)
+    @test occursin("HALF-FILLED", err3.msg)
+
+    # values without provenance: the mirrored half-fill
+    dir4 = mktempdir()
+    for f in ("model.toml", "tokenizer.toml")
+        cp(joinpath(FIXTURE_DIR, f), joinpath(dir4, f))
+    end
+    write(
+        joinpath(dir4, "expected_logits.toml"),
+        """
+        schema = "harpe-toy-expected-logits-v1"
+
+        [provenance]
+        oracle = ""
+        commit = ""
+        fixture_seed = ""
+
+        [[value]]
+        row = 0
+        col = 0
+        v = 0.0
+        """,
+    )
+    err4 = try
+        load_toy_fixture(dir4)
+        nothing
+    catch e
+        e
+    end
+    @test err4 isa ErrorException
+    @test occursin("HALF-FILLED", err4.msg)
+
+    # filled slot but missing commit provenance — loud error
+    dir5 = mktempdir()
+    for f in ("model.toml", "tokenizer.toml")
+        cp(joinpath(FIXTURE_DIR, f), joinpath(dir5, f))
+    end
+    write(
+        joinpath(dir5, "expected_logits.toml"),
+        """
+        schema = "harpe-toy-expected-logits-v1"
+
+        [provenance]
+        oracle = "cpu"
+        commit = ""
+        fixture_seed = "0x1"
+
+        [[value]]
+        row = 0
+        col = 0
+        v = 0.0
+        """,
+    )
+    err5 = try
+        load_toy_fixture(dir5)
+        nothing
+    catch e
+        e
+    end
+    @test err5 isa ErrorException
+    @test occursin("non-empty provenance commit", err5.msg)
 end

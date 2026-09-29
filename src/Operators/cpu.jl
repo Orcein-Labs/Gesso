@@ -163,6 +163,19 @@ for wl in (:PrefillWorkload, :DecodeWorkload)
             return _cpu_matmul!(dst, x, w)
         end
 
+        # tied output head (§LXXV): the embedding table IS the lm_head —
+        # its (vocab, dim) bytes viewed as a (out, in) projection. Same
+        # function, no second vocabulary, no second table.
+        function matmul!(
+            ::CPUBackend,
+            dst::Activation,
+            x::Activation,
+            w::EmbeddingTable,
+            ::Semantics.$wl,
+        )
+            return _cpu_matmul!(dst, x, w)
+        end
+
         function softmax!(
             ::CPUBackend,
             dst::TemporaryWorkspace,

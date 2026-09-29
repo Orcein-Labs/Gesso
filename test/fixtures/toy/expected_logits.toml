@@ -1,22 +1,650 @@
-# Expected-logits SLOT for the toy fixture pack (schema only — see the
-# fixtures README). Deliberately EMPTY of values: filling it requires the
-# Phase 2 CPU oracle math, which does not exist yet, and hand-computing
-# logits before an oracle exists would bake arithmetic errors into the
-# laboratory. The slot exists so Phase 2 inherits the format, not numbers.
-#
-# When filled: logits are Float64, shape [vocab_size, seq_len], row-major
-# over vocab, one column per BOS-prefixed position. Values are listed under
-# [[value]] with their indices, so the file stays human-diffable.
+# Expected logits for toy2, prompt [1, 3, 4, 5] (0-based, BOS-prefixed).
+# Produced by the Phase 2 CPU oracle (scripts/fill_logits.jl) — NOT hand-computed.
+# Column t = next-token logits after consuming tokens 1..t. Dense (vocab, seq).
 schema = "harpe-toy-expected-logits-v1"
 
 [provenance]
-# how these numbers were produced. MUST be filled when values are:
-# e.g. oracle = "cpu", commit = "<hash>", fixture_seed = "<value>"
-oracle = ""
-commit = ""
-fixture_seed = ""
+oracle = "cpu"
+commit = "953b374"
+fixture_seed = "14625882002354481486"
 
-# [[value]]
-# row = 0    # vocab index
-# col = 0    # position
-# v = 0.0
+[[value]]
+row = 0
+col = 0
+v = -543.3908431084095
+
+[[value]]
+row = 1
+col = 0
+v = 1000.6178962393057
+
+[[value]]
+row = 2
+col = 0
+v = -1327.8880328163402
+
+[[value]]
+row = 3
+col = 0
+v = 136.5066650672072
+
+[[value]]
+row = 4
+col = 0
+v = 1067.9390786930874
+
+[[value]]
+row = 5
+col = 0
+v = 184.29410386295632
+
+[[value]]
+row = 6
+col = 0
+v = 831.5277750412048
+
+[[value]]
+row = 7
+col = 0
+v = -487.61995145270123
+
+[[value]]
+row = 8
+col = 0
+v = -857.1207025982136
+
+[[value]]
+row = 9
+col = 0
+v = -1442.5806498740617
+
+[[value]]
+row = 10
+col = 0
+v = 98.69293886674252
+
+[[value]]
+row = 11
+col = 0
+v = 938.5536366637592
+
+[[value]]
+row = 12
+col = 0
+v = 1519.7589966015437
+
+[[value]]
+row = 13
+col = 0
+v = -561.9127640349278
+
+[[value]]
+row = 14
+col = 0
+v = -247.65932460083704
+
+[[value]]
+row = 15
+col = 0
+v = -1385.3529500555906
+
+[[value]]
+row = 16
+col = 0
+v = 612.9219918951585
+
+[[value]]
+row = 17
+col = 0
+v = -1274.7047728606858
+
+[[value]]
+row = 18
+col = 0
+v = -304.04710259281546
+
+[[value]]
+row = 19
+col = 0
+v = 964.344799870385
+
+[[value]]
+row = 20
+col = 0
+v = -272.79986513872865
+
+[[value]]
+row = 21
+col = 0
+v = 712.8546968761644
+
+[[value]]
+row = 22
+col = 0
+v = 873.2641776195205
+
+[[value]]
+row = 23
+col = 0
+v = 1048.5382235824716
+
+[[value]]
+row = 24
+col = 0
+v = 1127.7815482050023
+
+[[value]]
+row = 25
+col = 0
+v = -542.1839544843552
+
+[[value]]
+row = 26
+col = 0
+v = 857.758804873474
+
+[[value]]
+row = 27
+col = 0
+v = -1249.7479606990305
+
+[[value]]
+row = 28
+col = 0
+v = 116.36380519132074
+
+[[value]]
+row = 29
+col = 0
+v = -319.35474576830825
+
+[[value]]
+row = 30
+col = 0
+v = 726.6400702482225
+
+[[value]]
+row = 31
+col = 0
+v = -1686.4814860783201
+
+[[value]]
+row = 0
+col = 1
+v = 1170.004923235413
+
+[[value]]
+row = 1
+col = 1
+v = -660.6379358958872
+
+[[value]]
+row = 2
+col = 1
+v = -77.9439028445679
+
+[[value]]
+row = 3
+col = 1
+v = 162.7887631653781
+
+[[value]]
+row = 4
+col = 1
+v = 115.50582098663342
+
+[[value]]
+row = 5
+col = 1
+v = 301.0453461251552
+
+[[value]]
+row = 6
+col = 1
+v = 113.02449575440183
+
+[[value]]
+row = 7
+col = 1
+v = -107.06913092581543
+
+[[value]]
+row = 8
+col = 1
+v = -248.58320925564826
+
+[[value]]
+row = 9
+col = 1
+v = 1166.1009059477533
+
+[[value]]
+row = 10
+col = 1
+v = 322.9209698887035
+
+[[value]]
+row = 11
+col = 1
+v = 488.30144815216016
+
+[[value]]
+row = 12
+col = 1
+v = 493.51766206009677
+
+[[value]]
+row = 13
+col = 1
+v = 376.55423467258146
+
+[[value]]
+row = 14
+col = 1
+v = 425.3498444611022
+
+[[value]]
+row = 15
+col = 1
+v = 752.7262110259954
+
+[[value]]
+row = 16
+col = 1
+v = 701.0725592633618
+
+[[value]]
+row = 17
+col = 1
+v = 29.770283354546017
+
+[[value]]
+row = 18
+col = 1
+v = 115.97349471421322
+
+[[value]]
+row = 19
+col = 1
+v = 169.37397370826181
+
+[[value]]
+row = 20
+col = 1
+v = -678.260181518923
+
+[[value]]
+row = 21
+col = 1
+v = -600.1702307605622
+
+[[value]]
+row = 22
+col = 1
+v = 747.770761687054
+
+[[value]]
+row = 23
+col = 1
+v = -809.1603871095656
+
+[[value]]
+row = 24
+col = 1
+v = 1303.2366248982923
+
+[[value]]
+row = 25
+col = 1
+v = 100.76356844191952
+
+[[value]]
+row = 26
+col = 1
+v = 1066.8667323641655
+
+[[value]]
+row = 27
+col = 1
+v = -362.38740333952313
+
+[[value]]
+row = 28
+col = 1
+v = -360.2516362043717
+
+[[value]]
+row = 29
+col = 1
+v = -939.8816617804124
+
+[[value]]
+row = 30
+col = 1
+v = 36.42541841465175
+
+[[value]]
+row = 31
+col = 1
+v = 169.18096373722824
+
+[[value]]
+row = 0
+col = 2
+v = 1133.8643999508981
+
+[[value]]
+row = 1
+col = 2
+v = -606.1871012840164
+
+[[value]]
+row = 2
+col = 2
+v = 1.7761810576121881
+
+[[value]]
+row = 3
+col = 2
+v = 153.8792387218423
+
+[[value]]
+row = 4
+col = 2
+v = 191.38903512603622
+
+[[value]]
+row = 5
+col = 2
+v = 285.73721382402334
+
+[[value]]
+row = 6
+col = 2
+v = 49.928032726503844
+
+[[value]]
+row = 7
+col = 2
+v = -114.3467215985964
+
+[[value]]
+row = 8
+col = 2
+v = -149.83727231943539
+
+[[value]]
+row = 9
+col = 2
+v = 1118.069177995087
+
+[[value]]
+row = 10
+col = 2
+v = 338.98896801293193
+
+[[value]]
+row = 11
+col = 2
+v = 338.7388158758975
+
+[[value]]
+row = 12
+col = 2
+v = 312.06173468654913
+
+[[value]]
+row = 13
+col = 2
+v = 340.2817524333839
+
+[[value]]
+row = 14
+col = 2
+v = 356.87435044393465
+
+[[value]]
+row = 15
+col = 2
+v = 874.7310481153971
+
+[[value]]
+row = 16
+col = 2
+v = 604.8358863646516
+
+[[value]]
+row = 17
+col = 2
+v = 242.7257570058763
+
+[[value]]
+row = 18
+col = 2
+v = 79.24285479115898
+
+[[value]]
+row = 19
+col = 2
+v = 191.96409971793932
+
+[[value]]
+row = 20
+col = 2
+v = -615.5325005334073
+
+[[value]]
+row = 21
+col = 2
+v = -575.2765943723771
+
+[[value]]
+row = 22
+col = 2
+v = 673.611289965259
+
+[[value]]
+row = 23
+col = 2
+v = -945.217055154899
+
+[[value]]
+row = 24
+col = 2
+v = 1215.2220034711847
+
+[[value]]
+row = 25
+col = 2
+v = 226.32009126669942
+
+[[value]]
+row = 26
+col = 2
+v = 910.1891592089235
+
+[[value]]
+row = 27
+col = 2
+v = -412.20549771625963
+
+[[value]]
+row = 28
+col = 2
+v = -342.2334839292503
+
+[[value]]
+row = 29
+col = 2
+v = -765.1416286359257
+
+[[value]]
+row = 30
+col = 2
+v = -61.939250426970794
+
+[[value]]
+row = 31
+col = 2
+v = 188.56102494659527
+
+[[value]]
+row = 0
+col = 3
+v = -50.29465954489872
+
+[[value]]
+row = 1
+col = 3
+v = 415.81879408463243
+
+[[value]]
+row = 2
+col = 3
+v = -386.2767008597794
+
+[[value]]
+row = 3
+col = 3
+v = 80.57833883542772
+
+[[value]]
+row = 4
+col = 3
+v = -223.13371669562076
+
+[[value]]
+row = 5
+col = 3
+v = -114.97239465159024
+
+[[value]]
+row = 6
+col = 3
+v = -130.00582038124125
+
+[[value]]
+row = 7
+col = 3
+v = 200.54385065705873
+
+[[value]]
+row = 8
+col = 3
+v = -361.14290420607165
+
+[[value]]
+row = 9
+col = 3
+v = 8.026933221681581
+
+[[value]]
+row = 10
+col = 3
+v = -177.96406807736687
+
+[[value]]
+row = 11
+col = 3
+v = 401.18933992540894
+
+[[value]]
+row = 12
+col = 3
+v = 369.34790506863084
+
+[[value]]
+row = 13
+col = 3
+v = 42.86374267340415
+
+[[value]]
+row = 14
+col = 3
+v = -213.0268879010082
+
+[[value]]
+row = 15
+col = 3
+v = -528.5894244730756
+
+[[value]]
+row = 16
+col = 3
+v = 171.89304118772438
+
+[[value]]
+row = 17
+col = 3
+v = -43.895492170718114
+
+[[value]]
+row = 18
+col = 3
+v = 21.334797693695634
+
+[[value]]
+row = 19
+col = 3
+v = 223.68812753349115
+
+[[value]]
+row = 20
+col = 3
+v = 157.39192975457595
+
+[[value]]
+row = 21
+col = 3
+v = -447.54025012848035
+
+[[value]]
+row = 22
+col = 3
+v = -0.6501570107029845
+
+[[value]]
+row = 23
+col = 3
+v = -97.98768238517462
+
+[[value]]
+row = 24
+col = 3
+v = -154.72900285145863
+
+[[value]]
+row = 25
+col = 3
+v = 137.16384431076636
+
+[[value]]
+row = 26
+col = 3
+v = -146.39394350220297
+
+[[value]]
+row = 27
+col = 3
+v = 249.5566821465661
+
+[[value]]
+row = 28
+col = 3
+v = -78.98496586518581
+
+[[value]]
+row = 29
+col = 3
+v = -290.74574221423006
+
+[[value]]
+row = 30
+col = 3
+v = 288.1439849257947
+
+[[value]]
+row = 31
+col = 3
+v = -535.5031546334444
+

@@ -49,6 +49,10 @@ export PrefillWorkload, DecodeWorkload
 using .ModelIR: Embedding, RMSNorm, RoPE, Attention, SwiGLU, Block, Model
 export Embedding, RMSNorm, RoPE, Attention, SwiGLU, Block, Model
 
+# Phase 2 (§LXXV): the reference interpreter is the first public engine slice
+using .Inference: reference_prefill
+export reference_prefill
+
 using .Parameters:
     SemanticTensor,
     ProjectionWeight,

@@ -28,7 +28,8 @@ object-model encoding decided in canon (§CIX). Nothing here runs models yet.
 - [x] BONES sprint (agent charter, module skeleton, receipts types, tooling)
 - [x] Foundation hardening (receipt stress tests, taxonomy pins, freeze evidence, lab fixtures, empty-core fence)
 - [x] Phase 1: semantic core per §CIX — types exist, `toy2` expressible end to end, **no execution yet**
-- [ ] Phase 2: CPU oracle (reference execution) — fills the operators' math, fills `expected_logits.toml`
+- [x] Phase 2 (prefill): CPU oracle — `toy2` runs on `CPUBackend`; deterministic forward pass; known logits persisted with provenance
+- [ ] Phase 2 (generate): greedy decode with a real KV append (item C)
 - [ ] Telemetry collection (Phase 6)
 
 ## The stack

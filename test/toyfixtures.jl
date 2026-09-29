@@ -131,15 +131,52 @@ function load_toy_fixture(dir=FIXTURE_DIR)
     )
     id_text = String[seen[i] for i in expected_ids]
 
-    # --- expected-logits slot ------------------------------------------------
-    if haskey(logits, "value") || get(logits["provenance"], "oracle", "") != ""
-        error(
-            "toy fixture: expected_logits.toml carries values/oracle provenance — " *
-            "filling it requires the Phase 2 CPU oracle to exist first " *
-            "(see test/fixtures/toy/README.md); until then the slot stays empty",
+    # --- expected-logits slot (§LXXV: the Phase 2 CPU oracle fills it) --------
+    # Empty slot: expected_logits === nothing. Filled slot: provenance
+    # oracle == "cpu" AND [[value]] rows present → a (vocab, seq) matrix.
+    # Half-filled (values without provenance, provenance without values,
+    # missing commit/seed) is a LOUD error — a slot must never be ambiguous.
+    has_values = haskey(logits, "value")
+    prov = get(logits, "provenance", Dict{String, Any}())
+    oracle = String(get(prov, "oracle", ""))
+    if has_values || oracle != ""
+        (has_values && oracle == "cpu") || error(
+            "toy fixture: expected_logits slot is HALF-FILLED — values " *
+            "require provenance.oracle == \"cpu\" and vice versa " *
+            "(values=$(has_values), oracle=$(repr(oracle)))",
         )
+        commit = String(get(prov, "commit", ""))
+        seed = String(get(prov, "fixture_seed", ""))
+        (isempty(commit) || isempty(seed)) && error(
+            "toy fixture: filled expected_logits slot requires non-empty " *
+            "provenance commit and fixture_seed",
+        )
+
+        cells = Dict{Tuple{Int, Int}, Float64}()
+        maxcol = -1
+        for v in logits["value"]
+            row, col, val = Int(v["row"]), Int(v["col"]), Float64(v["v"])
+            0 <= row < vocab_size || error(
+                "toy fixture: expected-logits row $row out of range 0..$(vocab_size - 1)",
+            )
+            col >= 0 || error("toy fixture: expected-logits column must be ≥ 0 (got $col)")
+            haskey(cells, (row, col)) &&
+                error("toy fixture: duplicate expected-logits cell (row=$row, col=$col)")
+            cells[(row, col)] = val
+            maxcol = max(maxcol, col)
+        end
+        n_expected = vocab_size * (maxcol + 1)
+        length(cells) == n_expected || error(
+            "toy fixture: expected-logits slot is sparse — got " *
+            "$(length(cells)) cells, expected $n_expected (dense (vocab, seq))",
+        )
+        expected_logits = zeros(vocab_size, maxcol + 1)
+        for ((row, col), val) in cells
+            expected_logits[row+1, col+1] = val
+        end
+    else
+        expected_logits = nothing
     end
-    expected_logits = nothing
 
     # --- master seed (protocol: fold of the architecture data, FNV-1a) -------
     seed = UInt64(0x6f11406b13a90d0f)
