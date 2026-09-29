@@ -55,6 +55,32 @@ search/session may continue.
     # tier (KV memory program §6)
 end
 
+# Intended producers — documentation of ownership, not a registry. Which
+# module raises a code is settled by the phase that owns the failing concept
+# (docs/ARCHITECTURE.md); adding a code means editing this taxonomy, its
+# stability test (test/test_errors.jl), and the owning phase's work item.
+#
+#   ERR_INTERNAL                     any module, on an invariant violation
+#   ERR_INVALID_PLAN                 Planning (§XVII)
+#   ERR_CONSTRAINT_REJECTED          Planning/Autotune candidate filters
+#   ERR_COMPILE                      Lowering/Autotune (§XXII–XXIII)
+#   ERR_RESOURCE_LIMIT               Planning/Autotune budgets
+#   ERR_ALLOCATION                   Inference/Runtime (device + host)
+#   ERR_LAUNCH                       backend extensions (CUDA/Lava)
+#   ERR_RUNTIME                      backends + Inference (§XXIX)
+#   ERR_TIMEOUT                      Runtime budgets (§XXXII)
+#   ERR_VERIFY_MISMATCH              correctness gates (KV program oracle ladder)
+#   ERR_NUMERICAL_INSTABILITY        Operators/backends
+#   ERR_BENCHMARK                    benchmark harness (§XXXIII)
+#   ERR_CACHE                        Inference/Runtime cache + KV layer (§XXXI)
+#   ERR_APPROXIMATION_BUDGET_EXCEEDED declared BoundedApproximation contracts
+#                                    (KV memory program §6)
+#
+# The integer values are the persisted identity of a code (failure records
+# classify and may persist by code; §LXIX). Renumbering, reordering, or
+# inserting codes without a deliberate taxonomy review is a compatibility
+# break — test/test_errors.jl pins them.
+
 """
     HarpeError <: HarpeException
 
