@@ -2808,6 +2808,13 @@ LXXIX. PHASE 6 — PERFORMANCE OBSERVABILITY
 
 Instrument everything.
 
+Status: A/B/C/D LANDED 2026-09-30 (one receipt per Session call — prefill/
+decode/TTFT timing, token usage, KV bytes derived from the page table,
+failure records; Profiling renders stable machine-readable reports; warmed
+TTFT/decode bench rows). Attribution, not speed — nothing got faster.
+Implementation goal: `docs/goals/PHASE6_OBSERVABILITY.md`.
+Do not invent a second result type.
+
 Exit:
 
     every major latency component attributable

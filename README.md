@@ -17,7 +17,7 @@ hardware and workload actually present.
 sprint and the foundation-hardening sprint: receipts/failure-taxonomy/freeze
 infrastructure stress-tested, correctness laboratory established).
 **Phase 1 (semantic core) and Phase 2 (CPU oracle) are COMPLETE.**
-Next gate: Phase 5 — native inference engine (`docs/goals/PHASE5_ENGINE.md`). `toy2` and `llama_micro` run on `CPUBackend` and `CUDABackend`.
+Next gate: Phase 6 — performance observability (`docs/goals/PHASE6_OBSERVABILITY.md`). `toy2` and `llama_micro` run on `CPUBackend` and `CUDABackend`.
 
 - [x] Clean `Project.toml`, no third-party dependencies (§VII: *Gesso earns every hard dependency*; stdlibs `Dates` and `LinearAlgebra`, enforced by test)
 - [x] Package skeleton: logging conventions, backend interface draft
@@ -32,7 +32,8 @@ Next gate: Phase 5 — native inference engine (`docs/goals/PHASE5_ENGINE.md`). 
 - [x] Phase 3: first real model import — SKIP-OR-GREEN (GQA interpreter, Llama import, GPT-2 BPE landed; the real-model gate is a named skip without a local SmolLM2 snapshot, §LXXVI)
 - [x] Phase 4: CUDA.jl execution — COMPLETE 2026-09-29 (extension seam, operator methods + `to_device`, backend-generic interpreter; device-vs-oracle gates green on RTX 5060)
 - [x] Phase 5: native inference engine — `Session` + `generate` over a paged KV manager (Magenta §9.5 step 1); engine ids equal the oracle on toy2/llama_micro, SmolLM2 gate skip-or-green (§LXXVIII)
-- [ ] Telemetry collection (Phase 6)
+- [x] Phase 6: performance observability — every generate emits a receipt (prefill/decode/TTFT, tokens, KV bytes from the page table); `Profiling` renders stable reports; warmed TTFT/decode bench rows (§LXXIX)
+- [ ] Telemetry collection (Phase 6+)
 
 ## The stack
 
@@ -60,6 +61,13 @@ cache rows and the engine gathers pages per attention step.
 `reference_prefill` / `reference_generate` remain the oracle the engine is
 gated against (token ids equal, CPU logits atol=0).
 
+Every `Session` call leaves a `Receipt` (§XLII fields: prefill/decode/TTFT
+timing, token usage, KV bytes + pages derived from the page table, failure)
+in a `Gesso.InMemorySink` — pass `sink=` to inject your own — and
+`Gesso.Profiling.engine_report` projects receipts into stable
+machine-readable rows. This is attribution, not a speed claim: we can
+explain prefill vs decode vs KV bytes; we have not made anything fast.
+
 ## Development order (§III)
 
 ```
@@ -76,6 +84,7 @@ Current phases (docs/Gesso_Stack.md §LXXIII ff.):
 | 3 | First real model import | **SKIP-OR-GREEN** — items A/B/C landed (GQA interpreter, Llama import, GPT-2 BPE); item D is skip-or-green pending a local SmolLM2 snapshot |
 | 4 | CUDA.jl execution | **COMPLETE 2026-09-29** — extension seam, ops + `to_device`, backend-generic interpreter, device-vs-CPU gates; SmolLM2-CUDA + bench row skip-or-green (§LXXVII) |
 | 5 | Native inference engine | **A/B/C/D LANDED 2026-09-30** — paged KV manager + `Session`/`generate` matching the oracle; scheduler/continuous batching is a later goal under this phase (§LXXVIII) |
+| 6 | Performance observability | **A/B/C/D LANDED 2026-09-30** — receipts per engine call, Profiling reports, warmed TTFT/decode rows; attribution, not speed (§LXXIX) |
 
 Training is **not** part of Gesso — by explicit, permanent decision
 ([docs/Gesso_Stack.md §LVIII](docs/Gesso_Stack.md)). If you want to contribute
