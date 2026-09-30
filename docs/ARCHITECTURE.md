@@ -28,12 +28,12 @@ policy (internal: NIRA); **Lava** = Vulkan substrate.
 | `Parameters` | `src/Parameters/` | §XI, **§CIX** — §XI family types + `frozen` trait + metadata fields; §LVIII forbids Gradient/OptimizerState | 1/3 — item A ✓ |
 | `Operators` | `src/Operators/` | §XII, **§CIX** — operators are functions (owned by `backends.jl`); dispatch methods on `SemanticTensor × workload`; `cpu.jl` = CPU reference math (§LXXV, Float64; `rmsnorm!`/`rope!` carry `eps`/`theta` keyword defaults per §LXXVI; `quantize!`/`dequantize!` still decline) | 1 — item C ✓; 2 — item A ✓; 3 — item A ✓ |
 | `Lowering` | `src/Lowering/` | §XXII–XXIII backend routing; mixed-backend is ordinary | 4 (seam proven by the GessoCUDAExt extension; routing lands later) |
-| `Inference` | `src/Inference/` | §XXIX engine, §XXX prefill/decode split, KV manager hooks; Phase 2 slice: `reference_prefill` + `reference_generate` CPU oracle (§LXXV); Phase 3: GQA (repeat-for-contraction, cache at `n_kv_heads`), optional `final_rms`, threaded `eps`/`theta` (item A); Llama import — `load_llama` path (`llama_import.jl`: config validation, safetensors reader with exact f64 upcast, closed name map; JSON is the ONE sanctioned third-party dep + Mmap, §LXXVI) (item B); GPT-2 byte-level BPE tokenizer (`gpt2_tokenizer.jl`: published algorithm, loud refusals) (item C); SmolLM2 real-model gate (`GESSO_SMOLLM2_DIR` skip-or-green, no downloads) (item D); Phase 4: backend-generic interpreter — `backend=` keyword (default CPU, bit-identical), explicit no-copy law (host Array under a non-CPU backend is `ERR_INVALID_PLAN`), device buffers via `similar`, CPU scalar loops pinned vs device broadcast/CUBLAS forms (§LXXVII) | 2 — items B, C ✓; 3 — items A, B, C ✓, D skip-or-green; 4 — items A–C ✓, D skip-or-green; 5 |
+| `Inference` | `src/Inference/` | §XXIX engine, §XXX prefill/decode split, KV manager hooks; Phase 2 slice: `reference_prefill` + `reference_generate` CPU oracle (§LXXV); Phase 3: GQA (repeat-for-contraction, cache at `n_kv_heads`), optional `final_rms`, threaded `eps`/`theta` (item A); Llama import — `load_llama` path (`llama_import.jl`: config validation, safetensors reader with exact f64 upcast, closed name map; JSON is the ONE sanctioned third-party dep + Mmap, §LXXVI) (item B); GPT-2 byte-level BPE tokenizer (`gpt2_tokenizer.jl`: published algorithm, loud refusals) (item C); SmolLM2 real-model gate (`GESSO_SMOLLM2_DIR` skip-or-green, no downloads) (item D); Phase 4: backend-generic interpreter — `backend=` keyword (default CPU, bit-identical), explicit no-copy law (host Array under a non-CPU backend is `ERR_INVALID_PLAN`), device buffers via `similar`, CPU scalar loops pinned vs device broadcast/CUBLAS forms (§LXXVII); Phase 5: paged KV manager (`kv_manager.jl` — Magenta §9.5 step 1: pages are the cache, gather-on-read, per-page provenance `layer/kind/start_pos/filled`, typed `ERR_RESOURCE_LIMIT` at context exhaustion) + the Session engine (`session.jl` — `prefill!`/`decode!`/`generate`, greedy `_greedy_id`, required `eos_token_id`, streaming `on_token` callback, string prompts via the tokenizer; ids equal the oracle, CPU logits atol=0) | 2 — items B, C ✓; 3 — items A, B, C ✓, D skip-or-green; 4 — items A–C ✓, D skip-or-green; 5 — items A, B, C, D ✓ |
 | `Runtime` | `src/Runtime/` | §XXXII scheduler, §XXXIII+ agent mechanism; mechanism-only (§XLIII) | 5+/12 |
 | `Profiling` | `src/Profiling/` | §XLIX metrics, §L performance failure taxonomy | 6 |
 | `Planning` | `src/Planning/` | §XVII execution synthesis, §XIX memory planning, §LXI policies | 7 |
 | `Autotune` | `src/Autotune/` | §XXVI; KV program §7 — realization search (kernel-first) | 9 |
-| `Representation` | `src/Representation/` | §XIV materialization, §XV quantization-as-lowering; KV program §5 lattice | 10 |
+| `Representation` | `src/Representation/` | §XIV materialization, §XV quantization-as-lowering; research seed: `docs/research/REPRESENTATION_PROGRAM.md` | 10 |
 | `Agents` | `src/Agents/` | §XXXIII–XLII agent primitives; JSON is wire format, not ontology | 12 |
 | `CAPI` | `src/CAPI/` | §XLVI–XLVII libgesso; adoption surface, not architecture | 16 |
 
@@ -42,7 +42,12 @@ policy (internal: NIRA); **Lava** = Vulkan substrate.
 | Document | Role |
 |---|---|
 | `docs/Gesso_Stack.md` | **CANON.** Everything else is subordinate. |
-| `docs/research/KV_MEMORY_PROGRAM.md` | KV/working-memory research program; extends §XXXI/§X/§LIX; feeds Phases 5/9/10. |
+| `docs/research/README.md` | **Index.** Sequencing law: boring stack first, exotic later. Every research program is linked from here. |
+| `docs/research/KV_MEMORY_PROGRAM.md` | Magenta Memory Part I — KV/working-state as a lowering; extends §XXXI/§X/§LIX; feeds Phases 5/9/10/11. |
+| `docs/research/KV_MEMORY_PROGRAM_part2.md` | Magenta Part II — topology / residency / schedule. Exploratory. After a real KV manager. |
+| `docs/research/REPRESENTATION_PROGRAM.md` | Gauge-compiled / caged weights. Phases 7 (candidate) / 10 (host). Not Phase 5. |
+| `docs/research/CYAN_TRIAL_GESSO_FALLOUT.md` | Cyan trial metal detector. Promotion filter. Not a work item. |
+| `docs/research/ROADMAP_NOW.md` | Living phase map. Not a Buffy goal. |
 | `docs/Gesso_musings.md` | The dangerous notebook. Parking lot — promote deliberately, never wholesale. |
 | `docs/DECISION_PACKETS.md` | Architecture escalations (decision-packet format). Packets 1–2 resolved into §CIX; remaining packets follow the same rule: resolved INTO canon, never in code. |
 | `docs/Harpe_Stack_old.md` | Predecessor vision (Harpe-era), archived. Superseded where they disagree. |
@@ -54,7 +59,7 @@ policy (internal: NIRA); **Lava** = Vulkan substrate.
 |---|---|
 | `AGENTS.md` | **Binding agent charter** (transcribes §LXXI/§LXXII/§LXX). |
 | `.github/ISSUE_TEMPLATE/work-item.md` | §LXXI work-item format. |
-| `docs/goals/` | Sprint goals. Phase 1–4 landed. |
+| `docs/goals/` | Sprint goals. Phase 1–4 landed; Phase 5 items A–D landed (`PHASE5_ENGINE.md`). |
 | `.github/PULL_REQUEST_TEMPLATE.md` | §LXXII receipt-as-PR. |
 | `scripts/` + `Makefile` | `make test / bench / format / format-check / freeze`. |
 | `benchmark/results/*.tsv` | Regression corpus (accrues from every bench run). |

@@ -2772,6 +2772,13 @@ Exit:
 LXXVIII. PHASE 5 — NATIVE INFERENCE ENGINE
 ===============================================================================
 
+Status: A/B/C/D LANDED 2026-09-30 (paged KV manager — Magenta §9.5 step 1;
+Session engine `prefill!`/`decode!`/`generate` matching the oracle — ids
+equal, CPU logits atol=0; streaming callback + string prompts + CUDA engine;
+llama_micro/SmolLM2 gates skip-or-green). Greedy sampling only; scheduler /
+continuous batching is a follow-on goal under this phase. Implementation
+goal: `docs/goals/PHASE5_ENGINE.md`.
+
 Build:
 
     prefill
@@ -2785,6 +2792,14 @@ Build:
 Exit:
 
     Gesso no longer relies on another inference engine.
+
+Magenta step 1 lives here as a paged KV manager
+(`docs/research/KV_MEMORY_PROGRAM.md`). Gauge-compiled weights do not
+(`docs/research/REPRESENTATION_PROGRAM.md`). Index: `docs/research/README.md`.
+
+Living split (`docs/research/ROADMAP_NOW.md`): 5a is the engine
+(`docs/goals/PHASE5_ENGINE.md`). Scheduler / continuous batching is 5b,
+a later goal under this phase.
 
 
 ===============================================================================
@@ -2821,6 +2836,8 @@ or:
 Exit:
 
     reproducible win against equivalent generic execution.
+
+Candidates and sequencing: `docs/research/README.md`.
 
 
 ===============================================================================
@@ -2872,6 +2889,9 @@ Build:
 Exit:
 
     same logical model materializes into at least two valid execution representations.
+
+Implementation seed: `docs/research/REPRESENTATION_PROGRAM.md`
+(index: `docs/research/README.md`). Do not start this phase from musings.
 
 
 ===============================================================================
@@ -3028,6 +3048,8 @@ Prototype.
 Measure.
 
 Kill bad ideas quickly.
+
+No research program in `docs/research/` yet. Do not pull this into Phase 5.
 
 
 ===============================================================================
