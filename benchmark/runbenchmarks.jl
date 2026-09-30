@@ -181,6 +181,64 @@ suite["llama_micro_session_generate_cpu"] = (
     "§LXXVIII item D: CPU Session generate over the paged KV manager (page_size=4), tokens [0,1,2] + 3 greedy steps",
 )
 
+# --- Phase 6 (§LXXIX item C): engine TTFT / decode attribution rows (CPU) ---
+# Same model, same prompt, ONE warmup generate (compile) before any timed
+# sample — the harness then samples; every row here is post-warmup (§XXXIII).
+# TTFT and decode are DISTINCT rows so neither subsumes the other; read the
+# two together, never averaged.
+_bench_ttft_session6() = Gesso.Session(
+    _bench_model,
+    _bench_ts;
+    context_length=16,
+    eos_token_id=0,
+    page_size=4,
+    eps=_bench_cfg.rms_norm_eps,
+    theta=_bench_cfg.rope_theta,
+)
+# warmup: one full generate OUTSIDE any timed region (compiles every path)
+Gesso.generate(_bench_ttft_session6(), _bench_tokens; max_new_tokens=3)
+
+# TTFT row: prefill + exactly one decode step (time-to-first-token, engine
+# receipt's ttft_ns definition)
+_bench_ttft_probe() = Gesso.generate(
+    Gesso.Session(
+        _bench_model,
+        _bench_ts;
+        context_length=16,
+        eos_token_id=0,
+        page_size=4,
+        eps=_bench_cfg.rms_norm_eps,
+        theta=_bench_cfg.rope_theta,
+    ),
+    _bench_tokens;
+    max_new_tokens=1,
+)
+suite["session_ttft_1tok_cpu"] = (
+    _bench_ttft_probe,
+    "§LXXIX item C: post-warmup — CPU Session prefill + 1 greedy step (time-to-first-token)",
+)
+
+# per-generate row: full 8-step decode on the same model/prompt (median over
+# the whole generate — decode marginal cost = this row minus the TTFT row,
+# both post-warmup, same measurement discipline)
+_bench_gen8_probe() = Gesso.generate(
+    Gesso.Session(
+        _bench_model,
+        _bench_ts;
+        context_length=16,
+        eos_token_id=0,
+        page_size=4,
+        eps=_bench_cfg.rms_norm_eps,
+        theta=_bench_cfg.rope_theta,
+    ),
+    _bench_tokens;
+    max_new_tokens=8,
+)
+suite["session_generate_8tok_cpu"] = (
+    _bench_gen8_probe,
+    "§LXXIX item C: post-warmup — CPU Session generate, 8 greedy steps over the paged KV manager",
+)
+
 # --- Phase 4 (§LXXVII item D): gated micro-llama CUDA prefill probe ---------
 # benchmark/Project.toml declares CUDA (the bench env, never core §VII) so
 # the GessoCUDAExt extension can trigger here. Without a functional device
@@ -215,6 +273,26 @@ if CUDA_BENCH
     suite["micro_llama_cuda_prefill_012"] = (
         _bench_probe,
         "§LXXVII item D: CUDA F32 prefill + host readback, tokens [0,1,2], llama_micro shape",
+    )
+
+    # --- Phase 6 (§LXXIX item C): CUDA Session generate row (gated) ----------
+    # Session over device pages; one warmup generate, then the harness
+    # samples (post-warmup, §XXXIII). Array() readback implies CUDA.
+    # synchronize before ids reach host (§LXXVII).
+    _bench_gpu_session6() = Gesso.Session(
+        _bench_model,
+        _bench_gpu_ts;
+        backend=_bench_cuda,
+        context_length=16,
+        eos_token_id=0,
+        page_size=4,
+        eps=_bench_cfg.rms_norm_eps,
+        theta=_bench_cfg.rope_theta,
+    )
+    Gesso.generate(_bench_gpu_session6(), _bench_tokens; max_new_tokens=3)   # warmup
+    suite["session_generate_3tok_cuda"] = (
+        () -> Gesso.generate(_bench_gpu_session6(), _bench_tokens; max_new_tokens=3),
+        "§LXXIX item C: post-warmup — CUDA Session generate, 3 greedy steps over device pages",
     )
 else
     println(
