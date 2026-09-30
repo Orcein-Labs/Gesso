@@ -67,6 +67,7 @@ using .Inference:
     Session,
     prefill!,
     decode!,
+    fork,
     generate,
     default_receipt_sink
 export reference_prefill,
@@ -82,6 +83,7 @@ export reference_prefill,
     Session,
     prefill!,
     decode!,
+    fork,
     generate,
     default_receipt_sink
 

@@ -708,6 +708,10 @@ include("kv_manager.jl")
 # Phase 5 (§LXXVIII items B/C): the Session engine — prefill!/decode!/generate
 # over the paged manager. The oracle (reference_prefill/reference_generate)
 # stays untouched; this path must match it (ids equal, CPU logits atol=0).
+#
+# Phase 7 (§LXXX item B): fork — DECLARED identity prefix share (Magenta
+# §9.5 step 3). The declaration is the function call; sharing is never
+# discovered by token match. CoW lives in kv_manager.jl (item A).
 include("session.jl")
 
 # Phase 3 (§LXXVI item C): GPT-2 byte-level BPE — the tokenizer path, in

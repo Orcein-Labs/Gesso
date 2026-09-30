@@ -639,4 +639,59 @@ function generate(s::Session, text::AbstractString; max_new_tokens::Int=8, on_to
     )
 end
 
-export Session, decode!, generate, prefill!
+# --- fork (§LXXX: declared identity prefix share, Magenta §9.5 step 3) --------
+
+"""
+    fork(s::Session; sink=default_receipt_sink()) -> Session
+
+DECLARED identity prefix share (§LXXX; Magenta §9.5 step 3): the ONLY share
+constructor in Gesso. Sharing is never discovered by token match — two
+Sessions that prefill the same tokens independently do NOT share; they
+share because `fork` was called.
+
+Legal after `prefill!` (and after subsequent `decode!`s); on a Session that
+is not `ready` it throws `ERR_INVALID_PLAN`. The child:
+
+  * carries the same `model`, `tensors`, `backend`, `page_size`,
+    `context_length`, `eos_token_id`, `tokenizer`, `eps`, `theta`,
+  * owns a NEW `PagedKVManager` whose page lists are new vectors holding the
+    SAME `KVPage` objects, each marked `shared=true` — copy-on-write in
+    `append_kv!` copies only the page being written (kv_manager.jl),
+  * has its own COPIED hidden buffer `h` plus copied `seqlen`/`ready` (no
+    hidden-state CoW this sprint),
+  * owns its own `sink` (inject one with `sink=`; tests do).
+
+`fork` itself emits NO receipt: it is a declaration of sharing, not an
+inference step (§LXXIX receipts record prefill!/decode!/generate). A forked
+child that calls `generate` still RESETS — and so DROPS the share (§LXXVIII
+law unchanged). The share path is `prefill!` / `fork` / `decode!`.
+"""
+function fork(s::Session; sink::ReceiptSink=default_receipt_sink())
+    s.ready || throw(
+        gesso_error(
+            ERR_INVALID_PLAN,
+            "fork: session is not ready — identity prefix share is legal " *
+            "after prefill! (and subsequent decode!s); this session has " *
+            "consumed $(s.seqlen) token(s) (§LXXX)",
+        ),
+    )
+    child = Session(
+        s.model,
+        s.tensors;
+        backend=s.backend,
+        page_size=s.page_size,
+        context_length=s.context_length,
+        eos_token_id=s.eos_token_id,
+        tokenizer=s.tokenizer,
+        eps=s.eps,
+        theta=s.theta,
+        sink=sink,
+    )
+    _alias_pages!(child.mgr, s.mgr)
+    child.h = copy(s.h)                # hidden state is COPIED (§LXXX) —
+    child.seqlen = s.seqlen            # device storage copies on device
+    child.ready = true                 # (§LXXVII: no host round trip)
+    return child
+end
+
+export Session, decode!, fork, generate, prefill!

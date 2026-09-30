@@ -99,6 +99,11 @@ using Gesso: reference_prefill, reference_generate
     # timing/token/KV consistency, failure receipts, ids unchanged
     include("test_session_receipts.jl")
 
+    # Phase 7 (§LXXX item B): Session fork — DECLARED identity prefix share
+    # (Magenta §9.5 step 3); forked decode ids equal independent sessions,
+    # generate still resets (and drops the share), fork emits no receipt
+    include("test_session_fork.jl")
+
     # Phase 6 (§LXXIX item B): Profiling — KV footprint from the page table,
     # structurally stable reports, empty sink is explicit, no CUDA
     include("test_profiling.jl")
