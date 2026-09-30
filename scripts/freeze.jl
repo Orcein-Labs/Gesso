@@ -78,6 +78,7 @@ curated = String[
     "docs/goals/PHASE3_FIRST_IMPORT.md",
     "docs/goals/PHASE4_CUDA.md",
     "docs/goals/PHASE5_ENGINE.md",
+    "docs/goals/PHASE6_OBSERVABILITY.md",
     "docs/research/README.md",
     "docs/research/KV_MEMORY_PROGRAM.md",
     "docs/research/KV_MEMORY_PROGRAM_part2.md",

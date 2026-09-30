@@ -66,12 +66,11 @@ _session(model, ts; kw...) =
         @test m.context_length == 128
         @test m.context_remaining == 128 - kv_len
         # page_count spans K AND V, all layers
-        @test m.page_count ==
-              length(Gesso.Inference.kv_cache(s.mgr, 1, :k).storage) * 2 * 2
+        @test m.page_count == length(Gesso.Inference.kv_cache(s.mgr, 1, :k).storage) * 2 * 2
         # kv_bytes derived from the manager matches a direct sizeof walk
         direct = sum(
-            sizeof(p.storage) for pages in (s.mgr.k_pages, s.mgr.v_pages) for lp in pages for
-            p in lp
+            sizeof(p.storage) for pages in (s.mgr.k_pages, s.mgr.v_pages) for
+            lp in pages for p in lp
         )
         @test m.kv_bytes == direct
         # documented formula (no extra K+V factor — page_count already spans both)
