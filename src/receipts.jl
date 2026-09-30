@@ -10,7 +10,8 @@
 # etc.) arrives with the phase that first persists receipts; until then the
 # in-memory sink suffices. No dependencies added — the dependency law holds.
 
-export Receipt, ReceiptSink, InMemorySink, emit!, next_receipt_id, new_receipt
+export Receipt,
+    ReceiptSink, InMemorySink, emit!, next_receipt_id, new_receipt, default_receipt_sink
 # RECEIPT_SCHEMA_VERSION is owned and exported by versions.jl — re-exporting
 # it here too would make `names(Gesso)` ambiguous about ownership.
 
@@ -130,3 +131,16 @@ Convenience constructor: a fresh receipt stamped with a fresh id and current
 UTC time. Keyword arguments fill the §XLII fields.
 """
 new_receipt(; kw...) = Receipt(id=next_receipt_id(), timestamp=now(UTC); kw...)
+
+# Process-level default sink (§LXXVIII engine telemetry lands here unless the
+# caller injects one). Bounded ring: a runaway engine cannot grow memory
+# without bound; overflow drops the OLDEST receipt and logs that it did.
+const _PROCESS_SINK = InMemorySink()
+
+"""
+    default_receipt_sink() -> InMemorySink
+
+The process-level sink every `Session` emits to unless constructed with an
+explicit `sink=`. Tests inject their own `InMemorySink` (§LXXVIII item A).
+"""
+default_receipt_sink() = _PROCESS_SINK

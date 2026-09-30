@@ -95,6 +95,10 @@ using Gesso: reference_prefill, reference_generate
     include("test_session_llama.jl")
     include("test_session_smollm2.jl")
 
+    # Phase 6 (§LXXIX item A): the engine is auditable — one receipt per call,
+    # timing/token/KV consistency, failure receipts, ids unchanged
+    include("test_session_receipts.jl")
+
     @testset "package loads" begin
         @test Gesso.Log isa Module
         @test isdefined(Gesso, :CPUBackend)

@@ -67,7 +67,8 @@ using .Inference:
     Session,
     prefill!,
     decode!,
-    generate
+    generate,
+    default_receipt_sink
 export reference_prefill,
     reference_generate,
     load_llama_config,
@@ -81,7 +82,8 @@ export reference_prefill,
     Session,
     prefill!,
     decode!,
-    generate
+    generate,
+    default_receipt_sink
 
 using .Parameters:
     SemanticTensor,

@@ -30,6 +30,15 @@
 #     hardcode the oracle's TOY_EOS. The oracle still does (its contract).
 #   * Runtime stays contract-only (§XXXII): Session lives in Inference; there
 #     is no scheduler, no batching, no queues this sprint.
+#
+# Phase 6 (§LXXIX item A): every generate / prefill! / decode! emits ONE
+# receipt (§XLII fields filled, no new Receipt fields — no schema bump).
+# emit! never throws and a telemetry failure never changes ids: the receipt
+# is built AFTER the result (or the caught error) exists, and emit! itself
+# swallows delivery failures (receipts.jl). Timing is wall-clock time_ns()
+# around the phases (§XXXIII hygiene: tests that assert structure may include
+# compile; benchmarks warm up first). kv_bytes is DERIVED from the page table
+# (see kv_manager.jl) — a test reconstructs it from sizeof of the pages.
 
 mutable struct Session
     model::Any
@@ -41,6 +50,7 @@ mutable struct Session
     tokenizer::Any
     eps::Float64
     theta::Float64
+    sink::ReceiptSink
     mgr::PagedKVManager
     h::Any                                  # (context_length, dim) hidden rows
     seqlen::Int                        # consumed tokens == kv_len (lockstep)
@@ -54,7 +64,8 @@ end
 
 """
     Session(model, tensors; backend=CPUBackend(), page_size=16, context_length,
-            eos_token_id, tokenizer=nothing, eps=1e-6, theta=10000.0)
+            eos_token_id, tokenizer=nothing, eps=1e-6, theta=10000.0,
+            sink=default_receipt_sink())
 
 The Phase 5 engine surface (§LXVII): `prefill!` / `decode!` / `generate`.
 
@@ -75,6 +86,7 @@ function Session(
     tokenizer=nothing,
     eps::Real=1e-6,
     theta::Real=10000.0,
+    sink::ReceiptSink=default_receipt_sink(),
 )
     context_length >= 1 || throw(
         gesso_error(
@@ -121,6 +133,7 @@ function Session(
         tokenizer,
         Float64(eps),
         Float64(theta),
+        sink,
         mgr,
         h,
         0,
@@ -166,6 +179,85 @@ function _session_reset!(s::Session)
     return s
 end
 
+# --- receipts (§LXXIX item A; §XLII fields, no new Receipt fields) ------------
+
+# timing/tokens accumulator handed to the impl functions: they record their
+# phase timings and token counts through it, so the wrapper can build the
+# receipt from facts the call itself measured (no re-timing, no drift).
+mutable struct _EngineSpan
+    prefill_ns::UInt64
+    decode_ns::UInt64
+    prompt_tokens::Int
+    new_tokens::Int
+end
+_EngineSpan() = _EngineSpan(UInt64(0), UInt64(0), 0, 0)
+
+# one auditable record of an engine call. `failure` is the CONSTRUCTED
+# GessoError when the call threw (the throw still propagates); timing is
+# wall-clock time_ns() (§XXXIII: structure tests may include compile).
+function _engine_receipt(
+    s::Session,
+    task::Symbol,
+    t0_ns::UInt64,
+    span::_EngineSpan,
+    failure,
+    max_new_tokens=nothing,
+)
+    kv_len = s.seqlen
+    return new_receipt(
+        task=task,
+        model=nameof(typeof(s.model)),
+        inference_request=(
+            backend=backend_name(s.backend),
+            page_size=s.page_size,
+            max_new_tokens=max_new_tokens,
+            eos_token_id=s.eos_token_id,
+        ),
+        timing=(
+            prefill_ns=span.prefill_ns,
+            decode_ns=span.decode_ns,
+            total_ns=time_ns() - t0_ns,
+            ttft_ns=span.prefill_ns + (span.new_tokens > 0 ? span.decode_ns : UInt64(0)),
+        ),
+        token_usage=(
+            prompt_tokens=span.prompt_tokens,
+            new_tokens=span.new_tokens,
+            total_tokens=span.prompt_tokens + span.new_tokens,
+        ),
+        memory_usage=(
+            kv_bytes=kv_bytes(s.mgr),
+            page_count=page_count(s.mgr),
+            kv_len=kv_len,
+            context_length=s.context_length,
+            context_remaining=s.context_length - kv_len,
+        ),
+        failure=failure,
+        context=Dict{Symbol, Any}(:gap_class => :algorithm),   # §L label, not a detective
+    )
+end
+
+# wrap one engine call: run f(span) → result, build the receipt from the
+# span (on success) or from the caught error (on failure), emit exactly one
+# receipt, then rethrow the ORIGINAL error. emit! never throws (receipts.jl
+# law) — a telemetry failure cannot change ids or suppress the throw.
+function _audited(f, s::Session, task::Symbol; max_new_tokens=nothing)
+    t0 = time_ns()
+    span = _EngineSpan()
+    result = nothing
+    try
+        result = f(span)
+    catch err
+        # failure receipt carries the CONSTRUCTED error; the throw still
+        # propagates (§LXXIX item A)
+        receipt = _engine_receipt(s, task, t0, span, err, max_new_tokens)
+        emit!(s.sink, receipt)
+        rethrow()
+    end
+    receipt = _engine_receipt(s, task, t0, span, nothing, max_new_tokens)
+    emit!(s.sink, receipt)
+    return result
+end
+
 # --- prefill! (§XXX: prompt ingestion is PrefillWorkload, once) ----------------
 
 """
@@ -177,6 +269,12 @@ this sprint). Throws `ERR_INVALID_PLAN` on an empty prompt or a reused
 session; `ERR_RESOURCE_LIMIT` when the prompt exceeds `context_length`.
 """
 function prefill!(s::Session, tokens::AbstractVector{Int})
+    return _audited(s, :prefill) do span
+        _prefill_impl!(s, tokens, span)
+    end
+end
+
+function _prefill_impl!(s::Session, tokens::AbstractVector{Int}, span::_EngineSpan)
     isempty(tokens) &&
         throw(gesso_error(ERR_INVALID_PLAN, "prefill!: token sequence is empty"))
     (!s.ready && s.seqlen == 0) || throw(
@@ -195,6 +293,7 @@ function prefill!(s::Session, tokens::AbstractVector{Int})
             context_length=s.context_length,
         ),
     )
+    t_prefill = time_ns()
 
     cpu = s.backend
     on_cpu = backend_name(cpu) === :cpu
@@ -311,6 +410,8 @@ function prefill!(s::Session, tokens::AbstractVector{Int})
     matmul!(cpu, seqvocab, hp, tensors.lm_head, wl)
     s.seqlen = P
     s.ready = true
+    span.prefill_ns = UInt64(time_ns() - t_prefill)
+    span.prompt_tokens = P
     logits = permutedims(seqvocab.storage)       # (vocab, P)
     return on_cpu ? logits : Array(logits)       # host-visible (§LXXVII)
 end
@@ -326,6 +427,12 @@ the paged manager, hidden row written) before it is returned; on EOS nothing
 is appended (the engine does not step past a stop token).
 """
 function decode!(s::Session)
+    return _audited(s, :decode) do span
+        _decode_impl!(s, span)
+    end
+end
+
+function _decode_impl!(s::Session, span::_EngineSpan)
     s.ready || throw(
         gesso_error(
             ERR_INVALID_PLAN,
@@ -336,12 +443,16 @@ function decode!(s::Session)
     on_cpu = backend_name(cpu) === :cpu
     wl = DecodeWorkload()    # _last_logits consumes an Activation (oracle helper contract) — wrap the
     # session's h buffer; storage CONTENT is shared, nothing is copied
+    t_decode = time_ns()
     h_act = Activation(; shape=(s.context_length, s.model.embedding.dim), storage=s.h)
     logits_row =
         _last_logits(s.model, s.tensors, h_act, cpu, wl, s.vocab, s.seqlen; eps=s.eps)
     next = _greedy_id(logits_row)
-    next == s.eos_token_id && return next        # still returned; no append after stop
-    _session_consume!(s, next)
+    if next != s.eos_token_id                    # EOS: returned, nothing appended
+        _session_consume!(s, next)
+    end
+    span.decode_ns += UInt64(time_ns() - t_decode)
+    span.new_tokens += 1
     return next
 end
 
@@ -476,16 +587,28 @@ function generate(
     max_new_tokens::Int=8,
     on_token=nothing,
 )
+    return _audited(s, :generate; max_new_tokens) do span
+        _generate_impl!(s, prompt, max_new_tokens, on_token, span)
+    end
+end
+
+function _generate_impl!(
+    s::Session,
+    prompt::AbstractVector{Int},
+    max_new_tokens::Int,
+    on_token,
+    span::_EngineSpan,
+)
     isempty(s.model.blocks) &&
         throw(gesso_error(ERR_INVALID_PLAN, "generate: model has no blocks"))
     isempty(prompt) && throw(gesso_error(ERR_INVALID_PLAN, "generate: prompt is empty"))
     _session_reset!(s)
-    prefill!(s, prompt)
+    _prefill_impl!(s, prompt, span)
     ids = collect(prompt)
     cap = max(max_new_tokens, 0)
     steps = 0
     while steps < cap
-        next = decode!(s)
+        next = _decode_impl!(s, span)
         push!(ids, next)
         on_token === nothing || on_token(next)
         steps += 1

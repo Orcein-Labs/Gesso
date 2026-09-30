@@ -295,4 +295,36 @@ function gather_kv(mgr::PagedKVManager, layer::Int, kind::Symbol; len::Int=-1)
     return gather_kv!(dest, mgr, layer, kind; len=n)
 end
 
-export PagedKVManager, append_kv!, filled_len, gather_kv, gather_kv!, kv_cache, kv_len
+# --- derived footprint (§LXXIX: memory accounting trustworthy) ----------------
+
+"""
+    kv_bytes(mgr) -> Int
+
+KV cache footprint in bytes, DERIVED from the page table — never estimated:
+the sum of `sizeof` over every allocated page storage, K and V, all layers
+(a live page's unused rows count — they are allocated). A test reconstructs
+this number from the page arrays; if the two ever disagree, that is a bug.
+"""
+function kv_bytes(mgr::PagedKVManager)
+    total = 0
+    for pages in (mgr.k_pages, mgr.v_pages), layer_pages in pages, p in layer_pages
+        total += sizeof(p.storage)
+    end
+    return total
+end
+
+"""
+    page_count(mgr) -> Int
+
+Number of allocated pages across all layers, K and V combined.
+"""
+function page_count(mgr::PagedKVManager)
+    total = 0
+    for pages in (mgr.k_pages, mgr.v_pages), layer_pages in pages
+        total += length(layer_pages)
+    end
+    return total
+end
+
+export PagedKVManager,
+    append_kv!, filled_len, gather_kv, gather_kv!, kv_bytes, kv_cache, kv_len, page_count
