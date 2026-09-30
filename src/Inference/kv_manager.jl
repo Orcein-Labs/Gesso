@@ -25,6 +25,9 @@
 #     filled length is the quantity every consumer wants.
 #   * K and V are independent logical caches (Magenta: "K and V separately");
 #     the engine appends them as a pair per token via the paired `append_kv!`.
+#   * Phase 7 pick (§LXXX, PINNED): `KVPage` gains `shared::Bool` (default
+#     false); `KVCache` gains NOTHING. CoW copies only the dirty page; full
+#     shared pages are never written.
 #   * Pages are the cache; reads GATHER into contiguous scratch. There is no
 #     second contiguous buffer to keep coherent (locked decision, 2026-09-30).
 #
@@ -41,10 +44,23 @@
 #     kind::Symbol    :k or :v
 #     start_pos::Int  0-based first token-row this page covers
 #     filled::Int     rows written in this page, 0 ≤ filled ≤ page_size
+#     shared::Bool    §LXXX pick, PINNED: true once `_alias_pages!` (Session
+#                     `fork`) marks the page aliased by another manager; the
+#                     flag gates copy-on-write in `append_kv!`
 #
-# That provenance is the hook for Magenta §9.5 steps 2–7 (CoW, prefix share,
-# span classes, tiering, eviction) — NONE of which exist here. No span
-# classes, no CoW, no eviction (Phase 7+).
+# Magenta §9.5 steps 2–3 landed in Phase 7 (§LXXX): COPY-ON-WRITE and DECLARED
+# identity prefix share. Declaration, not discovery: pages become shared ONLY
+# through `_alias_pages!` (Session `fork` is the caller) — two managers that
+# fill the same tokens independently NEVER share (pinned by test).
+# `append_kv!` into a shared last page copies THAT PAGE ONLY (fresh storage,
+# filled rows, shared=false, this manager's list entry replaced); the other
+# manager keeps the original page object untouched — `filled` and `storage`
+# of a shared page are never mutated, and the original is never un-shared
+# (conservative: no refcount, a fork-of-fork must stay correct). A FULL
+# shared page is never written: the append takes the allocation branch and
+# the complete prefix page stays aliased forever. Steps 4–7 (span classes,
+# tiering, eviction, remat) still do not exist. `KVCache` gains NO fields —
+# the pick lives on `KVPage`.
 #
 # Exceeding `context_length` on a cache throws typed ERR_RESOURCE_LIMIT: no
 # silent drop, no wraparound (§LXX).
@@ -55,7 +71,12 @@ mutable struct KVPage
     start_pos::Int
     filled::Int
     storage::Any                       # (page_size, n_kv_heads, d_head)
+    shared::Bool                       # §LXXX: aliased by another manager
 end
+
+# 5-arg form keeps every pre-Phase-7 construction site shared=false.
+KVPage(layer, kind, start_pos, filled, storage) =
+    KVPage(layer, kind, start_pos, filled, storage, false)
 
 mutable struct PagedKVManager
     n_layers::Int
@@ -193,9 +214,12 @@ end
 
 Write one token-row — shape `(n_kv_heads, d_head)`, post-RoPE (the oracle
 caches post-RoPE K/V, §LXXV) — into the next row of the cache's last page,
-allocating exactly one new page when it is full. Appending past
-`context_length` throws `ERR_RESOURCE_LIMIT`; the cache is never realloc-
-copied and tokens are never silently dropped or wrapped (§LXX).
+allocating exactly one new page when it is full. If that last page is
+SHARED (marked by `_alias_pages!` under Session `fork`, §LXXX), it is
+copied first — that page only; the aliasing manager keeps the original.
+Appending past `context_length` throws `ERR_RESOURCE_LIMIT`; the cache is
+never realloc-copied and tokens are never silently dropped or wrapped
+(§LXX).
 
     append_kv!(mgr, layer, k_row, v_row)
 
@@ -230,6 +254,8 @@ function append_kv!(mgr::PagedKVManager, layer::Int, kind::Symbol, row)
     if page === nothing
         # allocate ONE page off the prototype (CPU Array{Float64} or device
         # CuArray{Float32}, §LXXVII). start_pos is 0-based (§LXXV positions).
+        # A FULL shared page takes THIS branch, never the write below: the
+        # complete prefix page stays aliased forever (§LXXX).
         page = KVPage(
             layer,
             kind,
@@ -238,6 +264,19 @@ function append_kv!(mgr::PagedKVManager, layer::Int, kind::Symbol, row)
             similar(mgr.prototype, mgr.page_size, mgr.n_kv_heads, mgr.d_head),
         )
         push!(pages, page)
+    elseif page.shared
+        # COPY-ON-WRITE (§LXXX item A, Magenta §9.5 step 2): this manager is
+        # about to dirty a page whose storage another manager also holds.
+        # Copy the filled rows into fresh storage, mark the copy unshared, and
+        # replace THIS manager's list entry only — the other manager's page
+        # object is never touched (its `filled`/`storage` are frozen; it is
+        # not un-shared either: no refcount, a fork-of-fork must stay
+        # correct). Allocation is `similar` off the page's own storage, so
+        # device pages copy on device (§LXXVII: no host copy).
+        fresh = similar(page.storage)
+        @views fresh[1:page.filled, :, :] .= page.storage[1:page.filled, :, :]
+        page = KVPage(layer, kind, page.start_pos, page.filled, fresh, false)
+        pages[end] = page
     end
     i = page.filled + 1
     @views page.storage[i, :, :] .= row
@@ -249,6 +288,56 @@ function append_kv!(mgr::PagedKVManager, layer::Int, k_row, v_row)
     append_kv!(mgr, layer, :k, k_row)
     append_kv!(mgr, layer, :v, v_row)
     return mgr
+end
+
+# COPY-ON-WRITE ALIASING (§LXXX item A, Magenta §9.5 step 2) — internal.
+#
+# Make `dst`'s (layer, kind) page lists alias `src`'s CURRENT pages: new
+# Vector objects holding the SAME KVPage objects, every one marked
+# `shared=true`. This is the ONLY share constructor in Gesso — Session
+# `fork` is the intended caller, and two managers that fill the same tokens
+# independently never reach it (declaration, not discovery). dst must be a
+# fresh, compatible manager (empty caches, same geometry): anything else is
+# ERR_INVALID_PLAN, not a silent merge. Page `filled`/`storage` are never
+# touched here; only the `shared` flag flips (KVPage is mutable, §CIX
+# discipline — identity mutates, semantics do not).
+function _alias_pages!(dst::PagedKVManager, src::PagedKVManager)
+    (
+        dst.n_layers == src.n_layers &&
+        dst.n_kv_heads == src.n_kv_heads &&
+        dst.d_head == src.d_head &&
+        dst.page_size == src.page_size &&
+        dst.context_length == src.context_length
+    ) || throw(
+        gesso_error(
+            ERR_INVALID_PLAN,
+            "_alias_pages!: managers are incompatible — " *
+            "dst (layers=$(dst.n_layers), kv_heads=$(dst.n_kv_heads), " *
+            "d_head=$(dst.d_head), page_size=$(dst.page_size), " *
+            "context_length=$(dst.context_length)) vs " *
+            "src (layers=$(src.n_layers), kv_heads=$(src.n_kv_heads), " *
+            "d_head=$(src.d_head), page_size=$(src.page_size), " *
+            "context_length=$(src.context_length))";
+        ),
+    )
+    for pages in (dst.k_pages, dst.v_pages), layer_pages in pages
+        isempty(layer_pages) || throw(
+            gesso_error(
+                ERR_INVALID_PLAN,
+                "_alias_pages!: dst manager already holds pages — " *
+                "aliasing is only defined into a fresh manager (§LXXX)";
+            ),
+        )
+    end
+    for (dst_lists, src_lists) in ((dst.k_pages, src.k_pages), (dst.v_pages, src.v_pages))
+        for l in 1:src.n_layers
+            for p in src_lists[l]
+                p.shared = true
+            end
+            dst_lists[l] = copy(src_lists[l])
+        end
+    end
+    return dst
 end
 
 """
