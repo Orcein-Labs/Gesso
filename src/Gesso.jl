@@ -51,6 +51,8 @@ export Embedding, RMSNorm, RoPE, Attention, SwiGLU, Block, Model
 
 # Phase 2 (§LXXV): the reference interpreter is the first public engine slice
 # Phase 3 (§LXXVI item B): the Llama import path rides the same surface
+# Phase 5 (§LXXVIII): the Session engine — prefill!/decode!/generate over the
+# paged KV manager; reference_* remain the oracle
 using .Inference:
     reference_prefill,
     reference_generate,
@@ -61,7 +63,11 @@ using .Inference:
     load_llama,
     GPT2BPE,
     load_gpt2_tokenizer,
-    encode
+    encode,
+    Session,
+    prefill!,
+    decode!,
+    generate
 export reference_prefill,
     reference_generate,
     load_llama_config,
@@ -71,7 +77,11 @@ export reference_prefill,
     load_llama,
     GPT2BPE,
     load_gpt2_tokenizer,
-    encode
+    encode,
+    Session,
+    prefill!,
+    decode!,
+    generate
 
 using .Parameters:
     SemanticTensor,

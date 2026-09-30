@@ -82,6 +82,10 @@ using Gesso: reference_prefill, reference_generate
     # pages are the cache, gather-on-read, typed context exhaustion
     include("test_kv_manager.jl")
 
+    # Phase 5 (§LXXVIII item B): the Session engine vs the oracle — exact ids,
+    # atol=0 prefill logits, page_size=4 crosses the boundary, EOS, typed errors
+    include("test_session.jl")
+
     @testset "package loads" begin
         @test Gesso.Log isa Module
         @test isdefined(Gesso, :CPUBackend)

@@ -701,6 +701,11 @@ include("llama_import.jl")
 # existing operators (the manager owns storage and append, not a kernel).
 include("kv_manager.jl")
 
+# Phase 5 (§LXXVIII items B/C): the Session engine — prefill!/decode!/generate
+# over the paged manager. The oracle (reference_prefill/reference_generate)
+# stays untouched; this path must match it (ids equal, CPU logits atol=0).
+include("session.jl")
+
 # Phase 3 (§LXXVI item C): GPT-2 byte-level BPE — the tokenizer path, in
 # Gesso (no Tokenizers.jl; JSON is already the sanctioned dependency).
 include("gpt2_tokenizer.jl")
