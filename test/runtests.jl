@@ -99,6 +99,10 @@ using Gesso: reference_prefill, reference_generate
     # timing/token/KV consistency, failure receipts, ids unchanged
     include("test_session_receipts.jl")
 
+    # Phase 6 (§LXXIX item B): Profiling — KV footprint from the page table,
+    # structurally stable reports, empty sink is explicit, no CUDA
+    include("test_profiling.jl")
+
     @testset "package loads" begin
         @test Gesso.Log isa Module
         @test isdefined(Gesso, :CPUBackend)

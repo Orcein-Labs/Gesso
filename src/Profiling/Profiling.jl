@@ -1,14 +1,114 @@
 # Profiling — performance observability (§XLIX, §L; Phase 6).
 #
-# Owns: telemetry collection for the §XLIX metric list (kernel latency,
-# launch overhead, bandwidth, allocation, synchronization, compilation time,
-# VRAM, TTFT, decode tok/s, batching efficiency, KV footprint, scheduler
-# queue time, ...) and the §L failure taxonomy mapping — every performance
-# gap classifiable, "no idea why it is slow" unacceptable.
+# Owns: stable, machine-readable attribution of what the engine already
+# measured. §LXXIX exit for this sprint: prefill vs decode vs KV bytes are
+# attributable per Session call, memory accounting is a FUNCTION OF THE PAGE
+# TABLE (not an estimate), and reports are structurally stable across runs.
 #
-# Event vocabulary already exists (logging.jl); this module owns collection.
+# This module does NOT diagnose "why it is slow" (§L: taxonomy is a label —
+# the engine attaches context[:gap_class] on the receipt; the detective is
+# Phase 9+). It does NOT import CUDA, does not time anything itself, and
+# adds no dependencies. KV footprint helpers live next to the pages
+# (Inference.kv_bytes / Inference.page_count — derived from the page table);
+# this module renders them.
+
 module Profiling
 
-# Phase 6 fills this module. Contract only — no speculative implementation.
+using ..Inference: PagedKVManager, kv_bytes, page_count
+using ..Gesso: Receipt, ReceiptSink, InMemorySink, GessoError
+
+export engine_report, print_report, kv_footprint, page_footprint
+
+"""
+    kv_footprint(mgr) -> Int
+
+KV cache footprint in bytes — the page-table-derived number
+(Inference.kv_bytes): sum of sizeof over every allocated page storage,
+K and V, all layers, including unused rows of live pages. Trustworthy means
+a test can reconstruct it from the manager; test_session_receipts.jl and
+test_profiling.jl both do.
+"""
+kv_footprint(mgr::PagedKVManager) = kv_bytes(mgr)
+
+"""
+    page_footprint(mgr) -> Int
+
+Allocated page count across all layers, K and V combined.
+"""
+page_footprint(mgr::PagedKVManager) = page_count(mgr)
+
+# the machine-readable projection of an engine receipt: fixed keys, fixed
+# types (UInt64 ns timings, Int counts) — two identical generates produce
+# structurally identical reports; only the VALUES differ. `nothing` for a
+# field the receipt does not carry is explicit, never a missing key.
+function _project(r::Receipt)
+    t = r.timing isa NamedTuple ? r.timing : NamedTuple()
+    m = r.memory_usage isa NamedTuple ? r.memory_usage : NamedTuple()
+    tu = r.token_usage isa NamedTuple ? r.token_usage : NamedTuple()
+    return (
+        task=r.task,
+        prefill_ns=get(t, :prefill_ns, nothing),
+        decode_ns=get(t, :decode_ns, nothing),
+        ttft_ns=get(t, :ttft_ns, nothing),
+        total_ns=get(t, :total_ns, nothing),
+        prompt_tokens=get(tu, :prompt_tokens, nothing),
+        new_tokens=get(tu, :new_tokens, nothing),
+        total_tokens=get(tu, :total_tokens, nothing),
+        kv_bytes=get(m, :kv_bytes, nothing),
+        page_count=get(m, :page_count, nothing),
+        kv_len=get(m, :kv_len, nothing),
+        context_length=get(m, :context_length, nothing),
+        context_remaining=get(m, :context_remaining, nothing),
+        failed=r.failure !== nothing,
+        failure_code=r.failure isa GessoError ? r.failure.code : nothing,
+    )
+end
+
+"""
+    engine_report(r::Receipt) -> NamedTuple
+
+Machine-readable attribution for one engine receipt: fixed keys
+(`prefill_ns`, `decode_ns`, `ttft_ns`, `kv_bytes`, `kv_len`, …), fixed
+types. Structure is stable across runs; values are whatever the call
+measured. A failed call reports `failed = true` and its code.
+"""
+engine_report(r::Receipt) = _project(r)
+
+"""
+    engine_report(sink) -> Vector{NamedTuple}
+
+Reports for every receipt in a sink, in insertion order. An EMPTY sink
+yields an empty vector — explicit, not a crash.
+"""
+function engine_report(sink::InMemorySink)
+    return [_project(r) for r in sink.buf]
+end
+
+"""
+    print_report(io, r::Receipt)
+
+Stable text rendering of one engine receipt: one fixed-order line, one
+`key=value` field per projection key. Nothing here is parsed by tests that
+want numbers — they use `engine_report`; this is the human surface.
+"""
+function print_report(io::IO, r::Receipt)
+    p = _project(r)
+    print(io, "gesso.engine task=", p.task)
+    print(io, " prefill_ns=", p.prefill_ns)
+    print(io, " decode_ns=", p.decode_ns)
+    print(io, " ttft_ns=", p.ttft_ns)
+    print(io, " total_ns=", p.total_ns)
+    print(io, " prompt_tokens=", p.prompt_tokens)
+    print(io, " new_tokens=", p.new_tokens)
+    print(io, " kv_bytes=", p.kv_bytes)
+    print(io, " pages=", p.page_count)
+    print(io, " kv_len=", p.kv_len)
+    print(io, "/", p.context_length)
+    print(io, " failed=", p.failed)
+    p.failure_code === nothing || print(io, " code=", p.failure_code)
+    return nothing
+end
+
+print_report(r::Receipt) = print_report(stdout, r)
 
 end
