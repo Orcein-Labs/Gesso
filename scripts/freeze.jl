@@ -110,6 +110,7 @@ curated = String[
     "test/test_cuda_seam.jl",
     "test/test_cuda_ops.jl",
     "test/test_cuda_inference.jl",
+    "test/test_cuda_smollm2.jl",
     "test/testhelpers.jl",
     "test/test_helpers.jl",
     "test/toyfixtures.jl",

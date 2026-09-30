@@ -1,6 +1,12 @@
 [deps]
 Gesso = "05f31162-62af-44f0-af37-0e48a49f1899"
 BenchmarkTools = "6e4b80f9-dd63-53aa-95a3-0cdb28fa8baf"
+# Phase 4 (§LXXVII item D): CUDA in the BENCH env so the GessoCUDAExt
+# extension can trigger for the gated micro-llama prefill probe. This is
+# the bench env, not core — core [deps] stays CUDA-free (§VII), same
+# precedent as test/Project.toml. Without a device the probe is skipped
+# (no row accrued); the suite still runs and persists.
+CUDA = "052768ef-5323-5732-b1bb-66c8b64840ba"
 
 [sources]
 Gesso = {path = ".."}

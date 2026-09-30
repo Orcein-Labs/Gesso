@@ -1,0 +1,7 @@
+schema	date_utc	julia_version	host	arch	nthreads	commit	dirty	benchmark	samples	median_ns	mean_ns	min_ns	allocs	bytes	bench_note
+0.2.0	2026-09-30 T01:40:22Z	1.12.6	cachyos-x8664	x86_64	1	5355a38	true	backend_tag_construction	10000	1.411	1.5181595999999997	1.407	0	0	§XX: tag construction must stay free
+0.2.0	2026-09-30 T01:40:22Z	1.12.6	cachyos-x8664	x86_64	1	5355a38	true	capability_probe	10000	6.5184999999999995	7.0157107000000005	6.155	0	0	§XX: capability probing is always safe, never throws
+0.2.0	2026-09-30 T01:40:22Z	1.12.6	cachyos-x8664	x86_64	1	5355a38	true	lowering_not_implemented_throw	10000	1.411	1.4430034999999994	1.407	0	0	§LXX: explicit failure must be affordable
+0.2.0	2026-09-30 T01:40:22Z	1.12.6	cachyos-x8664	x86_64	1	5355a38	true	micro_llama_cuda_prefill_012	479	8.809167e6	1.0449877743215032e7	7.652542e6	13128	721968	§LXXVII item D: CUDA F32 prefill + host readback, tokens [0,1,2], llama_micro shape
+0.2.0	2026-09-30 T01:40:22Z	1.12.6	cachyos-x8664	x86_64	1	5355a38	true	receipt_emit_inmemory	10000	249.2016129032258	338.3703504032258	212.3125	7	848	§XLII: audited actions pay for receipts; keep it negligible
+0.2.0	2026-09-30 T01:40:22Z	1.12.6	cachyos-x8664	x86_64	1	5355a38	true	structured_log_event	10000	1419.413043478261	1598.7222217391304	957.9565217391304	31	1264	§XLII: logging must never be the reason to skip logging

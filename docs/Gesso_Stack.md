@@ -2748,6 +2748,9 @@ Exit:
 LXXVII. PHASE 4 — CUDA.JL EXECUTION
 ===============================================================================
 
+Status: COMPLETE 2026-09-29 (extension seam + CUDA ops + backend-generic
+interpreter; toy2/llama_micro device-vs-oracle gates green on RTX 5060;
+SmolLM2-CUDA and the micro-llama CUDA bench row are skip-or-green).
 Implementation goal: `docs/goals/PHASE4_CUDA.md`.
 CUDA.jl is a package extension, never a core dependency (§VII).
 

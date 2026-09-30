@@ -17,7 +17,7 @@ hardware and workload actually present.
 sprint and the foundation-hardening sprint: receipts/failure-taxonomy/freeze
 infrastructure stress-tested, correctness laboratory established).
 **Phase 1 (semantic core) and Phase 2 (CPU oracle) are COMPLETE.**
-Next gate: Phase 3 — first real model import. `toy2` runs on `CPUBackend`.
+Next gate: Phase 5 — native inference engine. `toy2` and `llama_micro` run on `CPUBackend` and `CUDABackend`.
 
 - [x] Clean `Project.toml`, no third-party dependencies (§VII: *Gesso earns every hard dependency*; stdlibs `Dates` and `LinearAlgebra`, enforced by test)
 - [x] Package skeleton: logging conventions, backend interface draft
@@ -29,7 +29,8 @@ Next gate: Phase 3 — first real model import. `toy2` runs on `CPUBackend`.
 - [x] Foundation hardening (receipt stress tests, taxonomy pins, freeze evidence, lab fixtures, empty-core fence)
 - [x] Phase 1: semantic core per §CIX — types exist, `toy2` expressible end to end, **no execution yet**
 - [x] Phase 2: CPU oracle COMPLETE — deterministic prefill with known logits (persisted + provenance) and greedy KV-cached decode; `toy2` runs on `CPUBackend`
-- [ ] Phase 3: first real model import
+- [x] Phase 3: first real model import — SKIP-OR-GREEN (GQA interpreter, Llama import, GPT-2 BPE landed; the real-model gate is a named skip without a local SmolLM2 snapshot, §LXXVI)
+- [x] Phase 4: CUDA.jl execution — COMPLETE 2026-09-29 (extension seam, operator methods + `to_device`, backend-generic interpreter; device-vs-oracle gates green on RTX 5060)
 - [ ] Telemetry collection (Phase 6)
 
 ## The stack
@@ -54,8 +55,8 @@ Current phases (docs/Gesso_Stack.md §LXXIII ff.):
 | 0 | Repository foundation | **COMPLETE** |
 | 1 | Semantic core (§CIX encoding) | **COMPLETE** — expressible, not executable |
 | 2 | Reference execution (CPU oracle) | **COMPLETE** — prefill + greedy KV decode |
-| 3 | First real model import | **IN PROGRESS** — items A/B/C landed (GQA interpreter, Llama import, GPT-2 BPE); item D is skip-or-green pending a local SmolLM2 snapshot |
-| 4 | CUDA.jl execution | |
+| 3 | First real model import | **SKIP-OR-GREEN** — items A/B/C landed (GQA interpreter, Llama import, GPT-2 BPE); item D is skip-or-green pending a local SmolLM2 snapshot |
+| 4 | CUDA.jl execution | **COMPLETE 2026-09-29** — extension seam, ops + `to_device`, backend-generic interpreter, device-vs-CPU gates; SmolLM2-CUDA + bench row skip-or-green (§LXXVII) |
 
 Training is **not** part of Gesso — by explicit, permanent decision
 ([docs/Gesso_Stack.md §LVIII](docs/Gesso_Stack.md)). If you want to contribute
@@ -109,6 +110,12 @@ Without the variable the gate is one named skip — CI stays green on a
 machine that has never seen SmolLM2 weights. The first successful run on
 a snapshot freezes `test/fixtures/smollm2/expected_logits.toml`
 (oracle `gesso-cpu`); that committed file is the regression oracle.
+
+CUDA device tests (Phase 4, §LXXVII) follow the same skip law: without an
+NVIDIA device they are named skips and CI never requires a GPU. The
+SmolLM2 CUDA gate additionally needs `GESSO_SMOLLM2_DIR` — it compares
+last-position logits on device to the frozen CPU golden at `atol=1e-2`
+(F32 device vs F64 oracle) and never fakes a golden CUDA file.
 
 Under the hood (Julia 1.12 workspace — activate the root, then let Pkg
 discover the members; do NOT `Pkg.instantiate("test")`, positional
