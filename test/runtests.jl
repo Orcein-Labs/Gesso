@@ -86,6 +86,10 @@ using Gesso: reference_prefill, reference_generate
     # atol=0 prefill logits, page_size=4 crosses the boundary, EOS, typed errors
     include("test_session.jl")
 
+    # Phase 5 (§LXXVIII item C): CUDA Session — device ids equal CPU ids,
+    # logits at declared atol, no-copy law; named skip without a device
+    include("test_session_cuda.jl")
+
     @testset "package loads" begin
         @test Gesso.Log isa Module
         @test isdefined(Gesso, :CPUBackend)

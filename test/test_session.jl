@@ -141,4 +141,55 @@ _session(model, ts; kw...) =
         end
         @test err isa Gesso.GessoError && err.code == Gesso.ERR_INVALID_PLAN
     end
+
+    # ---- item C (§LXXVIII): streaming + string prompts -----------------------
+
+    @testset "on_token fires once per NEW token (streaming is a callback)" begin
+        seen = Int[]
+        g = Gesso.generate(
+            _session(model, ts),
+            PROMPT;
+            max_new_tokens=3,
+            on_token=id -> push!(seen, id),
+        )
+        @test seen == g[(length(PROMPT)+1):end]        # the generated suffix, NOT the prompt
+        @test length(seen) == 3
+        # and the callback sees EOS too, when it is produced
+        seen2 = Int[]
+        g2 = Gesso.generate(
+            _session(model, ts),
+            PROMPT;
+            max_new_tokens=8,
+            on_token=id -> push!(seen2, id),
+        )
+        @test seen2 == g2[(length(PROMPT)+1):end]
+    end
+
+    @testset "string generate without a tokenizer throws ERR_INVALID_PLAN" begin
+        err = try
+            Gesso.generate(_session(model, ts), "hi"; max_new_tokens=2)
+            nothing
+        catch e
+            e
+        end
+        @test err isa Gesso.GessoError && err.code == Gesso.ERR_INVALID_PLAN
+        @test occursin("tokenizer", sprint(showerror, err))
+    end
+
+    @testset "string generate with the tiny GPT-2 tokenizer (ids fit toy2's vocab)" begin
+        tk = Gesso.load_gpt2_tokenizer(joinpath(@__DIR__, "fixtures", "gpt2_tiny"))
+        s = _session(model, ts; tokenizer=tk)
+        seen = Int[]
+        # "Hello" is a literal vocab entry in the 13-token fixture ("hi" would
+        # need a bare 'h' symbol the fixture does not have)
+        g1 = Gesso.generate(s, "Hello"; max_new_tokens=3, on_token=id -> push!(seen, id))
+        @test g1 isa Vector{Int}
+        @test g1[1:length(Gesso.encode(tk, "Hello"))] == Gesso.encode(tk, "Hello")
+        @test seen == g1[(end-2):end]                  # callback fired per new token
+        # deterministic: two runs equal (do not pin the actual ids)
+        g2 = Gesso.generate(s, "Hello"; max_new_tokens=3)
+        @test g1 == g2
+        # string and integer prompts agree when the ids match
+        @test Gesso.generate(s, Gesso.encode(tk, "Hello"); max_new_tokens=3) == g1
+    end
 end
