@@ -78,6 +78,10 @@ using Gesso: reference_prefill, reference_generate
     # golden at wider atol — named skip without a device AND GESSO_SMOLLM2_DIR
     include("test_cuda_smollm2.jl")
 
+    # Phase 5 (§LXXVIII item A): paged KV manager — Magenta §9.5 step 1;
+    # pages are the cache, gather-on-read, typed context exhaustion
+    include("test_kv_manager.jl")
+
     @testset "package loads" begin
         @test Gesso.Log isa Module
         @test isdefined(Gesso, :CPUBackend)

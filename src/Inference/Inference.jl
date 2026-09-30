@@ -46,6 +46,7 @@ using ..Gesso:
     backend_name,
     gesso_error,
     ERR_INVALID_PLAN,
+    ERR_RESOURCE_LIMIT,
     embedding_lookup!,
     rmsnorm!,
     rope!,
@@ -694,6 +695,11 @@ export reference_generate
 # Phase 3 (§LXXVI item B): Llama-family checkpoint import — config,
 # safetensors reader, name map. Transport, not architecture (§VIII).
 include("llama_import.jl")
+
+# Phase 5 (§LXXVIII item A): paged KV manager — Magenta §9.5 step 1. Pages
+# are the cache; attention gathers into contiguous scratch and reuses the
+# existing operators (the manager owns storage and append, not a kernel).
+include("kv_manager.jl")
 
 # Phase 3 (§LXXVI item C): GPT-2 byte-level BPE — the tokenizer path, in
 # Gesso (no Tokenizers.jl; JSON is already the sanctioned dependency).
