@@ -67,6 +67,7 @@ curated = String[
     "Project.toml",
     ".gitignore",
     ".JuliaFormatter.toml",
+    "RPD_SOP.md",
     "docs/Gesso_Stack.md",
     "docs/Harpe_Stack_old.md",
     "docs/Native_Julia_Kernel_Autotuning_North_Star_README.md",
@@ -76,7 +77,13 @@ curated = String[
     "docs/goals/PHASE2_CPU_ORACLE.md",
     "docs/goals/PHASE3_FIRST_IMPORT.md",
     "docs/goals/PHASE4_CUDA.md",
+    "docs/goals/PHASE5_ENGINE.md",
+    "docs/research/README.md",
     "docs/research/KV_MEMORY_PROGRAM.md",
+    "docs/research/KV_MEMORY_PROGRAM_part2.md",
+    "docs/research/REPRESENTATION_PROGRAM.md",
+    "docs/research/CYAN_TRIAL_GESSO_FALLOUT.md",
+    "docs/research/ROADMAP_NOW.md",
     "docs/Gesso_musings.md",
     # package core
     "src/Gesso.jl",
@@ -111,6 +118,11 @@ curated = String[
     "test/test_cuda_ops.jl",
     "test/test_cuda_inference.jl",
     "test/test_cuda_smollm2.jl",
+    "test/test_kv_manager.jl",
+    "test/test_session.jl",
+    "test/test_session_cuda.jl",
+    "test/test_session_llama.jl",
+    "test/test_session_smollm2.jl",
     "test/testhelpers.jl",
     "test/test_helpers.jl",
     "test/toyfixtures.jl",
@@ -206,8 +218,10 @@ per-phase baseline snapshot.
 
 1. `docs/Gesso_Stack.md` — CANON (sections are Roman numerals; §LXXIII+
    is the phase plan).
-2. `docs/research/KV_MEMORY_PROGRAM.md` — the KV/working-memory research
-   program (extends §XXXI/§X/§LIX; feeds Phases 5/9/10).
+2. `docs/research/README.md` — research parking lot. Sequencing law:
+   boring stack first, exotic later. Magenta (KV), the representation
+   program, and `ROADMAP_NOW.md` (living phase map, not a Buffy goal)
+   live beside it; they are not Phase 5 work.
 3. `docs/ARCHITECTURE.md` — module map for orientation.
 4. `docs/Gesso_musings.md` — the dangerous research notebook. Parking lot,
    not canon. Promotions from it are deliberate.

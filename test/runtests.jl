@@ -90,6 +90,11 @@ using Gesso: reference_prefill, reference_generate
     # logits at declared atol, no-copy law; named skip without a device
     include("test_session_cuda.jl")
 
+    # Phase 5 (§LXXVIII item D): the engine runs the models we already import
+    # — llama_micro vs the oracle; SmolLM2 named skip without GESSO_SMOLLM2_DIR
+    include("test_session_llama.jl")
+    include("test_session_smollm2.jl")
+
     @testset "package loads" begin
         @test Gesso.Log isa Module
         @test isdefined(Gesso, :CPUBackend)

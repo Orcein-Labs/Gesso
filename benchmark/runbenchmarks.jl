@@ -116,18 +116,76 @@ suite["lowering_not_implemented_throw"] = (
     "§LXX: explicit failure must be affordable",
 )
 
+# --- Phase 4/5 shared micro model (public vocabulary, deterministic filler) --
+# config_to_model + materialize_llama with formula filler — the bench env has
+# no JSON dependency, and a formula fixture is bit-reproducible across runs
+# (the regression corpus must be comparable, §XLIX). Correctness parity for
+# this model shape is the test suite's job; the rows below are measurements,
+# not claims (§LXXII).
+_bench_cfg = (
+    model_type="llama",
+    hidden_size=32,
+    num_hidden_layers=2,
+    num_attention_heads=4,
+    num_key_value_heads=2,
+    intermediate_size=64,
+    vocab_size=32,
+    rms_norm_eps=1e-5,
+    rope_theta=10000.0,
+    tie_word_embeddings=true,
+)
+_bench_model = Gesso.config_to_model(_bench_cfg)
+_filler(shape) = reshape([(i % 13 - 6) * 0.01 for i in 1:prod(shape)], shape)
+_bench_tensors = Dict{String, Array{Float64}}(
+    "model.embed_tokens.weight" =>
+        _filler((_bench_cfg.vocab_size, _bench_cfg.hidden_size)),
+    "model.norm.weight" => _filler((_bench_cfg.hidden_size,)),
+)
+for i in 1:_bench_cfg.num_hidden_layers
+    _bench_tensors["model.layers.$i.self_attn.q_proj.weight"] =
+        _filler((_bench_cfg.hidden_size, _bench_cfg.hidden_size))
+    _bench_tensors["model.layers.$i.self_attn.k_proj.weight"] =
+        _filler((_bench_cfg.num_key_value_heads * 8, _bench_cfg.hidden_size))
+    _bench_tensors["model.layers.$i.self_attn.v_proj.weight"] =
+        _filler((_bench_cfg.num_key_value_heads * 8, _bench_cfg.hidden_size))
+    _bench_tensors["model.layers.$i.self_attn.o_proj.weight"] =
+        _filler((_bench_cfg.hidden_size, _bench_cfg.hidden_size))
+    _bench_tensors["model.layers.$i.mlp.gate_proj.weight"] =
+        _filler((_bench_cfg.intermediate_size, _bench_cfg.hidden_size))
+    _bench_tensors["model.layers.$i.mlp.up_proj.weight"] =
+        _filler((_bench_cfg.intermediate_size, _bench_cfg.hidden_size))
+    _bench_tensors["model.layers.$i.mlp.down_proj.weight"] =
+        _filler((_bench_cfg.hidden_size, _bench_cfg.intermediate_size))
+    _bench_tensors["model.layers.$i.input_layernorm.weight"] =
+        _filler((_bench_cfg.hidden_size,))
+    _bench_tensors["model.layers.$i.post_attention_layernorm.weight"] =
+        _filler((_bench_cfg.hidden_size,))
+end
+_bench_ts = Gesso.materialize_llama(_bench_model, _bench_tensors, _bench_cfg)
+_bench_tokens = [0, 1, 2]
+
+# --- Phase 5 (§LXXVIII item D): llama_micro Session generate row (CPU) ------
+# Measures the ENGINE: Session + paged KV over CPU, tokens [0,1,2] + 3 greedy
+# steps. page_size=4 so the row exercises page-boundary appends.
+_bench_session5() = Gesso.Session(
+    _bench_model,
+    _bench_ts;
+    context_length=16,
+    eos_token_id=0,
+    page_size=4,
+    eps=_bench_cfg.rms_norm_eps,
+    theta=_bench_cfg.rope_theta,
+)
+suite["llama_micro_session_generate_cpu"] = (
+    () -> Gesso.generate(_bench_session5(), _bench_tokens; max_new_tokens=3),
+    "§LXXVIII item D: CPU Session generate over the paged KV manager (page_size=4), tokens [0,1,2] + 3 greedy steps",
+)
+
 # --- Phase 4 (§LXXVII item D): gated micro-llama CUDA prefill probe ---------
 # benchmark/Project.toml declares CUDA (the bench env, never core §VII) so
 # the GessoCUDAExt extension can trigger here. Without a functional device
 # the entry is never added — CPU-only machines accrue no row and CI never
 # requires a device (§LXXVII skip law; the run output names the skip).
-#
-# The micro model is built from the public vocabulary (config_to_model +
-# materialize_llama) with deterministic formula filler — the bench env has
-# no JSON dependency, and a formula fixture is bit-reproducible across runs
-# (the regression corpus must be comparable, §XLIX). Correctness parity for
-# this model shape is the test suite's job (test_cuda_inference.jl); this
-# row is a measurement, not a claim (§LXXII).
 const CUDA_BENCH = let
     ok = true
     try
@@ -142,49 +200,8 @@ end
 if CUDA_BENCH
     @eval Main using CUDA   # in scope for the probe body
 
-    _bench_cfg = (
-        model_type="llama",
-        hidden_size=32,
-        num_hidden_layers=2,
-        num_attention_heads=4,
-        num_key_value_heads=2,
-        intermediate_size=64,
-        vocab_size=32,
-        rms_norm_eps=1e-5,
-        rope_theta=10000.0,
-        tie_word_embeddings=true,
-    )
-    _bench_model = Gesso.config_to_model(_bench_cfg)
-    _filler(shape) = reshape([(i % 13 - 6) * 0.01 for i in 1:prod(shape)], shape)
-    _bench_tensors = Dict{String, Array{Float64}}(
-        "model.embed_tokens.weight" =>
-            _filler((_bench_cfg.vocab_size, _bench_cfg.hidden_size)),
-        "model.norm.weight" => _filler((_bench_cfg.hidden_size,)),
-    )
-    for i in 1:_bench_cfg.num_hidden_layers
-        _bench_tensors["model.layers.$i.self_attn.q_proj.weight"] =
-            _filler((_bench_cfg.hidden_size, _bench_cfg.hidden_size))
-        _bench_tensors["model.layers.$i.self_attn.k_proj.weight"] =
-            _filler((_bench_cfg.num_key_value_heads * 8, _bench_cfg.hidden_size))
-        _bench_tensors["model.layers.$i.self_attn.v_proj.weight"] =
-            _filler((_bench_cfg.num_key_value_heads * 8, _bench_cfg.hidden_size))
-        _bench_tensors["model.layers.$i.self_attn.o_proj.weight"] =
-            _filler((_bench_cfg.hidden_size, _bench_cfg.hidden_size))
-        _bench_tensors["model.layers.$i.mlp.gate_proj.weight"] =
-            _filler((_bench_cfg.intermediate_size, _bench_cfg.hidden_size))
-        _bench_tensors["model.layers.$i.mlp.up_proj.weight"] =
-            _filler((_bench_cfg.intermediate_size, _bench_cfg.hidden_size))
-        _bench_tensors["model.layers.$i.mlp.down_proj.weight"] =
-            _filler((_bench_cfg.hidden_size, _bench_cfg.intermediate_size))
-        _bench_tensors["model.layers.$i.input_layernorm.weight"] =
-            _filler((_bench_cfg.hidden_size,))
-        _bench_tensors["model.layers.$i.post_attention_layernorm.weight"] =
-            _filler((_bench_cfg.hidden_size,))
-    end
-    _bench_ts = Gesso.materialize_llama(_bench_model, _bench_tensors, _bench_cfg)
     _bench_cuda = Gesso.CUDABackend()
     _bench_gpu_ts = Gesso.to_device(_bench_cuda, _bench_ts)
-    _bench_tokens = [0, 1, 2]
     _bench_probe() = Array(
         Gesso.reference_prefill(
             _bench_model,
