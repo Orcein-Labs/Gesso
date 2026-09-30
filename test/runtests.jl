@@ -70,6 +70,10 @@ using Gesso: reference_prefill, reference_generate
     # the CPU oracle at declared atol — one named skip without a device
     include("test_cuda_ops.jl")
 
+    # Phase 4 (§LXXVII item C): full prefill + generate on device vs the CPU
+    # oracle — logits at declared atol, token ids EXACT (argmax is the gate)
+    include("test_cuda_inference.jl")
+
     @testset "package loads" begin
         @test Gesso.Log isa Module
         @test isdefined(Gesso, :CPUBackend)

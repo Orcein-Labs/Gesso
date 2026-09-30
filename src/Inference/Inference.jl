@@ -20,10 +20,20 @@
 # in `tensors` (applied before the tied head; absent ⇒ toy2 path untouched),
 # and `eps` / `theta` threaded as keyword defaults — never hardcoded config
 # constants.
+#
+# Phase 4 slice (§LXXVII items B/C): the interpreter is backend-generic.
+# `backend` defaults to CPUBackend so every CPU path is bit-identical; with
+# `backend=CUDABackend()` the tensors MUST already be on device (to_device
+# is the explicit transfer — the interpreter never copies, and host Array
+# storage under a non-CPU backend is ERR_INVALID_PLAN). All buffers are
+# allocated with `similar` off the tensors' storage, so device memory lands
+# on the device. CPU keeps its scalar contraction loops bit-for-bit; other
+# backends use the same math expressed as range broadcasts + CUBLAS.
 
 module Inference
 
 using ..Gesso:
+    AbstractGessoBackend,
     CPUBackend,
     PrefillWorkload,
     DecodeWorkload,
@@ -33,6 +43,9 @@ using ..Gesso:
     FrozenParameter,
     TemporaryWorkspace,
     KVCache,
+    backend_name,
+    gesso_error,
+    ERR_INVALID_PLAN,
     embedding_lookup!,
     rmsnorm!,
     rope!,
@@ -67,19 +80,25 @@ Phase 3 (§LXXVI item A): `eps` (default 1e-6) and `theta` (default
 10000.0) thread into `rmsnorm!` / `rope!` — toy2's values, unchanged. If
 `tensors` carries a non-`nothing` `final_rms::FrozenParameter`, a final
 RMSNorm is applied after the last block, before the tied head (Llama's
-`model.norm`; toy2 omits it). GQA models (`n_kv_heads < n_heads`) are
-supported: K/V are cached at `n_kv_heads` and repeated per query head
-only for the score/value contraction.
+`model.norm`; toy2 omits it).GQA supported (`n_kv_heads < n_heads`): K/V cached at `n_kv_heads` and
+repeated per query head only inside the attention contraction.
+
+Pass `backend=CUDABackend()` (Phase 4, §LXXVII) to run on an NVIDIA GPU —
+`tensors` must already be on device (`to_device`); the interpreter never
+copies host memory, and host Array storage under a non-CPU backend is
+`ERR_INVALID_PLAN`.
 """
 function reference_prefill(
     model,
     tensors,
     tokens::AbstractVector{Int};
+    backend::AbstractGessoBackend=CPUBackend(),
     eps::Real=1e-6,
     theta::Real=10000.0,
 )
     isempty(tokens) && error("reference_prefill: token sequence is empty")
-    cpu = CPUBackend()
+    _infer_device_storage!(:reference_prefill, backend, tensors)
+    cpu = backend
     wl = PrefillWorkload()
     seq = length(tokens)
     dim = model.embedding.dim
@@ -99,45 +118,58 @@ function reference_prefill(
     )
 
     positions = collect(0:(seq-1))            # 0-based (§LXXV)
+    on_cpu = backend_name(cpu) === :cpu
+    T = typeof(tensors.embedding.storage)      # buffers live where the data lives
+    zeros_like =
+        (dims::Tuple{Vararg{Int}}) -> fill!(
+            similar(tensors.embedding.storage, T <: Array ? Float64 : eltype(T), dims),
+            zero(eltype(T)),
+        )
 
     # hidden states: (seq, dim)
-    h = Activation(; shape=(seq, dim), storage=zeros(seq, dim))
+    h = Activation(; shape=(seq, dim), storage=zeros_like((seq, dim)))
     embedding_lookup!(cpu, h, tensors.embedding, tokens, wl)
 
     # scratch — allocated once per forward, written in place
-    normed = Activation(; shape=(seq, dim), storage=zeros(seq, dim))
-    q = Activation(; shape=(seq, dim), storage=zeros(seq, dim))
+    normed = Activation(; shape=(seq, dim), storage=zeros_like((seq, dim)))
+    q = Activation(; shape=(seq, dim), storage=zeros_like((seq, dim)))
     kdim = n_kv_heads * d_head
-    k = Activation(; shape=(seq, kdim), storage=zeros(seq, kdim))
-    v = Activation(; shape=(seq, kdim), storage=zeros(seq, kdim))
-    qh = Activation(; shape=(seq, n_heads, d_head), storage=zeros(seq, n_heads, d_head))
+    k = Activation(; shape=(seq, kdim), storage=zeros_like((seq, kdim)))
+    v = Activation(; shape=(seq, kdim), storage=zeros_like((seq, kdim)))
+    qh = Activation(;
+        shape=(seq, n_heads, d_head),
+        storage=zeros_like((seq, n_heads, d_head)),
+    )
     kh = Activation(;
         shape=(seq, n_kv_heads, d_head),
-        storage=zeros(seq, n_kv_heads, d_head),
+        storage=zeros_like((seq, n_kv_heads, d_head)),
     )
     vh = Activation(;
         shape=(seq, n_kv_heads, d_head),
-        storage=zeros(seq, n_kv_heads, d_head),
+        storage=zeros_like((seq, n_kv_heads, d_head)),
     )
-    attn = Activation(; shape=(seq, n_heads, d_head), storage=zeros(seq, n_heads, d_head))
-    merged = Activation(; shape=(seq, dim), storage=zeros(seq, dim))
-    sub = Activation(; shape=(seq, dim), storage=zeros(seq, dim))
-    normed2 = Activation(; shape=(seq, dim), storage=zeros(seq, dim))
+    attn = Activation(;
+        shape=(seq, n_heads, d_head),
+        storage=zeros_like((seq, n_heads, d_head)),
+    )
+    merged = Activation(; shape=(seq, dim), storage=zeros_like((seq, dim)))
+    sub = Activation(; shape=(seq, dim), storage=zeros_like((seq, dim)))
+    normed2 = Activation(; shape=(seq, dim), storage=zeros_like((seq, dim)))
     gate = Activation(;
         shape=(seq, model.blocks[1].ffn.hidden),
-        storage=zeros(seq, model.blocks[1].ffn.hidden),
+        storage=zeros_like((seq, model.blocks[1].ffn.hidden)),
     )
     up = Activation(;
         shape=(seq, model.blocks[1].ffn.hidden),
-        storage=zeros(seq, model.blocks[1].ffn.hidden),
+        storage=zeros_like((seq, model.blocks[1].ffn.hidden)),
     )
     act = Activation(;
         shape=(seq, model.blocks[1].ffn.hidden),
-        storage=zeros(seq, model.blocks[1].ffn.hidden),
+        storage=zeros_like((seq, model.blocks[1].ffn.hidden)),
     )
-    down = Activation(; shape=(seq, dim), storage=zeros(seq, dim))
-    scores = TemporaryWorkspace(; shape=(seq, seq), storage=zeros(seq, seq))
-    scores_out = TemporaryWorkspace(; shape=(seq, seq), storage=zeros(seq, seq))
+    down = Activation(; shape=(seq, dim), storage=zeros_like((seq, dim)))
+    scores = TemporaryWorkspace(; shape=(seq, seq), storage=zeros_like((seq, seq)))
+    scores_out = TemporaryWorkspace(; shape=(seq, seq), storage=zeros_like((seq, seq)))
 
     for (bi, blk) in enumerate(model.blocks)
         bt = tensors.blocks[bi]
@@ -160,18 +192,33 @@ function reference_prefill(
         kx = _repeat_heads(kh, group)
         vx = _repeat_heads(vh, group)
 
-        # scores per head: (seq, seq), scaled by √d_head
-        fill!(scores.storage, 0.0)
-        for t in 1:seq, u in 1:seq, hh in 1:n_heads, j in 1:d_head
-            scores.storage[t, u] +=
-                qh.storage[t, hh, j] * kx.storage[u, hh, j] / sqrt(d_head)
+        # scores per head: (seq, seq), scaled by √d_head. CPU keeps its
+        # scalar loops (bit-identical, §LXXV); device storage gets the same
+        # math as broadcasts (§LXXVII).
+        fill!(scores.storage, zero(eltype(scores.storage)))
+        if on_cpu
+            for t in 1:seq, u in 1:seq, hh in 1:n_heads, j in 1:d_head
+                scores.storage[t, u] +=
+                    qh.storage[t, hh, j] * kx.storage[u, hh, j] / sqrt(d_head)
+            end
+        else
+            for hh in 1:n_heads, j in 1:d_head
+                @views scores.storage[:, :] .+=
+                    qh.storage[:, hh, j] .* kx.storage[:, hh, j]' ./ sqrt(d_head)
+            end
         end
         softmax!(cpu, scores_out, scores, wl)   # causal mask applied inside
 
         # attention @ v, per head
-        fill!(attn.storage, 0.0)
-        for t in 1:seq, hh in 1:n_heads, j in 1:d_head, u in 1:seq
-            attn.storage[t, hh, j] += scores_out.storage[t, u] * vx.storage[u, hh, j]
+        fill!(attn.storage, zero(eltype(attn.storage)))
+        if on_cpu
+            for t in 1:seq, hh in 1:n_heads, j in 1:d_head, u in 1:seq
+                attn.storage[t, hh, j] += scores_out.storage[t, u] * vx.storage[u, hh, j]
+            end
+        else
+            for hh in 1:n_heads, j in 1:d_head
+                @views attn.storage[:, hh, j] .= scores_out.storage * vx.storage[:, hh, j]
+            end
         end
 
         # merge heads back to (seq, dim), then output projection + residual
@@ -193,7 +240,7 @@ function reference_prefill(
     final_rms = haskey(tensors, :final_rms) ? tensors.final_rms : nothing
     hhead = h
     if final_rms !== nothing
-        finaln = Activation(; shape=(seq, dim), storage=zeros(seq, dim))
+        finaln = Activation(; shape=(seq, dim), storage=zeros_like((seq, dim)))
         rmsnorm!(cpu, finaln, h, final_rms, wl; eps)
         hhead = finaln
     end
@@ -204,25 +251,64 @@ function reference_prefill(
     lm_head = tensors.lm_head
     seqvocab = Activation(;
         shape=(seq, size(lm_head.storage, 1)),
-        storage=zeros(seq, size(lm_head.storage, 1)),
+        storage=zeros_like((seq, size(lm_head.storage, 1))),
     )
     matmul!(cpu, seqvocab, hhead, lm_head, wl)
     return permutedims(seqvocab.storage)        # (vocab, seq)
 end
 
-# head-major split/merge between (seq, dim) and (seq, n_heads, d_head)
+# head-major split/merge between (seq, dim) and (seq, n_heads, d_head).
+# Head-major layout maps head hh's feature block to a contiguous slice, so
+# the split/merge is a plain elementwise copy per head — same values as the
+# old scalar loops on ANY storage (identical on CPU, pinned by atol=0).
 function _split_heads!(dst, src, n_heads, d_head)
-    for t in axes(src.storage, 1), hh in 1:n_heads, j in 1:d_head
-        dst.storage[t, hh, j] = src.storage[t, (hh-1)*d_head+j]
+    for hh in 1:n_heads
+        @views dst.storage[:, hh, :] .= src.storage[:, ((hh-1)*d_head+1):(hh*d_head)]
     end
     return dst
 end
 
 function _merge_heads!(dst, src, n_heads, d_head)
-    for t in axes(dst.storage, 1), hh in 1:n_heads, j in 1:d_head
-        dst.storage[t, (hh-1)*d_head+j] = src.storage[t, hh, j]
+    for hh in 1:n_heads
+        @views dst.storage[:, ((hh-1)*d_head+1):(hh*d_head)] .= src.storage[:, hh, :]
     end
     return dst
+end
+
+# --- backend / storage discipline (§LXXVII) -----------------------------------
+
+# the interpreter never copies: a non-CPU backend REQUIRES device storage
+# (to_device is the explicit transfer). Host Array storage under CUDA is
+# ERR_INVALID_PLAN, not a silent transfer (§LXX).
+function _infer_device_storage!(where::Symbol, backend::AbstractGessoBackend, tensors)
+    backend_name(backend) === :cpu && return nothing
+    _check_device_storage(where, backend, tensors.embedding)
+    tensors.lm_head === tensors.embedding ||
+        _check_device_storage(where, backend, tensors.lm_head)
+    for bt in tensors.blocks
+        for name in propertynames(bt)
+            _check_device_storage(where, backend, getproperty(bt, name))
+        end
+    end
+    fr = haskey(tensors, :final_rms) ? tensors.final_rms : nothing
+    fr === nothing || _check_device_storage(where, backend, fr)
+    return nothing
+end
+
+function _check_device_storage(where::Symbol, backend, t)
+    s = t.storage
+    s === nothing &&
+        error("$where: tensor storage is unset — materialize before calling (§LXXV)")
+    s isa Array || return nothing             # already device (or otherwise OK)
+    throw(
+        gesso_error(
+            ERR_INVALID_PLAN,
+            "$where: backend :$(backend_name(backend)) received host Array " *
+            "storage — call to_device(tensors, backend) first; the " *
+            "interpreter does not copy host memory to the device (§LXXVII)";
+            backend=backend_name(backend),
+        ),
+    )
 end
 
 # GQA (§LXXVI): query head h attends kv head div(h-1, group) + 1 — repeat
@@ -232,9 +318,15 @@ end
 function _repeat_heads(kv::Activation, group::Int)
     group == 1 && return kv
     seq, nk, d = size(kv.storage)
-    out = Activation(; shape=(seq, nk * group, d), storage=zeros(seq, nk * group, d))
-    for t in 1:seq, h in 1:nk, g in 1:group, j in 1:d
-        out.storage[t, (h-1)*group+g, j] = kv.storage[t, h, j]
+    out = Activation(;
+        shape=(seq, nk * group, d),
+        storage=similar(kv.storage, seq, nk * group, d),
+    )
+    # repeat = each kv head fills its group of CONSECUTIVE query-head slots
+    # (q head h attends kv head div(h-1, group)+1, §LXXVI) — same values as
+    # the old scalar loops on any storage
+    for h in 1:nk
+        @views out.storage[:, ((h-1)*group+1):(h*group), :] .= kv.storage[:, h:h, :]
     end
     return out
 end
@@ -265,18 +357,23 @@ Phase 3 (§LXXVI item A): `eps` / `theta` thread through as in
 `reference_prefill`; `tensors.final_rms` (when present) is applied before
 the tied head on every argmax step; GQA models cache K/V at `n_kv_heads`
 and repeat per query head only inside the attention contraction.
+
+Pass `backend=CUDABackend()` for device execution (§LXXVII): `tensors` on
+device via `to_device`, argmax computed per step (device-safe), ids on host.
 """
 function reference_generate(
     model,
     tensors,
     prompt::AbstractVector{Int};
+    backend::AbstractGessoBackend=CPUBackend(),
     max_new_tokens::Int=8,
     info=nothing,
     eps::Real=1e-6,
     theta::Real=10000.0,
 )
     isempty(prompt) && error("reference_generate: prompt is empty")
-    cpu = CPUBackend()
+    _infer_device_storage!(:reference_generate, backend, tensors)
+    cpu = backend
     wp, wd = PrefillWorkload(), DecodeWorkload()
     dim = model.embedding.dim
     n_heads = model.blocks[1].attention.n_heads
@@ -290,45 +387,59 @@ function reference_generate(
     P = length(prompt)
     cap = max(max_new_tokens, 0)
     vocab = size(tensors.embedding.storage, 1)
+    on_cpu = backend_name(cpu) === :cpu
+    T = typeof(tensors.embedding.storage)
+    zeros_like =
+        (dims::Tuple{Vararg{Int}}) -> fill!(
+            similar(tensors.embedding.storage, T <: Array ? Float64 : eltype(T), dims),
+            zero(eltype(T)),
+        )
 
     # per-layer KV caches: preallocated (P + cap) rows, filled progressively
     # (the cache is runtime state, not a weight — no fixture-walk entries)
     kc = [
         Activation(;
             shape=(P + cap, n_kv_heads, d_head),
-            storage=zeros(P + cap, n_kv_heads, d_head),
+            storage=zeros_like((P + cap, n_kv_heads, d_head)),
         ) for _ in 1:length(model.blocks)
     ]
     vc = [
         Activation(;
             shape=(P + cap, n_kv_heads, d_head),
-            storage=zeros(P + cap, n_kv_heads, d_head),
+            storage=zeros_like((P + cap, n_kv_heads, d_head)),
         ) for _ in 1:length(model.blocks)
     ]
 
     # hidden states: (P + cap, dim) — prefill fills rows 1..P, each decode
     # step writes its single new row in place (Activation fields are
     # immutable, §CIX; storage CONTENT is what the interpreter owns)
-    h = Activation(; shape=(P + cap, dim), storage=zeros(P + cap, dim))
-    normed = Activation(; shape=(P, dim), storage=zeros(P, dim))
+    h = Activation(; shape=(P + cap, dim), storage=zeros_like((P + cap, dim)))
+    normed = Activation(; shape=(P, dim), storage=zeros_like((P, dim)))
     kdim = n_kv_heads * d_head
-    q = Activation(; shape=(P, dim), storage=zeros(P, dim))
-    k = Activation(; shape=(P, kdim), storage=zeros(P, kdim))
-    v = Activation(; shape=(P, kdim), storage=zeros(P, kdim))
-    qh = Activation(; shape=(P, n_heads, d_head), storage=zeros(P, n_heads, d_head))
-    kh = Activation(; shape=(P, n_kv_heads, d_head), storage=zeros(P, n_kv_heads, d_head))
-    vh = Activation(; shape=(P, n_kv_heads, d_head), storage=zeros(P, n_kv_heads, d_head))
-    attn = Activation(; shape=(P, n_heads, d_head), storage=zeros(P, n_heads, d_head))
-    merged = Activation(; shape=(P, dim), storage=zeros(P, dim))
-    sub = Activation(; shape=(P, dim), storage=zeros(P, dim))
-    normed2 = Activation(; shape=(P, dim), storage=zeros(P, dim))
+    q = Activation(; shape=(P, dim), storage=zeros_like((P, dim)))
+    k = Activation(; shape=(P, kdim), storage=zeros_like((P, kdim)))
+    v = Activation(; shape=(P, kdim), storage=zeros_like((P, kdim)))
+    qh = Activation(; shape=(P, n_heads, d_head), storage=zeros_like((P, n_heads, d_head)))
+    kh = Activation(;
+        shape=(P, n_kv_heads, d_head),
+        storage=zeros_like((P, n_kv_heads, d_head)),
+    )
+    vh = Activation(;
+        shape=(P, n_kv_heads, d_head),
+        storage=zeros_like((P, n_kv_heads, d_head)),
+    )
+    attn =
+        Activation(; shape=(P, n_heads, d_head), storage=zeros_like((P, n_heads, d_head)))
+    merged = Activation(; shape=(P, dim), storage=zeros_like((P, dim)))
+    sub = Activation(; shape=(P, dim), storage=zeros_like((P, dim)))
+    normed2 = Activation(; shape=(P, dim), storage=zeros_like((P, dim)))
     hidden_ffn = model.blocks[1].ffn.hidden
-    gate = Activation(; shape=(P, hidden_ffn), storage=zeros(P, hidden_ffn))
-    up = Activation(; shape=(P, hidden_ffn), storage=zeros(P, hidden_ffn))
-    act = Activation(; shape=(P, hidden_ffn), storage=zeros(P, hidden_ffn))
-    down = Activation(; shape=(P, dim), storage=zeros(P, dim))
-    scores = TemporaryWorkspace(; shape=(P, P), storage=zeros(P, P))
-    scores_out = TemporaryWorkspace(; shape=(P, P), storage=zeros(P, P))
+    gate = Activation(; shape=(P, hidden_ffn), storage=zeros_like((P, hidden_ffn)))
+    up = Activation(; shape=(P, hidden_ffn), storage=zeros_like((P, hidden_ffn)))
+    act = Activation(; shape=(P, hidden_ffn), storage=zeros_like((P, hidden_ffn)))
+    down = Activation(; shape=(P, dim), storage=zeros_like((P, dim)))
+    scores = TemporaryWorkspace(; shape=(P, P), storage=zeros_like((P, P)))
+    scores_out = TemporaryWorkspace(; shape=(P, P), storage=zeros_like((P, P)))
 
     positions = collect(0:(P-1))
     # the prefill phase works on rows 1..P of h through a VIEW (Activation
@@ -355,15 +466,28 @@ function reference_generate(
         kx = _repeat_heads(kh, group)
         vx = _repeat_heads(vh, group)
         # attention over the cache (identical math/order to reference_prefill)
-        fill!(scores.storage, 0.0)
-        for t in 1:P, u in 1:P, hh in 1:n_heads, j in 1:d_head
-            scores.storage[t, u] +=
-                qh.storage[t, hh, j] * kx.storage[u, hh, j] / sqrt(d_head)
+        fill!(scores.storage, zero(eltype(scores.storage)))
+        if on_cpu
+            for t in 1:P, u in 1:P, hh in 1:n_heads, j in 1:d_head
+                scores.storage[t, u] +=
+                    qh.storage[t, hh, j] * kx.storage[u, hh, j] / sqrt(d_head)
+            end
+        else
+            for hh in 1:n_heads, j in 1:d_head
+                @views scores.storage[:, :] .+=
+                    qh.storage[:, hh, j] .* kx.storage[:, hh, j]' ./ sqrt(d_head)
+            end
         end
         softmax!(cpu, scores_out, scores, wp)
-        fill!(attn.storage, 0.0)
-        for t in 1:P, hh in 1:n_heads, j in 1:d_head, u in 1:P
-            attn.storage[t, hh, j] += scores_out.storage[t, u] * vx.storage[u, hh, j]
+        fill!(attn.storage, zero(eltype(attn.storage)))
+        if on_cpu
+            for t in 1:P, hh in 1:n_heads, j in 1:d_head, u in 1:P
+                attn.storage[t, hh, j] += scores_out.storage[t, u] * vx.storage[u, hh, j]
+            end
+        else
+            for hh in 1:n_heads, j in 1:d_head
+                @views attn.storage[:, hh, j] .= scores_out.storage * vx.storage[:, hh, j]
+            end
         end
         _merge_heads!(merged, attn, n_heads, d_head)
         matmul!(cpu, sub, merged, bt.wo, wp)
@@ -379,9 +503,11 @@ function reference_generate(
     ids = collect(prompt)
     steps = 0
     while steps < cap
-        # greedy argmax at the current last position (row P + steps)
+        # greedy argmax at the current last position (row P + steps); the
+        # argmax may run over device storage — only the scalar id crosses
+        # back to the host
         logits_row = _last_logits(model, tensors, h, cpu, wd, vocab, P + steps; eps)
-        next = argmax(logits_row) - 1                 # 0-based id
+        next = Int(argmax(logits_row)) - 1            # 0-based id
         push!(ids, next)
         steps += 1
         (next == TOY_EOS || steps >= cap) && break
@@ -390,11 +516,12 @@ function reference_generate(
             tensors,
             kc,
             vc,
-            Int(next),
+            next,
             P + steps,
             cpu,
             wd,
             h;
+            on_cpu,
             n_heads,
             n_kv_heads,
             d_head,
@@ -412,14 +539,27 @@ end
 # the final RMSNorm first when `tensors` carries one (§LXXVI).
 function _last_logits(model, tensors, h, cpu, wl, vocab, row::Int; eps::Real=1e-6)
     dim = size(h.storage, 2)
-    lastrow = Activation(; shape=(1, dim), storage=reshape(h.storage[row, :], (1, :)))
+    T = typeof(h.storage)
+    lastrow = Activation(; shape=(1, dim), storage=reshape(h.storage[row, :], (1, dim)))
     final_rms = haskey(tensors, :final_rms) ? tensors.final_rms : nothing
     if final_rms !== nothing
-        normed = Activation(; shape=(1, dim), storage=zeros(1, dim))
+        normed = Activation(;
+            shape=(1, dim),
+            storage=fill!(
+                similar(h.storage, T <: Array ? Float64 : eltype(T), (1, dim)),
+                zero(eltype(h.storage)),
+            ),
+        )
         rmsnorm!(cpu, normed, lastrow, final_rms, wl; eps)
         lastrow = normed
     end
-    out = Activation(; shape=(1, vocab), storage=zeros(1, vocab))
+    out = Activation(;
+        shape=(1, vocab),
+        storage=fill!(
+            similar(h.storage, T <: Array ? Float64 : eltype(T), (1, vocab)),
+            zero(eltype(h.storage)),
+        ),
+    )
     matmul!(cpu, out, lastrow, tensors.lm_head, wl)
     return vec(out.storage)
 end
@@ -438,6 +578,7 @@ function _decode_step!(
     cpu,
     wl,
     h;
+    on_cpu,
     n_heads,
     n_kv_heads,
     d_head,
@@ -447,27 +588,40 @@ function _decode_step!(
 )
     dim = model.embedding.dim
     kdim = n_kv_heads * d_head
-    hp = Activation(; shape=(1, dim), storage=zeros(1, dim))
+    T = typeof(tensors.embedding.storage)
+    zeros_like =
+        (dims::Tuple{Vararg{Int}}) -> fill!(
+            similar(tensors.embedding.storage, T <: Array ? Float64 : eltype(T), dims),
+            zero(eltype(T)),
+        )
+    hp = Activation(; shape=(1, dim), storage=zeros_like((1, dim)))
     embedding_lookup!(cpu, hp, tensors.embedding, [tok], wl)
-    normed = Activation(; shape=(1, dim), storage=zeros(1, dim))
-    q = Activation(; shape=(1, dim), storage=zeros(1, dim))
-    k = Activation(; shape=(1, kdim), storage=zeros(1, kdim))
-    v = Activation(; shape=(1, kdim), storage=zeros(1, kdim))
-    qh = Activation(; shape=(1, n_heads, d_head), storage=zeros(1, n_heads, d_head))
-    kh = Activation(; shape=(1, n_kv_heads, d_head), storage=zeros(1, n_kv_heads, d_head))
-    vh = Activation(; shape=(1, n_kv_heads, d_head), storage=zeros(1, n_kv_heads, d_head))
-    attn = Activation(; shape=(1, n_heads, d_head), storage=zeros(1, n_heads, d_head))
-    merged = Activation(; shape=(1, dim), storage=zeros(1, dim))
-    sub = Activation(; shape=(1, dim), storage=zeros(1, dim))
-    normed2 = Activation(; shape=(1, dim), storage=zeros(1, dim))
+    normed = Activation(; shape=(1, dim), storage=zeros_like((1, dim)))
+    q = Activation(; shape=(1, dim), storage=zeros_like((1, dim)))
+    k = Activation(; shape=(1, kdim), storage=zeros_like((1, kdim)))
+    v = Activation(; shape=(1, kdim), storage=zeros_like((1, kdim)))
+    qh = Activation(; shape=(1, n_heads, d_head), storage=zeros_like((1, n_heads, d_head)))
+    kh = Activation(;
+        shape=(1, n_kv_heads, d_head),
+        storage=zeros_like((1, n_kv_heads, d_head)),
+    )
+    vh = Activation(;
+        shape=(1, n_kv_heads, d_head),
+        storage=zeros_like((1, n_kv_heads, d_head)),
+    )
+    attn =
+        Activation(; shape=(1, n_heads, d_head), storage=zeros_like((1, n_heads, d_head)))
+    merged = Activation(; shape=(1, dim), storage=zeros_like((1, dim)))
+    sub = Activation(; shape=(1, dim), storage=zeros_like((1, dim)))
+    normed2 = Activation(; shape=(1, dim), storage=zeros_like((1, dim)))
     hidden_ffn = model.blocks[1].ffn.hidden
-    gate = Activation(; shape=(1, hidden_ffn), storage=zeros(1, hidden_ffn))
-    up = Activation(; shape=(1, hidden_ffn), storage=zeros(1, hidden_ffn))
-    act = Activation(; shape=(1, hidden_ffn), storage=zeros(1, hidden_ffn))
-    down = Activation(; shape=(1, dim), storage=zeros(1, dim))
+    gate = Activation(; shape=(1, hidden_ffn), storage=zeros_like((1, hidden_ffn)))
+    up = Activation(; shape=(1, hidden_ffn), storage=zeros_like((1, hidden_ffn)))
+    act = Activation(; shape=(1, hidden_ffn), storage=zeros_like((1, hidden_ffn)))
+    down = Activation(; shape=(1, dim), storage=zeros_like((1, dim)))
     K = pos0                                    # cache rows now: P + steps
-    scores = TemporaryWorkspace(; shape=(1, K), storage=zeros(1, K))
-    scores_out = TemporaryWorkspace(; shape=(1, K), storage=zeros(1, K))
+    scores = TemporaryWorkspace(; shape=(1, K), storage=zeros_like((1, K)))
+    scores_out = TemporaryWorkspace(; shape=(1, K), storage=zeros_like((1, K)))
 
     for (bi, blk) in enumerate(model.blocks)
         bt = tensors.blocks[bi]
@@ -487,15 +641,37 @@ function _decode_step!(
         # new row; it was consumed by the append)
         kx = _repeat_heads(kc[bi], group)
         vx = _repeat_heads(vc[bi], group)
-        fill!(scores.storage, 0.0)
-        for u in 1:K, hh in 1:n_heads, j in 1:d_head
-            scores.storage[1, u] +=
-                qh.storage[1, hh, j] * kx.storage[u, hh, j] / sqrt(d_head)
+        fill!(scores.storage, zero(eltype(scores.storage)))
+        if on_cpu
+            for u in 1:K, hh in 1:n_heads, j in 1:d_head
+                scores.storage[1, u] +=
+                    qh.storage[1, hh, j] * kx.storage[u, hh, j] / sqrt(d_head)
+            end
+        else
+            # one-row contraction: per query head, q's (d_head,) row against
+            # the (K, d_head) slice of k — CUBLAS matvec over device copies
+            # (real gathers, no scalar indexing on device storage, §LXXVII)
+            for hh in 1:n_heads
+                q1 = vec(qh.storage[1, hh, :])          # (d_head,) device copy
+                # rows 1..K ONLY: the cache buffer is (P + cap) rows and
+                # decode attends to filled rows 1..K (the CPU loop is
+                # `u in 1:K`); indexing (not view) drops the head dim → (K, d_head)
+                Kmat = kx.storage[1:K, hh, :]
+                @views scores.storage[1, :] .+= (Kmat * q1) ./ sqrt(d_head)
+            end
         end
         softmax!(cpu, scores_out, scores, wl)   # offset mask: nothing masked
-        fill!(attn.storage, 0.0)
-        for hh in 1:n_heads, j in 1:d_head, u in 1:K
-            attn.storage[1, hh, j] += scores_out.storage[1, u] * vx.storage[u, hh, j]
+        fill!(attn.storage, zero(eltype(attn.storage)))
+        if on_cpu
+            for hh in 1:n_heads, j in 1:d_head, u in 1:K
+                attn.storage[1, hh, j] += scores_out.storage[1, u] * vx.storage[u, hh, j]
+            end
+        else
+            for hh in 1:n_heads
+                V = vx.storage[1:K, hh, :]              # (K, d_head) device copy
+                # (1,K)·(K,d) → (1,d): vec to the (d,) row shape the view wants
+                @views attn.storage[1, hh, :] .= vec(scores_out.storage * V)
+            end
         end
         _merge_heads!(merged, attn, n_heads, d_head)
         matmul!(cpu, sub, merged, bt.wo, wl)

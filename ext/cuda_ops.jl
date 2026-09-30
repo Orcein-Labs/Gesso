@@ -32,17 +32,21 @@ function _cuda_device_storage!(op::Symbol, t)
             op = op,
         ),
     )
-    s isa CuArray || throw(
+    # the guard exists to catch a skipped to_device: HOST memory is an
+    # Array. Device-side views (SubArray over CuArray) are legal — the
+    # interpreter legitimately slices device buffers (generate's prefill
+    # rows). Only the host/device BOUNDARY matters (§LXXVII).
+    s isa Array || return s
+    throw(
         gesso_error(
             ERR_INVALID_PLAN,
-            "$op: CUDABackend received $(typeof(s).name.wrapper) storage — " *
+            "$op: CUDABackend received host Array storage — " *
             "call to_device(tensors) first; the interpreter does not copy " *
             "host memory to device implicitly (§LXXVII)";
             op = op,
             storage_type = string(typeof(s)),
         ),
     )
-    return s
 end
 
 # --- op bodies -----------------------------------------------------------------
