@@ -239,6 +239,24 @@ suite["session_generate_8tok_cpu"] = (
     "§LXXIX item C: post-warmup — CPU Session generate, 8 greedy steps over the paged KV manager",
 )
 
+# --- Phase 7 (§LXXX item C): unique-vs-summed KV byte rows (CPU) -------------
+# The §LIV win as a NUMBER OF BYTES, not a slogan: Profiling.unique_kv_bytes
+# counts live page storage once per distinct array, so a declared fork alias
+# (prefill! + fork, §LXXX) costs one session's KV, not two. Byte rows are
+# deterministic post-warmup — there is no sample to warm, only the engine
+# paths to compile (§XXXIII): one untimed prefill here, fresh sessions inside
+# each probe below. No CUDA row: the CPU pair proves the win (goal §C).
+_bench_share_session() = Gesso.Session(
+    _bench_model,
+    _bench_ts;
+    context_length=16,
+    eos_token_id=0,
+    page_size=4,
+    eps=_bench_cfg.rms_norm_eps,
+    theta=_bench_cfg.rope_theta,
+)
+Gesso.prefill!(_bench_share_session(), _bench_tokens)   # warmup: compile (§XXXIII)
+
 # --- Phase 4 (§LXXVII item D): gated micro-llama CUDA prefill probe ---------
 # benchmark/Project.toml declares CUDA (the bench env, never core §VII) so
 # the GessoCUDAExt extension can trigger here. Without a functional device
@@ -349,6 +367,45 @@ for name in sort(collect(keys(suite)))
         note=note,
     )
 end
+
+# Byte rows: recorded directly (not through @benchmark — these measure
+# BYTES from the page tables, not nanoseconds; ns fields are 0 and
+# samples=1 by construction, §XXXIII: no timing is claimed here).
+function _bench_share_unique_bytes(forked::Bool)
+    if forked
+        parent = _bench_share_session()
+        Gesso.prefill!(parent, _bench_tokens)
+        child = Gesso.fork(parent)
+        return Gesso.Profiling.unique_kv_bytes(parent.mgr, child.mgr)
+    end
+    a = _bench_share_session()
+    Gesso.prefill!(a, _bench_tokens)
+    b = _bench_share_session()
+    Gesso.prefill!(b, _bench_tokens)
+    return Gesso.Profiling.unique_kv_bytes(a.mgr, b.mgr)
+end
+_isolated_bytes = _bench_share_unique_bytes(false)
+_forked_bytes = _bench_share_unique_bytes(true)
+record(
+    "kv_bytes_two_isolated_prefill_cpu";
+    samples=1,
+    median_ns=0,
+    mean_ns=0,
+    min_ns=0,
+    allocs=0,
+    bytes=_isolated_bytes,
+    note="§LXXX item C: post-warmup BYTE row (not timing) — unique_kv_bytes over two INDEPENDENT llama_micro prefill sessions = 2× one session's kv_bytes (declaration, not discovery: no fork, no sharing)",
+)
+record(
+    "kv_bytes_prefill_fork_cpu";
+    samples=1,
+    median_ns=0,
+    mean_ns=0,
+    min_ns=0,
+    allocs=0,
+    bytes=_forked_bytes,
+    note="§LXXX item C: post-warmup BYTE row (not timing) — unique_kv_bytes(parent, child) after prefill!+fork, pre-decode: the declared alias costs ONE session's kv_bytes; saving vs the isolated-pair row is the difference of the two rows",
+)
 
 println("=" ^ 72)
 println(length(RESULTS), " benchmarks recorded.")

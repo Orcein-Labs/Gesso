@@ -10,14 +10,16 @@
 # Phase 9+). It does NOT import CUDA, does not time anything itself, and
 # adds no dependencies. KV footprint helpers live next to the pages
 # (Inference.kv_bytes / Inference.page_count — derived from the page table);
-# this module renders them.
+# this module renders them. §LXXX adds unique_kv_bytes: the DECLARED-share
+# win metric — live storage counted once per distinct page array across a
+# group of managers.
 
 module Profiling
 
 using ..Inference: PagedKVManager, kv_bytes, page_count
 using ..Gesso: Receipt, ReceiptSink, InMemorySink, GessoError
 
-export engine_report, print_report, kv_footprint, page_footprint
+export engine_report, print_report, kv_footprint, page_footprint, unique_kv_bytes
 
 """
     kv_footprint(mgr) -> Int
@@ -36,6 +38,38 @@ kv_footprint(mgr::PagedKVManager) = kv_bytes(mgr)
 Allocated page count across all layers, K and V combined.
 """
 page_footprint(mgr::PagedKVManager) = page_count(mgr)
+
+"""
+    unique_kv_bytes(mgrs::PagedKVManager...) -> Int
+
+Live KV storage of a GROUP of managers, counted ONCE per distinct page
+storage array (§LXXX item C — the §LIV win metric): `sizeof` summed over the
+distinct `objectid(page.storage)` across every manager's pages, K and V, all
+layers.
+
+Per-session `kv_bytes` stays honest per-session accounting (§LXXX: shared
+pages appear in BOTH sessions' receipts). The win is visible HERE: after
+`prefill!` + `fork` (before any decode) `unique_kv_bytes(parent.mgr,
+child.mgr) == kv_bytes(parent.mgr)` — the aliased prefix is one array, not
+two — and the value stays below the per-session sum for as long as any page
+remains aliased. Two managers built INDEPENDENTLY share no storage
+(declaration, not discovery — Session `fork` is the only share constructor),
+so the function degenerates to the sum of their `kv_bytes`.
+"""
+function unique_kv_bytes(mgrs::PagedKVManager...)
+    seen = Set{UInt}()
+    total = 0
+    for mgr in mgrs
+        for pages in (mgr.k_pages, mgr.v_pages), layer_pages in pages, p in layer_pages
+
+            id = objectid(p.storage)
+            id in seen && continue
+            push!(seen, id)
+            total += sizeof(p.storage)
+        end
+    end
+    return total
+end
 
 # the machine-readable projection of an engine receipt: fixed keys, fixed
 # types (UInt64 ns timings, Int counts) — two identical generates produce

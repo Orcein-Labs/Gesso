@@ -123,6 +123,54 @@ _prof_session(model, ts; kw...) =
         @test occursin("failed=false", text)
     end
 
+    @testset "unique_kv_bytes (§LXXX item C): the declared-share win is bytes" begin
+        # page_size=4: the 4-token prompt fills page 1 exactly, so the child's
+        # first decode allocates a PRIVATE page past the aliased full prefix
+        s = _prof_session(model, ts; page_size=4)
+        Gesso.prefill!(s, PROMPT)
+        c = Gesso.fork(s)
+
+        # before any decode: every page aliased ⇒ the pair costs ONE session
+        @test Gesso.Profiling.unique_kv_bytes(s.mgr, c.mgr) ==
+              Gesso.Profiling.kv_footprint(s.mgr)
+        # degenerate forms: one manager ⇒ its own kv_bytes; zero managers ⇒ 0
+        @test Gesso.Profiling.unique_kv_bytes(s.mgr) == Gesso.Profiling.kv_footprint(s.mgr)
+        @test Gesso.Profiling.unique_kv_bytes() == 0
+
+        # three child-only decodes allocate private pages (page 1 is FULL and
+        # stays aliased; the copies live in the child's page 2)
+        child_steps = 0
+        for _ in 1:3
+            id = Gesso.decode!(c)
+            child_steps += 1
+            id == c.eos_token_id && break
+        end
+        child_steps == 3 || error(
+            "fixture drift: toy2 eos hit before 3 decode steps — private-page pin invalid",
+        )
+        @test Gesso.Inference.kv_len(s.mgr) == 4                # parent untouched
+        @test length(Gesso.Inference.kv_cache(c.mgr, 1, :k).storage) == 2
+
+        page_bytes = 4 * s.n_kv_heads * s.d_head * sizeof(Float64)   # 4·2·4·8 = 256
+        parent_bytes = Gesso.Profiling.kv_footprint(s.mgr)
+        child_bytes = Gesso.Profiling.kv_footprint(c.mgr)
+        uniq = Gesso.Profiling.unique_kv_bytes(s.mgr, c.mgr)
+        # exact decomposition: aliased prefix (counted once) + child private
+        @test parent_bytes == 4 * page_bytes                 # 4 caches × 1 full page
+        @test child_bytes == 4 * 2 * page_bytes              # 4 caches × 2 pages
+        @test uniq == parent_bytes + 4 * page_bytes          # + child's private page 2
+        @test uniq < parent_bytes + child_bytes              # an alias remains ⇒ strictly cheaper
+
+        # two INDEPENDENT sessions share nothing (declaration, not discovery):
+        # the function degenerates to the honest per-session sum
+        a = _prof_session(model, ts; page_size=4)
+        b = _prof_session(model, ts; page_size=4)
+        Gesso.prefill!(a, PROMPT)
+        Gesso.prefill!(b, PROMPT)
+        @test Gesso.Profiling.unique_kv_bytes(a.mgr, b.mgr) ==
+              Gesso.Profiling.kv_footprint(a.mgr) + Gesso.Profiling.kv_footprint(b.mgr)
+    end
+
     @testset "Profiling does not import CUDA" begin
         @test !isdefined(Gesso.Profiling, :CUDA)
         @test !(:CUDA in string.(names(Gesso.Profiling)))
