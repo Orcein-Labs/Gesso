@@ -78,6 +78,11 @@ using Gesso: reference_prefill, reference_generate
     # golden at wider atol — named skip without a device AND GESSO_SMOLLM2_DIR
     include("test_cuda_smollm2.jl")
 
+    # Phase 8 (§LXXXI item A): the Lava (Vulkan) backend seam — manifest law,
+    # extension binding, name clash, explicit no-device failure. Probes and
+    # imports Lava at its own top level, exactly like the CUDA seam above.
+    include("test_lava_seam.jl")
+
     # Phase 5 (§LXXVIII item A): paged KV manager — Magenta §9.5 step 1;
     # pages are the cache, gather-on-read, typed context exhaustion
     include("test_kv_manager.jl")
@@ -150,6 +155,7 @@ using Gesso: reference_prefill, reference_generate
         # is justified here; the extension is the ONLY code allowed to load it.
         weakdeps_allowlist = Dict{String, String}( # name => justification
             "CUDA" => "Phase 4 backend (§LXXVII), package extension GessoCUDAExt — never a core dep",
+            "Lava" => "Phase 8 backend (§LXXXI), package extension GessoLavaExt — never a core dep; not in General registry, test env installs from source",
         )
         unjustified_weak = [
             d for d in get(declared, "weakdeps", String[]) if !haskey(weakdeps_allowlist, d)

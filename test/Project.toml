@@ -24,6 +24,30 @@ JSON = "682c06a0-de6a-54ab-a142-c8b1cf79cde6"
 # stays CUDA-free (§VII). Device-absent machines still pass: the CUDA
 # tests are named skips when CUDA.functional() is false.
 CUDA = "052768ef-5323-5732-b1bb-66c8b64840ba"
+# Phase 8 (§LXXXI): Lava in the TEST env so `using Lava` triggers the
+# GessoLavaExt extension. Not in the General registry — installed from
+# source via [sources] below. This is the test env, not core — core [deps]
+# stays Lava-free (§VII). Device-absent machines still pass: the Lava tests
+# are named skips when vk_context() fails.
+Lava = "3a680b1f-cb25-4bee-9cf7-bc880b76dc8c"
+# Phase 8 (§LXXXI): Vulkan.jl + VulkanCore.jl, Lava's runtime dependencies,
+# pinned FROM SOURCE in the test env only. Ground truth (2026-09-30): Lava
+# master calls Vulkan.PhysicalDeviceCooperativeMatrixFeaturesKHR during
+# vk_context() device setup WHENEVER the device advertises
+# VK_KHR_cooperative_matrix (the RTX 5060 does), and the latest REGISTERED
+# Vulkan.jl (0.6.30) does not define that symbol, so vk_context() throws
+# UndefVarError on exactly those devices. The pairing Lava master actually
+# targets is Vulkan.jl 0.7.0 + VulkanCore.jl 1.4.0 — both unreleased, both
+# living on the sd/vk1.4 branches (the same unreleased pair already in the
+# operator's depot). Worked around here by the same [sources] mechanism the
+# Phase 8 recipe itself mandates for Lava. Test-env pins only — core stays
+# Vulkan-free — and rev-pinned for reproducibility. Revisit when 0.7.0/1.4.0
+# ship to the registry.
+Vulkan = "9f14b124-c50e-4008-a7d4-969b3a6cd68a"
+VulkanCore = "16167f82-ea26-5cba-b1de-ed6fd5e30a11"
 
 [sources]
 Gesso = {path = ".."}
+Lava = {url = "https://github.com/SimonDanisch/Lava.jl"}
+Vulkan = {url = "https://github.com/JuliaGPU/Vulkan.jl", rev = "03b4ca2351477ccbb8ee378f512da50f7eec7bac"}
+VulkanCore = {url = "https://github.com/JuliaGPU/VulkanCore.jl", rev = "1d02829e8fa92da430d879db4dd7bf564a872035"}

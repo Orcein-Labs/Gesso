@@ -20,7 +20,7 @@ authors = ["Matt <liravossai@gmail.com>"]
 #   Lava    → ext/GessoLavaExt.jl   (Phase 8)
 #
 # Lava lives at libs/Lava as a local development source; it is NOT a dependency
-# of this package yet and must not become one before Phase 8.
+# of this package. Phase 8 (§LXXXI) added it as a WEAKDEP + extension only.
 Dates = "ade2ca70-3891-5945-98fb-dc099432e06a"
 # Phase 2 (§LXXV): CPU reference matmul — matmul! lowers x * transpose(W)
 # through BLAS. Stdlib, justified in the dependency-law test.
@@ -37,9 +37,15 @@ JSON = "682c06a0-de6a-54ab-a142-c8b1cf79cde6"
 # ext/GessoCUDAExt.jl is the only file allowed to `using CUDA`; core compiles
 # and tests with CUDA not loaded.
 CUDA = "052768ef-5323-5732-b1bb-66c8b64840ba"
+# Phase 8 (§LXXXI): Lava (Vulkan) is a package EXTENSION, never a core dep.
+# ext/GessoLavaExt.jl is the only file allowed to `using Lava`; core compiles
+# and tests with Lava not loaded. Not in the General registry — the TEST env
+# installs it from source via [sources] (test/Project.toml).
+Lava = "3a680b1f-cb25-4bee-9cf7-bc880b76dc8c"
 
 [extensions]
 GessoCUDAExt = "CUDA"
+GessoLavaExt = "Lava"
 
 [compat]
 julia = "1.12"
