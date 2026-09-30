@@ -68,6 +68,14 @@ in a `Gesso.InMemorySink` — pass `sink=` to inject your own — and
 machine-readable rows. This is attribution, not a speed claim: we can
 explain prefill vs decode vs KV bytes; we have not made anything fast.
 
+Phase 7 adds **declared** identity prefix share: `child = Gesso.fork(session)`
+aliases the prefix KV pages, and the next write into a shared page copies
+that page only (copy-on-write). `Gesso.Profiling.unique_kv_bytes(parent.mgr,
+child.mgr)` counts the pair's live storage once per shared page. Sharing is
+declared, never discovered: two sessions that prefill the same tokens
+independently do NOT share. `generate` still resets (a forked child that
+calls `generate` drops the share).
+
 ## Development order (§III)
 
 ```
@@ -85,6 +93,7 @@ Current phases (docs/Gesso_Stack.md §LXXIII ff.):
 | 4 | CUDA.jl execution | **COMPLETE 2026-09-29** — extension seam, ops + `to_device`, backend-generic interpreter, device-vs-CPU gates; SmolLM2-CUDA + bench row skip-or-green (§LXXVII) |
 | 5 | Native inference engine | **A/B/C/D LANDED 2026-09-30** — paged KV manager + `Session`/`generate` matching the oracle; scheduler/continuous batching is a later goal under this phase (§LXXVIII) |
 | 6 | Performance observability | **A/B/C/D LANDED 2026-09-30** — receipts per engine call, Profiling reports, warmed TTFT/decode rows; attribution, not speed (§LXXIX) |
+| 7 | First semantic optimization | **A/B/C/D LANDED 2026-09-30** — CoW + declared identity prefix share (`fork`), `Profiling.unique_kv_bytes` byte win (§LXXX) |
 
 Training is **not** part of Gesso — by explicit, permanent decision
 ([docs/Gesso_Stack.md §LVIII](docs/Gesso_Stack.md)). If you want to contribute

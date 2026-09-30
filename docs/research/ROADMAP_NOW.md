@@ -10,8 +10,11 @@ Buffy implements closed recipes under `docs/goals/`.
 Phase 6 landed 2026-09-30 (`docs/goals/PHASE6_OBSERVABILITY.md`):
 receipts per engine call, Profiling reports, KV bytes from the page
 table — attribution, not speed. Phase 5a landed 2026-09-30
-(`docs/goals/PHASE5_ENGINE.md`). Next open recipe: Phase 7 (one semantic
-win; default pick CoW / identity prefix share) — goal file to come.
+(`docs/goals/PHASE5_ENGINE.md`). Phase 7 landed 2026-09-30
+(`docs/goals/PHASE7_PREFIX_SHARE.md`): CoW + declared identity prefix
+share — `fork` is the only share constructor, and the win is bytes
+(`Profiling.unique_kv_bytes`: 2048 vs 4096 on the llama_micro prefill
+pair, `benchmark/results/2026-09-30.tsv`).
 
 Canon still lists Phases 0–22 in `docs/Gesso_Stack.md` §LXXIII–§XCV.
 This file says what that list *means* after Phases 0–4 and the first
@@ -21,11 +24,12 @@ Cyan engineer trial.
 
 ## 0. WHERE WE ARE
 
-Phases 0–5a are complete: meaning, CPU F64 oracle, Llama-shaped
+Phases 0–7 are complete: meaning, CPU F64 oracle, Llama-shaped
 import, CUDA.jl as a weakdep, `Session` + paged KV matching the
-oracle. `reference_*` remain the oracle. Lowering, Planning,
-Autotune, Representation, Runtime, Profiling are contract-only
-(Profiling fills in Phase 6).
+oracle, receipts + Profiling, and the declared-share win
+(CoW + identity prefix share). `reference_*` remain the oracle.
+Lowering, Planning, Autotune, Representation, Runtime are
+contract-only.
 
 That is the floor. Exotic Gesso is still the point. The floor has
 to exist first.
@@ -34,8 +38,8 @@ to exist first.
 
 ## 1. THREE LAYERS (DO NOT FLATTEN)
 
-    1. Boring machine     Phases 5–6 (5a now, 5b later)
-    2. One measured win   Phase 7, then Lava + autotune (8–9)
+    1. Boring machine     Phases 5–6 (5a+6 landed, 5b later)
+    2. One measured win   Phase 7 (landed 2026-09-30), then Lava + autotune (8–9)
     3. Exotic compilers   Phases 10–11, then 18–20
 
 Cyan and Palette are not a Gesso layer. They are already being
@@ -72,8 +76,8 @@ inference engine. That is 5a. Serving fabric is 5b.
 0–4     floor                         DONE
 5a      engine                        DONE  2026-09-30
 5b      serving fabric                after two concurrent Sessions
-6       measure                       OPEN  PHASE6_OBSERVABILITY.md
-7       one semantic win              pick ONE (see below)
+6       measure                       DONE  2026-09-30
+7       one semantic win              DONE  2026-09-30  PHASE7_PREFIX_SHARE.md
 8–9     Lava + autotune               second silicon, first search
 10–11   weight compiler + memory      REPRESENTATION_PROGRAM + Magenta
 12–13   shared model runtime          mechanism for many agents, one model
@@ -85,11 +89,13 @@ ABI     Cyan consumes Gesso           Phases 16, then 17 adapter
 22      plastic / lifecycle           research
 ```
 
-Phase 7 pick, given current evidence:
+Phase 7 pick, LANDED 2026-09-30:
 
     Default:  CoW + identity prefix share on the paged KV
               (Magenta §9.5 steps 2–3). Same model, same
-              hardware, correctness preserved, measurable share.
+              hardware, correctness preserved, measured share:
+              unique_kv_bytes 2048 vs 4096 (llama_micro
+              prefill pair, benchmark/results/2026-09-30.tsv).
 
     Steal:    gauge-compiled / ExactBits only if Measurement 1
               (B1 < B0 on SmolLM2) is interesting. Probe on the

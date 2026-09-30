@@ -2826,6 +2826,15 @@ Exit:
 LXXX. PHASE 7 — FIRST SEMANTIC OPTIMIZATION
 ===============================================================================
 
+Status: A/B/C/D LANDED 2026-09-30 — the pick is DECLARED CoW + identity
+prefix share on the paged KV (Magenta §9.5 steps 2–3): `fork(s::Session)`
+is the only share constructor (declaration, never token-match discovery);
+`append_kv!` copies only the dirty shared page; full prefix pages stay
+aliased forever; `Profiling.unique_kv_bytes` proves the win as a number of
+bytes (llama_micro prefill pair: 2048 unique bytes vs 4096 isolated).
+Two `generate` calls stay independent; token ids are unchanged.
+Implementation goal: `docs/goals/PHASE7_PREFIX_SHARE.md`.
+
 Choose ONE.
 
 Recommended candidates:
