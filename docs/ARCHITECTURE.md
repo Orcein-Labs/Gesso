@@ -33,7 +33,7 @@ policy (internal: NIRA); **Lava** = Vulkan substrate.
 | `Profiling` | `src/Profiling/` | §XLIX metrics, §L performance failure taxonomy; Phase 6: `engine_report`/`print_report` (stable machine-readable attribution from engine receipts), `kv_footprint`/`page_footprint` (derived from the page table via `Inference.kv_bytes`); Phase 7: `unique_kv_bytes` (live storage counted once per distinct page array across managers — the declared-share win metric); no CUDA in this module | 6 — items A, B ✓; 7 — item C ✓ |
 | `Planning` | `src/Planning/` | §XVII execution synthesis, §XIX memory planning, §LXI policies | still empty (Phase 7 was prefix share; Phase 8 was the Lava extension) |
 | `Autotune` | `src/Autotune/` | §XXVI; KV program §7 — the realization-search LOOP: `Candidate`/`TuneResult`, `register!` (registration order), `search!` (correctness gate before timing; compile+warmup untimed, §XXXIII), `select` (cache hit replays the same result), `invalidate!`/`invalidate_all!`, one `:autotune_select` receipt per search/hit; imports neither CUDA nor Lava (§VII) — extensions register candidates in `__init__` (Phase 9: `:cublas_mul` + `:generic_mul` for CUDA `matmul!`, gated at the CUDA op atol; the op consults and dispatches to the cached winner, §LXXXII) | 9 — items A, B, C, D ✓ |
-| `benchmark/compare_eager.py` | `benchmark/` | §LXXXIII gate G2 — eager-PyTorch reference timings (first-token / warmed) for the named-model factor: external python3 binary, local weights only (`local_files_only=True`, never downloads), no torch.compile, JSON or key-value output; invoked by the G2 block in `benchmark/runbenchmarks.jl` when snapshot + CUDA + torch exist, named skip otherwise — torch is NEVER a Project.toml dep (§VII) | 10 — item D ✓ |
+| `benchmark/compare_eager.py` | `benchmark/` | §LXXXIII gate G2 — eager-PyTorch reference timings (first-token / warmed) for the named-model factor: external python3 binary, local weights only (`local_files_only=True`, never downloads), no torch.compile, JSON or key-value output; `--probe` is the REAL torch gate (dry `import torch` + `import transformers`, exit 3 when missing — `--help` is not a probe, Phase 10B); invoked by the G2 block in `benchmark/runbenchmarks.jl` when snapshot + CUDA + torch exist, named skip otherwise — torch is NEVER a Project.toml dep (§VII) | 10 — item D ✓; 10B — item A ✓ |
 | `Representation` | `src/Representation/` | §XIV materialization, §XV quantization-as-lowering; research seed: `docs/research/REPRESENTATION_PROGRAM.md` | 10 |
 | `Agents` | `src/Agents/` | §XXXIII–XLII agent primitives; JSON is wire format, not ontology | 12 |
 | `CAPI` | `src/CAPI/` | §XLVI–XLVII libgesso; adoption surface, not architecture | 16 |
@@ -62,7 +62,7 @@ policy (internal: NIRA); **Lava** = Vulkan substrate.
 |---|---|
 | `AGENTS.md` | **Binding agent charter** (transcribes §LXXI/§LXXII/§LXX). |
 | `.github/ISSUE_TEMPLATE/work-item.md` | §LXXI work-item format. |
-| `docs/goals/` | Sprint goals. Phases 1–9 landed; living Phase 10 OPEN (`PHASE10_SPEED_FLOOR.md`). Canon §LXXXIII representation waits on G1∧G2∧G3. |
+| `docs/goals/` | Sprint goals. Phases 1–9 landed; living Phase 10 LANDED; 10B OPEN (`PHASE10B_SPEED_FLOOR_CLOSE.md`). Canon §LXXXIII waits on a measured SmolLM2 factor. |
 | `.github/PULL_REQUEST_TEMPLATE.md` | §LXXII receipt-as-PR. |
 | `scripts/` + `Makefile` | `make test / bench / format / format-check / freeze`. |
 | `benchmark/results/*.tsv` | Regression corpus (accrues from every bench run). |

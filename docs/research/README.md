@@ -24,10 +24,9 @@ The engine is `Session` / `generate` over paged KV.
 8 Lava/Vulkan portable seam (`PHASE8_LAVA.md`),
 9 autotune — the §XXVI loop for CUDA `matmul!`, winner cached, engine
 consults it (`PHASE9_AUTOTUNE.md`; selection, not speed).
-Next gates: **speed floor** (`docs/goals/PHASE10_SPEED_FLOOR.md`) —
-SmolLM2 green on the demo box, eager-PyTorch decode factor, device
-greedy + device GEMM over gathered scratch, still `fork`s. Canon
-Phase 10 representation (§LXXXIII) waits on G1∧G2∧G3.
+Next gates: **ops** — local SmolLM2 snapshot + torch, then the G2
+factor row. Living Phase 10 rungs 1–2 already landed
+(`PHASE10_SPEED_FLOOR.md`). Canon §LXXXIII waits on a measured factor.
 Tackle each problem in this folder individually when its phase owns it.
 
 ---
@@ -68,7 +67,7 @@ program until someone writes one **and** a phase owns it.
 | One semantic win (pick one) | §LXXX | **7 landed 2026-09-30** (`PHASE7_PREFIX_SHARE.md`) |
 | Lava / Vulkan | §LXXXI | **8 landed 2026-09-30** (`PHASE8_LAVA.md`) |
 | Autotune | §LXXXII | **9 landed 2026-10-01** (`PHASE9_AUTOTUNE.md`) |
-| Speed floor rungs 1–2 (device greedy + GEMM, G2 harness) | §LXXXII/§LXXXIII | **10 landed 2026-10-01** (`PHASE10_SPEED_FLOOR.md`); §LXXXIII representation planner stays PARKED until G1∧G2∧G3 honestly green |
+| Speed floor rungs 1–2 (device greedy + GEMM, G2 harness) | §LXXXII/§LXXXIII | **10 landed 2026-10-01** (`PHASE10_SPEED_FLOOR.md`, closed by `PHASE10B_SPEED_FLOOR_CLOSE.md`: real torch probe, caps pinned, llama_micro generate rows); §LXXXIII representation planner stays PARKED until G1∧G2∧G3 honestly green |
 | Representation planner | §LXXXIII | after G1∧G2∧G3 — seed is REPRESENTATION_PROGRAM.md |
 | Memory planner | §LXXXIV | Phase 11 |
 | Agent runtime / Palette / Cyan / C ABI | §LXXXV–LXXXIX | Phases 12–16 |

@@ -110,8 +110,8 @@ Read from `src/` on 2026-10-01. No tok/s claim is made here.
 | # | Mechanism | Where | Why it costs |
 |---|-----------|--------|--------------|
 | 1 | Attention **gathers** paged KV into contiguous scratch every step | `kv_manager.jl` `gather_kv!`; `session.jl` | Pages are the cache; the manager is not a kernel. FlashAttention-class fusion is glue we have not written. |
-| 2 | Logits **read back to host** for greedy | `session.jl` (`prefill!` / `decode!`) | Argmax is a host `argmax`. Every token pays a D2H. |
-| 3 | Unfused op soup | `cpu.jl` / `cuda_ops.jl` / `lava_ops.jl` | rmsnorm, rope, matmul, softmax, swiglu, embedding are separate launches. Phase 9 Autotune selects among two **matmuls** (`:cublas_mul` vs `:generic_mul`). CUBLAS winning does not fuse attention. |
+| 2 | Prefill still D2H of the logits row; decode greedy is device-side | `session.jl` | CUDA `:argmax` — host gets one Int on **decode**. `prefill!` still returns `Array(logits)`. Lava: full-row host argmax. |
+| 3 | Unfused op soup + gather then GEMM | `cpu.jl` / `cuda_ops.jl` / `lava_ops.jl` / `session.jl` | Layer ops still separate launches. CUDA attention is now device `mul!` over **gathered** scratch (`:attn_gemm`). Gather every step remains. Phase 9 Autotune still only selects among two **matmuls**. |
 | 4 | Batch = 1, `generate` RESETS | `session.jl` | No continuous batching, no prefix-reuse across `generate` calls. `fork` is the share constructor; `generate` drops it. |
 | 5 | Host-side interpreter loop | `Inference.jl` | Julia orchestrates layers in a serial for-loop. Fine for correctness. Death for decode tok/s until the inner step is one (or few) device graphs. |
 | 6 | Lava path is GPUArrays broadcast + `mul!` | `lava_ops.jl` | Portable seam (Phase 8). Untuned. CUDA is the speed horse; Lava stays the portable proof. |
@@ -376,7 +376,13 @@ ABI         Cyan consumes Gesso           when Session is stable
 18–20       the rest of the weirdness     after 10 has a receipt
 ```
 
-**Do not hand Buffy Phase 10 next.** Hand a speed-floor recipe.
+Living Phase 10 (speed floor recipe) **LANDED 2026-10-01**, closed by
+Phase 10B the same day (harness skip-or-land hardening: --probe dry
+import, snapshot file gate, caps pinned by test, llama_micro generate
+first-token + warmed rows on the GEMM path — fixture numbers, not the
+board factor). Do not hand Buffy canon §LXXXIII. Next is **ops**:
+local SmolLM2 snapshot + torch, then a measured G2 factor. Idle Buffys
+import glue.
 Phase 9's Autotune loop is the consult site; fused work lands as
 **candidates**, CUDA ext files, and a corpus row. `Lowering.jl`
 stays empty until a recipe says routing/fusion lives there —

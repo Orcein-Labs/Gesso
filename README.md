@@ -109,8 +109,12 @@ page-table kernel — that is a later packet). The G2 comparison harness
 SmolLM2-135M against eager PyTorch `generate` on the same checkpoint, prompt,
 and length — when a local snapshot, CUDA, and an external `python3` with
 torch/transformers are all present; without them it is a named skip, and CI
-never requires any of the three (never downloads). §LXXXIII (the
-representation planner) stays parked until G1∧G2∧G3 are honestly green.
+never requires any of the three (never downloads). The probe is a real dry
+import (`--probe`), so a snapshot with a missing PyTorch is a named skip,
+never a broken run. llama_micro CUDA generate is measured on the fast path
+(first-token and warmed rows; ids gated against the CPU Session) — fixture
+numbers, not the board factor. §LXXXIII (the representation planner) stays
+parked until G1∧G2∧G3 are honestly green.
 
 ## Development order (§III)
 

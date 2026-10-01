@@ -21,10 +21,12 @@ CPU oracle; portable seam, not tuned. Phase 9 landed 2026-10-01
 (`docs/goals/PHASE9_AUTOTUNE.md`): the §XXVI loop — two gated CUDA
 `matmul!` candidates, the winner cached per (device, backend, op, regime),
 the op consults Autotune and dispatches to it. Selection happened; no
-speed claim. Next open recipe: **speed floor**
-(`docs/goals/PHASE10_SPEED_FLOOR.md`) — named model + eager-PyTorch
-factor + device greedy + device attention over gathered scratch.
-Canon §LXXXIII representation waits on G1∧G2∧G3.
+speed claim. Living Phase 10 speed floor **LANDED 2026-10-01**
+(`docs/goals/PHASE10_SPEED_FLOOR.md`) — rungs 1–2 on the tree; G1/G2
+ops-blocked until a local SmolLM2 snapshot + torch exist on the demo
+box. Next Buffy recipe: `docs/goals/PHASE10B_SPEED_FLOOR_CLOSE.md`
+(harness + measure + skip-or-land G1/G2). Canon §LXXXIII waits on a
+**measured** factor.
 
 Canon still lists Phases 0–22 in `docs/Gesso_Stack.md` §LXXIII–§XCV.
 This file says what that list *means* after Phases 0–4 and the first
@@ -102,6 +104,11 @@ inference engine. That is 5a. Serving fabric is 5b.
 8       Lava / Vulkan                 DONE  2026-09-30  PHASE8_LAVA.md
 9       autotune (selection)          DONE  2026-10-01  PHASE9_AUTOTUNE.md
 G1–G3   speed floor                   LANDED 2026-10-01  PHASE10_SPEED_FLOOR.md
+                                      (+10B close: --probe dry-import gate,
+                                      caps pinned by test, llama_micro CUDA
+                                      generate first-token ~42ms compile-in /
+                                      ~9.9ms warmed on the GEMM path — FIXTURE
+                                      numbers, not the board factor)
                                       device greedy (one Int per token) +
                                       device GEMM over gathered scratch;
                                       still forks; G2 harness exists —

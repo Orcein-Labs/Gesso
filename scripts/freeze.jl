@@ -83,6 +83,8 @@ curated = String[
     "docs/goals/PHASE8_LAVA.md",
     "docs/goals/PHASE9_AUTOTUNE.md",
     "docs/goals/PHASE10_SPEED_FLOOR.md",
+    "docs/goals/PHASE10B_SPEED_FLOOR_CLOSE.md",
+    "docs/goals/PHASE10B_SPEED_FLOOR_CLOSE.md",
     "docs/research/README.md",
     "docs/research/KV_MEMORY_PROGRAM.md",
     "docs/research/KV_MEMORY_PROGRAM_part2.md",

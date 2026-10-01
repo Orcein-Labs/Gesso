@@ -18,11 +18,13 @@ compiler attribution, §2b three tuners). Companion seed:
 **Depends on:** Phase 9 complete (`docs/goals/PHASE9_AUTOTUNE.md`)
 **Packets:** 1 and 2 stay closed.
 
-**Status:** OPEN. This is "publish a named-model factor vs eager
-PyTorch, on a path that still `fork`s, with compile and execute
-on different receipts." FlashAttention-class paged kernels,
-foundry, Julia compiler fork, Lava tune, Magenta, cages — later.
-Do **not** edit `libs/Lava`.
+**Status:** LANDED (Buffy, 2026-10-01) — rungs 1–2 on the tree;
+G1/G2 **ops-blocked** on this box (no SmolLM2 snapshot, no torch).
+Device greedy + `:attn_gemm` over gathered scratch; G2 harness
+exists; factor NOT MEASURED; `fork` 2048 vs 4096 held; fingerprints
+bit-identical; §LXXXIII parked. 1497 pass / 3 named SmolLM2 skips;
+device-less 1310/10. Next is **ops** (place snapshot, run G1/G2),
+not a representation recipe. Do **not** edit `libs/Lava`.
 
 ---
 

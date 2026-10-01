@@ -2976,6 +2976,18 @@ G1∧G2∧G3 exist and the encoding owner opens that phase):
     stay skip-or-green. §LXXXIII is NOT COMPLETE; no Representation
     fill, no cages, no Magenta, no Julia fork.
 
+    Phase 10B close (2026-10-01, docs/goals/PHASE10B_SPEED_FLOOR.md):
+    the G2 probe is a REAL dry import (--probe; --help was never a torch
+    probe) and a snapshot gate on the loader's files — snapshot xor torch
+    (or a junk dir) is a named skip + NOT MEASURED factor, never a suite
+    error. The fast-path caps are pinned by tests: CUDA has :argmax and
+    :attn_gemm; Lava has neither (its contraction and host argmax are
+    unchanged). llama_micro CUDA generate is measured on the GEMM path
+    (first-token + warmed rows, ids gated against the CPU Session before
+    any row) — a FIXTURE measurement, not the board factor. G1 and the
+    G2 factor remain ops-owned (snapshot + torch); §LXXXIII still NOT
+    COMPLETE.
+
 
 ===============================================================================
 LXXXIV. PHASE 11 — MEMORY PLANNER
