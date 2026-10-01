@@ -26,26 +26,41 @@
 #     seq ≤ 8), not bit-identity. Never silently widen past 1e-2 without a
 #     decision packet.
 #   * Implementation is GPUArrays broadcasting + Lava's `mul!` (Lava
-#     array/gemm.jl) — at most one KernelAbstractions `@kernel` per op where
-#     broadcast cannot express it (RoPE pairwise rotate, causal softmax),
-#     launched on the KA backend (`KALava`), never on Gesso's tag. No
-#     handwritten SPIR-V, no coopmat, no graphics, no ray tracing. This
-#     sprint is the portable SEAM (§LXXXI), not a kernel contest.
+#     array/gemm.jl) — broadcast expresses ALL SIX ops on this storage (RoPE
+#     via strided pairwise views, causal softmax via an index mask), so this
+#     extension defines NO KernelAbstractions kernels at all. No handwritten
+#     SPIR-V, no coopmat, no graphics, no ray tracing. This sprint is the
+#     portable SEAM (§LXXXI), not a kernel contest. Operator methods live in
+#     lava_ops.jl, included below.
 module GessoLavaExt
 
 # the bare `import Gesso` binds the MODULE NAME (needed for the Core.eval
 # namespace binding below); the named imports extend the existing vocabulary
 import Gesso
 import Gesso:
+    rmsnorm!,
+    rope!,
+    softmax!,
+    swiglu!,
+    matmul!,
+    embedding_lookup!,
     backend_name,
     execution_tier,
     supports
 
 using Gesso:
     AbstractGessoBackend,
+    Activation,
+    EmbeddingTable,
+    ProjectionWeight,
+    FrozenParameter,
+    TemporaryWorkspace,
+    PrefillWorkload,
+    DecodeWorkload,
     GessoError,
     gesso_error,
-    ERR_RESOURCE_LIMIT
+    ERR_RESOURCE_LIMIT,
+    ERR_INVALID_PLAN
 
 using Lava
 
@@ -54,7 +69,6 @@ using Lava
 # Lava's OWN KernelAbstractions GPU backend (kernels, synchronize, launch).
 # Aliased so nothing below mistakes it for Gesso's tag (§LXXXI name clash).
 const KALava = Lava.LavaBackend
-
 """
     LavaBackend <: AbstractGessoBackend
 
@@ -115,6 +129,10 @@ const LAVA_SUPPORTED_CAPS = Set([
 supports(::LavaBackend, cap::Symbol) = cap in LAVA_SUPPORTED_CAPS
 supports(::Type{LavaBackend}, cap::Symbol) = cap in LAVA_SUPPORTED_CAPS
 
+# Phase 8 item B (§LXXXI): the Lava operator methods on LavaArray{Float32}
+# + explicit to_device transfer. Same op names, more-specific methods (§CIX).
+include("lava_ops.jl")
+
 # Bind the backend into the package's namespace: after this ext triggers,
 # `Gesso.LavaBackend` resolves to the type defined HERE — while a Lava-less
 # load of core leaves the name entirely absent (both directions are pinned
@@ -125,13 +143,43 @@ supports(::Type{LavaBackend}, cap::Symbol) = cap in LAVA_SUPPORTED_CAPS
 # compilation (the closed-module rule) — but method attachments to Gesso's
 # functions above are the sanctioned extension mechanism and precompile
 # fine. The binding is a per-session side effect, which is exactly what
-# __init__ is for. (Same pattern as GessoCUDAExt; `to_device` joins the
-# binding with Phase 8 item B, when the operator methods land.)
+# __init__ is for. (Same pattern as GessoCUDAExt.)
+#
+# `to_device` needs CROSS-EXTENSION CARE that the tag does not: both backend
+# extensions define a transfer function and install it as `Gesso.to_device`.
+# A plain re-binding would make the LAST-loaded extension's function object
+# the only one reachable through `Gesso.to_device`, silently hiding the
+# other backend's methods (§LXX-adjacent: a silent capability loss). So:
+# when some other extension has already installed `Gesso.to_device`, THIS
+# extension defines its method BY NAME against that existing binding — the
+# definition then attaches to the same function object the name already
+# holds (one function, both backends' methods, both reachable).
+#
+# (Empirical note, 2026-09-30: interpolating the function OBJECT into the
+# definition head — `:($f(b, t) = …)` — is not a legal method definition
+# and silently defines nothing; the definition must go through the NAME in
+# the eval target's scope. Interpolating the ext-local WORKER into call
+# position is fine.)
+# Known residual: the CUDA extension still re-binds unconditionally, so
+# loading CUDA AFTER Lava re-installs its own binding (CUDA-side wart, fixed
+# here only on the Lava side — GessoCUDAExt is not this item's file).
 function __init__()
     Core.eval(Gesso, :(const LavaBackend = $LavaBackend))
+    if isdefined(Gesso, :to_device)
+        Core.eval(
+            Gesso,
+            quote
+                function to_device(b::LavaBackend, tensors)
+                    $(_lava_to_device)(tensors)
+                end
+            end,
+        )
+    else
+        Core.eval(Gesso, :(const to_device = $to_device))
+    end
     nothing
 end
 
-export LavaBackend
+export LavaBackend, to_device
 
 end # module GessoLavaExt

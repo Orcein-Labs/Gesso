@@ -83,6 +83,11 @@ using Gesso: reference_prefill, reference_generate
     # imports Lava at its own top level, exactly like the CUDA seam above.
     include("test_lava_seam.jl")
 
+    # Phase 8 (§LXXXI item B): Lava operator methods on LavaArray{Float32} vs
+    # the CPU F64 oracle at declared atol — named skip without a device. The
+    # LAVA_LOADED / VULKAN_OK consts come from the seam file above.
+    include("test_lava_ops.jl")
+
     # Phase 5 (§LXXVIII item A): paged KV manager — Magenta §9.5 step 1;
     # pages are the cache, gather-on-read, typed context exhaustion
     include("test_kv_manager.jl")
