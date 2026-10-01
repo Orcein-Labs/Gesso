@@ -129,6 +129,7 @@ include("cuda_ops.jl")
 # object into the definition head is not a legal method definition.)
 function __init__()
     Core.eval(Gesso, :(const CUDABackend = $CUDABackend))
+    _autotune_register!()   # §LXXXII: backend extensions register candidates (runtime state)
     if isdefined(Gesso, :to_device)
         Core.eval(
             Gesso,

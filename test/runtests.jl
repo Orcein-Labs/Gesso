@@ -78,6 +78,12 @@ using Gesso: reference_prefill, reference_generate
     # golden at wider atol — named skip without a device AND GESSO_SMOLLM2_DIR
     include("test_cuda_smollm2.jl")
 
+    # Phase 9 (§LXXXII item B): the two CUDA matmul! candidates — :cublas_mul
+    # and :generic_mul — gated against the CPU F64 oracle at the existing CUDA
+    # op atol; named skip without a device. Registration happened in
+    # GessoCUDAExt.__init__ (the CUDA seam above loaded it).
+    include("test_autotune_cuda.jl")
+
     # Phase 8 (§LXXXI item A): the Lava (Vulkan) backend seam — manifest law,
     # extension binding, name clash, explicit no-device failure. Probes and
     # imports Lava at its own top level, exactly like the CUDA seam above.

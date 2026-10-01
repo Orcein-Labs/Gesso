@@ -332,6 +332,67 @@ end
 # quantize! / dequantize!: NO CUDA method — the generic decline still fires
 # (their math is a Representation-phase concern, §LXXVII).
 
+# --- Autotune candidates for :matmul! (§LXXXII item B) -------------------------
+#
+# Two legal realizations of the SAME semantics on CuArray{Float32}:
+#
+#   :cublas_mul   the Phase 4 implementation — fill! + CUBLAS `mul!` with the
+#                 transpose unwrapped by the GEMM call.
+#   :generic_mul  GPUArrays-broadcast outer-product accumulation:
+#                 dst += x[:,k] ⊗ w[:,k] for k in 1:K. Same contract, same
+#                 storage, no new kernel language — deliberately the loser on
+#                 any real shape. §LXXXII: "If :cublas_mul wins, that is the
+#                 expected and acceptable result. The point is that selection
+#                 happened."
+#
+# Both are gated against the CPU F64 oracle at the EXISTING Phase 4 CUDA op
+# atol (1e-2, the op-level compare in test_cuda_ops.jl — no third atol is
+# invented). The gate runs the candidate into a scratch (never the live dst)
+# and compares in F64; a NaN anywhere fails the gate (NaN <= atol is false).
+# Registration happens at __init__ (runtime state, never precompile); the
+# candidates themselves never run unless a search consults them.
+
+function _cuda_generic_matmul!(dst, x, w)
+    fill!(dst.storage, 0)
+    xs, ws = x.storage, w.storage
+    for k in 1:size(xs, 2)
+        dst.storage .+= view(xs, :, k) .* transpose(view(ws, :, k))
+    end
+    return dst
+end
+
+# the correctness gate both candidates share: F64 host oracle vs a scratch
+# run of `impl`, at the Phase 4 CUDA op atol
+function _cuda_matmul_gate(impl, dst, x, w; atol = 1e-2)
+    ref = Float64.(Array(x.storage)) * Float64.(Array(w.storage))'
+    sc = typeof(dst)(; shape = dst.shape, storage = similar(dst.storage))
+    impl(sc, x, w)
+    return maximum(abs, Float64.(Array(sc.storage)) .- ref) <= atol
+end
+
+function _autotune_register!()
+    A = Gesso.Autotune
+    A.register!(
+        :matmul!,
+        :cuda,
+        A.Candidate(
+            :cublas_mul,
+            (dst, x, w) -> _cuda_matmul!(dst, x, w),
+            (dst, x, w) -> _cuda_matmul_gate(_cuda_matmul!, dst, x, w),
+        ),
+    )
+    A.register!(
+        :matmul!,
+        :cuda,
+        A.Candidate(
+            :generic_mul,
+            (dst, x, w) -> _cuda_generic_matmul!(dst, x, w),
+            (dst, x, w) -> _cuda_matmul_gate(_cuda_generic_matmul!, dst, x, w),
+        ),
+    )
+    return nothing
+end
+
 # --- explicit transfer (§LXXVII: "the interpreter does not copy") ---------------
 
 """
