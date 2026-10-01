@@ -2872,6 +2872,21 @@ Exit:
     same Gesso API
     Lava execution correct on supported Vulkan hardware
 
+Status: COMPLETE 2026-09-30 (§LXXXI items A–C; maps updated same day).
+    A: Lava as weakdep + GessoLavaExt extension (never a core dep, §VII);
+    Gesso.LavaBackend vs Lava.LavaBackend kept distinct (alias KALava);
+    no-device construction throws ERR_RESOURCE_LIMIT — no silent fallback
+    (§LXX). B: the six implemented ops on LavaArray{Float32} via GPUArrays
+    broadcast + Lava mul! (no KA kernels, no SPIR-V); to_device copies
+    F64→F32 explicitly; quantize!/dequantize! still decline. C:
+    interpreter + Session on Lava match the CPU oracle (ids EXACT,
+    logits atol 1e-3); fork aliases prefix pages and CoW works on
+    LavaArray with no special casing; src/ untouched; one bench row
+    accrued (post-warmup, schema 0.2.0). Exit verified: same logical
+    model, same Gesso API, correct on supported Vulkan hardware;
+    device-less machines skip by name and CI never requires a device.
+    NOT claimed: tuned performance (Phase 9), any speed comparison.
+
 
 ===============================================================================
 LXXXII. PHASE 9 — AUTOTUNING

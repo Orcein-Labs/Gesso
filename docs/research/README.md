@@ -58,8 +58,8 @@ program until someone writes one **and** a phase owns it.
 |---|---|---|
 | Native engine | §LXXVIII | **5a landed 2026-09-30**; 5b serving later |
 | Observability | §LXXIX | **6 landed 2026-09-30** (`PHASE6_OBSERVABILITY.md`) |
-| One semantic win (pick one) | §LXXX | **now — Phase 7** (`PHASE7_PREFIX_SHARE.md`) |
-| Lava / Vulkan | §LXXXI | Phase 8 |
+| One semantic win (pick one) | §LXXX | **7 landed 2026-09-30** (`PHASE7_PREFIX_SHARE.md`) |
+| Lava / Vulkan | §LXXXI | **8 landed 2026-09-30** (`PHASE8_LAVA.md`) |
 | Autotune | §LXXXII | Phase 9 |
 | Representation planner | §LXXXIII | Phase 10 — seed is REPRESENTATION_PROGRAM.md |
 | Memory planner | §LXXXIV | Phase 11 |

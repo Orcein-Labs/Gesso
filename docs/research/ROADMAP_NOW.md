@@ -14,7 +14,10 @@ table — attribution, not speed. Phase 5a landed 2026-09-30
 (`docs/goals/PHASE7_PREFIX_SHARE.md`): CoW + declared identity prefix
 share — `fork` is the only share constructor, and the win is bytes
 (`Profiling.unique_kv_bytes`: 2048 vs 4096 on the llama_micro prefill
-pair, `benchmark/results/2026-09-30.tsv`).
+pair, `benchmark/results/2026-09-30.tsv`). Phase 8 landed 2026-09-30
+(`docs/goals/PHASE8_LAVA.md`): Lava/Vulkan as a weakdep extension — seam,
+six ops, interpreter/Session/fork on `LavaArray{Float32}`, ids matching the
+CPU oracle; portable seam, not tuned. Next open recipe: Phase 9 autotune.
 
 Canon still lists Phases 0–22 in `docs/Gesso_Stack.md` §LXXIII–§XCV.
 This file says what that list *means* after Phases 0–4 and the first
@@ -78,7 +81,8 @@ inference engine. That is 5a. Serving fabric is 5b.
 5b      serving fabric                after two concurrent Sessions
 6       measure                       DONE  2026-09-30
 7       one semantic win              DONE  2026-09-30  PHASE7_PREFIX_SHARE.md
-8–9     Lava + autotune               second silicon, first search
+8       Lava / Vulkan                 DONE  2026-09-30  PHASE8_LAVA.md
+9       autotune                      after 8 (tune, not this sprint)
 10–11   weight compiler + memory      REPRESENTATION_PROGRAM + Magenta
 12–13   shared model runtime          mechanism for many agents, one model
 ABI     Cyan consumes Gesso           Phases 16, then 17 adapter

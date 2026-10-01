@@ -76,6 +76,16 @@ declared, never discovered: two sessions that prefill the same tokens
 independently do NOT share. `generate` still resets (a forked child that
 calls `generate` drops the share).
 
+Phase 8 adds the **Lava/Vulkan backend** as a package extension
+(`ext/GessoLavaExt.jl`, the only file allowed `using Lava`): pass
+`backend=Gesso.LavaBackend()` and tensors moved with `Gesso.to_device` to run
+the interpreter, `Session`, and `fork`/CoW on `LavaArray{Float32}` storage —
+GPUArrays broadcast + Lava's `mul!`, no handwritten kernels. Same API as CPU
+and CUDA; greedy ids match the CPU oracle, logits within the declared atol.
+Requesting Lava without a usable Vulkan device throws a typed error — never a
+silent CPU fallback (§LXX). The extension is portable-first; nothing here is
+tuned (Phase 9's job), and no speed claim is made.
+
 ## Development order (§III)
 
 ```
@@ -94,6 +104,7 @@ Current phases (docs/Gesso_Stack.md §LXXIII ff.):
 | 5 | Native inference engine | **A/B/C/D LANDED 2026-09-30** — paged KV manager + `Session`/`generate` matching the oracle; scheduler/continuous batching is a later goal under this phase (§LXXVIII) |
 | 6 | Performance observability | **A/B/C/D LANDED 2026-09-30** — receipts per engine call, Profiling reports, warmed TTFT/decode rows; attribution, not speed (§LXXIX) |
 | 7 | First semantic optimization | **A/B/C/D LANDED 2026-09-30** — CoW + declared identity prefix share (`fork`), `Profiling.unique_kv_bytes` byte win (§LXXX) |
+| 8 | Lava/Vulkan backend | **A/B/C LANDED 2026-09-30** — GessoLavaExt seam + six ops + interpreter/Session/fork on `LavaArray{Float32}` (§LXXXI); portable seam, not tuned; device-less runs skip by name |
 
 Training is **not** part of Gesso — by explicit, permanent decision
 ([docs/Gesso_Stack.md §LVIII](docs/Gesso_Stack.md)). If you want to contribute
