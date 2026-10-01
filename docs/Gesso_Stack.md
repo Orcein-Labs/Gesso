@@ -2872,7 +2872,7 @@ Exit:
     same Gesso API
     Lava execution correct on supported Vulkan hardware
 
-Status: COMPLETE 2026-09-30 (§LXXXI items A–C; maps updated same day).
+Status: COMPLETE 2026-09-30 (§LXXXI items A–D).
     A: Lava as weakdep + GessoLavaExt extension (never a core dep, §VII);
     Gesso.LavaBackend vs Lava.LavaBackend kept distinct (alias KALava);
     no-device construction throws ERR_RESOURCE_LIMIT — no silent fallback
@@ -2903,6 +2903,40 @@ Build:
 Exit:
 
     at least one operator automatically selects device-specific winning implementation.
+
+Status: COMPLETE 2026-10-01 (§LXXXII items A–D).
+    A: mixed-backend to_device survives either load order
+    (attach-or-own in GessoCUDAExt.__init__, mirroring the Lava
+    pattern); Autotune filled with the generic loop — Candidate /
+    TuneResult, register! (registration order is the contract),
+    search! (correctness gate BEFORE any timing; compile + warmup
+    outside the timed region, §XXXIII), select (a cache hit replays
+    the SAME TuneResult), invalidate!, invalidate_all! — core
+    machinery that imports neither CUDA nor Lava (§VII; extensions
+    register candidates in __init__, never at precompile);
+    AUTOTUNE_CACHE_VERSION = v"0.1.0" in src/versions.jl. B: two CUDA
+    matmul! candidates — :cublas_mul (the Phase 4 CUBLAS path) and
+    :generic_mul (broadcast outer-product accumulation) — registered
+    under (:matmul!, :cuda), both gated against the CPU F64 oracle at
+    the EXISTING CUDA op atol 1e-2 (no third atol invented); a
+    gate-failing candidate is DISQUALIFIED (§LXX) and all-fail throws
+    GessoError(ERR_VERIFY_MISMATCH) — never a silent keep, never a CPU
+    fallback because search missed. C: the CUDA matmul! op methods
+    consult Autotune — cache key (AUTOTUNE_CACHE_VERSION, device
+    identity, backend, op, regime); regimes :toy2/:llama_micro are
+    named (K, N) buckets, not a cartesian search — and dispatch to the
+    winning candidate by name; the first call per key searches, later
+    calls hit the cache; every selection emits ONE Receipt through the
+    existing sink (task=:autotune_select; no new result type, no
+    schema bump); toy2 + llama_micro greedy ids still match CPU
+    exactly and logits stay inside the declared atol; one bench row
+    accrued (post-warmup, schema 0.2.0). D: maps updated. Exit
+    verified: one operator automatically selects a device-specific
+    winning implementation and the engine uses it; device-less
+    machines skip by name and CI never requires a device. NOT
+    claimed: tuned performance, any speed comparison, occupancy
+    search, foundry/kernel generation, disk-persisted cache, Lava
+    autotuning (all later).
 
 
 ===============================================================================

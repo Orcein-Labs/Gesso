@@ -17,7 +17,14 @@ share — `fork` is the only share constructor, and the win is bytes
 pair, `benchmark/results/2026-09-30.tsv`). Phase 8 landed 2026-09-30
 (`docs/goals/PHASE8_LAVA.md`): Lava/Vulkan as a weakdep extension — seam,
 six ops, interpreter/Session/fork on `LavaArray{Float32}`, ids matching the
-CPU oracle; portable seam, not tuned. Next open recipe: Phase 9 autotune.
+CPU oracle; portable seam, not tuned. Phase 9 landed 2026-10-01
+(`docs/goals/PHASE9_AUTOTUNE.md`): the §XXVI loop — two gated CUDA
+`matmul!` candidates, the winner cached per (device, backend, op, regime),
+the op consults Autotune and dispatches to it. Selection happened; no
+speed claim. Next open recipe: **speed floor**
+(`docs/research/SPEED_FLOOR.md`) — named model + eager-PyTorch
+factor + fast path that still `fork`s. Phase 10 representation waits
+on that gate.
 
 Canon still lists Phases 0–22 in `docs/Gesso_Stack.md` §LXXIII–§XCV.
 This file says what that list *means* after Phases 0–4 and the first
@@ -27,23 +34,33 @@ Cyan engineer trial.
 
 ## 0. WHERE WE ARE
 
-Phases 0–7 are complete: meaning, CPU F64 oracle, Llama-shaped
+Phases 0–8 are complete: meaning, CPU F64 oracle, Llama-shaped
 import, CUDA.jl as a weakdep, `Session` + paged KV matching the
-oracle, receipts + Profiling, and the declared-share win
-(CoW + identity prefix share). `reference_*` remain the oracle.
-Lowering, Planning, Autotune, Representation, Runtime are
-contract-only.
+oracle, receipts + Profiling, the declared-share win
+(CoW + identity prefix share), and Lava/Vulkan as a weakdep
+extension (`GessoLavaExt`, `LavaArray{Float32}`, ids matching the
+CPU oracle). `reference_*` remain the oracle. The CUDA and Lava
+*seams* exist; Lowering *routing* is still later. Planning,
+Representation, Runtime are contract-only. Autotune is not anymore:
+the §XXVI loop runs, one operator (CUDA `matmul!`) selects a
+device-specific winner under a correctness gate, caches it, and the
+engine uses it (§LXXXII; selection is the product — no speed claim).
 
 That is the floor. Exotic Gesso is still the point. The floor has
-to exist first.
+to exist first. A board will not accept the exotic on an engine
+that is not somewhat close in performance on a named model —
+see §3a and `docs/research/SPEED_FLOOR.md`.
 
 ---
 
-## 1. THREE LAYERS (DO NOT FLATTEN)
+## 1. FOUR LAYERS (DO NOT FLATTEN)
 
     1. Boring machine     Phases 5–6 (5a+6 landed, 5b later)
-    2. One measured win   Phase 7 (landed 2026-09-30), then Lava + autotune (8–9)
-    3. Exotic compilers   Phases 10–11, then 18–20
+    2. One measured win   Phase 7 (landed 2026-09-30), Phase 8 Lava (landed 2026-09-30), Phase 9 autotune (landed 2026-10-01 — selection, not speed)
+    3. Speed floor        G1∧G2∧G3 in SPEED_FLOOR.md (named model,
+                          eager-PyTorch factor, fork-preserving fused
+                          decode). Gate on layer 4.
+    4. Exotic compilers   Phases 10–11, then 18–20
 
 Cyan and Palette are not a Gesso layer. They are already being
 tortured *above* the machine. Gesso ships a Session and later a
@@ -78,12 +95,16 @@ inference engine. That is 5a. Serving fabric is 5b.
 ```
 0–4     floor                         DONE
 5a      engine                        DONE  2026-09-30
-5b      serving fabric                after two concurrent Sessions
+5b      serving fabric                after G2 and two concurrent
+                                      Sessions on the fast path
 6       measure                       DONE  2026-09-30
 7       one semantic win              DONE  2026-09-30  PHASE7_PREFIX_SHARE.md
 8       Lava / Vulkan                 DONE  2026-09-30  PHASE8_LAVA.md
-9       autotune                      after 8 (tune, not this sprint)
-10–11   weight compiler + memory      REPRESENTATION_PROGRAM + Magenta
+9       autotune (selection)          DONE  2026-10-01  PHASE9_AUTOTUNE.md
+G1–G3   speed floor                   NEXT  SPEED_FLOOR.md
+                                      SmolLM2 green, eager-PyTorch
+                                      factor, fused decode that still forks
+10–11   weight compiler + memory      AFTER G1∧G2∧G3
 12–13   shared model runtime          mechanism for many agents, one model
 ABI     Cyan consumes Gesso           Phases 16, then 17 adapter
 14–15   canon still names Palette/Cyan as Gesso phases;
@@ -92,6 +113,37 @@ ABI     Cyan consumes Gesso           Phases 16, then 17 adapter
 21      training APB                  never this package
 22      plastic / lifecycle           research
 ```
+
+---
+
+## 3a. BOARD CONSTRAINT (2026-10-01)
+
+Exotic capabilities are the product. They are illegal to *sell*
+until a named-model decode on this box is somewhat close to naive
+PyTorch eager, as a published factor, with `fork` still sharing
+pages. Full gate, hot-path inventory, and RPD/RPDO split:
+`docs/research/SPEED_FLOOR.md`.
+
+Do not open a Phase 10 Buffy recipe until G1∧G2∧G3. Idle Buffys
+take the speed-floor recipe or Llama-family import glue (second
+tokenizer, `rope_scaling`), one architecture at a time.
+
+The speed floor has two clocks: application (fusion, D2H, gather)
+and Julia compiler (TTFX, invalidation, GPUCompiler, Lava SPIR-V).
+Attribute compile vs execute on SmolLM2 before anyone proposes a
+compiler fork. Seed:
+`Julia Compiler Optimizations for Gesso/docs/the_ancient_texts.md`.
+
+Seriousness bet (`SPEED_FLOOR.md` §2b): stack kernels + Julia
+compiler + Lava, together, get us fairly close. After that,
+dispatch and metaprogramming specialize parallel *schedules*
+(better where parallelism already exists; new where the engine
+still serializes — `fork` trees, page CoW). That is Phases
+18–20 shaped work. It is not the next Buffy recipe.
+
+"Any currently available model" is the long import program. The
+speed floor's model is SmolLM2-135M. Training remains someone
+else's package.
 
 Phase 7 pick, LANDED 2026-09-30:
 

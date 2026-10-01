@@ -18,11 +18,16 @@ Gesso is not trying to be exotic yet.
             Huffman codec, or a "lossless 2-bit" story
 
 The engine is `Session` / `generate` over paged KV.
-`reference_*` remain the oracle. Phases 0–7 are complete:
+`reference_*` remain the oracle. Phases 0–9 are complete:
 5a engine, 6 observability, 7 the declared-share win
-(CoW + identity prefix share, `fork`, `unique_kv_bytes`).
-Next gates: 5b serving fabric (a later goal under Phase 5),
-then Phases 8–9.
+(CoW + identity prefix share, `fork`, `unique_kv_bytes`),
+8 Lava/Vulkan portable seam (`PHASE8_LAVA.md`),
+9 autotune — the §XXVI loop for CUDA `matmul!`, winner cached, engine
+consults it (`PHASE9_AUTOTUNE.md`; selection, not speed).
+Next gates: **speed floor** (`SPEED_FLOOR.md`) — SmolLM2 green on
+the demo box, eager-PyTorch decode factor, fused CUDA decode that
+still `fork`s. Phase 10 representation and 5b serving wait on that
+gate. Do not open a Phase 10 recipe until G1∧G2∧G3.
 Tackle each problem in this folder individually when its phase owns it.
 
 ---
@@ -35,7 +40,8 @@ Tackle each problem in this folder individually when its phase owns it.
 | [KV_MEMORY_PROGRAM_part2.md](KV_MEMORY_PROGRAM_part2.md) | Magenta execution plane (topology, residency, schedule) | same object, access/residency half | after a real KV manager exists |
 | [REPRESENTATION_PROGRAM.md](REPRESENTATION_PROGRAM.md) | static learned operators (weights) | do not quantize the accidental representation | Phase 7 candidate / Phase 10 host |
 | [CYAN_TRIAL_GESSO_FALLOUT.md](CYAN_TRIAL_GESSO_FALLOUT.md) | promotion filter from the first Cyan/Palette engineer trial | generality × composability × ecosystem leverage, or it stays above Gesso | Phase 6+ spikes; not Phase 5 |
-| [ROADMAP_NOW.md](ROADMAP_NOW.md) | living reading of Phases 5–22 after 0–4 + the Cyan trial | 5a engine now; 5b serving later; Cyan consumes Gesso | map only — not a /goal |
+| [ROADMAP_NOW.md](ROADMAP_NOW.md) | living reading of Phases 5–22 after 0–4 + the Cyan trial | 5a engine now; speed floor next; 5b and Phase 10 after G1∧G2∧G3 | map only — not a /goal |
+| [SPEED_FLOOR.md](SPEED_FLOOR.md) | board constraint: somewhat-close decode before exotic compilers | named model + eager-PyTorch factor + fork-preserving fused step; compiler attribution before a Julia fork | gate on Phase 10; not a /goal until a recipe is written |
 
 Same philosophy, two expensive objects:
 
@@ -60,7 +66,7 @@ program until someone writes one **and** a phase owns it.
 | Observability | §LXXIX | **6 landed 2026-09-30** (`PHASE6_OBSERVABILITY.md`) |
 | One semantic win (pick one) | §LXXX | **7 landed 2026-09-30** (`PHASE7_PREFIX_SHARE.md`) |
 | Lava / Vulkan | §LXXXI | **8 landed 2026-09-30** (`PHASE8_LAVA.md`) |
-| Autotune | §LXXXII | Phase 9 |
+| Autotune | §LXXXII | **9 landed 2026-10-01** (`PHASE9_AUTOTUNE.md`) |
 | Representation planner | §LXXXIII | Phase 10 — seed is REPRESENTATION_PROGRAM.md |
 | Memory planner | §LXXXIV | Phase 11 |
 | Agent runtime / Palette / Cyan / C ABI | §LXXXV–LXXXIX | Phases 12–16 |
