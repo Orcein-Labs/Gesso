@@ -6,7 +6,8 @@
 # Every persisted artifact (receipts, future cache entries, tuning records,
 # benchmark result files) stamps the schema version it was written under.
 
-export GESSO_SCHEMA_VERSION, RECEIPT_SCHEMA_VERSION, BENCH_RESULT_SCHEMA_VERSION
+export GESSO_SCHEMA_VERSION,
+    RECEIPT_SCHEMA_VERSION, BENCH_RESULT_SCHEMA_VERSION, AUTOTUNE_CACHE_VERSION
 
 """Overall schema generation for persisted Gesso artifacts."""
 const GESSO_SCHEMA_VERSION = v"0.1.0"
@@ -23,3 +24,11 @@ const RECEIPT_SCHEMA_VERSION = v"0.1.0"
 #         (§LXIX): a file may mix row schemas — group by the schema column
 #         when comparing; never silently reinterpret old rows.
 const BENCH_RESULT_SCHEMA_VERSION = v"0.2.0"
+
+"""Autotune cache semantics (src/Autotune/Autotune.jl, §XXVI/§LXXXII).
+
+Part of the cache key. Bump when key fields or winner-selection semantics
+change — a differing version is a cache MISS (re-search), never a silent
+reinterpretation of old entries (§LXIX). The cache itself is process-local
+this sprint; disk persistence arrives later under its own version story."""
+const AUTOTUNE_CACHE_VERSION = v"0.1.0"

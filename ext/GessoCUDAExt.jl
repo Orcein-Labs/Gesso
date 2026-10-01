@@ -118,9 +118,29 @@ include("cuda_ops.jl")
 # functions above are the sanctioned extension mechanism and precompile
 # fine. The binding is a per-session side effect, which is exactly what
 # __init__ is for.
+#
+# `to_device` attach-or-own (Phase 9 item A, §LXXXII — fixes the wart the
+# Phase 8 receipts documented): when another backend extension (GessoLavaExt)
+# already installed `Gesso.to_device`, THIS extension defines its method BY
+# NAME against that existing binding instead of replacing the function
+# object. One function object, both backends' methods, either load order.
+# (Mirrors GessoLavaExt.__init__; see there for the empirical note on why
+# the definition must go through the NAME — interpolating the function
+# object into the definition head is not a legal method definition.)
 function __init__()
     Core.eval(Gesso, :(const CUDABackend = $CUDABackend))
-    Core.eval(Gesso, :(const to_device = $to_device))
+    if isdefined(Gesso, :to_device)
+        Core.eval(
+            Gesso,
+            quote
+                function to_device(b::CUDABackend, tensors)
+                    $(_to_device_cuda)(tensors)
+                end
+            end,
+        )
+    else
+        Core.eval(Gesso, :(const to_device = $to_device))
+    end
     nothing
 end
 

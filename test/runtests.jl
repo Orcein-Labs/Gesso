@@ -127,6 +127,16 @@ using Gesso: reference_prefill, reference_generate
     # structurally stable reports, empty sink is explicit, no CUDA
     include("test_profiling.jl")
 
+    # Phase 9 (§LXXXII item A): mixed-backend to_device — both extension load
+    # orders keep both backends' methods (in-suite order here; Lava-first via
+    # a child process). Runs after both seam files so the load-state consts exist.
+    include("test_to_device_mixed.jl")
+
+    # Phase 9 (§LXXXII item A): the Autotune loop — register, gate, bench,
+    # select, cache, invalidate with pure-Julia candidates. Core machinery:
+    # always runs, no device, no backend imports in the loop.
+    include("test_autotune.jl")
+
     @testset "package loads" begin
         @test Gesso.Log isa Module
         @test isdefined(Gesso, :CPUBackend)

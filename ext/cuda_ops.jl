@@ -342,7 +342,7 @@ the lowering) and return a new named tuple of the same shape — `embedding`,
 `blocks`, `lm_head`, and `final_rms` when present. NEVER mutates the CPU
 tensors. Tied heads stay tied on device: `lm_head === embedding`.
 """
-function to_device(::CUDABackend, tensors)
+function _to_device_cuda(tensors)
     _to_f32(s) = s isa CuArray ? s : CuArray{Float32}(s)
     # tensors in the map carry (shape, storage); blocks are NAMED TUPLES of
     # tensors, so their fields convert field-wise
@@ -359,4 +359,11 @@ function to_device(::CUDABackend, tensors)
     return (; embedding, blocks, lm_head, final_rms)
 end
 
-export to_device
+# ext-local dispatch wrapper (bound as Gesso.to_device when this extension is
+# the first backend extension to load; otherwise __init__ attaches the worker
+# to the already-installed function object — see GessoLavaExt for the full
+# cross-extension rationale and the empirical note on why the definition
+# must go through the NAME in the eval target's scope)
+function to_device(::CUDABackend, tensors)
+    return _to_device_cuda(tensors)
+end
