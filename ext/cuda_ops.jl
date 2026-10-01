@@ -16,6 +16,7 @@
 # a new named tuple of the same shape. It NEVER mutates the CPU tensors.
 
 using LinearAlgebra: mul!
+using Gesso: ERR_VERIFY_MISMATCH   # the all-fail / stale-winner code (§LXX, §LXXXII)
 
 # --- device guard (the interpreter does not copy) -----------------------------
 
@@ -231,6 +232,58 @@ function rope!(
     return _cuda_rope!(q, k, positions; theta)
 end
 
+# --- the §LXXXII exit: the op consults Autotune --------------------------------
+
+# Cache-key device identity (§XXVI): a hardware-stable string, not the
+# process-global singleton. `CUDA.name(CUDA.device())` is the GPU's
+# marketing name (e.g. "NVIDIA GeForce RTX 5060") — different cards tune
+# independently, the same card re-uses its cache across processes.
+_autotune_device_id() = CUDA.name(CUDA.device())
+
+# Shape regime (§LXXXII: named buckets, not every (M, K, N)): look the live
+# matmul's (K, N) up against the two fixture tables item B pinned. A (K, N)
+# that matches no known pair is attributed to :toy2 — the SMALLER bucket —
+# so unknown tiny shapes tune once under a conservative regime instead of
+# widening the search space (and prefill/decode share a regime: the winner
+# is selected per (K, N) table, not per sequence length).
+function _autotune_regime(K::Integer, N::Integer)
+    (K, N) in ((32, 32), (32, 16), (32, 64), (64, 32)) && return :llama_micro
+    return :toy2
+end
+
+# Dispatch through the Autotune registry by WINNER NAME (a Symbol in the
+# cache entry and every receipt), never by holding a function object —
+# re-registration of a name must be able to replace the realization the
+# winner points at (idempotent across extension reloads, §LXXXII).
+# A name that is registered but somehow not dispatchable means the registry
+# and the winner were written by different eras — that is a hard error
+# (§LXX: no silent keep of a stale plan).
+function _autotune_dispatch!(dst, x, w, regime)
+    A = Gesso.Autotune
+    result = A.select(
+        :matmul!,
+        :cuda,
+        regime,
+        _autotune_device_id(),
+        dst,
+        x,
+        w,
+    )
+    cands = A.candidates(:matmul!, :cuda)
+    i = findfirst(c -> c.name === result.winner, cands)
+    i === nothing && throw(
+        gesso_error(
+            ERR_VERIFY_MISMATCH,
+            "matmul!: autotune winner :$(result.winner) has no registered " *
+            "candidate — registry and cache disagree (§LXX: no silent keep)",
+            op = :matmul!,
+            regime = regime,
+            winner = string(result.winner),
+        ),
+    )
+    return cands[i].run!(dst, x, w)
+end
+
 function matmul!(
     ::CUDABackend,
     dst::Activation,
@@ -240,7 +293,7 @@ function matmul!(
 )
     _cuda_device_storage!(:matmul!, dst)
     _cuda_device_storage!(:matmul!, x)
-    return _cuda_matmul!(dst, x, w)
+    return _autotune_dispatch!(dst, x, w, _autotune_regime(size(x.storage, 2), size(w.storage, 1)))
 end
 
 function matmul!(
@@ -252,7 +305,7 @@ function matmul!(
 )
     _cuda_device_storage!(:matmul!, dst)
     _cuda_device_storage!(:matmul!, x)
-    return _cuda_matmul!(dst, x, w)
+    return _autotune_dispatch!(dst, x, w, _autotune_regime(size(x.storage, 2), size(w.storage, 1)))
 end
 
 # tied head (§LXXV): the embedding table IS the lm_head — same function,
@@ -266,7 +319,7 @@ function matmul!(
 )
     _cuda_device_storage!(:matmul!, dst)
     _cuda_device_storage!(:matmul!, x)
-    return _cuda_matmul!(dst, x, w)
+    return _autotune_dispatch!(dst, x, w, _autotune_regime(size(x.storage, 2), size(w.storage, 1)))
 end
 
 function matmul!(
@@ -278,7 +331,7 @@ function matmul!(
 )
     _cuda_device_storage!(:matmul!, dst)
     _cuda_device_storage!(:matmul!, x)
-    return _cuda_matmul!(dst, x, w)
+    return _autotune_dispatch!(dst, x, w, _autotune_regime(size(x.storage, 2), size(w.storage, 1)))
 end
 
 function softmax!(

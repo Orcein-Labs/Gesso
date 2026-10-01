@@ -312,10 +312,35 @@ if CUDA_BENCH
         () -> Gesso.generate(_bench_gpu_session6(), _bench_tokens; max_new_tokens=3),
         "§LXXIX item C: post-warmup — CUDA Session generate, 3 greedy steps over device pages",
     )
+
+    # --- Phase 9 (§LXXXII item C): autotuned matmul! row (gated) -------------
+    # The §LXXXII exit as ONE corpus row: the CUDA matmul! op consults
+    # Autotune, so this prefill executes the (K, N)-regime search on its
+    # first call per regime and dispatches to the cached winner thereafter.
+    # The row is the autotuned-path prefill (post-warmup, §XXXIII); the note
+    # names the winner and makes no speed claim vs any backend (§LXXXII).
+    _bench_autotuned_probe() = Array(
+        Gesso.reference_prefill(
+            _bench_model,
+            _bench_gpu_ts,
+            _bench_tokens;
+            backend=_bench_cuda,
+            eps=_bench_cfg.rms_norm_eps,
+            theta=_bench_cfg.rope_theta,
+        ),
+    )
+    Gesso.Autotune.invalidate_all!()
+    _bench_autotuned_probe()   # warmup: compiles the consult + runs the search once (MISS, §XXXIII)
+    _at_tune = Gesso.Autotune.cached_result(:matmul!, :cuda, :llama_micro)
+    _at_winner = _at_tune === nothing ? :none : _at_tune.winner
+    suite["micro_llama_cuda_prefill_012_autotuned"] = (
+        _bench_autotuned_probe,
+        "§LXXXII item C: post-warmup — CUDA F32 prefill through the Autotune-consulted matmul!; autotune winner for :llama_micro = :$(_at_winner) (selection receipt, no speed claim)",
+    )
 else
     println(
-        "skipping micro-llama CUDA prefill probe: no NVIDIA device ",
-        "(CUDA.functional() == false) — no row accrued (§LXXVII)",
+        "skipping micro-llama CUDA prefill probes: no NVIDIA device ",
+        "(CUDA.functional() == false) — no rows accrued (§LXXVII; §LXXXII autotune row also gated)",
     )
 end
 

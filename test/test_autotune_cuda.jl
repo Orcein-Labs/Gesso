@@ -6,6 +6,13 @@
 # untouched). quantize!/dequantize! still decline; the CPU matmul! path is
 # untouched by Autotune (no consult).
 #
+# Phase 9 item C (§LXXXII): the CUDA `matmul!` op methods CONSULT Autotune —
+# first call searches (cache MISS), later calls hit the cache — and dispatch
+# to the winning candidate by name. Engine-level gates here: toy2 and
+# llama_micro greedy ids still match CPU exactly, logits stay inside the
+# declared atol, host Array + CUDABackend is still ERR_INVALID_PLAN, and the
+# receipts name the winner.
+#
 # Named skip without a CUDA device (§LXXXII skip law). Registration happens
 # in GessoCUDAExt.__init__ — loading CUDA (test_cuda_seam.jl) registered the
 # two real candidates.
@@ -153,5 +160,182 @@ else
             wl,
         )
         @test cpu_d.storage == [4.0 5.0; 10.0 11.0]
+    end
+
+    # ---- Phase 9 item C: the op consults Autotune (§LXXXII exit) ------------
+
+    psink = Gesso.default_receipt_sink()   # process sink: op consults emit here
+    _last_at(regime) = findlast(
+        r ->
+            r.task === :autotune_select &&
+            (regime === nothing || r.context[:regime] === regime),
+        psink.buf,
+    )
+
+    @testset "op consults Autotune: cache entry on first matmul!, hit on second" begin
+        K, N, M = 16, 64, 3                    # toy2 mlp-up shape → :toy2 regime
+        dst = mat(Gesso.Activation, CUDA.zeros(Float32, M, N))
+        xt = mat(
+            Gesso.Activation,
+            CuArray{Float32}(randn(deterministic_rng(48), Float64, M, K)),
+        )
+        wt = mat(
+            Gesso.ProjectionWeight,
+            CuArray{Float32}(randn(deterministic_rng(49), Float64, N, K)),
+        )
+        A.invalidate_all!()                    # only THIS call's miss in the table
+        n_before = _last_at(nothing)
+        Gesso.matmul!(cuda, dst, xt, wt, wl)
+        i1 = _last_at(nothing)
+        @test i1 !== nothing && i1 != n_before          # a select receipt appeared
+        @test psink.buf[i1].context[:cache_hit] == false # first call = MISS
+        @test psink.buf[i1].context[:regime] === :toy2   # (K,N)=(16,64) → toy2
+        entry = A.cached_result(:matmul!, :cuda, :toy2; device=CUDA.name(CUDA.device()))
+        @test entry !== nothing
+        @test entry.winner in _AT_NAMES                 # winner is a registered name
+        # second call with the same key: cache HIT, same winner, no re-search
+        Gesso.matmul!(cuda, dst, xt, wt, wl)
+        i2 = _last_at(nothing)
+        @test i2 !== nothing && i2 > i1
+        @test psink.buf[i2].context[:cache_hit] == true
+        @test psink.buf[i2].context[:winner] === entry.winner
+        # and the winner actually ran: dst holds the right product
+        ref = Float64.(Array(xt.storage)) * Float64.(Array(wt.storage))'
+        @test approx_eq(Array(dst.storage), Float32.(ref); atol=1e-2)
+    end
+
+    @testset "regimes: every declared (K, N) pair resolves and searches legally" begin
+        for (regime, pairs) in _REGIME_PAIRS
+            for (K, N) in pairs
+                M = 2
+                dst = mat(Gesso.Activation, CUDA.zeros(Float32, M, N))
+                xt = mat(
+                    Gesso.Activation,
+                    CuArray{Float32}(randn(deterministic_rng(50), Float64, M, K)),
+                )
+                wt = mat(
+                    Gesso.ProjectionWeight,
+                    CuArray{Float32}(randn(deterministic_rng(51), Float64, N, K)),
+                )
+                r = A.search!(
+                    :matmul!,
+                    :cuda,
+                    regime,
+                    "cuda-device",
+                    dst,
+                    xt,
+                    wt;
+                    samples=4,
+                )
+                @test r.winner in _AT_NAMES
+                @test isempty(r.rejected)
+            end
+        end
+    end
+
+    @testset "regression: host Array + CUDABackend still ERR_INVALID_PLAN (§LXX)" begin
+        err = try
+            Gesso.matmul!(
+                cuda,
+                mat(Gesso.Activation, zeros(2, 2)),
+                mat(Gesso.Activation, [1.0 2.0]),
+                mat(Gesso.ProjectionWeight, [1.0 1.0]),
+                wl,
+            )
+            nothing
+        catch e
+            e
+        end
+        @test err isa Gesso.GessoError
+        @test err.code == Gesso.ERR_INVALID_PLAN
+        @test occursin("to_device", sprint(showerror, err))
+    end
+
+    @testset "end-to-end: toy2 + llama_micro ids match CPU with the consult live" begin
+        # toy2: greedy ids EXACT (argmax is the gate), logits inside the atol
+        ts = toy2_tensors()
+        cpu_ids = Gesso.reference_generate(toy2_modelir(), ts, PROMPT; max_new_tokens=8)
+        gpu_ts = Gesso.to_device(cuda, ts)
+        gpu_logits = Gesso.reference_prefill(toy2_modelir(), gpu_ts, PROMPT; backend=cuda)
+        cpu_logits = Gesso.reference_prefill(toy2_modelir(), ts, PROMPT)
+        got = Float64.(Array(gpu_logits))
+        @test approx_eq(got, cpu_logits; atol=1e-3)
+        println(
+            "toy2 cuda-vs-cpu max|Δlogit| (autotuned) = ",
+            maximum(abs, got .- cpu_logits),
+        )
+        gpu_ids = Gesso.reference_generate(
+            toy2_modelir(),
+            gpu_ts,
+            PROMPT;
+            backend=cuda,
+            max_new_tokens=8,
+        )
+        @test gpu_ids == cpu_ids
+        i_toy = _last_at(:toy2)
+        @test i_toy !== nothing
+        @test psink.buf[i_toy].context[:winner] in _AT_NAMES
+
+        # llama_micro (GQA on device): same two gates, :llama_micro regime used
+        dir = mktempdir()
+        make_micro_checkpoint(dir)
+        model, cpu_tensors, cfg = Gesso.load_llama(dir)
+        tokens = [0, 1, 2]
+        cpu_out = Gesso.reference_prefill(
+            model,
+            cpu_tensors,
+            tokens;
+            eps=cfg.rms_norm_eps,
+            theta=cfg.rope_theta,
+        )
+        gpu_tensors = Gesso.to_device(cuda, cpu_tensors)
+        i_pre = _last_at(:llama_micro)                       # last micro receipt BEFORE this prefill
+        gpu_out = Float64.(
+            Array(
+                Gesso.reference_prefill(
+                    model,
+                    gpu_tensors,
+                    tokens;
+                    backend=cuda,
+                    eps=cfg.rms_norm_eps,
+                    theta=cfg.rope_theta,
+                ),
+            ),
+        )
+        # FIRST micro receipt of this prefill = the (32,32) search → a MISS
+        i_first_micro = findfirst(
+            i ->
+                i > (i_pre === nothing ? 0 : i_pre) &&
+                psink.buf[i].task === :autotune_select &&
+                psink.buf[i].context[:regime] === :llama_micro,
+            1:length(psink.buf),
+        )
+        @test i_first_micro !== nothing
+        @test psink.buf[i_first_micro].context[:cache_hit] == false  # first micro matmul searched
+        @test approx_eq(gpu_out, cpu_out; atol=1e-3)
+        println(
+            "llama_micro cuda-vs-cpu max|Δlogit| (autotuned) = ",
+            maximum(abs, gpu_out .- cpu_out),
+        )
+        cpu_gen = Gesso.reference_generate(
+            model,
+            cpu_tensors,
+            tokens;
+            max_new_tokens=3,
+            eps=cfg.rms_norm_eps,
+            theta=cfg.rope_theta,
+        )
+        gpu_gen = Gesso.reference_generate(
+            model,
+            gpu_tensors,
+            tokens;
+            backend=cuda,
+            max_new_tokens=3,
+            eps=cfg.rms_norm_eps,
+            theta=cfg.rope_theta,
+        )
+        @test gpu_gen == cpu_gen
+        i_micro = _last_at(:llama_micro)
+        @test psink.buf[i_micro].context[:cache_hit] == true          # later calls hit
     end
 end
