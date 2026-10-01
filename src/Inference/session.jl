@@ -26,6 +26,14 @@
 #     host Array storage under a non-CPU backend is ERR_INVALID_PLAN.
 #   * greedy only: `argmax`, ties = first index, 0-based id, no Random (§LXXVIII).
 #     The argmax lives in `_greedy_id` so it is not buried.
+
+# Device fast paths (Phase 10 B/C) are gated on backend CAPABILITY (§XX),
+# probed as `Gesso.supports(backend, :argmax / :attn_gemm)` — so a backend
+# without the fast path (Lava) keeps its own contraction and the full-row
+# host argmax. No silent fallback: the gate is declared, the branches are
+# visible, and ids are asserted identical either way.
+import ..Gesso                                # binds the parent module NAME for the capability probes
+using LinearAlgebra: mul!                     # device GEMM fast paths (Phase 10 C)
 #   * `eos_token_id` is a required Session field — the engine does NOT
 #     hardcode the oracle's TOY_EOS. The oracle still does (its contract).
 #   * Runtime stays contract-only (§XXXII): Session lives in Inference; there
@@ -163,6 +171,35 @@ _session_zeros_like(tensors, dims::Tuple{Vararg{Int}}) = fill!(
 # greedy id from a logits row: argmax, ties = first index, 0-based (§LXXVIII;
 # no Random, no Sampler zoo)
 _greedy_id(logits_row) = Int(argmax(logits_row)) - 1
+
+# device greedy id over hidden row `row` (Phase 10 B): the `_last_logits`
+# math (final RMSNorm when present, tied lm_head matmul) runs on the device
+# storage, then `argmax` runs ON the device too — GPUArrays argmax resolves
+# ties to the FIRST index deterministically (verified against host `argmax`
+# on tie fixtures: mid-tie, all-equal, 50k-apart equal tail), matching the
+# host reduction bit-for-bit on ids. Returns ONE 0-based Int: the (vocab,)
+# logits row never crosses to the host on the decode hot path (§LXXVII:
+# explicit transfers; the decode D2H is one Int per token).
+function _device_greedy_id(model, tensors, h, cpu, wl, vocab, row::Int; eps::Real=1e-6)
+    dim = size(h, 2)
+    T = typeof(h)
+    lastrow = Activation(; shape=(1, dim), storage=reshape(h[row, :], (1, dim)))
+    final_rms = haskey(tensors, :final_rms) ? tensors.final_rms : nothing
+    if final_rms !== nothing
+        normed = Activation(;
+            shape=(1, dim),
+            storage=fill!(similar(h, eltype(T), (1, dim)), zero(eltype(h))),
+        )
+        rmsnorm!(cpu, normed, lastrow, final_rms, wl; eps)
+        lastrow = normed
+    end
+    out = Activation(;
+        shape=(1, vocab),
+        storage=fill!(similar(h, eltype(T), (1, vocab)), zero(eltype(h))),
+    )
+    matmul!(cpu, out, lastrow, tensors.lm_head, wl)
+    return Int(argmax(vec(out.storage))) - 1     # 0-based id, ties = first index (§LXXVIII)
+end
 
 function _session_reset!(s::Session)
     s.mgr = PagedKVManager(
@@ -371,7 +408,20 @@ function _prefill_impl!(s::Session, tokens::AbstractVector{Int}, span::_EngineSp
                 scores.storage[t, u] +=
                     qh.storage[t, hh, j] * kx.storage[u, hh, j] / sqrt(d_head)
             end
+        elseif Gesso.supports(cpu, :attn_gemm)
+            # CUDA fast path (Phase 10 C): the same contraction, as one flat
+            # GEMM over (P, n_heads·d_head) reshapes — a plain device `mul!`
+            # (CUBLAS) on the SAME gathered scratch. Pages remain the cache;
+            # gather remains legal; no page-table kernel (that is the packet).
+            # reshape(CuArray) is zero-copy and stays a CuArray (probed); the
+            # non-contiguous inner axis disappears in the 2-D flatten.
+            Q2 = reshape(qh.storage, P, n_heads * d_head)
+            K2 = reshape(kx.storage, P, n_heads * d_head)
+            mul!(scores.storage, Q2, transpose(K2))
+            scores.storage ./= sqrt(d_head)
         else
+            # Device backends without the :attn_gemm cap (Lava): the original
+            # per-head broadcasts, unchanged.
             for hh in 1:n_heads, j in 1:d_head
                 @views scores.storage[:, :] .+=
                     qh.storage[:, hh, j] .* kx.storage[:, hh, j]' ./ sqrt(d_head)
@@ -384,6 +434,12 @@ function _prefill_impl!(s::Session, tokens::AbstractVector{Int}, span::_EngineSp
             for t in 1:P, hh in 1:n_heads, j in 1:d_head, u in 1:P
                 attn.storage[t, hh, j] += scores_out.storage[t, u] * vx.storage[u, hh, j]
             end
+        elseif Gesso.supports(cpu, :attn_gemm)
+            # PV as one flat GEMM too: (P,P)·(P, H·d) → (P, H·d), reshaped back
+            # in place over the SAME (P, n_heads, d_head) buffer.
+            A2 = reshape(attn.storage, P, n_heads * d_head)
+            V2 = reshape(vx.storage, P, n_heads * d_head)
+            mul!(A2, scores_out.storage, V2)
         else
             for hh in 1:n_heads, j in 1:d_head
                 @views attn.storage[:, hh, j] .= scores_out.storage * vx.storage[:, hh, j]
@@ -444,10 +500,36 @@ function _decode_impl!(s::Session, span::_EngineSpan)
     wl = DecodeWorkload()    # _last_logits consumes an Activation (oracle helper contract) — wrap the
     # session's h buffer; storage CONTENT is shared, nothing is copied
     t_decode = time_ns()
-    h_act = Activation(; shape=(s.context_length, s.model.embedding.dim), storage=s.h)
-    logits_row =
-        _last_logits(s.model, s.tensors, h_act, cpu, wl, s.vocab, s.seqlen; eps=s.eps)
-    next = _greedy_id(logits_row)
+    if on_cpu
+        # CPU oracle path (bit-identical): full (vocab,) logits row, host argmax.
+        h_act = Activation(; shape=(s.context_length, s.model.embedding.dim), storage=s.h)
+        logits_row =
+            _last_logits(s.model, s.tensors, h_act, cpu, wl, s.vocab, s.seqlen; eps=s.eps)
+        next = _greedy_id(logits_row)
+    elseif Gesso.supports(cpu, :argmax)
+        # Device fast path (Phase 10 B): the (vocab,) logits row NEVER crosses
+        # back to the host — argmax runs where the logits live and the host
+        # receives ONE integer (§LXXVII explicit transfers; §LXX no silent
+        # downgrades — same lm_head matmul, same reduction semantics, ties =
+        # first index on both paths).
+        next = _device_greedy_id(
+            s.model,
+            s.tensors,
+            s.h,
+            cpu,
+            wl,
+            s.vocab,
+            s.seqlen;
+            eps=s.eps,
+        )
+    else
+        # Device backends without the :argmax cap (Lava): full (vocab,) row
+        # crosses back, host argmax — §LXXVIII semantics unchanged.
+        h_act = Activation(; shape=(s.context_length, s.model.embedding.dim), storage=s.h)
+        logits_row =
+            _last_logits(s.model, s.tensors, h_act, cpu, wl, s.vocab, s.seqlen; eps=s.eps)
+        next = _greedy_id(logits_row)
+    end
     if next != s.eos_token_id                    # EOS: returned, nothing appended
         _session_consume!(s, next)
     end
@@ -535,6 +617,14 @@ function _session_consume!(s::Session, tok::Int)
                 scores.storage[1, u] +=
                     qh.storage[1, hh, j] * kx.storage[u, hh, j] / sqrt(d_head)
             end
+        elseif Gesso.supports(cpu, :attn_gemm)
+            # CUDA fast path (Phase 10 C): one (1, H·d)·(H·d, K) GEMM row over
+            # the SAME gathered scratch — CUBLAS on reshape views, no per-head
+            # Julia loop, no page-table kernel (that is the packet).
+            Q1 = reshape(qh.storage, 1, n_heads * d_head)
+            K2 = reshape(kx.storage, K, n_heads * d_head)
+            mul!(scores.storage, Q1, transpose(K2))
+            scores.storage ./= sqrt(d_head)
         else
             for hh in 1:n_heads
                 q1 = vec(qh.storage[1, hh, :])           # (d_head,) device copy
@@ -548,6 +638,11 @@ function _session_consume!(s::Session, tok::Int)
             for hh in 1:n_heads, j in 1:d_head, u in 1:K
                 attn.storage[1, hh, j] += scores_out.storage[1, u] * vx.storage[u, hh, j]
             end
+        elseif Gesso.supports(cpu, :attn_gemm)
+            # PV: (1,K)·(K, H·d) → (1, H·d), reshaped back in place.
+            A1 = reshape(attn.storage, 1, n_heads * d_head)
+            V2 = reshape(vx.storage, K, n_heads * d_head)
+            mul!(A1, scores_out.storage, V2)
         else
             for hh in 1:n_heads
                 V = vx.storage[1:K, hh, :]               # (K, d_head)

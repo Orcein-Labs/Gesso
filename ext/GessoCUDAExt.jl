@@ -88,9 +88,12 @@ execution_tier(::CUDABackend) = 1   # OPTIMIZED_GENERIC (§XXI)
 backend_name(::Type{CUDABackend}) = :cuda
 execution_tier(::Type{CUDABackend}) = 1
 
-# Same capability coverage as the CPU reference: the six implemented ops.
-# :quantize / :dequantize stay false (Representation-phase concern), and
-# unknown capabilities stay false — probing is always safe (§XX).
+# Same capability coverage as the CPU reference: the six implemented ops,
+# plus the Phase 10 device-only fast-path caps: :argmax (reduction ON the
+# device — host receives one Int, never the logits row) and :attn_gemm (the
+# Session attention contraction as one flat device GEMM over the gathered
+# scratch). :quantize / :dequantize stay false (Representation-phase
+# concern), and unknown capabilities stay false — probing is always safe (§XX).
 const CUDA_SUPPORTED_CAPS = Set([
     :rmsnorm,
     :rope,
@@ -98,6 +101,8 @@ const CUDA_SUPPORTED_CAPS = Set([
     :swiglu,
     :matmul,
     :embedding_lookup,
+    :argmax,
+    :attn_gemm,
 ])
 
 supports(::CUDABackend, cap::Symbol) = cap in CUDA_SUPPORTED_CAPS

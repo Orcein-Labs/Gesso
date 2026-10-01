@@ -398,6 +398,13 @@ end
 #                 expected and acceptable result. The point is that selection
 #                 happened."
 #
+# Phase 10 C note: the Session ATTENTION contraction (QKᵀ and PV over the
+# gathered scratch) is NOT registered here — it is head-structured (3-D
+# storages), not matmul!-shaped under this two-candidate (dst, x, w) 2-D
+# contract, so it lives in Session backend-dispatched (its capability gate
+# is supports(::CUDABackend, :attn_gemm)); every matmul! on the path still
+# consults the search above (§LXXXII unchanged).
+#
 # Both are gated against the CPU F64 oracle at the EXISTING Phase 4 CUDA op
 # atol (1e-2, the op-level compare in test_cuda_ops.jl — no third atol is
 # invented). The gate runs the candidate into a scratch (never the live dst)

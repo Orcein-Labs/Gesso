@@ -3,6 +3,13 @@
 # (argmax gate), prefill! logits at declared atol=1e-3, and the no-copy law
 # (host Array tensors + CUDA backend is ERR_INVALID_PLAN at construction).
 # One named skip without a device (§LXXVIII skip law).
+#
+# Phase 10 items B/C: the device fast paths — argmax runs ON the device
+# (host receives ONE Int per decode step, never the (vocab,) logits row)
+# and the attention contraction is one flat device GEMM over the gathered
+# scratch (capability :attn_gemm). Both are gated by token-id identity vs
+# the CPU Session below; the intent assertion names the device argmax so a
+# future full-row D2H on the decode hot path fails here, not in review.
 
 using Test: AbstractTestSet, Broken, get_testset, record
 
@@ -73,6 +80,33 @@ else
             max_new_tokens=8,
         )
         @test gpu_ids3 == cpu_ids
+    end
+
+    @testset "Phase 10 B: device argmax fast path — ids exact, host gets one Int" begin
+        gpu_ts = Gesso.to_device(cuda, ts)
+        cpu_ids = Gesso.generate(
+            Gesso.Session(model, ts; context_length=128, eos_token_id=2),
+            PROMPT;
+            max_new_tokens=8,
+        )
+        # greedy-id identity through the device-argmax path (every decode step
+        # of this generate runs _device_greedy_id: the (vocab,) logits row
+        # never crosses to the host)
+        gpu_ids = Gesso.generate(
+            Gesso.Session(model, gpu_ts; backend=cuda, context_length=128, eos_token_id=2),
+            PROMPT;
+            max_new_tokens=8,
+        )
+        @test gpu_ids == cpu_ids
+        # intent: the device argmax is a declared capability (§XX), not a
+        # silent behavior — a backend that loses the cap falls back to the
+        # full-row host argmax and this assertion fails loudly
+        @test Gesso.supports(cuda, :argmax) == true
+        # tie law on device: Base.argmax on CuVector resolves ties to the
+        # FIRST index, matching the host reduction bit-for-bit (§LXXVIII)
+        tie = CuArray([3.0f0, 5.0f0, 5.0f0, 1.0f0])
+        @test argmax(tie) == 2
+        @test argmax(CuArray(fill(2.0f0, 64))) == 1
     end
 
     @testset "no-copy law: host Array tensors + CUDA backend throws at construction" begin
