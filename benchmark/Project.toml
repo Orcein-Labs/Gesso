@@ -7,6 +7,21 @@ BenchmarkTools = "6e4b80f9-dd63-53aa-95a3-0cdb28fa8baf"
 # precedent as test/Project.toml. Without a device the probe is skipped
 # (no row accrued); the suite still runs and persists.
 CUDA = "052768ef-5323-5732-b1bb-66c8b64840ba"
+# Phase 8 (§LXXXI item C): Lava in the BENCH env so the GessoLavaExt
+# extension can trigger for the gated micro-llama prefill probe. This is
+# the bench env, not core — core [deps] stays Lava-free (§VII), same
+# precedent as CUDA above and test/Project.toml. Without a usable Vulkan
+# device the probe is skipped (no row accrued); the suite still runs and
+# persists. Vulkan.jl/VulkanCore.jl are Lava's runtime deps, pinned FROM
+# SOURCE to the sd/vk1.4 branches — the same upstream-skew workaround as
+# test/Project.toml (registered Vulkan.jl 0.6.30 lacks a symbol Lava master
+# calls on cooperative-matrix devices); see that file for the full note.
+Lava = "3a680b1f-cb25-4bee-9cf7-bc880b76dc8c"
+Vulkan = "9f14b124-c50e-4008-a7d4-969b3a6cd68a"
+VulkanCore = "16167f82-ea26-5cba-b1de-ed6fd5e30a11"
 
 [sources]
 Gesso = {path = ".."}
+Lava = {url = "https://github.com/SimonDanisch/Lava.jl"}
+Vulkan = {url = "https://github.com/JuliaGPU/Vulkan.jl", rev = "03b4ca2351477ccbb8ee378f512da50f7eec7bac"}
+VulkanCore = {url = "https://github.com/JuliaGPU/VulkanCore.jl", rev = "1d02829e8fa92da430d879db4dd7bf564a872035"}

@@ -319,6 +319,48 @@ else
     )
 end
 
+# --- Phase 8 (§LXXXI item C): gated micro-llama Lava prefill probe ----------
+# benchmark/Project.toml declares Lava (the bench env, never core §VII) so
+# the GessoLavaExt extension can trigger here. Without a usable Vulkan
+# device the entry is never added — device-less machines accrue no row and
+# CI never requires a device (§LXXXI skip law; the run output names it).
+# ONE corpus row this sprint (§LXXXI): prefill; no CUDA/llama.cpp comparison
+# is claimed anywhere (§LXXXI — tune is Phase 9).
+const LAVA_BENCH = let
+    ok = true
+    try
+        @eval Main using Lava
+        Lava.vk_context()
+    catch
+        ok = false
+    end
+    ok
+end
+
+if LAVA_BENCH
+    _bench_lava = Gesso.LavaBackend()
+    _bench_lava_ts = Gesso.to_device(_bench_lava, _bench_ts)
+    _bench_lava_probe() = Array(
+        Gesso.reference_prefill(
+            _bench_model,
+            _bench_lava_ts,
+            _bench_tokens;
+            backend=_bench_lava,
+            eps=_bench_cfg.rms_norm_eps,
+            theta=_bench_cfg.rope_theta,
+        ),
+    )   # Array() reads back to host after the op-boundary synchronize (§LXXXI)
+    suite["micro_llama_lava_prefill_012"] = (
+        _bench_lava_probe,
+        "§LXXXI item C: Vulkan F32 prefill + host readback, tokens [0,1,2], llama_micro shape — portable seam, no speed claim vs CUDA (tune is Phase 9)",
+    )
+else
+    println(
+        "skipping micro-llama Lava prefill probe: no usable Vulkan device ",
+        "(Lava.vk_context() failed) — no row accrued (§LXXXI)",
+    )
+end
+
 # --- environment metadata (recorded once; persisted per row) ----------------
 host = try
     gethostname()
