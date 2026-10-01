@@ -97,6 +97,21 @@ dispatches to the cached winner; every selection emits one `Receipt`
 CUDA nor Lava — backends register candidates at load time. Selection
 happened; no tuned-kernel or speed claim is made.
 
+Phase 10 lands the **speed floor's proof-ladder rungs 1–2**
+(`docs/goals/PHASE10_SPEED_FLOOR.md`, gates G1–G3 of
+`docs/research/SPEED_FLOOR.md`): CUDA decode runs greedy argmax **on the
+device** — the host receives one integer per token and the (vocab,) logits
+row never crosses back on the hot path — and the attention contraction
+(QKᵀ + PV) runs as **one flat device GEMM over the gathered scratch** (pages
+remain the cache, gather remains legal, `fork` aliasing untouched; no
+page-table kernel — that is a later packet). The G2 comparison harness
+(`benchmark/compare_eager.py`) publishes first-token and warmed rows for
+SmolLM2-135M against eager PyTorch `generate` on the same checkpoint, prompt,
+and length — when a local snapshot, CUDA, and an external `python3` with
+torch/transformers are all present; without them it is a named skip, and CI
+never requires any of the three (never downloads). §LXXXIII (the
+representation planner) stays parked until G1∧G2∧G3 are honestly green.
+
 ## Development order (§III)
 
 ```
@@ -117,6 +132,7 @@ Current phases (docs/Gesso_Stack.md §LXXIII ff.):
 | 7 | First semantic optimization | **A/B/C/D LANDED 2026-09-30** — CoW + declared identity prefix share (`fork`), `Profiling.unique_kv_bytes` byte win (§LXXX) |
 | 8 | Lava/Vulkan backend | **A/B/C/D LANDED 2026-09-30** — GessoLavaExt seam + six ops + interpreter/Session/fork on `LavaArray{Float32}` (§LXXXI); portable seam, not tuned; device-less runs skip by name |
 | 9 | Autotune | **A/B/C/D LANDED 2026-10-01** — the §XXVI loop: two gated CUDA `matmul!` candidates, winner cached per (device, backend, op, regime), op consults and dispatches to it (§LXXXII); selection, not speed; device-less runs skip by name |
+| 10 | Speed floor (proof-ladder rungs 1–2) | **A/B/C/D LANDED 2026-10-01** — device greedy (one Int D2H per token) + device GEMM attention over gathered scratch (§LXXXIII gates G1–G3 harness); G2 eager-PyTorch rows skip-or-land; SmolLM2 gate is ops-blocked without a local snapshot; §LXXXIII representation planner stays PARKED |
 
 Training is **not** part of Gesso — by explicit, permanent decision
 ([docs/Gesso_Stack.md §LVIII](docs/Gesso_Stack.md)). If you want to contribute

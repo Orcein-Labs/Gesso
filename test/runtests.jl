@@ -143,6 +143,11 @@ using Gesso: reference_prefill, reference_generate
     # always runs, no device, no backend imports in the loop.
     include("test_autotune.jl")
 
+    # Phase 10 (§LXXXIII gate G2 item D): the eager-PyTorch comparison harness
+    # exists and stays honest — source-inspected and --help-probed WITHOUT
+    # torch, a snapshot, or a device (CI never requires any of them).
+    include("test_speed_floor_harness.jl")
+
     @testset "package loads" begin
         @test Gesso.Log isa Module
         @test isdefined(Gesso, :CPUBackend)

@@ -22,9 +22,9 @@ CPU oracle; portable seam, not tuned. Phase 9 landed 2026-10-01
 `matmul!` candidates, the winner cached per (device, backend, op, regime),
 the op consults Autotune and dispatches to it. Selection happened; no
 speed claim. Next open recipe: **speed floor**
-(`docs/research/SPEED_FLOOR.md`) — named model + eager-PyTorch
-factor + fast path that still `fork`s. Phase 10 representation waits
-on that gate.
+(`docs/goals/PHASE10_SPEED_FLOOR.md`) — named model + eager-PyTorch
+factor + device greedy + device attention over gathered scratch.
+Canon §LXXXIII representation waits on G1∧G2∧G3.
 
 Canon still lists Phases 0–22 in `docs/Gesso_Stack.md` §LXXIII–§XCV.
 This file says what that list *means* after Phases 0–4 and the first
@@ -101,9 +101,16 @@ inference engine. That is 5a. Serving fabric is 5b.
 7       one semantic win              DONE  2026-09-30  PHASE7_PREFIX_SHARE.md
 8       Lava / Vulkan                 DONE  2026-09-30  PHASE8_LAVA.md
 9       autotune (selection)          DONE  2026-10-01  PHASE9_AUTOTUNE.md
-G1–G3   speed floor                   NEXT  SPEED_FLOOR.md
-                                      SmolLM2 green, eager-PyTorch
-                                      factor, fused decode that still forks
+G1–G3   speed floor                   LANDED 2026-10-01  PHASE10_SPEED_FLOOR.md
+                                      device greedy (one Int per token) +
+                                      device GEMM over gathered scratch;
+                                      still forks; G2 harness exists —
+                                      SmolLM2 rows land on a box with a
+                                      local snapshot + torch (G1 is
+                                      ops-blocked here; harness skip-or-green)
+                                      §LXXXIII stays parked until G1∧G2∧G3
+                                      are honestly green with a measured
+                                      SmolLM2 factor on the demo box
 10–11   weight compiler + memory      AFTER G1∧G2∧G3
 12–13   shared model runtime          mechanism for many agents, one model
 ABI     Cyan consumes Gesso           Phases 16, then 17 adapter
@@ -140,6 +147,15 @@ dispatch and metaprogramming specialize parallel *schedules*
 (better where parallelism already exists; new where the engine
 still serializes — `fork` trees, page CoW). That is Phases
 18–20 shaped work. It is not the next Buffy recipe.
+
+Proof ladder and thesis: `SPEED_FLOOR.md` §2c. Two lanes, one
+engine — boring Session for everyone (and for Cyan); exotic
+schedules for ML/data scientists who can use the meaning. Lane B
+exists because Lane A is reliable. Collect "Julia would let us
+do *what*?" cases; do not build them from a daydream. First-draft
+mine: `docs/research/EXOTIC_CAPABILITY_MASTER_LEDGER.md` — strings,
+not sprints. The speed floor is the baseline every exotic schedule
+has to race.
 
 "Any currently available model" is the long import program. The
 speed floor's model is SmolLM2-135M. Training remains someone

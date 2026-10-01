@@ -2958,6 +2958,24 @@ Exit:
 Implementation seed: `docs/research/REPRESENTATION_PROGRAM.md`
 (index: `docs/research/README.md`). Do not start this phase from musings.
 
+SPEED FLOOR status note (2026-10-01, Phase 10 — this is NOT §LXXXIII
+completion; the representation planner above stays PARKED until
+G1∧G2∧G3 exist and the encoding owner opens that phase):
+    Phase 10 (docs/goals/PHASE10_SPEED_FLOOR.md) landed its
+    proof-ladder rungs 1–2: device greedy (CUDA decode! runs argmax
+    ON the device — host receives one Int per token, never the
+    (vocab,) logits row) and device attention over the gathered
+    scratch (QKᵀ + PV as flat device GEMM, pages + gather unchanged,
+    no page-table kernel). The G2 harness
+    (benchmark/compare_eager.py, external python3 + torch/transformers,
+    never a Project.toml dep) exists and lands first-token + warmed
+    SmolLM2-135M rows vs eager HF generate when snapshot + CUDA +
+    torch are present; without them it is a named skip, and CI never
+    requires any of the three. G1 (SmolLM2 snapshot protocol) remains
+    ops-blocked on boxes without a local snapshot — existing tests
+    stay skip-or-green. §LXXXIII is NOT COMPLETE; no Representation
+    fill, no cages, no Magenta, no Julia fork.
+
 
 ===============================================================================
 LXXXIV. PHASE 11 — MEMORY PLANNER

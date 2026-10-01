@@ -82,6 +82,7 @@ curated = String[
     "docs/goals/PHASE7_PREFIX_SHARE.md",
     "docs/goals/PHASE8_LAVA.md",
     "docs/goals/PHASE9_AUTOTUNE.md",
+    "docs/goals/PHASE10_SPEED_FLOOR.md",
     "docs/research/README.md",
     "docs/research/KV_MEMORY_PROGRAM.md",
     "docs/research/KV_MEMORY_PROGRAM_part2.md",
@@ -89,6 +90,7 @@ curated = String[
     "docs/research/CYAN_TRIAL_GESSO_FALLOUT.md",
     "docs/research/ROADMAP_NOW.md",
     "docs/research/SPEED_FLOOR.md",
+    "docs/research/EXOTIC_CAPABILITY_MASTER_LEDGER.md",
     "docs/Gesso_musings.md",
     # package core
     "src/Gesso.jl",

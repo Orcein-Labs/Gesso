@@ -344,6 +344,174 @@ else
     )
 end
 
+# --- Phase 10 (G2): named-model first-token + warmed rows vs eager PyTorch --
+# The §LXXXIII gate's first implementation: HuggingFaceTB/SmolLM2-135M on the
+# Gesso CUDA Session vs HF LlamaForCausalLM eager generate (no torch.compile,
+# batch 1, greedy) — SAME checkpoint (GESSO_SMOLLM2_DIR), same prompt
+# ("Hello"), same max_new_tokens (8), two clocks on each side. All sub-gates
+# must hold: CUDA.functional() (the enclosing CUDA_BENCH), a local snapshot
+# (never downloads, §LXXVI), and an external python3 with torch +
+# transformers (probe by --help dry run — PyTorch is an EXTERNAL binary,
+# never a Project.toml dep, §VII). Any missing gate: named skip, no rows —
+# the harness still exists either way.
+#
+# Clock discipline (§XXXIII, applied to BOTH sides):
+#   * FIRST-TOKEN row: one wall-clock generate on a fresh Session, one-shot
+#     kernel compile INSIDE the number (that is what first-token means).
+#   * WARMED row: untimed warmup, then BenchmarkTools samples. The eager
+#     side's warmed number comes from benchmark/compare_eager.py's own
+#     in-process warmup + median (python/torch startup amortized OUTSIDE its
+#     timed samples) — it is recorded DIRECTLY below, never re-run through
+#     @benchmark, which would time a process spawn per sample and lie.
+#   * ids gate BEFORE any row is recorded: the CUDA Session's generate must
+#     equal the CPU oracle on the named model, or the run errors with NO
+#     rows published (§LXX: fail closed — no factor without exact ids).
+#   * factor row is a DECLARATION (0-ns byte-row style): computed AFTER the
+#     suite loop from THIS run's recorded medians, stated in the note only.
+const _P10_PY = "python3"
+const _P10_SCRIPT = joinpath(@__DIR__, "compare_eager.py")
+const _P10_PROMPT = "Hello"
+const _P10_MAXNEW = 8
+const _P10_GESSO_DTYPE = "F32"          # CUDA Session compute dtype (§LXXVII)
+const P10_TORCH_STAMP = Ref("unknown")  # eager compute dtype (filled in-block)
+const P10_EAGER_WARMED_S = Ref(NaN)     # eager warmed seconds (factor post-loop)
+
+function _p10_run_eager(mode::AbstractString)
+    cmd = `$_P10_PY $_P10_SCRIPT --mode $mode --max-new-tokens $_P10_MAXNEW --prompt $_P10_PROMPT`
+    out = IOBuffer()
+    str = ""
+    local p
+    try
+        p = run(pipeline(cmd; stdout=out, stderr=devnull))
+        str = String(take!(out))
+    catch e
+        return (code=-1, out=sprint(showerror, e))
+    end
+    p.exitcode == 0 || return (code=p.exitcode, out=str)
+    kv = Dict{String, Float64}()
+    for line in split(str, '\n')
+        m = match(r"^([a-z_]+):\s*(.+)$", strip(line))
+        m === nothing && continue
+        v = tryparse(Float64, m.captures[2])
+        v === nothing || (kv[m.captures[1]] = v)
+    end
+    return (code=0, kv=kv, out=str)
+end
+
+function _p10_torch_ok()
+    cmd = `$_P10_PY $_P10_SCRIPT --help`
+    try
+        return run(pipeline(cmd; stdout=devnull, stderr=devnull)).exitcode == 0
+    catch
+        return false                            # python3 itself missing
+    end
+end
+
+if CUDA_BENCH &&
+   haskey(ENV, "GESSO_SMOLLM2_DIR") &&
+   isdir(ENV["GESSO_SMOLLM2_DIR"]) &&
+   _p10_torch_ok()
+    _p10_dir = ENV["GESSO_SMOLLM2_DIR"]
+    _p10_model, _p10_cpu_ts, _p10_cfg = Gesso.load_llama(_p10_dir)
+    _p10_tk = Gesso.load_gpt2_tokenizer(_p10_dir)
+    _p10_ids = Gesso.encode(_p10_tk, _P10_PROMPT)
+    _p10_gpu_ts = Gesso.to_device(_bench_cuda, _p10_cpu_ts)
+    _p10_session() = Gesso.Session(
+        _p10_model,
+        _p10_gpu_ts;
+        backend=_bench_cuda,
+        context_length=128,
+        eos_token_id=0,                  # the released checkpoint's EOS (§LXXVI)
+        tokenizer=_p10_tk,
+        eps=_p10_cfg.rms_norm_eps,
+        theta=_p10_cfg.rope_theta,
+    )
+
+    # eager side first (both clocks); a failed eager reference aborts the
+    # block BEFORE any Gesso row exists — never half a comparison
+    _p10_ef = _p10_run_eager("first")
+    _p10_ew = _p10_run_eager("warmed")
+    (_p10_ef.code == 0 && _p10_ew.code == 0) || error(
+        "G2 bench: eager reference failed (codes $(_p10_ef.code)/$(_p10_ew.code)) — no rows published (§LXX)",
+    )
+    _p10_stamp_txt = let
+        m = match(r"compute_dtype:\s*(\S+)", _p10_ew.out)
+        m === nothing ? "unknown" : String(m.captures[1])
+    end
+    P10_TORCH_STAMP[] = _p10_stamp_txt
+    P10_EAGER_WARMED_S[] = _p10_ew.kv["seconds"]
+    _p10_ef_s = _p10_ef.kv["seconds"]
+
+    # Gesso FIRST-TOKEN clock: one generate on a fresh CUDA Session, compile
+    # inside (§XXXIII). This same call's ids are the GATE: no exact ids, no
+    # rows — the measurement is discarded with the error.
+    _p10_t0 = time_ns()
+    _p10_gate_ids = Gesso.generate(_p10_session(), _p10_ids; max_new_tokens=_P10_MAXNEW)
+    _p10_g_first_s = (time_ns() - _p10_t0) / 1e9
+    _p10_cpu_ids = Gesso.generate(
+        Gesso.Session(
+            _p10_model,
+            _p10_cpu_ts;
+            context_length=128,
+            eos_token_id=0,
+            tokenizer=_p10_tk,
+            eps=_p10_cfg.rms_norm_eps,
+            theta=_p10_cfg.rope_theta,
+        ),
+        _p10_ids;
+        max_new_tokens=_P10_MAXNEW,
+    )
+    _p10_gate_ids == _p10_cpu_ids || error(
+        "G2 bench: CUDA Session ids diverged from the CPU oracle on the named model — no rows published (§LXX fail closed)",
+    )
+
+    # gates passed — publish the rows
+    record(
+        "smollm2_eager_pytorch_first_token";
+        samples=1,
+        median_ns=round(Int, _p10_ef_s * 1e9),
+        mean_ns=round(Int, _p10_ef_s * 1e9),
+        min_ns=round(Int, _p10_ef_s * 1e9),
+        allocs=0,
+        bytes=0,
+        note="§LXXXIII gate G2, FIRST-TOKEN clock: eager PyTorch single-shot generate, kernel compile INSIDE the number (LlamaForCausalLM.generate, do_sample=False, batch 1, NO torch.compile); one wall-clock run measured by benchmark/compare_eager.py; allocs/bytes not applicable across the process boundary",
+    )
+    record(
+        "smollm2_eager_pytorch_warmed";
+        samples=Int(_p10_ew.kv["samples"]),
+        median_ns=round(Int, _p10_ew.kv["seconds"] * 1e9),
+        mean_ns=round(Int, _p10_ew.kv["seconds"] * 1e9),
+        min_ns=round(Int, _p10_ew.kv["seconds"] * 1e9),
+        allocs=0,
+        bytes=0,
+        note="§LXXXIII gate G2, WARMED clock: eager PyTorch generate, median of the script's in-process samples AFTER its own untimed warmup (§XXXIII); measured by benchmark/compare_eager.py, recorded here verbatim; compute dtype $_p10_stamp_txt (from_pretrained defaults) vs Gesso $(_P10_GESSO_DTYPE) — both stamps travel with the numbers, no cross-dtype claim",
+    )
+    record(
+        "smollm2_gesso_cuda_first_token";
+        samples=1,
+        median_ns=round(Int, _p10_g_first_s * 1e9),
+        mean_ns=round(Int, _p10_g_first_s * 1e9),
+        min_ns=round(Int, _p10_g_first_s * 1e9),
+        allocs=0,
+        bytes=0,
+        note="§LXXXIII gate G2, FIRST-TOKEN clock: SmolLM2-135M CUDA Session generate on a fresh Session (greedy, batch 1), one-shot compile INSIDE the number; ids == CPU oracle (asserted before this row was recorded); compute dtype $(_P10_GESSO_DTYPE)",
+    )
+
+    # WARMED Gesso row through the standard suite (BenchmarkTools, post-warmup)
+    _p10_gesso_probe() =
+        Gesso.generate(_p10_session(), _p10_ids; max_new_tokens=_P10_MAXNEW)
+    _p10_gesso_probe()                       # untimed warmup (§XXXIII)
+    suite["smollm2_gesso_cuda_warmed"] = (
+        _p10_gesso_probe,
+        "§LXXXIII gate G2, WARMED clock: SmolLM2-135M CUDA Session generate post-warmup (greedy, batch 1); ids == CPU oracle (asserted before any row exists); compute dtype $(_P10_GESSO_DTYPE); eager warmed compute dtype $_p10_stamp_txt — same checkpoint, prompt \"$_P10_PROMPT\", max_new_tokens $_P10_MAXNEW on both sides",
+    )
+elseif CUDA_BENCH
+    println(
+        "skipping G2 SmolLM2 rows: needs GESSO_SMOLLM2_DIR (local snapshot, never downloads) ",
+        "and a python3 with torch+transformers — named skip, no rows (§LXXVI; §LXXXIII)",
+    )
+end
+
 # --- Phase 8 (§LXXXI item C): gated micro-llama Lava prefill probe ----------
 # benchmark/Project.toml declares Lava (the bench env, never core §VII) so
 # the GessoLavaExt extension can trigger here. Without a usable Vulkan
@@ -473,6 +641,40 @@ record(
     bytes=_forked_bytes,
     note="§LXXX item C: post-warmup BYTE row (not timing) — unique_kv_bytes(parent, child) after prefill!+fork, pre-decode: the declared alias costs ONE session's kv_bytes; saving vs the isolated-pair row is the difference of the two rows",
 )
+
+# --- Phase 10 (G2): the FACTOR row — a DECLARATION, not a measurement -------
+# Computed from THIS run's recorded medians (eager warmed median came from
+# the external script; the Gesso warmed median from the suite loop above).
+# If the G2 block never ran (no CUDA / no snapshot / no torch), the factor
+# names its own absence — the harness exists either way.
+if !isnan(P10_EAGER_WARMED_S[])
+    _p10_g_warmed = begin
+        idx = findfirst(r -> r.name == "smollm2_gesso_cuda_warmed", RESULTS)
+        idx === nothing ? NaN : RESULTS[idx].median_ns / 1e9
+    end
+    _p10_factor = P10_EAGER_WARMED_S[] / _p10_g_warmed
+    record(
+        "smollm2_g2_factor_eager_over_gesso";
+        samples=1,
+        median_ns=0,
+        mean_ns=0,
+        min_ns=0,
+        allocs=0,
+        bytes=0,
+        note="§LXXXIII gate G2 FACTOR (declaration, not a timing): eager_warmed_seconds / gesso_warmed_median_seconds = $(round(_p10_factor; digits=3)) × from THIS run's rows (smollm2_eager_pytorch_warmed = $(round(P10_EAGER_WARMED_S[]; digits=6)) s, smollm2_gesso_cuda_warmed = $(round(_p10_g_warmed; digits=6)) s); gesso dtype $(_P10_GESSO_DTYPE), eager dtype $(P10_TORCH_STAMP[]) — both stamps travel with the numbers, no cross-dtype claim; greedy, batch 1, NO torch.compile, NO vLLM (later additional rows)",
+    )
+else
+    record(
+        "smollm2_g2_factor_eager_over_gesso";
+        samples=1,
+        median_ns=0,
+        mean_ns=0,
+        min_ns=0,
+        allocs=0,
+        bytes=0,
+        note="§LXXXIII gate G2 FACTOR: NOT MEASURED on this run — the G2 block did not execute (needs CUDA + GESSO_SMOLLM2_DIR local snapshot + external python3 with torch/transformers; never downloads, §LXXVI). The harness (benchmark/compare_eager.py) exists either way; the gate number the board cares about is SmolLM2, and llama_micro is NOT that number",
+    )
+end
 
 println("=" ^ 72)
 println(length(RESULTS), " benchmarks recorded.")
