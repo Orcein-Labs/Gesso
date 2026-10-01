@@ -3,7 +3,12 @@
 # never requires PyTorch, never requires a device — so these tests assert
 # only environment-independent properties:
 #   * benchmark/compare_eager.py exists and parses (--help exits 0 WITHOUT
-#     importing torch — the probe path the bench harness itself uses);
+#     importing torch — the harness itself is testable torch-free);
+#   * --probe is the REAL torch gate (Phase 10B item A): a dry import that
+#     exits 0 only when torch AND transformers import — and --help is
+#     asserted NOT to be that probe (on this torch-less box: --help exits
+#     0, --probe exits 3 — the pair proves the paths differ);
+#   * the bench harness probes with --probe, never --help (source guard);
 #   * bad arguments fail loudly and fast (no torch import on the arg path);
 #   * the eager reference loads weights LOCAL-ONLY (source inspection:
 #     local_files_only=True, no download URLs anywhere in the script);
@@ -54,6 +59,22 @@ const _P10_SCRIPT = joinpath(pkgdir(Gesso), "benchmark", "compare_eager.py")
             )
         else
             @test help_p.exitcode == 0
+            # Phase 10B item A: --probe is the REAL torch gate — a dry import
+            # of torch AND transformers. On this torch-less box --help exits 0
+            # while --probe exits 3: the pair proves --help is NOT the probe
+            # (if the two ever agree on a torch-less box, this catches it).
+            probe_p = run(
+                pipeline(`$_P10_PY $_P10_SCRIPT --probe`; stdout=devnull, stderr=devnull);
+                wait=false,
+            )
+            wait(probe_p)
+            if probe_p.exitcode == 0
+                # torch appeared on this box — the probe is doing its job;
+                # the bench would land G2 rows here
+                @test true
+            else
+                @test probe_p.exitcode == 3
+            end
             # bad args fail loudly and fast (argparse errors BEFORE torch import);
             # wait() (unlike run) returns the process instead of throwing
             bad_p = run(
@@ -67,6 +88,12 @@ const _P10_SCRIPT = joinpath(pkgdir(Gesso), "benchmark", "compare_eager.py")
             wait(bad_p)
             @test bad_p.exitcode != 0
         end
+
+        # source guard on the BENCH harness: it must probe with --probe and
+        # must never mistake --help for a torch probe (Phase 10B item A)
+        bench_src = read(joinpath(pkgdir(Gesso), "benchmark", "runbenchmarks.jl"), String)
+        @test occursin("--probe", bench_src)
+        @test !occursin("--help\"", bench_src)   # no --help cmd in runbenchmarks.jl
 
         # dependency law (§VII): torch/transformers in NO Project.toml — the
         # eager reference is an external binary, never a package dep

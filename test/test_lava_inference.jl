@@ -27,6 +27,20 @@ if !LAVA_LOADED || !VULKAN_OK
 else
     lava = Gesso.LavaBackend()
 
+    # ---- Phase 10B item B: Lava does NOT have the CUDA fast-path caps ------
+    # The device fast paths (:argmax = argmax on device; :attn_gemm = flat
+    # device GEMM over the gathered scratch) are CUDA-only capabilities this
+    # sprint — declared via supports, not silently shared. Lava keeps the
+    # full-row host argmax and the per-head contraction. Type-level probes:
+    # legal without a device (no construction, §XX probing is always safe).
+    @testset "Phase 10B: Lava lacks the CUDA fast-path caps" begin
+        @test Gesso.supports(Gesso.LavaBackend, :argmax) == false
+        @test Gesso.supports(Gesso.LavaBackend, :attn_gemm) == false
+        # the six real Lava capabilities are untouched by the two new caps
+        @test Gesso.supports(Gesso.LavaBackend, :matmul) == true
+        @test Gesso.supports(Gesso.LavaBackend, :quantize) == false
+    end
+
     # ---- toy2 --------------------------------------------------------------
 
     ts = toy2_tensors()

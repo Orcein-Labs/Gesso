@@ -25,6 +25,12 @@
 #     4 no model dir · 5 measurement failed.
 #   * `--help` never imports torch: the harness itself is testable on a
 #     box without PyTorch (test/test_speed_floor_harness.jl).
+#   * `--probe` is the REAL torch gate (Phase 10B item A): it performs a
+#     dry `import torch` + `import transformers` and exits 0 when both
+#     import, 3 when either fails. Bench harnesses must probe with THIS,
+#     never with --help — --help proves the interpreter parses the script,
+#     not that PyTorch is installed. A snapshot with a missing venv must
+#     skip the bench block, never explode it.
 #
 # Arithmetic stamp (printed in the JSON as compute_dtype): the model loads
 # with from_pretrained defaults — no torch_dtype override — so a BF16
@@ -58,6 +64,15 @@ def build_parser():
     p.add_argument("--mode", choices=["first", "warmed"], default="warmed")
     p.add_argument("--samples", type=int, default=5, help="warmed-mode sample count")
     p.add_argument("--json", action="store_true", help="emit one JSON object on stdout")
+    p.add_argument(
+        "--probe",
+        action="store_true",
+        help=(
+            "dry-import probe: exit 0 if torch AND transformers import, "
+            "3 if either is missing (the real G2 torch gate — --help is "
+            "NOT a torch probe)"
+        ),
+    )
     return p
 
 
@@ -81,8 +96,18 @@ def _fail(args, code, kind, detail):
 def main():
     args = build_parser().parse_args()
 
-    # torch is imported only AFTER argument handling — --help and bad args
-    # work on a box with no PyTorch at all.
+    if args.probe:
+        # the real gate: a dry import of BOTH dependencies, nothing else
+        try:
+            import torch  # noqa: F401
+            import transformers  # noqa: F401
+        except Exception as e:
+            return _fail(args, 3, "torch_unavailable", str(e))
+        print("probe: ok")
+        return 0
+
+    # torch is imported only AFTER argument handling — --help, --probe and
+    # bad args work on a box with no PyTorch at all.
     try:
         import torch
         from transformers import AutoModelForCausalLM, AutoTokenizer

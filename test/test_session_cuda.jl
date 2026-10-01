@@ -98,10 +98,12 @@ else
             max_new_tokens=8,
         )
         @test gpu_ids == cpu_ids
-        # intent: the device argmax is a declared capability (§XX), not a
-        # silent behavior — a backend that loses the cap falls back to the
-        # full-row host argmax and this assertion fails loudly
+        # intent: the device fast paths are DECLARED capabilities (§XX), not
+        # silent behavior — a backend that loses a cap falls back to the
+        # pre-Phase-10 branch and this assertion fails loudly (Phase 10B
+        # item B: the caps are law, not comments)
         @test Gesso.supports(cuda, :argmax) == true
+        @test Gesso.supports(cuda, :attn_gemm) == true
         # tie law on device: Base.argmax on CuVector resolves ties to the
         # FIRST index, matching the host reduction bit-for-bit (§LXXVIII)
         tie = CuArray([3.0f0, 5.0f0, 5.0f0, 1.0f0])

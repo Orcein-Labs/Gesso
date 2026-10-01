@@ -337,6 +337,62 @@ if CUDA_BENCH
         _bench_autotuned_probe,
         "§LXXXII item C: post-warmup — CUDA F32 prefill through the Autotune-consulted matmul!; autotune winner for :llama_micro = :$(_at_winner) (selection receipt, no speed claim)",
     )
+
+    # --- Phase 10B (item C): llama_micro CUDA generate on the fast path ------
+    # The path we HAVE, measured: Session.generate on llama_micro AFTER the
+    # Phase 10 fast paths (:attn_gemm device-GEMM attention over the gathered
+    # scratch + :argmax device greedy — one Int D2H per token). FIRST-TOKEN
+    # row = one wall-clock generate on a fresh Session (compile inside,
+    # §XXXIII); WARMED row = untimed warmup then the standard suite loop.
+    # ids gate BEFORE any row is recorded: CUDA ids must equal the CPU
+    # Session's on the same prompt/length or the run errors with no rows
+    # (§LXX fail closed). These are FIXTURE rows — llama_micro is NOT the
+    # board factor; SmolLM2 G2 rows live in their own gated block.
+    _p10_lm_session(; ts=_bench_gpu_ts) = Gesso.Session(
+        _bench_model,
+        ts;
+        backend=_bench_cuda,
+        context_length=16,
+        eos_token_id=0,
+        page_size=4,
+        eps=_bench_cfg.rms_norm_eps,
+        theta=_bench_cfg.rope_theta,
+    )
+    _p10_lm_t0 = time_ns()
+    _p10_lm_ids = Gesso.generate(_p10_lm_session(), _bench_tokens; max_new_tokens=3)
+    _p10_lm_first_s = (time_ns() - _p10_lm_t0) / 1e9
+    _p10_lm_cpu_ids = Gesso.generate(
+        Gesso.Session(                       # CPU Session on the host tensors
+            _bench_model,
+            _bench_ts;
+            context_length=16,
+            eos_token_id=0,
+            page_size=4,
+            eps=_bench_cfg.rms_norm_eps,
+            theta=_bench_cfg.rope_theta,
+        ),
+        _bench_tokens;
+        max_new_tokens=3,
+    )
+    _p10_lm_ids == _p10_lm_cpu_ids || error(
+        "Phase 10B bench: CUDA Session ids diverged from the CPU Session on llama_micro — no rows published (§LXX fail closed)",
+    )
+    record(
+        "llama_micro_gesso_cuda_first_token";
+        samples=1,
+        median_ns=round(Int, _p10_lm_first_s * 1e9),
+        mean_ns=round(Int, _p10_lm_first_s * 1e9),
+        min_ns=round(Int, _p10_lm_first_s * 1e9),
+        allocs=0,
+        bytes=0,
+        note="§LXXXIII gates G3 (Phase 10B item C), FIRST-TOKEN clock: llama_micro CUDA Session.generate 3 greedy steps on a fresh Session, one-shot compile INSIDE the number; fast paths :attn_gemm (device GEMM over gathered scratch) + :argmax (one Int D2H per token); ids == CPU Session (asserted before this row); FIXTURE measurement, not the board factor",
+    )
+    _p10_lm_probe() = Gesso.generate(_p10_lm_session(), _bench_tokens; max_new_tokens=3)
+    _p10_lm_probe()   # untimed warmup (§XXXIII)
+    suite["llama_micro_gesso_cuda_warmed"] = (
+        _p10_lm_probe,
+        "§LXXXIII gates G3 (Phase 10B item C), WARMED clock: llama_micro CUDA Session.generate 3 greedy steps post-warmup; fast paths :attn_gemm + :argmax; ids == CPU Session (asserted before any row); FIXTURE measurement, not the board factor",
+    )
 else
     println(
         "skipping micro-llama CUDA prefill probes: no NVIDIA device ",
@@ -399,17 +455,45 @@ function _p10_run_eager(mode::AbstractString)
 end
 
 function _p10_torch_ok()
-    cmd = `$_P10_PY $_P10_SCRIPT --help`
+    # REAL dry-import probe (Phase 10B item A): `--probe` runs
+    # `import torch` + `import transformers` and exits 0 only when both
+    # import. --help is NOT a torch probe — it proves the interpreter
+    # parses the script, not that PyTorch is installed; probing with it
+    # let a snapshot+missing-venv box pass the gate and error() mid-suite
+    # (that hole is closed here).
+    cmd = `$_P10_PY $_P10_SCRIPT --probe`
+    out = IOBuffer()
     try
-        return run(pipeline(cmd; stdout=devnull, stderr=devnull)).exitcode == 0
+        ok =
+            run(pipeline(cmd; stdout=out, stderr=devnull); wait=false) |>
+            wait |>
+            p -> p.exitcode == 0
+        if ok
+            println(
+                "G2 torch probe: ",
+                strip(String(take!(out))),
+                " — eager reference available",
+            )
+        end
+        return ok
     catch
         return false                            # python3 itself missing
     end
 end
 
+function _p10_snapshot_ok(dir::AbstractString)
+    # isdir is not enough (Phase 10B item A): a junk/wrong dir must yield a
+    # NAMED SKIP, not a load_llama explosion mid-suite. The three files the
+    # loader actually needs (same contract as test_session_smollm2.jl's gate).
+    return isdir(dir) &&
+           isfile(joinpath(dir, "config.json")) &&
+           isfile(joinpath(dir, "model.safetensors")) &&
+           isfile(joinpath(dir, "tokenizer.json"))
+end
+
 if CUDA_BENCH &&
    haskey(ENV, "GESSO_SMOLLM2_DIR") &&
-   isdir(ENV["GESSO_SMOLLM2_DIR"]) &&
+   _p10_snapshot_ok(ENV["GESSO_SMOLLM2_DIR"]) &&
    _p10_torch_ok()
     _p10_dir = ENV["GESSO_SMOLLM2_DIR"]
     _p10_model, _p10_cpu_ts, _p10_cfg = Gesso.load_llama(_p10_dir)
@@ -506,10 +590,23 @@ if CUDA_BENCH &&
         "§LXXXIII gate G2, WARMED clock: SmolLM2-135M CUDA Session generate post-warmup (greedy, batch 1); ids == CPU oracle (asserted before any row exists); compute dtype $(_P10_GESSO_DTYPE); eager warmed compute dtype $_p10_stamp_txt — same checkpoint, prompt \"$_P10_PROMPT\", max_new_tokens $_P10_MAXNEW on both sides",
     )
 elseif CUDA_BENCH
-    println(
-        "skipping G2 SmolLM2 rows: needs GESSO_SMOLLM2_DIR (local snapshot, never downloads) ",
-        "and a python3 with torch+transformers — named skip, no rows (§LXXVI; §LXXXIII)",
+    haskey(ENV, "GESSO_SMOLLM2_DIR") || println(
+        "skipping G2 SmolLM2 rows: GESSO_SMOLLM2_DIR unset — no local snapshot, ",
+        "never downloads (§LXXVI); factor stays NOT MEASURED until ops places weights",
     )
+    haskey(ENV, "GESSO_SMOLLM2_DIR") &&
+        !_p10_snapshot_ok(ENV["GESSO_SMOLLM2_DIR"]) &&
+        println(
+            "skipping G2 SmolLM2 rows: GESSO_SMOLLM2_DIR=$(ENV["GESSO_SMOLLM2_DIR"]) is set but is not a usable snapshot ",
+            "(needs config.json + model.safetensors + tokenizer.json) — named skip, never downloads (§LXXVI)",
+        )
+    haskey(ENV, "GESSO_SMOLLM2_DIR") &&
+        _p10_snapshot_ok(ENV["GESSO_SMOLLM2_DIR"]) &&
+        !_p10_torch_ok() &&
+        println(
+            "skipping G2 SmolLM2 rows: snapshot present but the dry-import probe failed — ",
+            "python3 needs torch AND transformers importable; named skip, no rows (§LXXVI; §LXXXIII)",
+        )
 end
 
 # --- Phase 8 (§LXXXI item C): gated micro-llama Lava prefill probe ----------
