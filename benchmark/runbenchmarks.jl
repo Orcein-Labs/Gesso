@@ -424,7 +424,7 @@ end
 #     rows published (§LXX: fail closed — no factor without exact ids).
 #   * factor row is a DECLARATION (0-ns byte-row style): computed AFTER the
 #     suite loop from THIS run's recorded medians, stated in the note only.
-const _P10_PY = "python3"
+const _P10_PY = get(ENV, "GESSO_EAGER_PYTHON", "python3")
 const _P10_SCRIPT = joinpath(@__DIR__, "compare_eager.py")
 const _P10_PROMPT = "Hello"
 const _P10_MAXNEW = 8
@@ -464,10 +464,10 @@ function _p10_torch_ok()
     cmd = `$_P10_PY $_P10_SCRIPT --probe`
     out = IOBuffer()
     try
-        ok =
-            run(pipeline(cmd; stdout=out, stderr=devnull); wait=false) |>
-            wait |>
-            p -> p.exitcode == 0
+        # Julia 1.12: wait(::Process) returns nothing. run(; wait=true)
+        # returns the Process; .exitcode is the probe result.
+        p = run(pipeline(cmd; stdout=out, stderr=devnull); wait=true)
+        ok = p.exitcode == 0
         if ok
             println(
                 "G2 torch probe: ",
