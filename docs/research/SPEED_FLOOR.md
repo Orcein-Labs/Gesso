@@ -7,10 +7,14 @@
     Map:                docs/research/ROADMAP_NOW.md
     Canon:              docs/Gesso_Stack.md remains canon; this file
                         does not rewrite phases. It says when Phase 10
-                        is allowed to open.
-    This file is NOT:   a speed claim, or a license to fill
-                        Representation.jl. Buffy recipe:
-                        `docs/goals/PHASE10_SPEED_FLOOR.md`.
+                        is allowed to open.                        This file is NOT:   a speed claim, or a license to fill
+                        Representation.jl. Speed-floor recipes:
+                        `docs/goals/PHASE10_SPEED_FLOOR.md`,
+                        `PHASE10B_SPEED_FLOOR_CLOSE.md`. Current
+                        Buffy recipe:
+                        `docs/goals/PHASE10C_NAMED_MODEL_HYGIENE.md`
+                        (LANDED 2026-10-02: HF 0-based importer + frozen
+                        `gesso-cpu` golden + SmolLM2 fork bytes).
 
 ---
 
@@ -90,7 +94,9 @@ The path that produces G2 still:
 - matches CPU-oracle greedy ids on toy2 + llama_micro + SmolLM2
 - fail-closes (no silent CPU fallback, no silent kernel swap)
 - keeps `fork` + CoW byte-share (`unique_kv_bytes` still 2048 vs
-  4096 on the llama_micro pair, or the analogous SmolLM2 figure)
+  4096 on the llama_micro pair, or the analogous SmolLM2 figure —
+  measured 2026-10-02 in 10C: CPU N = 1_474_560; fork == one
+  session, two isolated == 2N)
 - leaves CUDA and Lava as extensions, JSON as the only core
   third-party hard dep
 
@@ -304,8 +310,9 @@ Corpus we do have (do not reuse as a PyStack comparison):
 - **Declared identity prefix share.** `fork` aliases complete
   prefix pages; first write copies that page. vLLM-class systems
   *discover* prefix cache by token match. Gesso *constructs* a
-  share tree. Measured on llama_micro. The demo that matters is
-  the same trick on SmolLM2 with the fast path still sharing.
+  share tree. Measured on llama_micro AND on SmolLM2 (10C:
+  CPU N = 1_474_560; fork == one session, isolated == 2N; CUDA
+  repeats the identities at N = 737_280, F32 storage).
 - **Fail-closed numerics.** Device work is illegal until greedy
   ids match the CPU F64 oracle. Autotune disqualifies a faster
   candidate that fails the gate.
@@ -380,9 +387,10 @@ Living Phase 10 (speed floor recipe) **LANDED 2026-10-01**, closed by
 Phase 10B the same day (harness skip-or-land hardening: --probe dry
 import, snapshot file gate, caps pinned by test, llama_micro generate
 first-token + warmed rows on the GEMM path — fixture numbers, not the
-board factor). Do not hand Buffy canon §LXXXIII. Next is **ops**:
-local SmolLM2 snapshot + torch, then a measured G2 factor. Idle Buffys
-import glue.
+board factor). Do not hand Buffy canon §LXXXIII. Ops delivered the
+snapshot; G2 is measured (0.692×, `2026-10-02.tsv`); 10C landed
+(HF importer, frozen `gesso-cpu` golden, named-model fork bytes).
+Idle Buffys import glue.
 Phase 9's Autotune loop is the consult site; fused work lands as
 **candidates**, CUDA ext files, and a corpus row. `Lowering.jl`
 stays empty until a recipe says routing/fusion lives there —

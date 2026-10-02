@@ -66,6 +66,28 @@ const SMOLLM2_DIR = get(ENV, "GESSO_SMOLLM2_DIR", nothing)
         # deterministic: two runs equal
         @test gen_session == Gesso.generate(_s2(), "Hello"; max_new_tokens=8)
 
+        # ---- Phase 10C item C: the named-model share figure (bytes) --------
+        # `fork` on the named model shares pages AS BYTES: after prefill! of
+        # "Hello" and BEFORE any decode, parent+child store ONE copy of the
+        # KV; two independent prefills store TWO. Measured 2026-10-02 on the
+        # demo snapshot (F64 CPU): N = 1_474_560 — "Hello" is ONE token, so
+        # one live page per cache: 30 layers × 2 (K,V) × 16 × 3 kv-heads ×
+        # 64 d-head × 8 (F64). Pinned so silent growth fails; the measured
+        # N agrees with the 10C sanity class (token count is the why).
+        parent = _s2(page_size=16)
+        Gesso.prefill!(parent, ids)
+        child = Gesso.fork(parent)
+        N = Gesso.Profiling.kv_footprint(parent.mgr)
+        @test N == 1_474_560
+        @test Gesso.Profiling.unique_kv_bytes(parent.mgr, child.mgr) == N
+        a = _s2(page_size=16)
+        b = _s2(page_size=16)
+        Gesso.prefill!(a, ids)
+        Gesso.prefill!(b, ids)
+        @test Gesso.Profiling.unique_kv_bytes(a.mgr, b.mgr) == 2N
+        # no decode happened on parent/child — the byte check precedes decode
+        @test child.seqlen == parent.seqlen == length(ids)
+
         # CUDA: ids equal the CPU Session ids when a device exists
         cuda_ok = let
             ok = true
@@ -87,6 +109,21 @@ const SMOLLM2_DIR = get(ENV, "GESSO_SMOLLM2_DIR", nothing)
             gpu_gen =
                 Gesso.generate(_s2(backend=cuda, ts=gpu_tensors), "Hello"; max_new_tokens=8)
             @test gpu_gen == gen_session                # argmax identity gate
+
+            # Phase 10C item C: CUDA repeats the IDENTITIES (fork == one
+            # session; isolated == sum). Do not require CUDA bytes == CPU
+            # bytes (F32 device storage vs F64 host).
+            ps = _s2(backend=cuda, ts=gpu_tensors, page_size=16)
+            Gesso.prefill!(ps, ids)
+            pc = Gesso.fork(ps)
+            n_gpu = Gesso.Profiling.kv_footprint(ps.mgr)
+            @test Gesso.Profiling.unique_kv_bytes(ps.mgr, pc.mgr) == n_gpu
+            qa = _s2(backend=cuda, ts=gpu_tensors, page_size=16)
+            qb = _s2(backend=cuda, ts=gpu_tensors, page_size=16)
+            Gesso.prefill!(qa, ids)
+            Gesso.prefill!(qb, ids)
+            @test Gesso.Profiling.unique_kv_bytes(qa.mgr, qb.mgr) == 2 * n_gpu
+            println("smollm2 cuda unique_kv_bytes (fork pair) = ", n_gpu)
         end
     end
 end

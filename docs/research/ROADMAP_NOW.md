@@ -22,11 +22,15 @@ CPU oracle; portable seam, not tuned. Phase 9 landed 2026-10-01
 `matmul!` candidates, the winner cached per (device, backend, op, regime),
 the op consults Autotune and dispatches to it. Selection happened; no
 speed claim. Living Phase 10 speed floor **LANDED 2026-10-01**
-(`docs/goals/PHASE10_SPEED_FLOOR.md`) — rungs 1–2 on the tree; G1/G2
-ops-blocked until a local SmolLM2 snapshot + torch exist on the demo
-box. Next Buffy recipe: `docs/goals/PHASE10B_SPEED_FLOOR_CLOSE.md`
-(harness + measure + skip-or-land G1/G2). Canon §LXXXIII waits on a
-**measured** factor.
+(`docs/goals/PHASE10_SPEED_FLOOR.md`) — rungs 1–2 on the tree.
+Phase 10B LANDED (`PHASE10B_SPEED_FLOOR_CLOSE.md`). Ops placed a
+local SmolLM2-135M snapshot; G1 load/generate is demo-box green;
+G2 factor is **0.692×** warmed (`benchmark/results/2026-10-02.tsv`,
+eager 0.436 s / Gesso CUDA 0.630 s; Gesso F32 vs eager bfloat16).
+Next Buffy recipe: `docs/goals/PHASE10C_NAMED_MODEL_HYGIENE.md`
+landed 2026-10-02 (importer HF 0-based + golden freeze + SmolLM2
+`fork` bytes). Canon §LXXXIII stays parked. Fusion is a later
+optimization pass, not this file.
 
 Canon still lists Phases 0–22 in `docs/Gesso_Stack.md` §LXXIII–§XCV.
 This file says what that list *means* after Phases 0–4 and the first
@@ -104,21 +108,17 @@ inference engine. That is 5a. Serving fabric is 5b.
 8       Lava / Vulkan                 DONE  2026-09-30  PHASE8_LAVA.md
 9       autotune (selection)          DONE  2026-10-01  PHASE9_AUTOTUNE.md
 G1–G3   speed floor                   LANDED 2026-10-01  PHASE10_SPEED_FLOOR.md
-                                      (+10B close: --probe dry-import gate,
-                                      caps pinned by test, llama_micro CUDA
-                                      generate first-token ~42ms compile-in /
-                                      ~9.9ms warmed on the GEMM path — FIXTURE
-                                      numbers, not the board factor)
-                                      device greedy (one Int per token) +
-                                      device GEMM over gathered scratch;
-                                      still forks; G2 harness exists —
-                                      SmolLM2 rows land on a box with a
-                                      local snapshot + torch (G1 is
-                                      ops-blocked here; harness skip-or-green)
-                                      §LXXXIII stays parked until G1∧G2∧G3
-                                      are honestly green with a measured
-                                      SmolLM2 factor on the demo box
-10–11   weight compiler + memory      AFTER G1∧G2∧G3
+                                      (+10B close). G1 demo-box green;
+                                      G2 factor 0.692× (2026-10-02.tsv);
+                                      G3 llama_micro 2048 vs 4096 held;
+                                      named-model share measured (10C:
+                                      SmolLM2 CPU N = 1_474_560).
+                                      Fusion later.
+10C     named-model hygiene           LANDED 2026-10-02  PHASE10C_NAMED_MODEL_HYGIENE.md
+                                      (HF importer, golden frozen oracle
+                                      "gesso-cpu", SmolLM2 fork bytes
+                                      pinned; §LXXXIII still parked)
+10–11   weight compiler + memory      AFTER G1∧G2∧G3 + encoding-owner open
 12–13   shared model runtime          mechanism for many agents, one model
 ABI     Cyan consumes Gesso           Phases 16, then 17 adapter
 14–15   canon still names Palette/Cyan as Gesso phases;
@@ -138,9 +138,11 @@ PyTorch eager, as a published factor, with `fork` still sharing
 pages. Full gate, hot-path inventory, and RPD/RPDO split:
 `docs/research/SPEED_FLOOR.md`.
 
-Do not open a Phase 10 Buffy recipe until G1∧G2∧G3. Idle Buffys
-take the speed-floor recipe or Llama-family import glue (second
-tokenizer, `rope_scaling`), one architecture at a time.
+Do not open canon Phase 10 (representation) until G1∧G2∧G3 and
+the encoding owner writes that recipe. 10C landed (importer,
+golden, named-model fork bytes); the next Buffy slice is Llama-family
+import glue (second tokenizer, `rope_scaling`) one architecture at
+a time, or a fusion recipe the encoding owner writes from the TSV.
 
 The speed floor has two clocks: application (fusion, D2H, gather)
 and Julia compiler (TTFX, invalidation, GPUCompiler, Lava SPIR-V).

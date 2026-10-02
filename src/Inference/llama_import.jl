@@ -38,7 +38,6 @@ const _REQUIRED_CONFIG_KEYS = (
     "rope_scaling",
     "rope_interleaved",
     "attention_bias",
-    "mlp_bias",
     "tie_word_embeddings",
 )
 
@@ -70,7 +69,11 @@ function load_llama_config(path::AbstractString)
     raw["attention_bias"] == false || error(
         "load_llama_config: attention_bias must be false — attention bias is out of scope (§LXXVI)",
     )
-    raw["mlp_bias"] == false || error(
+    # HuggingFace LlamaConfig defaults mlp_bias to false and SmolLM2-135M's
+    # released config.json (transformers 4.40.1) omits the key. Missing ⇒
+    # false. Present and true ⇒ refuse. Not a silent representation change.
+    mlp_bias = get(raw, "mlp_bias", false)
+    mlp_bias == false || error(
         "load_llama_config: mlp_bias must be false — MLP bias is out of scope (§LXXVI)",
     )
     raw["tie_word_embeddings"] == true || error(
@@ -228,6 +231,15 @@ end
 
 # --- name map + materialization ------------------------------------------------
 
+# HuggingFace Llama checkpoints often store reconstructed RoPE constants
+# `*.rotary_emb.inv_freq` per layer. Gesso computes RoPE from `rope_theta`
+# and does not consume inv_freq. This suffix is the ONLY known-ignored
+# leftover; any other leftover key is an unknown-weight error (§LXX).
+const _IGNORED_ROPE_INV_FREQ_SUFFIX = ".rotary_emb.inv_freq"
+
+_is_ignored_rope_inv_freq(name::AbstractString) =
+    endswith(name, _IGNORED_ROPE_INV_FREQ_SUFFIX)
+
 # layer-local names → tensor-map fields, in the order the fixture walk uses.
 const _LAYER_TENSOR_NAMES = (
     (name="self_attn.q_proj.weight", field=:wq),
@@ -249,7 +261,8 @@ Map checkpoint names onto the interpreter's tensor set
 name map: weights are `ProjectionWeight`s (HF Linear is (out, in) — already
 our convention), norms are `FrozenParameter`s, `model.norm.weight` becomes
 `final_rms`, and the head is the embedding table itself (tied). Unknown keys
-and missing keys are errors WITH THE KEY NAME (§LXX).
+and missing keys are errors WITH THE KEY NAME (§LXX). The only known-ignored
+leftover is reconstructed RoPE `*.rotary_emb.inv_freq` (not a weight).
 """
 function materialize_llama(model, tensors_by_name::Dict{String, Array{Float64}}, cfg)
     consumed = Set{String}()
@@ -265,7 +278,29 @@ function materialize_llama(model, tensors_by_name::Dict{String, Array{Float64}},
         storage=grab("model.embed_tokens.weight"),
     )
 
-    blocks = map(1:cfg.num_hidden_layers) do i
+    # HuggingFace Llama is 0-based (`model.layers.0` … `n-1`). Gesso micro
+    # fixtures were written 1-based (`model.layers.1` … `n`). Detect; refuse
+    # a mix. Missing both origins names both keys.
+    q0 = "model.layers.0.self_attn.q_proj.weight"
+    q1 = "model.layers.1.self_attn.q_proj.weight"
+    has0, has1 = haskey(tensors_by_name, q0), haskey(tensors_by_name, q1)
+    layer_ids = if has0
+        0:(cfg.num_hidden_layers-1)
+    elseif has1
+        1:cfg.num_hidden_layers
+    else
+        error("materialize_llama: missing required tensor: $q0 (HuggingFace) or $q1 (fixture)")
+    end
+    n = cfg.num_hidden_layers
+    has0 &&
+        has1 &&
+        n > 1 &&
+        haskey(tensors_by_name, "model.layers.$n.self_attn.q_proj.weight") &&
+        error(
+            "materialize_llama: checkpoint mixes HuggingFace 0-based layers with fixture 1-based layers",
+        )
+
+    blocks = map(layer_ids) do i
         fields = map(_LAYER_TENSOR_NAMES) do (suffix, field)
             name = "model.layers.$i.$suffix"
             arr = grab(name)
@@ -299,8 +334,15 @@ function materialize_llama(model, tensors_by_name::Dict{String, Array{Float64}},
     end
 
     leftover = sort(collect(setdiff(Set(keys(tensors_by_name)), consumed)))
-    isempty(leftover) ||
-        error("materialize_llama: unknown tensor(s) in checkpoint: $(join(leftover, ", "))")
+    ignored_inv_freq = filter(_is_ignored_rope_inv_freq, leftover)
+    unknown = filter(k -> !_is_ignored_rope_inv_freq(k), leftover)
+    isempty(unknown) || error(
+        "materialize_llama: unknown tensor(s) in checkpoint: $(join(unknown, ", "))" *
+        (
+            isempty(ignored_inv_freq) ? "" :
+            " (ignored reconstructed RoPE $(_IGNORED_ROPE_INV_FREQ_SUFFIX): $(join(ignored_inv_freq, ", ")))"
+        ),
+    )
 
     return (embedding=emb, blocks=collect(blocks), lm_head=emb, final_rms=final_rms)
 end

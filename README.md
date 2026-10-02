@@ -129,14 +129,14 @@ Current phases (docs/Gesso_Stack.md §LXXIII ff.):
 | 0 | Repository foundation | **COMPLETE** |
 | 1 | Semantic core (§CIX encoding) | **COMPLETE** — expressible, not executable |
 | 2 | Reference execution (CPU oracle) | **COMPLETE** — prefill + greedy KV decode |
-| 3 | First real model import | **SKIP-OR-GREEN** — items A/B/C landed (GQA interpreter, Llama import, GPT-2 BPE); item D is skip-or-green pending a local SmolLM2 snapshot |
+| 3 | First real model import | **COMPLETE 2026-10-02** — items A/B/C landed (GQA interpreter, Llama import, GPT-2 BPE); item D's golden is frozen (`oracle = "gesso-cpu"`); the real-model gate stays skip-or-green in CI (never downloads) and is green on the demo box |
 | 4 | CUDA.jl execution | **COMPLETE 2026-09-29** — extension seam, ops + `to_device`, backend-generic interpreter, device-vs-CPU gates; SmolLM2-CUDA + bench row skip-or-green (§LXXVII) |
 | 5 | Native inference engine | **A/B/C/D LANDED 2026-09-30** — paged KV manager + `Session`/`generate` matching the oracle; scheduler/continuous batching is a later goal under this phase (§LXXVIII) |
 | 6 | Performance observability | **A/B/C/D LANDED 2026-09-30** — receipts per engine call, Profiling reports, warmed TTFT/decode rows; attribution, not speed (§LXXIX) |
 | 7 | First semantic optimization | **A/B/C/D LANDED 2026-09-30** — CoW + declared identity prefix share (`fork`), `Profiling.unique_kv_bytes` byte win (§LXXX) |
 | 8 | Lava/Vulkan backend | **A/B/C/D LANDED 2026-09-30** — GessoLavaExt seam + six ops + interpreter/Session/fork on `LavaArray{Float32}` (§LXXXI); portable seam, not tuned; device-less runs skip by name |
 | 9 | Autotune | **A/B/C/D LANDED 2026-10-01** — the §XXVI loop: two gated CUDA `matmul!` candidates, winner cached per (device, backend, op, regime), op consults and dispatches to it (§LXXXII); selection, not speed; device-less runs skip by name |
-| 10 | Speed floor (proof-ladder rungs 1–2) | **A/B/C/D LANDED 2026-10-01** — device greedy (one Int D2H per token) + device GEMM attention over gathered scratch (§LXXXIII gates G1–G3 harness); G2 eager-PyTorch rows skip-or-land; SmolLM2 gate is ops-blocked without a local snapshot; §LXXXIII representation planner stays PARKED |
+| 10 | Speed floor (proof-ladder rungs 1–2) | **A/B/C/D LANDED 2026-10-01** — device greedy (one Int D2H per token) + device GEMM attention over gathered scratch (§LXXXIII gates G1–G3 harness); G2 factor **0.692×** measured (`2026-10-02.tsv`); 10C landed (HF 0-based importer, frozen golden, SmolLM2 fork bytes N = 1_474_560); §LXXXIII representation planner stays PARKED |
 
 Training is **not** part of Gesso — by explicit, permanent decision
 ([docs/Gesso_Stack.md §LVIII](docs/Gesso_Stack.md)). If you want to contribute
@@ -188,9 +188,12 @@ GESSO_SMOLLM2_DIR=/path/to/SmolLM2-135M make test
 ```
 
 Without the variable the gate is one named skip — CI stays green on a
-machine that has never seen SmolLM2 weights. The first successful run on
-a snapshot freezes `test/fixtures/smollm2/expected_logits.toml`
-(oracle `gesso-cpu`); that committed file is the regression oracle.
+machine that has never seen SmolLM2 weights. The regression oracle is
+COMMITTED (`test/fixtures/smollm2/expected_logits.toml`, provenance
+`oracle = "gesso-cpu"`, frozen 2026-10-02 from Gesso CPU on a local
+snapshot); regenerate only deliberately with
+`GESSO_SMOLLM2_DIR=… julia --project=test test/freeze_smollm2_golden.jl --force`
+(the writer refuses without a complete snapshot and without `--force`).
 
 CUDA device tests (Phase 4, §LXXVII) follow the same skip law: without an
 NVIDIA device they are named skips and CI never requires a GPU. The

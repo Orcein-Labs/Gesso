@@ -101,7 +101,9 @@ end
             golden = TOML.parsefile(GOLDEN_PATH)
             prov = get(golden, "provenance", Dict{String, Any}())
             @test get(prov, "oracle", "") == "gesso-cpu"
-            values = [Float64(row["v"]) for row in golden["value"]]
+            # 10C item B format: one compact `values` array of 49152 Float64s
+            # (provenance table + values; the old {v=…} table shape is gone)
+            values = Float64.(golden["values"])
             @test length(values) == 49152
             # §LXXVI tolerance: atol=1e-2, rtol=0 — f64 Gesso vs frozen f64 Gesso
             last = logits[:, end]

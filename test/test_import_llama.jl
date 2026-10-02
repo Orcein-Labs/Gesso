@@ -73,7 +73,13 @@ end
 _bf16_bits(v) = (reinterpret(UInt32, Float32(v)) >> 16) & 0xffff
 
 # deterministic micro checkpoint written into tmpdir; returns (dir, tensors)
-function make_micro_checkpoint(dir; shards=false, extra_keys=String[], drop_keys=String[])
+function make_micro_checkpoint(
+    dir;
+    shards=false,
+    extra_keys=String[],
+    drop_keys=String[],
+    layer_origin=:fixture,
+)
     mkpath(dir)
     rng = deterministic_rng(0x1337)
     d, nh, nkv, inter, V =
@@ -84,7 +90,13 @@ function make_micro_checkpoint(dir; shards=false, extra_keys=String[], drop_keys
         "model.embed_tokens.weight" => randn(rng, V, d),
         "model.norm.weight" => randn(rng, d),
     )
-    for i in 1:MICRO.layers
+    # :fixture is 1-based (`layers.1` … `n`); :hf is HuggingFace 0-based
+    # (`layers.0` … `n-1`). Mix is refused by materialize_llama.
+    layer_origin === :fixture ||
+        layer_origin === :hf ||
+        error("make_micro_checkpoint: layer_origin must be :fixture or :hf")
+    layer_ids = layer_origin === :hf ? (0:(MICRO.layers-1)) : (1:MICRO.layers)
+    for i in layer_ids
         tensors["model.layers.$i.self_attn.q_proj.weight"] = randn(rng, d, d)
         tensors["model.layers.$i.self_attn.k_proj.weight"] = randn(rng, kdim, d)
         tensors["model.layers.$i.self_attn.v_proj.weight"] = randn(rng, kdim, d)
@@ -211,6 +223,12 @@ end
     bad("rope_interleaved", c -> c["rope_interleaved"] = true)
     bad("attention_bias", c -> c["attention_bias"] = true)
     bad("mlp_bias", c -> c["mlp_bias"] = true)
+    # omitted mlp_bias is the HuggingFace default (false) — SmolLM2-135M
+    delete!(base, "mlp_bias")
+    rewrite()
+    @test Gesso.load_llama_config(path).tie_word_embeddings == true
+    base["mlp_bias"] = false
+    rewrite()
     bad("tie_word_embeddings", c -> c["tie_word_embeddings"] = false)
     bad("divisible", c -> c["num_attention_heads"] = 5)
     bad("num_key_value_heads", c -> c["num_key_value_heads"] = 3)
@@ -376,6 +394,97 @@ end
     @test err3 isa ErrorException
     @test occursin("lm_head", sprint(showerror, err3))
     @test occursin("untied", sprint(showerror, err3))
+end
+
+@testset "materialize_llama: 0-based HF layers load; 1-based fixtures still load; mix errors" begin
+    # HuggingFace 0-based: layer 0 is block 1, layer n-1 is block n
+    dir0 = mktempdir()
+    src0 = make_micro_checkpoint(dir0; layer_origin=:hf)
+    model0, tensors0, _ = Gesso.load_llama(dir0)
+    @test length(model0.blocks) == 2
+    @test length(tensors0.blocks) == 2
+    @test tensors0.blocks[1].wq.storage == src0["model.layers.0.self_attn.q_proj.weight"]
+    @test tensors0.blocks[2].wq.storage == src0["model.layers.1.self_attn.q_proj.weight"]
+    @test tensors0.blocks[1].wgate.storage == src0["model.layers.0.mlp.gate_proj.weight"]
+    @test !haskey(src0, "model.layers.2.self_attn.q_proj.weight")
+
+    # 1-based fixture origin still loads (existing micro checkpoints)
+    dir1 = mktempdir()
+    src1 = make_micro_checkpoint(dir1; layer_origin=:fixture)
+    _, tensors1, _ = Gesso.load_llama(dir1)
+    @test tensors1.blocks[1].wq.storage == src1["model.layers.1.self_attn.q_proj.weight"]
+    @test tensors1.blocks[2].wq.storage == src1["model.layers.2.self_attn.q_proj.weight"]
+
+    # mix: 0-based range PLUS fixture last layer `n` — refuse, name the mix
+    dirm = mktempdir()
+    make_micro_checkpoint(
+        dirm;
+        layer_origin=:hf,
+        extra_keys=["model.layers.2.self_attn.q_proj.weight"],
+    )
+    errm = try
+        Gesso.load_llama(dirm)
+        nothing
+    catch e
+        e
+    end
+    @test errm isa ErrorException
+    @test occursin("mixes", sprint(showerror, errm))
+    @test occursin("0-based", sprint(showerror, errm))
+    @test occursin("1-based", sprint(showerror, errm))
+end
+
+@testset "materialize_llama: leftover real weight still errors; rotary_emb.inv_freq is ignored" begin
+    # reconstructed RoPE constants are not weights — Gesso computes RoPE from
+    # theta and does not consume inv_freq. The suffix is the named skip
+    # pattern; any other leftover still errors WITH THE KEY NAME (§LXX).
+    dir = mktempdir()
+    make_micro_checkpoint(
+        dir;
+        extra_keys=[
+            "model.layers.0.self_attn.rotary_emb.inv_freq",
+            "model.layers.1.self_attn.rotary_emb.inv_freq",
+        ],
+        layer_origin=:hf,
+    )
+    model, tensors, _ = Gesso.load_llama(dir)
+    @test length(tensors.blocks) == 2
+
+    dirb = mktempdir()
+    make_micro_checkpoint(dirb; extra_keys=["model.layers.1.self_attn.q_proj.bias"])
+    errb = try
+        Gesso.load_llama(dirb)
+        nothing
+    catch e
+        e
+    end
+    @test errb isa ErrorException
+    msg = sprint(showerror, errb)
+    @test occursin("q_proj.bias", msg)
+    @test occursin("unknown tensor", msg)
+
+    # inv_freq + a real leftover: still fail closed, and the error names both
+    # the unknown weight and the ignored `*.rotary_emb.inv_freq` pattern
+    dirmix = mktempdir()
+    make_micro_checkpoint(
+        dirmix;
+        layer_origin=:hf,
+        extra_keys=[
+            "model.layers.0.self_attn.rotary_emb.inv_freq",
+            "model.layers.0.self_attn.q_proj.bias",
+        ],
+    )
+    errmix = try
+        Gesso.load_llama(dirmix)
+        nothing
+    catch e
+        e
+    end
+    @test errmix isa ErrorException
+    msgmix = sprint(showerror, errmix)
+    @test occursin("q_proj.bias", msgmix)
+    @test occursin("unknown tensor", msgmix)
+    @test occursin(".rotary_emb.inv_freq", msgmix)
 end
 
 @testset "materialize_llama: absent model.norm ⇒ final_rms is nothing (toy2 shape)" begin

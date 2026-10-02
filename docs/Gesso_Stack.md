@@ -2982,11 +2982,26 @@ G1∧G2∧G3 exist and the encoding owner opens that phase):
     (or a junk dir) is a named skip + NOT MEASURED factor, never a suite
     error. The fast-path caps are pinned by tests: CUDA has :argmax and
     :attn_gemm; Lava has neither (its contraction and host argmax are
-    unchanged). llama_micro CUDA generate is measured on the GEMM path
+    unchanged).    llama_micro CUDA generate is measured on the GEMM path
     (first-token + warmed rows, ids gated against the CPU Session before
     any row) — a FIXTURE measurement, not the board factor. G1 and the
     G2 factor remain ops-owned (snapshot + torch); §LXXXIII still NOT
     COMPLETE.
+
+    Phase 10C close (2026-10-02, docs/goals/PHASE10C_NAMED_MODEL_HYGIENE.md):
+    named-model hygiene — the released HF checkpoint loads (0-based layer
+    origin detected from `q_proj.weight`; fixture 1-based still loads; mixes
+    refused; omitted `mlp_bias` ⇒ false, true ⇒ error; `*.rotary_emb.inv_freq`
+    the only ignored leftover, all else fail-closed with the key name). The
+    SmolLM2 CPU golden is FROZEN (test/fixtures/smollm2/expected_logits.toml,
+    provenance oracle = "gesso-cpu", 49152 Float64 values, "Hello" last
+    position) — Phase 3 item D is no longer an unfrozen skip. G3 gained its
+    named-model byte figure: SmolLM2 CPU `unique_kv_bytes` N = 1_474_560,
+    fork == one session, two isolated prefills == 2N (CUDA repeats the
+    identities at N = 737_280, F32 storage). The G2 factor stands at 0.692×
+    (`benchmark/results/2026-10-02.tsv`); this sprint moved no kernel.
+    §LXXXIII remains NOT COMPLETE — no Representation fill, no cages, no
+    Magenta, no Julia fork.
 
 
 ===============================================================================

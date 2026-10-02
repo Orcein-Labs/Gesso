@@ -8,6 +8,9 @@ libs/
 # Freeze bundles are snapshots, not source
 *.zip
 
+# Local model snapshots (GESSO_SMOLLM2_DIR); never part of the package
+snapshots/
+
 # Editor / OS
 .vscode/
 .idea/
