@@ -29,8 +29,10 @@ by `PHASE10B_SPEED_FLOOR_CLOSE.md`). G1 is demo-box green on a local
 snapshot; G2 factor is 0.692× (`2026-10-02.tsv`). 10C landed
 (`PHASE10C_NAMED_MODEL_HYGIENE.md`): HF 0-based import, golden frozen
 (oracle `gesso-cpu`, 49152 values), SmolLM2 fork byte share measured
-(CPU N = 1_474_560; fork == one session, isolated == 2N). Canon
-§LXXXIII parked.
+(CPU N = 1_474_560; fork == one session, isolated == 2N). 10D landed
+2026-10-02 (`PHASE10D_FOUNDATION_HARDENING.md`): export inventory +
+parked-empty fence, fail-closed hunt, `@inferred` byte counters.
+Canon §LXXXIII parked.
 Tackle each problem in this folder individually when its phase owns it.
 
 ---
@@ -43,6 +45,7 @@ Tackle each problem in this folder individually when its phase owns it.
 | [KV_MEMORY_PROGRAM_part2.md](KV_MEMORY_PROGRAM_part2.md) | Magenta execution plane (topology, residency, schedule) | same object, access/residency half | after a real KV manager exists |
 | [REPRESENTATION_PROGRAM.md](REPRESENTATION_PROGRAM.md) | static learned operators (weights) | do not quantize the accidental representation | Phase 7 candidate / Phase 10 host |
 | [CYAN_TRIAL_GESSO_FALLOUT.md](CYAN_TRIAL_GESSO_FALLOUT.md) | promotion filter from the first Cyan/Palette engineer trial | generality × composability × ecosystem leverage, or it stays above Gesso | Phase 6+ spikes; not Phase 5 |
+| [CYAN_ELASTIC_ORCHESTRATION.md](CYAN_ELASTIC_ORCHESTRATION.md) | Gesso seam for Cyan MAO (WorkTree / leases / branch ids) | Cyan owns orchestration; Gesso consumes ids later | pointer only; freeze lives in Cyan Harness docs; not a /goal |
 | [ROADMAP_NOW.md](ROADMAP_NOW.md) | living reading of Phases 5–22 after 0–4 + the Cyan trial | 5a engine now; speed floor next; 5b and Phase 10 after G1∧G2∧G3 | map only — not a /goal |
 | [SPEED_FLOOR.md](SPEED_FLOOR.md) | board constraint: somewhat-close decode before exotic compilers | named model + eager-PyTorch factor + fork-preserving fused step; compiler attribution before a Julia fork | gate on §LXXXIII; 10C recipe landed (`PHASE10C_NAMED_MODEL_HYGIENE.md`): golden frozen, named-model fork bytes pinned |
 | [EXOTIC_CAPABILITY_MASTER_LEDGER.md](EXOTIC_CAPABILITY_MASTER_LEDGER.md) | capability mine: meta-primitives, Gesso/Palette/Cyan primitives, six meta-tools | strings to undiscovered capabilities; evidence labels; not a roadmap override | parked; deep-dives after speed floor |
@@ -71,7 +74,7 @@ program until someone writes one **and** a phase owns it.
 | One semantic win (pick one) | §LXXX | **7 landed 2026-09-30** (`PHASE7_PREFIX_SHARE.md`) |
 | Lava / Vulkan | §LXXXI | **8 landed 2026-09-30** (`PHASE8_LAVA.md`) |
 | Autotune | §LXXXII | **9 landed 2026-10-01** (`PHASE9_AUTOTUNE.md`) |
-| Speed floor rungs 1–2 (device greedy + GEMM, G2 harness) | §LXXXII/§LXXXIII | **10/10B landed**; G2 factor 0.692×; **10C LANDED** (`PHASE10C_NAMED_MODEL_HYGIENE.md`: HF importer, golden `gesso-cpu`, SmolLM2 fork N = 1_474_560). §LXXXIII representation planner stays PARKED |
+| Speed floor rungs 1–2 (device greedy + GEMM, G2 harness) | §LXXXII/§LXXXIII | **10/10B/10C/10D landed**; G2 factor 0.692×. §LXXXIII representation planner stays PARKED |
 | Representation planner | §LXXXIII | after G1∧G2∧G3 — seed is REPRESENTATION_PROGRAM.md |
 | Memory planner | §LXXXIV | Phase 11 |
 | Agent runtime / Palette / Cyan / C ABI | §LXXXV–LXXXIX | Phases 12–16 |

@@ -10,11 +10,10 @@
                         is allowed to open.                        This file is NOT:   a speed claim, or a license to fill
                         Representation.jl. Speed-floor recipes:
                         `docs/goals/PHASE10_SPEED_FLOOR.md`,
-                        `PHASE10B_SPEED_FLOOR_CLOSE.md`. Current
-                        Buffy recipe:
-                        `docs/goals/PHASE10C_NAMED_MODEL_HYGIENE.md`
-                        (LANDED 2026-10-02: HF 0-based importer + frozen
-                        `gesso-cpu` golden + SmolLM2 fork bytes).
+                        `PHASE10B_SPEED_FLOOR_CLOSE.md`. Landed
+                        through 10D (2026-10-02): foundation
+                        hardened; fusion still a later recipe
+                        (`PHASE10D_FOUNDATION_HARDENING.md`).
 
 ---
 

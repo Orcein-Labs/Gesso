@@ -59,8 +59,13 @@ end
             "GESSO_SMOLLM2_DIR=$SMOLLM2_DIR is not a usable snapshot — the gate never downloads (§LXXVI)",
         )
     elseif !isfile(GOLDEN_PATH)
-        @test _skip(
-            "snapshot present but test/fixtures/smollm2/expected_logits.toml is not frozen yet — freeze the CPU golden first (oracle \"gesso-cpu\"); CUDA compares to it",
+        # 10D item B: snapshot present + golden missing is a BROKEN TREE, not
+        # a skip — the frozen oracle is committed (10C); a vanished golden is
+        # a regression on this box, never "not frozen yet" (§LXX).
+        error(
+            "snapshot present but test/fixtures/smollm2/expected_logits.toml is MISSING — " *
+            "the golden is frozen (oracle \"gesso-cpu\") and must not vanish; restore it, " *
+            "or regenerate deliberately with test/freeze_smollm2_golden.jl --force",
         )
     else
         cuda = Gesso.CUDABackend()

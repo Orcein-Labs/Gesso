@@ -43,9 +43,11 @@ page_footprint(mgr::PagedKVManager) = page_count(mgr)
     unique_kv_bytes(mgrs::PagedKVManager...) -> Int
 
 Live KV storage of a GROUP of managers, counted ONCE per distinct page
-storage array (§LXXX item C — the §LIV win metric): `sizeof` summed over the
-distinct `objectid(page.storage)` across every manager's pages, K and V, all
-layers.
+storage array (§LXXX item C — the §LIV win metric): the managers' pinned
+`page_bytes` summed over the distinct `objectid(page.storage)` across every
+manager's pages, K and V, all layers (10D item C: Int arithmetic over the
+manager's known page geometry — concrete inference; NOT `sizeof` over
+`storage::Any`).
 
 Per-session `kv_bytes` stays honest per-session accounting (§LXXX: shared
 pages appear in BOTH sessions' receipts). The win is visible HERE: after
@@ -65,7 +67,7 @@ function unique_kv_bytes(mgrs::PagedKVManager...)
             id = objectid(p.storage)
             id in seen && continue
             push!(seen, id)
-            total += sizeof(p.storage)
+            total += mgr.page_bytes
         end
     end
     return total

@@ -3003,6 +3003,22 @@ G1∧G2∧G3 exist and the encoding owner opens that phase):
     §LXXXIII remains NOT COMPLETE — no Representation fill, no cages, no
     Magenta, no Julia fork.
 
+    Phase 10D close (2026-10-02, docs/goals/PHASE10D_FOUNDATION_HARDENING.md):
+    foundation hardening — every public name pinned to a test or a
+    parked-empty bucket (export inventory in CI; the six parked modules
+    still export only their own name); the snapshot-present/missing-golden
+    skip-hole is FAIL-closed in both SmolLM2 gates (a vanished oracle is a
+    broken tree, never a skip). Profiling byte counters are type-stable:
+    the KV manager pins `page_bytes` (Win 1 of ≤5 RPDO wins) and
+    `unique_kv_bytes` / `kv_footprint` are @inferred green; inference-path
+    @inferred (reference_prefill / decode!) is PACKETED on the §CIX
+    storage::Any encoding — re-encoding is a future packet, not a drive-by.
+    Ids, fingerprints, and fork bytes unchanged (toy2 bit-identical; CUDA
+    max|Δlogit| reprints inside atol; SmolLM2 N = 1_474_560 CPU / 737_280
+    CUDA hold). The G2 factor stands at 0.692×; this sprint moved no kernel.
+    §LXXXIII remains NOT COMPLETE — no Representation fill, no fused decode,
+    no cages, no Julia fork.
+
 
 ===============================================================================
 LXXXIV. PHASE 11 — MEMORY PLANNER

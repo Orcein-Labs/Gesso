@@ -27,10 +27,11 @@ Phase 10B LANDED (`PHASE10B_SPEED_FLOOR_CLOSE.md`). Ops placed a
 local SmolLM2-135M snapshot; G1 load/generate is demo-box green;
 G2 factor is **0.692×** warmed (`benchmark/results/2026-10-02.tsv`,
 eager 0.436 s / Gesso CUDA 0.630 s; Gesso F32 vs eager bfloat16).
-Next Buffy recipe: `docs/goals/PHASE10C_NAMED_MODEL_HYGIENE.md`
-landed 2026-10-02 (importer HF 0-based + golden freeze + SmolLM2
-`fork` bytes). Canon §LXXXIII stays parked. Fusion is a later
-optimization pass, not this file.
+10C landed 2026-10-02 (`PHASE10C_NAMED_MODEL_HYGIENE.md`). 10D
+landed 2026-10-02 (`PHASE10D_FOUNDATION_HARDENING.md`): export
+inventory + parked-empty fence, fail-closed vanished-golden gate,
+`@inferred` byte counters, 1 RPDO win. Fusion is the pass after
+10D. Canon §LXXXIII stays parked.
 
 Canon still lists Phases 0–22 in `docs/Gesso_Stack.md` §LXXIII–§XCV.
 This file says what that list *means* after Phases 0–4 and the first
@@ -115,11 +116,15 @@ G1–G3   speed floor                   LANDED 2026-10-01  PHASE10_SPEED_FLOOR.m
                                       SmolLM2 CPU N = 1_474_560).
                                       Fusion later.
 10C     named-model hygiene           LANDED 2026-10-02  PHASE10C_NAMED_MODEL_HYGIENE.md
-                                      (HF importer, golden frozen oracle
-                                      "gesso-cpu", SmolLM2 fork bytes
-                                      pinned; §LXXXIII still parked)
+10D     foundation hardening          LANDED 2026-10-02  PHASE10D_FOUNDATION_HARDENING.md
+                                      (inventory, fail-closed hunt,
+                                      @inferred, ≤5 RPDO wins; fusion later)
 10–11   weight compiler + memory      AFTER G1∧G2∧G3 + encoding-owner open
-12–13   shared model runtime          mechanism for many agents, one model
+12–13   shared model runtime          AFTER Cyan MAO v0 reducer exists;
+                                      consume branch/lease ids
+                                      (CYAN_ELASTIC_ORCHESTRATION.md).
+                                      src/Agents.jl stays empty until
+                                      that Gesso recipe is written.
 ABI     Cyan consumes Gesso           Phases 16, then 17 adapter
 14–15   canon still names Palette/Cyan as Gesso phases;
         living reading: they already exist above Gesso
@@ -139,10 +144,9 @@ pages. Full gate, hot-path inventory, and RPD/RPDO split:
 `docs/research/SPEED_FLOOR.md`.
 
 Do not open canon Phase 10 (representation) until G1∧G2∧G3 and
-the encoding owner writes that recipe. 10C landed (importer,
-golden, named-model fork bytes); the next Buffy slice is Llama-family
-import glue (second tokenizer, `rope_scaling`) one architecture at
-a time, or a fusion recipe the encoding owner writes from the TSV.
+the encoding owner writes that recipe. 10D is landed. Next: fused
+decode (factor next to 0.692×) or Llama-family import glue, one
+architecture at a time — each a new closed file.
 
 The speed floor has two clocks: application (fusion, D2H, gather)
 and Julia compiler (TTFX, invalidation, GPUCompiler, Lava SPIR-V).

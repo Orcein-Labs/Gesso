@@ -50,6 +50,16 @@ end
         @test _skip(
             "GESSO_SMOLLM2_DIR=$SMOLLM2_DIR is incomplete — need config.json, model.safetensors (or shard index), vocab.json, merges.txt",
         )
+    elseif !isfile(GOLDEN_PATH)
+        # 10D item B: snapshot present + golden missing is a BROKEN TREE, not
+        # a skip — the frozen oracle is committed (10C); a vanished golden is
+        # a regression on this box (§LXX: fail explicitly). Checked BEFORE the
+        # load: fail fast, no wasted prefill on a broken tree.
+        error(
+            "snapshot present but test/fixtures/smollm2/expected_logits.toml is MISSING — " *
+            "the golden is frozen (oracle \"gesso-cpu\") and must not vanish; restore it, " *
+            "or regenerate deliberately with test/freeze_smollm2_golden.jl --force",
+        )
     else
         # ---- the real gate -------------------------------------------------
         model, tensors, cfg = Gesso.load_llama(SMOLLM2_DIR)
@@ -96,27 +106,18 @@ end
             theta=cfg.rope_theta,
         )
 
-        # frozen-reference comparison: last-position logits vs the golden file
-        if isfile(GOLDEN_PATH)
-            golden = TOML.parsefile(GOLDEN_PATH)
-            prov = get(golden, "provenance", Dict{String, Any}())
-            @test get(prov, "oracle", "") == "gesso-cpu"
-            # 10C item B format: one compact `values` array of 49152 Float64s
-            # (provenance table + values; the old {v=…} table shape is gone)
-            values = Float64.(golden["values"])
-            @test length(values) == 49152
-            # §LXXVI tolerance: atol=1e-2, rtol=0 — f64 Gesso vs frozen f64 Gesso
-            last = logits[:, end]
-            @test all(
-                i -> isapprox(last[i], values[i]; atol=1e-2, rtol=0.0),
-                eachindex(values),
-            )
-        else
-            # snapshot present but golden not frozen: first-run instruction,
-            # NOT a faked file
-            @test _skip(
-                "snapshot present but test/fixtures/smollm2/expected_logits.toml is not frozen yet — prefill once on this snapshot and commit the result with provenance oracle = \"gesso-cpu\"",
-            )
-        end
+        # frozen-reference comparison: last-position logits vs the golden
+        # file (the vanished-golden FAIL fires earlier in the ladder, so the
+        # file exists here by construction)
+        golden = TOML.parsefile(GOLDEN_PATH)
+        prov = get(golden, "provenance", Dict{String, Any}())
+        @test get(prov, "oracle", "") == "gesso-cpu"
+        # 10C item B format: one compact `values` array of 49152 Float64s
+        # (provenance table + values; the old {v=…} table shape is gone)
+        values = Float64.(golden["values"])
+        @test length(values) == 49152
+        # §LXXVI tolerance: atol=1e-2, rtol=0 — f64 Gesso vs frozen f64 Gesso
+        last = logits[:, end]
+        @test all(i -> isapprox(last[i], values[i]; atol=1e-2, rtol=0.0), eachindex(values))
     end
 end

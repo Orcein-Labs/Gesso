@@ -87,6 +87,11 @@ mutable struct PagedKVManager
     k_pages::Vector{Vector{KVPage}}    # [layer] => ordered pages
     v_pages::Vector{Vector{KVPage}}
     prototype::Any                     # allocation source (similar), §LXXVII
+    page_bytes::Int                    # bytes of ONE page buffer (10D item C:
+    # runtime METADATA, §XIII — the manager
+    # already knows its page geometry, so
+    # byte accounting is Int math, not
+    # `sizeof` over `storage::Any`)
 end
 
 _kind_str(kind::Symbol) = kind === :k ? "K" : kind === :v ? "V" : string(kind)
@@ -171,6 +176,7 @@ function PagedKVManager(
         [KVPage[] for _ in 1:n_layers],
         [KVPage[] for _ in 1:n_layers],
         prototype,
+        page_size * n_kv_heads * d_head * sizeof(eltype(prototype)),
     )
 end
 
@@ -395,9 +401,13 @@ the sum of `sizeof` over every allocated page storage, K and V, all layers
 this number from the page arrays; if the two ever disagree, that is a bug.
 """
 function kv_bytes(mgr::PagedKVManager)
+    # every page of this manager has the same element count (pages allocate
+    # at (page_size, n_kv_heads, d_head); CoW `similar` copies those dims),
+    # so bytes are the pinned per-page size — Int arithmetic that infers
+    # concretely (10D item C), NOT `sizeof` over the `storage::Any` field.
     total = 0
-    for pages in (mgr.k_pages, mgr.v_pages), layer_pages in pages, p in layer_pages
-        total += sizeof(p.storage)
+    for pages in (mgr.k_pages, mgr.v_pages), layer_pages in pages, _ in layer_pages
+        total += mgr.page_bytes
     end
     return total
 end

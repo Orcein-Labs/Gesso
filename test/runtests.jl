@@ -148,6 +148,15 @@ using Gesso: reference_prefill, reference_generate
     # torch, a snapshot, or a device (CI never requires any of them).
     include("test_speed_floor_harness.jl")
 
+    # Phase 10D (foundation hardening item A): every public name has a home —
+    # export inventory + parked-empty fence. Always-on, no device/snapshot.
+    include("test_export_inventory.jl")
+
+    # Phase 10D (foundation hardening item C): the hot path is type-stable —
+    # @inferred on reference_prefill / decode! / unique_kv_bytes over toy2 +
+    # llama_micro. Always-on CPU; the §LXXV oracle stays the correctness law.
+    include("test_type_stability.jl")
+
     @testset "package loads" begin
         @test Gesso.Log isa Module
         @test isdefined(Gesso, :CPUBackend)

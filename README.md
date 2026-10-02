@@ -136,7 +136,7 @@ Current phases (docs/Gesso_Stack.md §LXXIII ff.):
 | 7 | First semantic optimization | **A/B/C/D LANDED 2026-09-30** — CoW + declared identity prefix share (`fork`), `Profiling.unique_kv_bytes` byte win (§LXXX) |
 | 8 | Lava/Vulkan backend | **A/B/C/D LANDED 2026-09-30** — GessoLavaExt seam + six ops + interpreter/Session/fork on `LavaArray{Float32}` (§LXXXI); portable seam, not tuned; device-less runs skip by name |
 | 9 | Autotune | **A/B/C/D LANDED 2026-10-01** — the §XXVI loop: two gated CUDA `matmul!` candidates, winner cached per (device, backend, op, regime), op consults and dispatches to it (§LXXXII); selection, not speed; device-less runs skip by name |
-| 10 | Speed floor (proof-ladder rungs 1–2) | **A/B/C/D LANDED 2026-10-01** — device greedy (one Int D2H per token) + device GEMM attention over gathered scratch (§LXXXIII gates G1–G3 harness); G2 factor **0.692×** measured (`2026-10-02.tsv`); 10C landed (HF 0-based importer, frozen golden, SmolLM2 fork bytes N = 1_474_560); §LXXXIII representation planner stays PARKED |
+| 10 | Speed floor (proof-ladder rungs 1–2) | **A/B/C/D LANDED 2026-10-01** — device greedy (one Int D2H per token) + device GEMM attention over gathered scratch (§LXXXIII gates G1–G3 harness); G2 factor **0.692×** measured (`2026-10-02.tsv`); 10C landed (HF 0-based importer, frozen golden, SmolLM2 fork bytes N = 1_474_560); 10D landed 2026-10-02 (export inventory + parked-empty fence, vanished-golden fail-closed, `@inferred` byte counters); §LXXXIII representation planner stays PARKED |
 
 Training is **not** part of Gesso — by explicit, permanent decision
 ([docs/Gesso_Stack.md §LVIII](docs/Gesso_Stack.md)). If you want to contribute

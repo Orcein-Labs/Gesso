@@ -48,8 +48,9 @@ policy (internal: NIRA); **Lava** = Vulkan substrate.
 | `docs/research/KV_MEMORY_PROGRAM_part2.md` | Magenta Part II — topology / residency / schedule. Exploratory. After a real KV manager. |
 | `docs/research/REPRESENTATION_PROGRAM.md` | Gauge-compiled / caged weights. Phases 7 (candidate) / 10 (host). Not Phase 5. |
 | `docs/research/CYAN_TRIAL_GESSO_FALLOUT.md` | Cyan trial metal detector. Promotion filter. Not a work item. |
+| `docs/research/CYAN_ELASTIC_ORCHESTRATION.md` | Seam pointer: Cyan MAO freeze. Not a Gesso /goal. `src/Agents.jl` stays empty. |
 | `docs/research/ROADMAP_NOW.md` | Living phase map. Not a Buffy goal. |
-| `docs/research/SPEED_FLOOR.md` | Board constraint: named-model decode factor before §LXXXIII. 10C recipe LANDED (`PHASE10C_NAMED_MODEL_HYGIENE.md`): HF importer, frozen `gesso-cpu` golden, named-model fork bytes (CPU N = 1_474_560). |
+| `docs/research/SPEED_FLOOR.md` | Board constraint: named-model decode factor before §LXXXIII. 10C + 10D LANDED (`PHASE10D_FOUNDATION_HARDENING.md`, 2026-10-02): HF importer, frozen `gesso-cpu` golden, named-model fork bytes (CPU N = 1_474_560), export inventory, `@inferred` byte counters. |
 | `docs/research/EXOTIC_CAPABILITY_MASTER_LEDGER.md` | Capability mine (meta-primitives, meta-tools). Parked. Not a /goal. |
 | `docs/Gesso_musings.md` | The dangerous notebook. Parking lot — promote deliberately, never wholesale. |
 | `docs/DECISION_PACKETS.md` | Architecture escalations (decision-packet format). Packets 1–2 resolved into §CIX; remaining packets follow the same rule: resolved INTO canon, never in code. |
@@ -62,7 +63,7 @@ policy (internal: NIRA); **Lava** = Vulkan substrate.
 |---|---|
 | `AGENTS.md` | **Binding agent charter** (transcribes §LXXI/§LXXII/§LXX). |
 | `.github/ISSUE_TEMPLATE/work-item.md` | §LXXI work-item format. |
-| `docs/goals/` | Sprint goals. Phases 1–9 and living 10/10B landed; **10C LANDED** (`PHASE10C_NAMED_MODEL_HYGIENE.md`: HF 0-based importer, golden `oracle = "gesso-cpu"`, SmolLM2 fork byte share). G2 factor 0.692× measured. Canon §LXXXIII parked. |
+| `docs/goals/` | Sprint goals. Phases 1–9 and living 10/10B/10C/10D landed (10D 2026-10-02: `PHASE10D_FOUNDATION_HARDENING.md` — inventory, fail-closed hunt, `@inferred` byte counters, 1 RPDO win). G2 factor 0.692×. Canon §LXXXIII parked. |
 | `.github/PULL_REQUEST_TEMPLATE.md` | §LXXII receipt-as-PR. |
 | `scripts/` + `Makefile` | `make test / bench / format / format-check / freeze`. |
 | `benchmark/results/*.tsv` | Regression corpus (accrues from every bench run). |
