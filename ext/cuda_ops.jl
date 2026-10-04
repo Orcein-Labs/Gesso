@@ -213,7 +213,13 @@ function rope!(
     positions::AbstractVector{Int},
     ::Gesso.PrefillWorkload;
     theta::Real = 10000.0,
+    inv_freq = nothing,
 )
+    # BREADTH-0 Pass D: a scaled positional policy has NO CUDA lowering yet.
+    # It must be REFUSED, not silently run unscaled (§LXX: no silent
+    # representation change). The CPU oracle implements these policies today.
+    inv_freq === nothing ||
+        Gesso.lowering_not_implemented(:rope!, Gesso.CUDABackend())
     _cuda_device_storage!(:rope!, q)
     _cuda_device_storage!(:rope!, k)
     return _cuda_rope!(q, k, positions; theta)
@@ -226,7 +232,13 @@ function rope!(
     positions::AbstractVector{Int},
     ::Gesso.DecodeWorkload;
     theta::Real = 10000.0,
+    inv_freq = nothing,
 )
+    # BREADTH-0 Pass D: a scaled positional policy has NO CUDA lowering yet.
+    # It must be REFUSED, not silently run unscaled (§LXX: no silent
+    # representation change). The CPU oracle implements these policies today.
+    inv_freq === nothing ||
+        Gesso.lowering_not_implemented(:rope!, Gesso.CUDABackend())
     _cuda_device_storage!(:rope!, q)
     _cuda_device_storage!(:rope!, k)
     return _cuda_rope!(q, k, positions; theta)

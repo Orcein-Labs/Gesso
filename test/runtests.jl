@@ -53,6 +53,17 @@ using Gesso: reference_prefill, reference_generate
     # mirrors the reader byte-for-byte
     include("test_import_llama.jl")
 
+    # BREADTH-0: the universal model doorway (Passes A/B/D/E/F/G/H). After
+    # the lab helpers (deterministic rng) and after the Llama importer, since
+    # it asserts the Llama path is UNCHANGED and pushes a second family
+    # through the same CPU oracle.
+    include("test_breadth0.jl")
+
+    # BREADTH-0 Pass C: the tokenizer PROTOCOL — GPT-2 BPE is one
+    # implementation, metaspace byte-level BPE is a materially different
+    # second one, and both answer the same protocol.
+    include("test_tokenizer_protocol.jl")
+
     # Phase 3 (§LXXVI item C): GPT-2 byte-level BPE against a tiny data-only
     # fixture (golden ids traced from the merge table in the file header)
     include("test_tokenizer_gpt2.jl")

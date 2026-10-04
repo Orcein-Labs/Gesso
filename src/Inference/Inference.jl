@@ -45,6 +45,7 @@ using ..Gesso:
     KVCache,
     backend_name,
     gesso_error,
+    LoweringNotImplemented,
     ERR_INVALID_PLAN,
     ERR_RESOURCE_LIMIT,
     ReceiptSink,
@@ -123,6 +124,10 @@ function reference_prefill(
     )
 
     positions = collect(0:(seq-1))            # 0-based (§LXXV)
+    # BREADTH-0 Pass D: the positional policy TRAVELS WITH the imported model.
+    # `nothing` for every unscaled model ⇒ the oracle evaluates its original
+    # expression ⇒ Llama is bit-identical (regression law §XIII).
+    inv_freq = tensors_rope_inv_freq(tensors, d_head)
     on_cpu = backend_name(cpu) === :cpu
     T = typeof(tensors.embedding.storage)      # buffers live where the data lives
     zeros_like =
@@ -191,7 +196,7 @@ function reference_prefill(
         _split_heads!(kh, k, n_kv_heads, d_head)
         _split_heads!(vh, v, n_kv_heads, d_head)
 
-        rope!(cpu, qh, kh, positions, wl; theta)
+        rope!(cpu, qh, kh, positions, wl; theta, inv_freq)
 
         # repeat KV heads for the contraction only (identity when MHA)
         kx = _repeat_heads(kh, group)
@@ -263,22 +268,56 @@ function reference_prefill(
 end
 
 # head-major split/merge between (seq, dim) and (seq, n_heads, d_head).
+#
+# Phase 10E: the bodies below take STORAGE ARRAYS and the Activation forms
+# forward to them. `Activation.storage` is `::Any` by §CIX (packet P-1), so a
+# hot-path loop that reads `dst.storage[i]` dispatches dynamically and BOXES
+# every element (measured: 16 B per element on the decode loops). Specializing
+# on the storage type as a FUNCTION ARGUMENT is ordinary Julia dispatch — it
+# adds no type to the §CIX hierarchy, does not parameterize Session, and does
+# not make `decode!` infer (P-1 stays packeted). Values are untouched: same
+# slices, same copy, same order.
 # Head-major layout maps head hh's feature block to a contiguous slice, so
 # the split/merge is a plain elementwise copy per head — same values as the
 # old scalar loops on ANY storage (identical on CPU, pinned by atol=0).
-function _split_heads!(dst, src, n_heads, d_head)
+# Phase 10F: the three head-layout copies below are the ones the 10E receipt
+# measured at 2.48 MB of HOST allocation per warmed SmolLM2 CUDA `decode!` —
+# a `Broadcasted` wrapper per head, per layer, per token, to move 64 floats.
+# The bodies below stay EXACTLY as they were (the CPU/Lava/oracle path, whose
+# values the toy2 fingerprint pins at atol=0). A backend extension may add a
+# MORE SPECIFIC method on its own storage type to replace the broadcast with a
+# kernel — that is ordinary dispatch on the storage argument, the same form
+# 10E already uses; it adds no type to the §CIX hierarchy (P-1 stays
+# packeted).
+function _split_heads!(
+    dst_storage::AbstractArray,
+    src_storage::AbstractArray,
+    n_heads,
+    d_head,
+)
     for hh in 1:n_heads
-        @views dst.storage[:, hh, :] .= src.storage[:, ((hh-1)*d_head+1):(hh*d_head)]
+        @views dst_storage[:, hh, :] .= src_storage[:, ((hh-1)*d_head+1):(hh*d_head)]
     end
-    return dst
+    return dst_storage
 end
 
-function _merge_heads!(dst, src, n_heads, d_head)
+_split_heads!(dst::Activation, src::Activation, n_heads, d_head) =
+    _split_heads!(dst.storage, src.storage, n_heads, d_head)
+
+function _merge_heads!(
+    dst_storage::AbstractArray,
+    src_storage::AbstractArray,
+    n_heads,
+    d_head,
+)
     for hh in 1:n_heads
-        @views dst.storage[:, ((hh-1)*d_head+1):(hh*d_head)] .= src.storage[:, hh, :]
+        @views dst_storage[:, ((hh-1)*d_head+1):(hh*d_head)] .= src_storage[:, hh, :]
     end
-    return dst
+    return dst_storage
 end
+
+_merge_heads!(dst::Activation, src::Activation, n_heads, d_head) =
+    _merge_heads!(dst.storage, src.storage, n_heads, d_head)
 
 # --- backend / storage discipline (§LXXVII) -----------------------------------
 
@@ -335,6 +374,50 @@ function _repeat_heads(kv::Activation, group::Int)
     end
     return out
 end
+
+# Phase 10E item C: the IN-PLACE GQA repeat, engine decode only. The
+# allocating `_repeat_heads` above stays — it is the oracle/interpreter
+# contract and returns an Activation.
+#
+#   * `group == 1` (MHA): NO COPY. `dst` may be `src` (the engine passes the
+#     gathered buffer itself), so toy2's allocation profile cannot grow here.
+#   * `group > 1`: rows 1:K of the preallocated `(context_length,
+#     n_heads, d_head)` destination are filled. Only the filled PREFIX is
+#     touched — per-token work is O(K), never O(context_length).
+#
+# The copy itself is byte-for-byte the same layout as `_repeat_heads` (each kv
+# head fills its group of consecutive query-head slots), so ids and logits do
+# not move. Like the head split/merge above, the body takes STORAGE ARRAYS so
+# the copy does not box element-by-element through `storage::Any` (P-1).
+function _repeat_heads!(
+    dst_storage::AbstractArray,
+    src_storage::AbstractArray,
+    group::Int,
+    K::Int,
+)
+    group == 1 && return dst_storage
+    nk = size(src_storage, 2)
+    for h in 1:nk
+        @views dst_storage[1:K, ((h-1)*group+1):(h*group), :] .= src_storage[1:K, h:h, :]
+    end
+    return dst_storage
+end
+
+_repeat_heads!(dst::Activation, src::Activation, group::Int, K::Int) =
+    _repeat_heads!(dst.storage, src.storage, group, K)
+
+# --- Phase 10F: storage-level residual add + score scale ---------------------
+#
+# The interpreter adds the residual in STORAGE (§LXXV: no `add!` operator
+# exists, and this does not introduce one) and scales the attention scores by
+# 1/sqrt(d_head). Both were inline `@views`/`./=` broadcasts at every call
+# site; naming them lets a device backend specialize on its storage type.
+# The generic bodies below ARE the previous expressions, unchanged.
+
+_add_storage!(dst_storage::AbstractArray, src_storage::AbstractArray) =
+    (@views dst_storage .+= src_storage)
+
+_scale_storage!(dst_storage::AbstractArray, s) = (@views dst_storage ./= s)
 
 export reference_prefill
 
@@ -447,6 +530,8 @@ function reference_generate(
     scores_out = TemporaryWorkspace(; shape=(P, P), storage=zeros_like((P, P)))
 
     positions = collect(0:(P-1))
+    # BREADTH-0 Pass D — see reference_prefill. `nothing` = unscaled model.
+    inv_freq = tensors_rope_inv_freq(tensors, d_head)
     # the prefill phase works on rows 1..P of h through a VIEW (Activation
     # storage is untyped by design; scratch stays exactly (P, …)-shaped so
     # softmax never sees padded zero columns — they would poison the
@@ -462,7 +547,7 @@ function reference_generate(
         _split_heads!(qh, q, n_heads, d_head)
         _split_heads!(kh, k, n_kv_heads, d_head)
         _split_heads!(vh, v, n_kv_heads, d_head)
-        rope!(cpu, qh, kh, positions, wp; theta)
+        rope!(cpu, qh, kh, positions, wp; theta, inv_freq)
         # KV APPEND: the prefill's post-rope K/V become cache rows 1..P,
         # stored at n_kv_heads (GQA caches the small side, §LXXVI)
         kc[bi].storage[1:P, :, :] .= kh.storage
@@ -533,6 +618,7 @@ function reference_generate(
             group,
             eps,
             theta,
+            inv_freq,
         )
     end
 
@@ -590,6 +676,7 @@ function _decode_step!(
     group,
     eps,
     theta,
+    inv_freq,
 )
     dim = model.embedding.dim
     kdim = n_kv_heads * d_head
@@ -637,7 +724,7 @@ function _decode_step!(
         _split_heads!(qh, q, n_heads, d_head)
         _split_heads!(kh, k, n_kv_heads, d_head)
         _split_heads!(vh, v, n_kv_heads, d_head)
-        rope!(cpu, qh, kh, [pos0 - 1], wl; theta)  # 0-based position of this token
+        rope!(cpu, qh, kh, [pos0 - 1], wl; theta, inv_freq)  # 0-based position
         # KV APPEND: exactly one row per layer per step, at n_kv_heads
         kc[bi].storage[pos0, :, :] .= kh.storage[1, :, :]
         vc[bi].storage[pos0, :, :] .= vh.storage[1, :, :]
@@ -716,6 +803,19 @@ include("session.jl")
 
 # Phase 3 (§LXXVI item C): GPT-2 byte-level BPE — the tokenizer path, in
 # Gesso (no Tokenizers.jl; JSON is already the sanctioned dependency).
+include("tokenizer_abstract.jl")  # Pass C: the protocol, BEFORE its implementors
 include("gpt2_tokenizer.jl")
+
+# --- BREADTH-0: the universal model doorway -------------------------------------
+#
+# Loaded AFTER llama_import.jl so the legacy strict Llama surface stays exactly
+# where it was (regression law §XIII) and the generic doorway sits beside it.
+# The generic path is what new families use; `load_llama` still works.
+include("architecture_spec.jl")      # Pass A/F: canonical description + capabilities
+include("semantic_params.jl")        # Pass B/E: canonical parameter identity
+include("arch_adapters.jl")          # Pass A/B: the family boundary
+include("materialize_architecture.jl") # Pass B/E: the generic binder
+include("tokenizer_protocol.jl")   # Pass C: the tokenizer PROTOCOL
+include("import_report.jl")      # Passes I/J: report + generated matrix
 
 end # module Inference

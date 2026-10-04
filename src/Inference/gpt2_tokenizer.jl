@@ -72,7 +72,7 @@ merge list (file order = rank order), the token-string → id vocabulary, and
 the special ids from the tokenizer config. Ids are 0-based, as everywhere
 in Gesso (§LXXV convention).
 """
-struct GPT2BPE
+struct GPT2BPE <: Tokenizer
     byte_encoder::Dict{UInt8, Char}
     merges::Vector{Pair{String, String}}          # rank order
     merge_rank::Dict{Pair{String, String}, Int}
@@ -150,7 +150,7 @@ end
 
 # greedy lowest-rank merge over one pre-token's symbol list (the published
 # algorithm: find the best pair present, merge ALL its occurrences, repeat)
-function _bpe(toks::Vector{String}, tk::GPT2BPE)
+function _bpe(toks::Vector{String}, tk::Tokenizer)
     length(toks) <= 1 && return toks
     work = copy(toks)
     while true

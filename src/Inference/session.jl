@@ -113,6 +113,17 @@ function Session(
     group = div(n_heads, n_kv_heads)
     vocab = size(tensors.embedding.storage, 1)
 
+    # BREADTH-0 Pass D — the engine threads `theta` only, so a model carrying
+    # a SCALED positional policy must NOT silently run unscaled (§LXX: no
+    # silent representation change). A scaled policy is refused AT THE
+    # OPERATION, naming what is missing (capability lattice, §II). The CPU
+    # oracle (`reference_prefill` / `reference_generate`) DOES implement
+    # scaled policies today and remains their reference.
+    _policy = (tensors isa NamedTuple && haskey(tensors, :rope)) ? tensors.rope : nothing
+    if _policy !== nothing && _policy.kind !== :none
+        throw(LoweringNotImplemented(Symbol("rope_", _policy.kind), backend_name(backend)))
+    end
+
     T = typeof(tensors.embedding.storage)
     h = fill!(
         similar(

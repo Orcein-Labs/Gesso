@@ -108,6 +108,49 @@ function load_llama_config(path::AbstractString)
 end
 
 """
+    spec_from_llama_cfg(cfg) -> ArchitectureSpec
+
+Lift the strict Llama config NamedTuple back into the canonical
+`ArchitectureSpec` (BREADTH-0 Pass A) so the Llama path and the generic
+doorway speak the SAME language downstream of validation.
+"""
+function spec_from_llama_cfg(cfg)
+    return ArchitectureSpec(;
+        family=Symbol(cfg.model_type),
+        hidden_size=cfg.hidden_size,
+        num_layers=cfg.num_hidden_layers,
+        n_heads=cfg.num_attention_heads,
+        n_kv_heads=cfg.num_key_value_heads,
+        vocab_size=cfg.vocab_size,
+        intermediate_size=cfg.intermediate_size,
+        norm_kind=:rms,
+        activation_kind=:swiglu,
+        rope=RoPEPolicy(; theta=cfg.rope_theta),
+        tie_word_embeddings=cfg.tie_word_embeddings,
+    )
+end
+
+"""
+    llama_param_map() -> FamilyParamMap
+
+The Llama family's external→canonical parameter map (BREADTH-0 Pass B).
+The name map is now DATA behind an interface, not logic inside a loop.
+"""
+llama_param_map() = param_map(LlamaAdapter(), spec_from_llama_cfg(_LLAMA_MAP_PROBE_CFG))
+
+const _LLAMA_MAP_PROBE_CFG = (
+    model_type="llama",
+    hidden_size=1,
+    num_hidden_layers=1,
+    num_attention_heads=1,
+    num_key_value_heads=1,
+    intermediate_size=1,
+    vocab_size=1,
+    rope_theta=10000.0,
+    tie_word_embeddings=true,
+)
+
+"""
     config_to_model(cfg) -> Model
 
 Compose a validated config into a `ModelIR.Model` (§VIII: a new architecture
@@ -265,87 +308,24 @@ and missing keys are errors WITH THE KEY NAME (§LXX). The only known-ignored
 leftover is reconstructed RoPE `*.rotary_emb.inv_freq` (not a weight).
 """
 function materialize_llama(model, tensors_by_name::Dict{String, Array{Float64}}, cfg)
-    consumed = Set{String}()
-    grab(name) = begin
-        haskey(tensors_by_name, name) ||
-            error("materialize_llama: missing required tensor: $name")
-        push!(consumed, name)
-        return tensors_by_name[name]
-    end
-
-    emb = EmbeddingTable(;
-        shape=(cfg.vocab_size, cfg.hidden_size),
-        storage=grab("model.embed_tokens.weight"),
+    # BREADTH-0 Pass B: the Llama path is now a THIN DELEGATION to the
+    # family-agnostic binder. The nine hardcoded tensor spellings live in
+    # `LlamaAdapter`'s `param_map` (data behind an interface), and the
+    # binding walk is `materialize_architecture`. There is ONE name-map
+    # implementation, not two — which is the meta-metric (§XVIII).
+    bound = materialize_architecture(
+        spec_from_llama_cfg(cfg),
+        llama_param_map(),
+        tensors_by_name,
     )
-
-    # HuggingFace Llama is 0-based (`model.layers.0` … `n-1`). Gesso micro
-    # fixtures were written 1-based (`model.layers.1` … `n`). Detect; refuse
-    # a mix. Missing both origins names both keys.
-    q0 = "model.layers.0.self_attn.q_proj.weight"
-    q1 = "model.layers.1.self_attn.q_proj.weight"
-    has0, has1 = haskey(tensors_by_name, q0), haskey(tensors_by_name, q1)
-    layer_ids = if has0
-        0:(cfg.num_hidden_layers-1)
-    elseif has1
-        1:cfg.num_hidden_layers
-    else
-        error("materialize_llama: missing required tensor: $q0 (HuggingFace) or $q1 (fixture)")
-    end
-    n = cfg.num_hidden_layers
-    has0 &&
-        has1 &&
-        n > 1 &&
-        haskey(tensors_by_name, "model.layers.$n.self_attn.q_proj.weight") &&
-        error(
-            "materialize_llama: checkpoint mixes HuggingFace 0-based layers with fixture 1-based layers",
-        )
-
-    blocks = map(layer_ids) do i
-        fields = map(_LAYER_TENSOR_NAMES) do (suffix, field)
-            name = "model.layers.$i.$suffix"
-            arr = grab(name)
-            if field === :attn_rms || field === :ffn_rms
-                return field => FrozenParameter(; shape=size(arr), storage=arr)
-            else
-                return field => ProjectionWeight(; shape=size(arr), storage=arr)
-            end
-        end
-        (; fields...)
-    end
-
-    final_rms = if haskey(tensors_by_name, "model.norm.weight")
-        push!(consumed, "model.norm.weight")
-        FrozenParameter(;
-            shape=(cfg.hidden_size,),
-            storage=tensors_by_name["model.norm.weight"],
-        )
-    else
-        nothing
-    end
-
-    # tied head: a distinct lm_head must be byte-identical or it is an error
-    if haskey(tensors_by_name, "lm_head.weight")
-        lm = tensors_by_name["model.embed_tokens.weight"]
-        lm_head_arr = tensors_by_name["lm_head.weight"]
-        lm == lm_head_arr || error(
-            "materialize_llama: lm_head.weight differs from embed_tokens.weight — untied heads are out of scope (§LXXVI)",
-        )
-        push!(consumed, "lm_head.weight")
-    end
-
-    leftover = sort(collect(setdiff(Set(keys(tensors_by_name)), consumed)))
-    ignored_inv_freq = filter(_is_ignored_rope_inv_freq, leftover)
-    unknown = filter(k -> !_is_ignored_rope_inv_freq(k), leftover)
-    isempty(unknown) || error(
-        "materialize_llama: unknown tensor(s) in checkpoint: $(join(unknown, ", "))" *
-        (
-            isempty(ignored_inv_freq) ? "" :
-            " (ignored reconstructed RoPE $(_IGNORED_ROPE_INV_FREQ_SUFFIX): $(join(ignored_inv_freq, ", ")))"
-        ),
+    return (
+        embedding=bound.embedding,
+        blocks=bound.blocks,
+        lm_head=bound.lm_head,
+        final_rms=bound.final_rms,
     )
-
-    return (embedding=emb, blocks=collect(blocks), lm_head=emb, final_rms=final_rms)
 end
+
 
 """
     load_llama(dir) -> (model, tensors, cfg)

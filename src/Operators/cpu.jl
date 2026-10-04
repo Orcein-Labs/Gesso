@@ -60,7 +60,7 @@ function _cpu_rmsnorm!(dst, x, scale; eps=1e-6)
     return dst
 end
 
-function _cpu_rope!(q, k, positions; theta=10000.0)
+function _cpu_rope!(q, k, positions; theta=10000.0, inv_freq=nothing)
     tθ = Float64(theta)
     size(q.storage, 3) == size(k.storage, 3) ||
         error("rope!: q d_head $(size(q.storage, 3)) ≠ k d_head $(size(k.storage, 3))")
@@ -71,8 +71,13 @@ function _cpu_rope!(q, k, positions; theta=10000.0)
         for t in axes(x.storage, 1), h in axes(x.storage, 2)
             m = Float64(positions[t])           # 0-based position
             d = size(x.storage, 3)              # d_head, even by contract
+            # BREADTH-0 Pass D: `inv_freq` carries an EXPLICIT positional
+            # policy. `inv_freq === nothing` is the unscaled policy and MUST
+            # stay the literal expression — it is what the Llama/CPU-oracle
+            # fingerprints pin at atol=0, so the default path is
+            # bit-identical by construction (regression law §XIII).
             for i in 0:(d÷2-1)
-                θ = m * tθ^(-2i / d)
+                θ = inv_freq === nothing ? m * tθ^(-2i / d) : m * inv_freq[i+1]
                 c, s = cos(θ), sin(θ)
                 x1, x2 = x.storage[t, h, 2i+1], x.storage[t, h, 2i+2]
                 x.storage[t, h, 2i+1] = x1 * c - x2 * s
@@ -162,8 +167,9 @@ for wl in (:PrefillWorkload, :DecodeWorkload)
             positions::AbstractVector{Int},
             ::Semantics.$wl;
             theta::Real=10000.0,
+            inv_freq=nothing,
         )
-            return _cpu_rope!(q, k, positions; theta)
+            return _cpu_rope!(q, k, positions; theta, inv_freq)
         end
 
         function matmul!(
