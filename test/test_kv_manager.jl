@@ -271,6 +271,41 @@ end
         @test_throws Gesso.GessoError Gesso.Inference.append_kv!(mgr, 1, :k, zeros(3, 4))
     end
 
+    @testset "gather_kv! dest MAY be longer than len; the tail is untouched (10E item B)" begin
+        mgr = KVManager(
+            Float64[];
+            n_layers=1,
+            n_kv_heads=2,
+            d_head=4,
+            page_size=4,
+            context_length=16,
+        )
+        _append_rows!(mgr, 1, 3)
+        len = Gesso.Inference.filled_len(mgr, 1, :k)
+        @test len == 3
+
+        # a dest LONGER than len is legal: writes 1:len, tail left alone.
+        # Poison the tail first so "untouched" is proven, not assumed.
+        dest = fill(-99.0, 8, 2, 4)
+        Gesso.Inference.gather_kv!(dest, mgr, 1, :k; len)
+        @test isequal(dest[1:len, :, :], _rows(2, 4, 0:2))   # prefix is the gather
+        @test all(==(-99.0), dest[(len+1):8, :, :])         # tail NOT written
+
+        # bit-identical to the allocating form on 1:len
+        @test isequal(dest[1:len, :, :], Gesso.Inference.gather_kv(mgr, 1, :k; len))
+
+        # an explicit shorter len into a long dest also leaves the rest alone
+        dest2 = fill(-7.0, 8, 2, 4)
+        Gesso.Inference.gather_kv!(dest2, mgr, 1, :k; len=1)
+        @test isequal(dest2[1:1, :, :], _rows(2, 4, 0:0))
+        @test all(==(-7.0), dest2[2:8, :, :])
+
+        # the length law still binds on the other two axes
+        @test_throws Gesso.GessoError Gesso.Inference.gather_kv!(zeros(2, 2, 4), mgr, 1, :k)
+        @test_throws Gesso.GessoError Gesso.Inference.gather_kv!(zeros(8, 3, 4), mgr, 1, :k)
+        @test_throws Gesso.GessoError Gesso.Inference.gather_kv!(zeros(8, 2, 5), mgr, 1, :k)
+    end
+
     @testset "CoW aliasing (§LXXX item A, Magenta §9.5 step 2)" begin
         # helper: make B's (empty) page lists alias A's current pages
         function _alias!(b, a)

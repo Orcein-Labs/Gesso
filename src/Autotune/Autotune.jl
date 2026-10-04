@@ -276,8 +276,10 @@ end
 
 The consult site's entry point: return the cached `TuneResult` for the key
 `(AUTOTUNE_CACHE_VERSION, device, backend, op, regime)` when present (a
-cache HIT — no re-search, one receipt with `cache_hit = true`), else run the
-full `search!` (a MISS) and cache the result.
+cache HIT — no re-search and NO receipt; the returned value carries
+`cache_hit === true` and shares every other field with the stored search
+record), else run the full `search!` (a MISS), emit the one
+`:autotune_select` receipt, and cache the result.
 """
 function select(
     op::Symbol,
@@ -294,18 +296,32 @@ function select(
         get(_CACHE, key, nothing)
     end
     if hit isa TuneResult
-        _emit(
-            op,
-            backend,
-            regime,
-            device,
+        # Phase 10G item A — A CACHE HIT IS NOT A DECISION. §LXXII records a
+        # CHANGE; the miss receipt already named the winner, so emitting the
+        # same 8-entry Dict on every hit is the same decision copied once per
+        # consult (633 consults per SmolLM2 token). Return the cached entry
+        # with the ONE consult-site field flipped and emit nothing.
+        #
+        # The flip is a new immutable sharing every decision-bearing field —
+        # same `medians` / `rejected` OBJECTS, not copies — because
+        # `TuneResult` is a non-isbits struct (Dict + Vector fields) for which
+        # `===` is FIELD-WISE. So a hit is NOT `===` the stored entry (the
+        # `cache_hit` field differs) but every other field is identical by
+        # object identity; tests pin that rather than `===`. Reconstructing
+        # the wrapper allocates nothing.
+        #
+        # The STORED `_CACHE` entry keeps `cache_hit = false`: it is the
+        # search record, and it is what `cached_result` hands back.
+        return TuneResult(
+            hit.op,
+            hit.backend,
+            hit.regime,
             hit.winner,
             hit.medians,
             hit.rejected,
             true,
-            sink,
+            hit.key,
         )
-        return hit
     end
     result = search!(op, backend, regime, device, args...; sink, samples, warmup)
     lock(_LOCK) do

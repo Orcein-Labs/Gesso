@@ -349,20 +349,41 @@ end
 """
     gather_kv!(dest, mgr, layer, kind; len=filled_len(mgr, layer, kind))
 
-Copy the first `len` filled token-rows into the contiguous `dest`
-(`(len, n_kv_heads, d_head)`, same storage kind). Pure row copies —
-bit-identical on CPU by construction (§LXXVIII: the manager owns storage,
-not a kernel; attention contracts run over the gathered scratch).
+Copy the first `len` filled token-rows into the contiguous `dest`, same
+storage kind. Pure row copies — bit-identical on CPU by construction
+(§LXXVIII: the manager owns storage, not a kernel; attention contracts
+run over the gathered scratch).
+
+**Phase 10E item B — the dest may be LONGER than `len`.** `size(dest, 1)
+>= len` is legal and the write is `dest[1:len, :, :]`; trailing rows are
+left UNTOUCHED (there is no `fill!` of the tail), so a caller can gather
+into a `context_length`-sized Session workspace and read a length-`K`
+prefix of it without a per-token reallocation. `size(dest, 2)` /
+`size(dest, 3)` must still equal `n_kv_heads` / `d_head`, and a `dest`
+shorter than `len` still throws `ERR_INVALID_PLAN`.
+
+This is the one behavior change from Phase 5 item A, when `dest` had to
+match `(len, n_kv_heads, d_head)` EXACTLY. Callers that relied on that
+exact-size check to validate their own buffer must now check
+`size(dest, 1) >= len` themselves.
 """
 function gather_kv!(dest, mgr::PagedKVManager, layer::Int, kind::Symbol; len::Int=-1)
     n = filled_len(mgr, layer, kind)
     len = len < 0 ? n : len
     0 <= len <= n ||
         throw(gesso_error(ERR_INVALID_PLAN, "gather_kv!: len $len outside 0:$n"; len=len))
-    size(dest) == (len, mgr.n_kv_heads, mgr.d_head) || throw(
+    size(dest, 1) >= len || throw(
         gesso_error(
             ERR_INVALID_PLAN,
-            "gather_kv!: dest must be ($len, $(mgr.n_kv_heads), $(mgr.d_head)), got $(size(dest))",
+            "gather_kv!: dest has $(size(dest, 1)) rows, need at least len=$len",
+            len=len,
+        ),
+    )
+    (size(dest, 2) == mgr.n_kv_heads && size(dest, 3) == mgr.d_head) || throw(
+        gesso_error(
+            ERR_INVALID_PLAN,
+            "gather_kv!: dest must be (>= $len, $(mgr.n_kv_heads), $(mgr.d_head)), " *
+            "got $(size(dest))",
         ),
     )
     pages = _pages(mgr, layer, kind)

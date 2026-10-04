@@ -110,21 +110,37 @@ end
     after_search = count[]
 
     second_result = Gesso.Autotune.select(:demo4, :cpu, :r1, "testdev", buf; sink)
-    @test second_result === first_result            # cache hit: same object, no re-search
     @test count[] == after_search                   # no re-bench on a hit
 
+    # 10G: a hit is not a decision — ONE receipt (the miss), not two.
     receipts = sink.buf                              # InMemorySink exposes the live buffer
-    @test length(receipts) == 2
+    @test length(receipts) == 1
     @test receipts[1].context[:cache_hit] == false
-    @test receipts[2].context[:cache_hit] == true
     @test receipts[1].context[:winner] === :counted_add
     @test receipts[1].task === :autotune_select
+
+    # `cache_hit` stays the consult-site signal, on the RETURN VALUE. The two
+    # results are not `===` (TuneResult is non-isbits, so `===` is field-wise
+    # and the flipped field differs) — but every decision-bearing field is the
+    # SAME OBJECT, not a copy.
+    @test first_result.cache_hit == false
+    @test second_result.cache_hit == true
+    @test second_result !== first_result
+    @test second_result.winner === first_result.winner
+    @test second_result.medians === first_result.medians
+    @test second_result.rejected === first_result.rejected
+    @test second_result.key === first_result.key
+    # the STORED entry is the search record and keeps cache_hit = false
+    @test Gesso.Autotune.cached_result(:demo4, :cpu, :r1; device="testdev").cache_hit ==
+          false
 
     dropped = Gesso.Autotune.invalidate!(:demo4, :cpu, :r1)
     @test dropped == 1
     third_result = Gesso.Autotune.select(:demo4, :cpu, :r1, "testdev", buf; sink)
     @test third_result !== first_result             # re-searched
     @test count[] > after_search                    # candidates ran again
+    @test third_result.cache_hit == false           # invalidate forces a MISS
+    @test length(sink.buf) == 2                     # ... and a miss DOES emit
     @test Gesso.Autotune.cached_result(:demo4, :cpu, :r1) === third_result
 
     @test Gesso.Autotune.invalidate_all!() === nothing

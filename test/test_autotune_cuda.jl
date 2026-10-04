@@ -193,12 +193,14 @@ else
         entry = A.cached_result(:matmul!, :cuda, :toy2; device=CUDA.name(CUDA.device()))
         @test entry !== nothing
         @test entry.winner in _AT_NAMES                 # winner is a registered name
-        # second call with the same key: cache HIT, same winner, no re-search
+        # second call with the same key: cache HIT — same winner, no re-search,
+        # and NO second receipt (10G: a hit is not a decision; the miss receipt
+        # already named the winner). The last :autotune_select receipt is
+        # therefore still the MISS.
         Gesso.matmul!(cuda, dst, xt, wt, wl)
         i2 = _last_at(nothing)
-        @test i2 !== nothing && i2 > i1
-        @test psink.buf[i2].context[:cache_hit] == true
-        @test psink.buf[i2].context[:winner] === entry.winner
+        @test i2 == i1
+        @test psink.buf[i1].context[:winner] === entry.winner
         # and the winner actually ran: dst holds the right product
         ref = Float64.(Array(xt.storage)) * Float64.(Array(wt.storage))'
         @test approx_eq(Array(dst.storage), Float32.(ref); atol=1e-2)
@@ -336,6 +338,15 @@ else
         )
         @test gpu_gen == cpu_gen
         i_micro = _last_at(:llama_micro)
-        @test psink.buf[i_micro].context[:cache_hit] == true          # later calls hit
+        # 10G: only the MISS emits, so the last llama_micro receipt is still
+        # the search — there is no per-consult hit receipt left to read.
+        @test i_micro == i_first_micro
+        @test psink.buf[i_micro].context[:cache_hit] == false
+        @test A.cached_result(
+            :matmul!,
+            :cuda,
+            :llama_micro;
+            device=CUDA.name(CUDA.device()),
+        ) !== nothing
     end
 end
