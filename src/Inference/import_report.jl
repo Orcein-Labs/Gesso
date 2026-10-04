@@ -8,10 +8,17 @@
 # not have (Pass J: "the documentation must not manually claim support that
 # tests do not prove").
 
+# BREADTH-1: `supports(backend, cap)` is the SINGLE authority for "can this
+# backend do this". The hand-kept `_implemented_capabilities` set that used to
+# answer the same question is gone — two declarations of one fact is precisely
+# how this file came to contradict the code it was describing.
+using ..Gesso: supports
+
 # --- Pass I: the human-readable report ----------------------------------------
 
 """
-    import_report(spec; tensors=nothing, bound=nothing) -> String
+    import_report(spec; tensors=nothing, bound=nothing,
+                  backend::AbstractGessoBackend=CPUBackend()) -> String
 
 A human-readable account of what Gesso UNDERSTOOD about a checkpoint, and
 where execution would stop. Answers, before anything runs:
@@ -24,7 +31,12 @@ where execution would stop. Answers, before anything runs:
 A user must never have to learn compatibility from a stack trace fifteen
 seconds into a run.
 """
-function import_report(spec::ArchitectureSpec; tensors=nothing, bound=nothing)
+function import_report(
+    spec::ArchitectureSpec;
+    tensors=nothing,
+    bound=nothing,
+    backend::AbstractGessoBackend=CPUBackend(),
+)
     caps = capabilities(spec)
     reqs = required_semantics(spec)
     io = IOBuffer()
@@ -84,12 +96,12 @@ function import_report(spec::ArchitectureSpec; tensors=nothing, bound=nothing)
     end
 
     println(io)
-    println(io, "Execution capabilities:")
+    println(io, "Execution capabilities (backend: ", backend_name(backend), "):")
     for cap in reqs
-        println(io, "    ", rpad(String(cap), 26), _cap_status(cap))
+        println(io, "    ", rpad(String(cap), 26), _cap_status(cap, backend))
     end
 
-    _missing = _missing_capabilities(caps)
+    _missing = _missing_capabilities(caps, backend)
     boundary = isempty(_missing) ? nothing : first(_missing)
     println(io)
     if boundary === nothing
@@ -100,28 +112,22 @@ function import_report(spec::ArchitectureSpec; tensors=nothing, bound=nothing)
     return String(take!(io))
 end
 
-# Capability existence is a property of what Gesso has IMPLEMENTED, not of a
-# backend. `_implemented_capabilities` is the single declaration of that set;
-# `supports(::backend, cap)` still governs whether a given BACKEND can run it.
-const _implemented_capabilities = Set{Symbol}([
-    :rmsnorm,
-    :attention,
-    :matmul,
-    :swiglu_ffn,
-    :embedding_lookup,
-    :softmax,
-    :rope_none,
-])
-
-_cap_status(cap::Symbol) = cap in _implemented_capabilities ? "READY" : "NOT IMPLEMENTED"
+# BREADTH-1: the question is no longer "does this exist anywhere" — it is
+# "can THIS backend run it". One authority, asked per backend, so a capability
+# that CPU has and CUDA does not (scaled RoPE, today) is representable at all.
+_cap_status(cap::Symbol, backend::AbstractGessoBackend) =
+    supports(backend, cap) ? "READY" : "NOT IMPLEMENTED"
 
 """
-    _missing_capabilities(caps) -> Vector{Symbol}
+    _missing_capabilities(caps, backend) -> Vector{Symbol}
 
-Every required capability Gesso has not implemented, in `required_semantics`
-order. The FIRST one is the failure boundary a model actually hits.
+Every required capability `backend` cannot run, in `required_semantics` order.
+The FIRST one is the failure boundary a model actually hits.
 """
-function _missing_capabilities(caps::ArchitectureCapabilities)
+function _missing_capabilities(
+    caps::ArchitectureCapabilities,
+    backend::AbstractGessoBackend,
+)
     probe = ArchitectureSpec(;
         family=:probe,
         hidden_size=8,
@@ -144,7 +150,7 @@ function _missing_capabilities(caps::ArchitectureCapabilities)
             original_max_position_embeddings=caps.rope_scaling === :llama3 ? 4096 : 0,
         ),
     )
-    return [c for c in required_semantics(probe) if !(c in _implemented_capabilities)]
+    return [c for c in required_semantics(probe) if !supports(backend, c)]
 end
 
 # --- Pass J: the machine-readable compatibility matrix --------------------------
@@ -190,21 +196,43 @@ const _MATRIX_WINDOWS = (nothing, 64)
 
 # The stable order `required_semantics` emits, DERIVED from it rather than
 # restated, so the "first missing" ordering cannot drift from the real one.
-const _REQUIRED_ORDER = required_semantics(
-    ArchitectureSpec(;
-        _matrix_base...,
-        family=:probe,
-        activation_kind=:gelu,
-        rope=RoPEPolicy(; kind=:llama3, factor=8.0, original_max_position_embeddings=8192),
-        features=Set{Symbol}([:qk_norm, :moe]),
-        sliding_window=64,
-    ),
-)
+# How early a capability appears in the semantic sequence, DERIVED from
+# `required_semantics` itself as the MINIMUM position it occupies in ANY
+# probed variant. Two earlier attempts were wrong and the tests caught both:
+#   * deriving the order from ONE probe — a spec carries one rope policy and
+#     one activation, so :rope_linear and :swiglu_ffn were missing entirely;
+#   * deriving it from the sweep's ENUMERATION order — that encodes the loop,
+#     so reordering `_MATRIX_ACTIVATIONS` would silently change which
+#     capability `first_missing` names.
+# Minimum position is stable under enumeration order and is the meaning we
+# want: how early does execution hit this?
+const _REQUIRED_RANK = let
+    rank = Dict{Symbol, Int}()
+    for act in _MATRIX_ACTIVATIONS,
+        rope in _MATRIX_ROPES,
+        feats in _MATRIX_FEATURES,
+        win in _MATRIX_WINDOWS
 
-_required_rank(c::Symbol) =
-    something(findfirst(==(c), _REQUIRED_ORDER), length(_REQUIRED_ORDER) + 1)
+        reqs = required_semantics(
+            ArchitectureSpec(;
+                _matrix_base...,
+                family=:probe,
+                activation_kind=act,
+                rope=rope,
+                features=Set{Symbol}(feats),
+                sliding_window=win,
+            ),
+        )
+        for (i, c) in enumerate(reqs)
+            rank[c] = min(get(rank, c, typemax(Int)), i)
+        end
+    end
+    rank
+end
 
-function _matrix_variant(fam::Symbol, rope, act, feats, win)
+_required_rank(c::Symbol) = get(_REQUIRED_RANK, c, length(_REQUIRED_RANK) + 1)
+
+function _matrix_variant(fam::Symbol, rope, act, feats, win, backend::AbstractGessoBackend)
     spec = ArchitectureSpec(;
         _matrix_base...,
         family=fam,
@@ -214,7 +242,7 @@ function _matrix_variant(fam::Symbol, rope, act, feats, win)
         sliding_window=win,
     )
     reqs = required_semantics(spec)
-    miss = [c for c in reqs if !(c in _implemented_capabilities)]
+    miss = [c for c in reqs if !supports(backend, c)]
     label = string(
         "rope=",
         rope.kind,
@@ -253,14 +281,13 @@ configuration of it, not merely the default.
 
 This is the machine-readable half of Pass J. Its companion assertions live in
 `test/test_breadth0.jl`: every family in `known_families()` MUST appear here,
-and the worst-case column may never read green while any implemented capability
-is missing from `_implemented_capabilities`.
+and the worst-case column may never read green while any implemented capabilityis missing from what `backend` can run.
 """
-function compatibility_matrix()
+function compatibility_matrix(; backend::AbstractGessoBackend=CPUBackend())
     rows = NamedTuple[]
     for fam in known_families()
         variants = [
-            _matrix_variant(Symbol(fam), rope, act, feats, win) for
+            _matrix_variant(Symbol(fam), rope, act, feats, win, backend) for
             rope in _MATRIX_ROPES,
             act in _MATRIX_ACTIVATIONS,
             feats in _MATRIX_FEATURES,
@@ -278,6 +305,7 @@ function compatibility_matrix()
             rows,
             (;
                 family=Symbol(fam),
+                backend=backend_name(backend),
                 variants=variants,
                 runnable=count(v -> isempty(v.missing), variants),
                 total=length(variants),
@@ -292,25 +320,27 @@ function compatibility_matrix()
 end
 
 """
-    compatibility_table(io=stdout) -> Nothing
+    compatibility_table(io=stdout; backend=CPUBackend()) -> Nothing
 
 Render `compatibility_matrix()` as a fixed-width table. Generated, so it can
 only ever describe what the registry actually contains — and it shows the
 WORST case plus how many configurations run, so "6 families, all green" is not
 something this table can say.
 """
-function compatibility_table(io::IO=stdout)
-    rows = compatibility_matrix()
+function compatibility_table(io::IO=stdout; backend::AbstractGessoBackend=CPUBackend())
+    rows = compatibility_matrix(; backend=backend)
     println(
         io,
-        "| architecture | base form | runnable configs | first missing across configs |",
+        "| architecture | backend | base form | runnable configs | first missing across configs |",
     )
-    println(io, "|---|---|---|---|")
+    println(io, "|---|---|---|---|---|---|")
     for r in rows
         println(
             io,
             "| ",
             r.family,
+            " | ",
+            r.backend,
             " | ",
             isempty(r.base_missing) ? "runs" : "blocked at $(r.base_first_missing)",
             " | ",

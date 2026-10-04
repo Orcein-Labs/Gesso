@@ -94,13 +94,18 @@ execution_tier(::Type{CUDABackend}) = 1
 # Session attention contraction as one flat device GEMM over the gathered
 # scratch). :quantize / :dequantize stay false (Representation-phase
 # concern), and unknown capabilities stay false — probing is always safe (§XX).
+# BREADTH-1: the semantic vocabulary (see backends.jl). CUDA's `rope!` still
+# refuses a scaled policy at the operation — it accepts the `inv_freq` kwarg
+# and raises LoweringNotImplemented on anything but `nothing` — so only
+# `:rope_none` is claimed. :argmax / :attn_gemm are STRATEGY gates.
 const CUDA_SUPPORTED_CAPS = Set([
     :rmsnorm,
-    :rope,
-    :softmax,
-    :swiglu,
+    :attention,
     :matmul,
+    :softmax,
     :embedding_lookup,
+    :swiglu_ffn,
+    :rope_none,
     :argmax,
     :attn_gemm,
 ])

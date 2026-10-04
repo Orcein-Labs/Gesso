@@ -71,16 +71,48 @@ execution_tier(::CPUBackend) = 0
     supports(backend, capability::Symbol) -> Bool
 
 Capability query (§XX). Answers "can this backend legally execute X?" — never
-"what vendor is this?". Capability symbol vocabulary is established per
-operator family in later phases; unknown capabilities must return `false`
-rather than throw, so capability probing is always safe.
+"what vendor is this?". Unknown capabilities must return `false` rather than
+throw, so capability probing is always safe.
+
+THE VOCABULARY IS THE SEMANTIC ONE. BREADTH-1: these sets used operator names
+(`:rope`, `:swiglu`) while `required_semantics` emitted semantic names
+(`:rope_none`, `:swiglu_ffn`) and a separate hand-kept `_implemented_capabilities`
+answered a third question. Three names for one fact is how a generated report
+ends up contradicting the code: the compatibility matrix said `:attention` was
+implemented while `supports(CPU, :attention)` said false, because `:attention`
+was in nobody's set.
+
+So the semantic symbols `required_semantics` emits are the ones answered here,
+and `supports` is the single authority for "can this backend do it". Semantic
+positional capabilities are kept DISTINCT (`:rope_none` / `:rope_linear` /
+`:rope_llama3`) because the distinction is the whole point — a model carrying
+scaled RoPE needs a capability an unscaled one does not.
+
+Three axes legitimately share this one function because they answer different
+questions about the same backend:
+  * SEMANTIC     — what an architecture needs (above)
+  * STRATEGY     — fast-path gates: `:argmax`, `:attn_gemm`
+  * REPRESENTATION — `:quantize`, `:dequantize`
 """
 # Phase 2 (§LXXV): CPU reference coverage. `true` only where a CPU method
 # actually computes; :quantize/:dequantize stay false until Representation
 # lands their math; unknown capabilities stay false (probing is always safe).
-const CPU_SUPPORTED_CAPS =
-    Set([:rmsnorm, :rope, :softmax, :swiglu, :matmul, :embedding_lookup],)
+# BREADTH-1: CPU runs scaled RoPE (Session threads `inv_freq`; verified
+# engine == oracle for :linear and :llama3). :dense_ffn, :qk_norm,
+# :sliding_window_attention and :moe_routing are genuinely absent.
+const CPU_SUPPORTED_CAPS = Set([
+    :rmsnorm,
+    :attention,
+    :matmul,
+    :softmax,
+    :embedding_lookup,
+    :swiglu_ffn,
+    :rope_none,
+    :rope_linear,
+    :rope_llama3,
+])
 supports(::CPUBackend, cap::Symbol) = cap in CPU_SUPPORTED_CAPS
+supports(::Type{CPUBackend}, cap::Symbol) = cap in CPU_SUPPORTED_CAPS
 
 # --- Lowering operation contract -------------------------------------------
 #

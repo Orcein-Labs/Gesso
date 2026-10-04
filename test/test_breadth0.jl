@@ -707,32 +707,71 @@ end
         end
     end
 
-    # THE FENCE. The matrix once reported every family green by probing only
-    # the default config, while `import_report` on a scaled-RoPE checkpoint
-    # correctly named `rope_llama3`. A report that overstates is worse than no
-    # report (§LXX), so: while any capability Gesso does not implement is
-    # reachable from a family's config space, NO family row may read total.
-    implemented = Set{Symbol}(Gesso.Inference._implemented_capabilities)
+    # THE FENCE. BREADTH-1 made `supports(backend, cap)` the SINGLE authority,
+    # so the matrix derives `missing` from it and can no longer OVERSTATE by
+    # consulting a second, hand-kept capability set.
+    backend_used = Gesso.CPUBackend()
+
+    # (a) nothing is called unreachable that the backend can actually run.
+    # This guards the OPPOSITE direction from the bug above: BREADTH-1 shipped
+    # a matrix that UNDERSTATED, because `_implemented_capabilities` went stale
+    # the moment CPU gained scaled RoPE and nothing noticed for a commit.
+    for r in rows, c in r.unreachable
+        @test !Gesso.supports(backend_used, c)
+    end
+
+    # (b) while any unimplemented capability is reachable from a family's
+    # config space, NO family row may read total (§LXX: a report that
+    # overstates is worse than no report).
     reachable_anywhere = Set{Symbol}()
     for r in rows
         union!(reachable_anywhere, r.unreachable)
     end
-    if !isempty(setdiff(reachable_anywhere, implemented))
+    if !isempty(reachable_anywhere)
         for r in rows
             @test r.first_missing !== nothing   # worst case must be named
         end
-        # and the rendered table must carry the runnable fraction, so the
-        # honest number is the one a reader actually sees
-        io = IOBuffer()
-        Gesso.compatibility_table(io)
-        @test occursin("runnable configs", String(take!(io)))
     end
+
+    # (c) every row names the backend it was computed against — the matrix has
+    # a backend dimension precisely because "implemented" is not global
+    # (CPU runs scaled RoPE; CUDA and Lava decline it).
+    for r in rows
+        @test r.backend == :cpu
+    end
+
+    # (d) THE BACKEND ARGUMENT IS HONORED. A device-free probe backend that
+    # reports CPU's set MINUS scaled RoPE must produce a strictly narrower
+    # matrix — otherwise the `backend` argument is decorative and "one
+    # authority" is one authority that only ever gets asked one question.
+    # Modelled on CUDA, which genuinely declines scaled RoPE at the operation.
+    @eval struct ProbeNoScaledRope <: $(Gesso.AbstractGessoBackend) end
+    @eval Gesso.backend_name(::$ProbeNoScaledRope) = :probe
+    @eval Gesso.supports(::$ProbeNoScaledRope, cap::Symbol) =
+        Gesso.supports($(Gesso.CPUBackend()), cap) &&
+        cap !== :rope_linear &&
+        cap !== :rope_llama3
+    cpu_row = first(Gesso.compatibility_matrix(; backend=Gesso.CPUBackend()))
+    probe_row = first(Gesso.compatibility_matrix(; backend=ProbeNoScaledRope()))
+    @test probe_row.runnable < cpu_row.runnable
+    @test :rope_linear in probe_row.unreachable
+    @test !(:rope_linear in cpu_row.unreachable)
+    @test probe_row.backend == :probe
+    # precisely the two capabilities the probe backend gave up, in
+    # required_semantics order — and `first_missing` is deliberately NOT
+    # asserted to differ: `:dense_ffn` precedes rope and is missing on BOTH,
+    # so the first wall is genuinely the same. That is the answer being
+    # correct, not the argument being untested.
+    @test setdiff(probe_row.unreachable, cpu_row.unreachable) ==
+          [:rope_linear, :rope_llama3]
+    @test probe_row.first_missing == cpu_row.first_missing == :dense_ffn
 
     # the rendered table is generated from those rows
     io = IOBuffer()
     Gesso.compatibility_table(io)
     table = String(take!(io))
     @test occursin("| architecture |", table)
+    @test occursin("runnable configs", table)
     for fam in fams
         @test occursin("| $fam |", table)   # no family may be silently dropped
     end

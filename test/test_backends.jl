@@ -64,7 +64,15 @@ end
     # keeps supports honest in both directions — no silent capability
     # invention, and no false denial of implemented coverage.
     cpu = Gesso.CPUBackend()
-    for cap in (:rmsnorm, :rope, :softmax, :swiglu, :matmul, :embedding_lookup)
+    for cap in (
+        :rmsnorm,
+        :attention,
+        :softmax,
+        :swiglu_ffn,
+        :matmul,
+        :embedding_lookup,
+        :rope_none,
+    )
         @test Gesso.supports(cpu, cap) == true
     end
     @test Gesso.supports(cpu, :quantize) == false

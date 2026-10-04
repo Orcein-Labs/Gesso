@@ -83,7 +83,15 @@ end
             @test Gesso.backend_name(b) == :cuda
             @test Gesso.execution_tier(b) == 1     # OPTIMIZED_GENERIC (§XXI)
             # same capability coverage as the CPU reference; quantize stays false
-            for cap in (:rmsnorm, :rope, :softmax, :swiglu, :matmul, :embedding_lookup)
+            for cap in (
+                :rmsnorm,
+                :attention,
+                :softmax,
+                :swiglu_ffn,
+                :matmul,
+                :embedding_lookup,
+                :rope_none,
+            )
                 @test Gesso.supports(b, cap) == true
             end
             @test Gesso.supports(b, :quantize) == false
