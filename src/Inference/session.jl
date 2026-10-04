@@ -66,6 +66,12 @@ mutable struct Session
     sink::ReceiptSink
     mgr::PagedKVManager
     h::Any                                  # (context_length, dim) hidden rows
+    # Phase 10E item A: the Session-owned decode workspace. ::Any like `h`,
+    # because P-1 stays packeted — parameterizing Session to make `decode!`
+    # infer is explicitly NOT done here. Built ONCE with the Session, KEPT by
+    # `_session_reset!` (so `generate` does not reallocate), and NEW per fork
+    # child because the child is built through this constructor.
+    ws::Any
     seqlen::Int                        # consumed tokens == kv_len (lockstep)
     ready::Bool                        # prefill! has run
     n_heads::Int
@@ -143,6 +149,17 @@ function Session(
         page_size=page_size,
         context_length=context_length,
     )
+    ws = _build_workspace(
+        tensors,
+        dim,
+        n_heads,
+        n_kv_heads,
+        d_head,
+        model.blocks[1].ffn.hidden,
+        vocab,
+        context_length,
+        group,
+    )
     return Session(
         model,
         tensors,
@@ -157,6 +174,7 @@ function Session(
         sink,
         mgr,
         h,
+        ws,
         0,
         false,
         n_heads,
@@ -181,6 +199,147 @@ _session_zeros_like(tensors, dims::Tuple{Vararg{Int}}) = fill!(
     zero(eltype(tensors.embedding.storage)),
 )
 
+# --- Phase 10E item A: the Session-owned decode workspace -----------------------
+#
+# Before this, a warmed `decode!` constructed ~18 Activation/TemporaryWorkspace
+# structs and TWO gathered K/V copies PER TOKEN and threw them away (SPEED_FLOOR
+# §2 rows 1 and 3: the §LXXVIII gather-on-read encoding, not a kernel). This
+# workspace is built ONCE with the Session and lives as long as it.
+#
+# Laws (10E item A, pinned here rather than in the goal file):
+#   * Storage kind matches `h` and the KV prototype — CPU `Array{Float64}`,
+#     CUDA `CuArray{Float32}`, Lava its array. The engine never copies (§LXXVII).
+#   * `_session_reset!` KEEPS the workspace, so `generate` (which resets) does
+#     not reallocate. `fork` builds the child through the Session constructor,
+#     so the child owns a NEW workspace.
+#   * Scratch is DIRTY WORKSPACE, not cache. Pages remain the cache.
+#   * Aliasing scratch across Sessions is ERR_INVALID_PLAN, never an
+#     optimization (`_assert_disjoint_scratch!`).
+#   * Every field is ::Any (P-1, §CIX). Parameterizing Session to make
+#     `decode!` infer is packeted P-1 work and is deliberately NOT done here.
+#
+# Every buffer is sized to `context_length` once, at construction. Per-token
+# work then touches only the 1:K prefix — the length-K views in
+# `_session_consume!` — and never runs an O(context_length) `fill!` of a tail.
+struct DecodeWorkspace
+    hp::Any
+    normed::Any
+    q::Any
+    k::Any
+    v::Any
+    qh::Any
+    kh::Any
+    vh::Any
+    attn::Any
+    merged::Any
+    sub::Any
+    normed2::Any
+    gate::Any
+    up::Any
+    act::Any
+    down::Any
+    scores::Any
+    scores_out::Any
+    k_gather::Any
+    v_gather::Any
+    k_rep::Any
+    v_rep::Any
+    logits::Any
+    finaln::Any
+    tok_buf::Any
+    pos_buf::Any
+end
+
+# `group == 1` (MHA) never writes k_rep/v_rep — the engine reads the gathered
+# buffer itself (`_repeat_heads!` is the identity there) — so those two buffers
+# are `nothing` rather than a second full copy of K and V.
+function _build_workspace(
+    tensors,
+    dim::Int,
+    n_heads::Int,
+    n_kv_heads::Int,
+    d_head::Int,
+    hidden_ffn::Int,
+    vocab::Int,
+    context_length::Int,
+    group::Int,
+)
+    z = dims -> _session_zeros_like(tensors, dims)
+    act = (dims...) -> Activation(; shape=dims, storage=z(dims))
+    work = (dims...) -> TemporaryWorkspace(; shape=dims, storage=z(dims))
+    return DecodeWorkspace(
+        act(1, dim),                              # hp
+        act(1, dim),                              # normed
+        act(1, dim),                              # q
+        act(1, n_kv_heads * d_head),              # k
+        act(1, n_kv_heads * d_head),              # v
+        act(1, n_heads, d_head),                  # qh
+        act(1, n_kv_heads, d_head),               # kh
+        act(1, n_kv_heads, d_head),               # vh
+        act(1, n_heads, d_head),                  # attn
+        act(1, dim),                              # merged
+        act(1, dim),                              # sub
+        act(1, dim),                              # normed2
+        act(1, hidden_ffn),                       # gate
+        act(1, hidden_ffn),                       # up
+        act(1, hidden_ffn),                       # act
+        act(1, dim),                              # down
+        work(1, context_length),                  # scores
+        work(1, context_length),                  # scores_out
+        work(context_length, n_kv_heads, d_head), # k_gather
+        work(context_length, n_kv_heads, d_head), # v_gather
+        group == 1 ? nothing : work(context_length, n_heads, d_head),   # k_rep
+        group == 1 ? nothing : work(context_length, n_heads, d_head),   # v_rep
+        act(1, vocab),                            # logits
+        act(1, dim),                              # finaln
+        zeros(Int, 1),                            # tok_buf
+        zeros(Int, 1),                            # pos_buf
+    )
+end
+
+# Storage identity of the buffers that must be REUSED rather than reallocated.
+# `test_decode_scratch.jl` compares these across warmed `decode!` calls, and
+# `_assert_disjoint_scratch!` compares them across a fork — "reuse" is proven
+# on memory, not on a field that merely exists.
+#
+# These are the storage OBJECTS, compared with `===`, not raw `pointer`s:
+# `pointer` is simply not defined for `LavaArray`, and the Lava path needs the
+# same check. Object identity is the weaker, conservative claim anyway — two
+# distinct objects that happened to alias would read as NOT shared, so this can
+# only ever fail to report a share, never invent one.
+_workspace_buffers(ws::DecodeWorkspace) = (
+    hp=ws.hp.storage,
+    scores=ws.scores.storage,
+    scores_out=ws.scores_out.storage,
+    k_gather=ws.k_gather.storage,
+    v_gather=ws.v_gather.storage,
+    k_rep=ws.k_rep === nothing ? nothing : ws.k_rep.storage,
+    v_rep=ws.v_rep === nothing ? nothing : ws.v_rep.storage,
+    logits=ws.logits.storage,
+)
+
+# Scratch is per-Session dirty workspace. A parent and a child that share a
+# buffer would interleave two sessions' partial sums in one array, so sharing is
+# ERR_INVALID_PLAN and never an optimization (§LXXX, §LXX).
+function _assert_disjoint_scratch!(parent::Session, child::Session)
+    pp = _workspace_buffers(parent.ws)
+    cp = _workspace_buffers(child.ws)
+    for name in keys(pp)
+        a = getfield(pp, name)
+        b = getfield(cp, name)
+        (a === nothing || b === nothing) && continue
+        a === b && throw(
+            gesso_error(
+                ERR_INVALID_PLAN,
+                "fork: parent and child share decode scratch buffer :$name — " *
+                "scratch is per-Session dirty workspace, never shared (§LXXX)";
+                buffer=name,
+            ),
+        )
+    end
+    return nothing
+end
+
 # greedy id from a logits row: argmax, ties = first index, 0-based (§LXXVIII;
 # no Random, no Sampler zoo)
 _greedy_id(logits_row) = Int(argmax(logits_row)) - 1
@@ -193,25 +352,31 @@ _greedy_id(logits_row) = Int(argmax(logits_row)) - 1
 # host reduction bit-for-bit on ids. Returns ONE 0-based Int: the (vocab,)
 # logits row never crosses to the host on the decode hot path (§LXXVII:
 # explicit transfers; the decode D2H is one Int per token).
-function _device_greedy_id(model, tensors, h, cpu, wl, vocab, row::Int; eps::Real=1e-6)
-    dim = size(h, 2)
-    T = typeof(h)
-    lastrow = Activation(; shape=(1, dim), storage=reshape(h[row, :], (1, dim)))
-    final_rms = haskey(tensors, :final_rms) ? tensors.final_rms : nothing
+#
+# Phase 10E item C: superseded by `_session_greedy_id!`, which writes the SAME
+# math into the Session-owned workspace `logits` / `finaln` buffers instead of
+# allocating a fresh (1, dim) and (1, vocab) pair per token. One behavior note
+# survives from the old device path and is load-bearing: the hidden row is taken
+# as `h[row, :]`, a contiguous dim-2 slice that is a real CuArray. A
+# `view(h, row:row, :)` would be a SubArray, and CUBLAS `mul!` cannot dispatch
+# on one (it falls back to scalar indexing and throws).
+function _session_greedy_id!(s::Session, cpu, wl)
+    ws = s.ws
+    dim = s.model.embedding.dim
+    lastrow = Activation(; shape=(1, dim), storage=reshape(s.h[s.seqlen, :], (1, dim)))
+    final_rms = haskey(s.tensors, :final_rms) ? s.tensors.final_rms : nothing
     if final_rms !== nothing
-        normed = Activation(;
-            shape=(1, dim),
-            storage=fill!(similar(h, eltype(T), (1, dim)), zero(eltype(h))),
-        )
-        rmsnorm!(cpu, normed, lastrow, final_rms, wl; eps)
-        lastrow = normed
+        rmsnorm!(cpu, ws.finaln, lastrow, final_rms, wl; eps=s.eps)
+        lastrow = ws.finaln
     end
-    out = Activation(;
-        shape=(1, vocab),
-        storage=fill!(similar(h, eltype(T), (1, vocab)), zero(eltype(h))),
-    )
-    matmul!(cpu, out, lastrow, tensors.lm_head, wl)
-    return Int(argmax(vec(out.storage))) - 1     # 0-based id, ties = first index (§LXXVIII)
+    matmul!(cpu, ws.logits, lastrow, s.tensors.lm_head, wl)
+    # argmax, ties = first index, 0-based (§LXXVIII). This single expression is
+    # the whole of the old three-branch tail: on CPU and Lava `argmax` reduces on
+    # the host, and on a backend with `:argmax` GPUArrays reduces on the device
+    # and returns one Int — so the (vocab,) row never crosses to the host on the
+    # decode hot path (§LXXVII), and nothing about the branch was ever about
+    # WHERE the reduction ran, only about avoiding the transfer.
+    return Int(argmax(vec(ws.logits.storage))) - 1
 end
 
 function _session_reset!(s::Session)
@@ -510,45 +675,67 @@ function _decode_impl!(s::Session, span::_EngineSpan)
     )
     cpu = s.backend
     on_cpu = backend_name(cpu) === :cpu
-    wl = DecodeWorkload()    # _last_logits consumes an Activation (oracle helper contract) — wrap the
-    # session's h buffer; storage CONTENT is shared, nothing is copied
+    wl = DecodeWorkload()
+    # Phase 10E item C: the last-token logits are computed INTO the workspace
+    # (`logits` / `finaln`), and the hidden row is read as `s.h[seqlen, :]` —
+    # a contiguous slice, so storage CONTENT is shared and nothing is copied.
     t_decode = time_ns()
-    if on_cpu
-        # CPU oracle path (bit-identical): full (vocab,) logits row, host argmax.
-        h_act = Activation(; shape=(s.context_length, s.model.embedding.dim), storage=s.h)
-        logits_row =
-            _last_logits(s.model, s.tensors, h_act, cpu, wl, s.vocab, s.seqlen; eps=s.eps)
-        next = _greedy_id(logits_row)
-    elseif Gesso.supports(cpu, :argmax)
-        # Device fast path (Phase 10 B): the (vocab,) logits row NEVER crosses
-        # back to the host — argmax runs where the logits live and the host
-        # receives ONE integer (§LXXVII explicit transfers; §LXX no silent
-        # downgrades — same lm_head matmul, same reduction semantics, ties =
-        # first index on both paths).
-        next = _device_greedy_id(
-            s.model,
-            s.tensors,
-            s.h,
-            cpu,
-            wl,
-            s.vocab,
-            s.seqlen;
-            eps=s.eps,
-        )
-    else
-        # Device backends without the :argmax cap (Lava): full (vocab,) row
-        # crosses back, host argmax — §LXXVIII semantics unchanged.
-        h_act = Activation(; shape=(s.context_length, s.model.embedding.dim), storage=s.h)
-        logits_row =
-            _last_logits(s.model, s.tensors, h_act, cpu, wl, s.vocab, s.seqlen; eps=s.eps)
-        next = _greedy_id(logits_row)
-    end
+    next = _session_greedy_id!(s, cpu, wl)
     if next != s.eos_token_id                    # EOS: returned, nothing appended
         _session_consume!(s, next)
     end
     span.decode_ns += UInt64(time_ns() - t_decode)
     span.new_tokens += 1
     return next
+end
+
+# --- Phase 10E fence expansion: the decode contractions, over STORAGE ---------
+#
+# `Activation.storage` is `::Any` (P-1 stays packeted), and so is
+# `Session.ws`. A loop body that reaches its numbers through those fields
+# therefore pays a dynamic `getindex` on EVERY element: measured with
+# `Profile.Allocs` on a warmed toy2 CPU `decode!`, `session.jl`'s two
+# contraction loops were 2,016 + 1,440 allocations and 55,256 of the 73,728
+# bytes per token — 32 B and 16 B of boxing per loop iteration, growing with
+# K. Naming the loops with `AbstractArray` parameters moves the ONE dynamic
+# dispatch to the call and specializes the body on the concrete storage type
+# (Array / CuArray / LavaArray), exactly as BREADTH-0 already did for
+# `_split_heads!` / `_merge_heads!` / `_repeat_heads!` / `_add_storage!`.
+#
+# The loop BODIES are unchanged, statement for statement and in the same
+# order, so the arithmetic — and therefore every token id and every logit —
+# is bit-identical (§XIII). Nothing here resolves P-1: no field type moves,
+# no new type is added, and `test/test_type_stability.jl`'s P-1 gates stay
+# broken.
+
+# scores[1, u] = Σ_{hh,j} q[1,hh,j]·k[u,hh,j] / sqrt(d_head)   (query row 1)
+function _qk_scores_storage!(
+    scores::AbstractMatrix,
+    qhs::AbstractArray,
+    kxs::AbstractArray,
+    n_heads::Int,
+    d_head::Int,
+    K::Int,
+)
+    for u in 1:K, hh in 1:n_heads, j in 1:d_head
+        scores[1, u] += qhs[1, hh, j] * kxs[u, hh, j] / sqrt(d_head)
+    end
+    return scores
+end
+
+# attn[1,hh,j] = Σ_u p[1,u]·v[u,hh,j]                          (P·V row)
+function _pv_attn_storage!(
+    atts::AbstractArray,
+    pouts::AbstractMatrix,
+    vxs::AbstractArray,
+    n_heads::Int,
+    d_head::Int,
+    K::Int,
+)
+    for hh in 1:n_heads, j in 1:d_head, u in 1:K
+        atts[1, hh, j] += pouts[1, u] * vxs[u, hh, j]
+    end
+    return atts
 end
 
 # consume one token: embed, rope at its 0-based position, append K/V rows
@@ -558,9 +745,7 @@ function _session_consume!(s::Session, tok::Int)
     on_cpu = backend_name(cpu) === :cpu
     wl = DecodeWorkload()
     model, tensors = s.model, s.tensors
-    dim = model.embedding.dim
     n_heads, n_kv_heads, d_head, group = s.n_heads, s.n_kv_heads, s.d_head, s.group
-    kdim = n_kv_heads * d_head
 
     pos0 = s.seqlen + 1                          # 1-based row this token occupies
     K = pos0                                     # cache rows after the append
@@ -572,34 +757,33 @@ function _session_consume!(s::Session, tok::Int)
         ),
     )
 
-    zeros_like = dims -> _session_zeros_like(tensors, dims)
-    hp = Activation(; shape=(1, dim), storage=zeros_like((1, dim)))
-    embedding_lookup!(cpu, hp, tensors.embedding, [tok], wl)
-    normed = Activation(; shape=(1, dim), storage=zeros_like((1, dim)))
-    q = Activation(; shape=(1, dim), storage=zeros_like((1, dim)))
-    k = Activation(; shape=(1, kdim), storage=zeros_like((1, kdim)))
-    v = Activation(; shape=(1, kdim), storage=zeros_like((1, kdim)))
-    qh = Activation(; shape=(1, n_heads, d_head), storage=zeros_like((1, n_heads, d_head)))
-    kh = Activation(;
-        shape=(1, n_kv_heads, d_head),
-        storage=zeros_like((1, n_kv_heads, d_head)),
-    )
-    vh = Activation(;
-        shape=(1, n_kv_heads, d_head),
-        storage=zeros_like((1, n_kv_heads, d_head)),
-    )
-    attn =
-        Activation(; shape=(1, n_heads, d_head), storage=zeros_like((1, n_heads, d_head)))
-    merged = Activation(; shape=(1, dim), storage=zeros_like((1, dim)))
-    sub = Activation(; shape=(1, dim), storage=zeros_like((1, dim)))
-    normed2 = Activation(; shape=(1, dim), storage=zeros_like((1, dim)))
-    hidden_ffn = model.blocks[1].ffn.hidden
-    gate = Activation(; shape=(1, hidden_ffn), storage=zeros_like((1, hidden_ffn)))
-    up = Activation(; shape=(1, hidden_ffn), storage=zeros_like((1, hidden_ffn)))
-    act = Activation(; shape=(1, hidden_ffn), storage=zeros_like((1, hidden_ffn)))
-    down = Activation(; shape=(1, dim), storage=zeros_like((1, dim)))
-    scores = TemporaryWorkspace(; shape=(1, K), storage=zeros_like((1, K)))
-    scores_out = TemporaryWorkspace(; shape=(1, K), storage=zeros_like((1, K)))
+    # Phase 10E item C: every buffer below is the Session-owned workspace,
+    # constructed once. The loop bodies are otherwise the same expressions, in
+    # the same order, over the same bytes — ids and logits do not move (§XIII).
+    ws = s.ws
+    hp, normed, q, k, v = ws.hp, ws.normed, ws.q, ws.k, ws.v
+    qh, kh, vh, attn = ws.qh, ws.kh, ws.vh, ws.attn
+    merged, sub, normed2 = ws.merged, ws.sub, ws.normed2
+    gate, up, act, down = ws.gate, ws.up, ws.act, ws.down
+
+    # Length-K views, built ONCE per token: they are loop-invariant across
+    # layers, and every one of them reads/writes only the filled prefix. The
+    # score workspaces are context_length-wide and are VIEWED as 1:K, so
+    # softmax and the contraction never see the padded tail (10E law).
+    scores = TemporaryWorkspace(; shape=(1, K), storage=view(ws.scores.storage, 1:1, 1:K))
+    scores_out =
+        TemporaryWorkspace(; shape=(1, K), storage=view(ws.scores_out.storage, 1:1, 1:K))
+    if group == 1
+        kx = view(ws.k_gather.storage, 1:K, :, :)      # MHA: identity, no copy
+        vx = view(ws.v_gather.storage, 1:K, :, :)
+    else
+        kx = view(ws.k_rep.storage, 1:K, :, :)
+        vx = view(ws.v_rep.storage, 1:K, :, :)
+    end
+
+    ws.tok_buf[1] = tok
+    ws.pos_buf[1] = pos0 - 1
+    embedding_lookup!(cpu, hp, tensors.embedding, ws.tok_buf, wl)
 
     for (bi, blk) in enumerate(model.blocks)
         bt = tensors.blocks[bi]
@@ -610,55 +794,74 @@ function _session_consume!(s::Session, tok::Int)
         _split_heads!(qh, q, n_heads, d_head)
         _split_heads!(kh, k, n_kv_heads, d_head)
         _split_heads!(vh, v, n_kv_heads, d_head)
-        rope!(cpu, qh, kh, [pos0 - 1], wl; theta=s.theta, inv_freq=s.inv_freq)   # 0-based position
+        rope!(cpu, qh, kh, ws.pos_buf, wl; theta=s.theta, inv_freq=s.inv_freq)   # 0-based position
         # KV APPEND through the paged manager (K and V as a pair), THEN gather
-        # rows 1..K — identical bytes and loop order to the oracle's decode.
-        # _repeat_heads RETURNS an Activation — use it directly (oracle contract).
+        # rows 1..K IN PLACE into the context_length workspace — identical bytes
+        # and loop order to the oracle's decode.
         @views append_kv!(s.mgr, bi, kh.storage[1, :, :], vh.storage[1, :, :])
-        kx = _repeat_heads(
-            Activation(; shape=(K, n_kv_heads, d_head), storage=gather_kv(s.mgr, bi, :k)),
-            group,
-        )
-        vx = _repeat_heads(
-            Activation(; shape=(K, n_kv_heads, d_head), storage=gather_kv(s.mgr, bi, :v)),
-            group,
-        )
+        gather_kv!(ws.k_gather.storage, s.mgr, bi, :k; len=K)
+        gather_kv!(ws.v_gather.storage, s.mgr, bi, :v; len=K)
+        if group > 1
+            # in-place GQA repeat, 1:K only (never the whole context_length)
+            _repeat_heads!(ws.k_rep.storage, ws.k_gather.storage, group, K)
+            _repeat_heads!(ws.v_rep.storage, ws.v_gather.storage, group, K)
+        end
         # scores over the gathered cache — SAME loop order as the oracle decode
         fill!(scores.storage, zero(eltype(scores.storage)))
         if on_cpu
-            for u in 1:K, hh in 1:n_heads, j in 1:d_head
-                scores.storage[1, u] +=
-                    qh.storage[1, hh, j] * kx.storage[u, hh, j] / sqrt(d_head)
-            end
+            _qk_scores_storage!(scores.storage, qh.storage, kx, n_heads, d_head, K)
         elseif Gesso.supports(cpu, :attn_gemm)
-            # CUDA fast path (Phase 10 C): one (1, H·d)·(H·d, K) GEMM row over
-            # the SAME gathered scratch — CUBLAS on reshape views, no per-head
-            # Julia loop, no page-table kernel (that is the packet).
+            # CUDA fast path (Phase 10 C): one (1, H·d)·(H·d, K) GEMM row, no
+            # per-head Julia loop, no page-table kernel (that is the packet).
+            #
+            # CUBLAS `mul!` only dispatches for a real CuArray, and rows 1:K of a
+            # context_length buffer are a SubArray (measured: `mul!` on one
+            # falls back to scalar indexing and throws). So the GEMM runs over
+            # the WHOLE buffer and the tail is neutralized explicitly rather
+            # than left to contribute:
+            #   * the QK^T tail is zeroed below, so softmax — which still sees
+            #     only 1:K — is unaffected;
+            #   * the PV then sums over the full buffer with a provably-zero
+            #     score tail, which is bit-identical to summing 1:K (measured
+            #     max|Δ| = 0.0 against the host reference).
+            # The cost is O(context_length) device columns instead of O(K); the
+            # saving is zero per-token host allocation. Both are stated in the
+            # 10E receipt rather than traded silently.
             Q1 = reshape(qh.storage, 1, n_heads * d_head)
-            K2 = reshape(kx.storage, K, n_heads * d_head)
-            mul!(scores.storage, Q1, transpose(K2))
-            scores.storage ./= sqrt(d_head)
+            K2 = reshape(
+                group == 1 ? ws.k_gather.storage : ws.k_rep.storage,
+                s.context_length,
+                n_heads * d_head,
+            )
+            mul!(ws.scores.storage, Q1, transpose(K2))
+            ws.scores.storage ./= sqrt(d_head)
+            if K < s.context_length
+                @views ws.scores.storage[:, (K+1):s.context_length] .= 0
+            end
         else
             for hh in 1:n_heads
                 q1 = vec(qh.storage[1, hh, :])           # (d_head,) device copy
-                Kmat = kx.storage[1:K, hh, :]            # (K, d_head)
+                Kmat = kx[:, hh, :]                     # (K, d_head)
                 @views scores.storage[1, :] .+= (Kmat * q1) ./ sqrt(d_head)
             end
         end
         softmax!(cpu, scores_out, scores, wl)   # offset mask: nothing masked
         fill!(attn.storage, zero(eltype(attn.storage)))
         if on_cpu
-            for hh in 1:n_heads, j in 1:d_head, u in 1:K
-                attn.storage[1, hh, j] += scores_out.storage[1, u] * vx.storage[u, hh, j]
-            end
+            _pv_attn_storage!(attn.storage, scores_out.storage, vx, n_heads, d_head, K)
         elseif Gesso.supports(cpu, :attn_gemm)
-            # PV: (1,K)·(K, H·d) → (1, H·d), reshaped back in place.
+            # PV: (1,ctx)·(ctx, H·d) → (1, H·d), reshaped back in place. The
+            # score tail is zero (above), so the extra columns contribute 0.
             A1 = reshape(attn.storage, 1, n_heads * d_head)
-            V2 = reshape(vx.storage, K, n_heads * d_head)
-            mul!(A1, scores_out.storage, V2)
+            V2 = reshape(
+                group == 1 ? ws.v_gather.storage : ws.v_rep.storage,
+                s.context_length,
+                n_heads * d_head,
+            )
+            mul!(A1, ws.scores_out.storage, V2)
         else
             for hh in 1:n_heads
-                V = vx.storage[1:K, hh, :]               # (K, d_head)
+                V = vx[:, hh, :]                     # (K, d_head)
                 @views attn.storage[1, hh, :] .= vec(scores_out.storage * V)
             end
         end
@@ -799,6 +1002,9 @@ function fork(s::Session; sink::ReceiptSink=default_receipt_sink())
     child.h = copy(s.h)                # hidden state is COPIED (§LXXX) —
     child.seqlen = s.seqlen            # device storage copies on device
     child.ready = true                 # (§LXXVII: no host round trip)
+    # the child got its OWN workspace from the constructor; prove it rather
+    # than assume it (§LXXX: pages are shared, scratch never is)
+    _assert_disjoint_scratch!(s, child)
     return child
 end
 

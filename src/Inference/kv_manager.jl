@@ -285,7 +285,7 @@ function append_kv!(mgr::PagedKVManager, layer::Int, kind::Symbol, row)
         pages[end] = page
     end
     i = page.filled + 1
-    @views page.storage[i, :, :] .= row
+    _copy_row_storage!(page.storage, row, i)
     page.filled = i
     return mgr
 end
@@ -393,7 +393,7 @@ function gather_kv!(dest, mgr::PagedKVManager, layer::Int, kind::Symbol; len::In
         take = min(page.filled, remaining)
         take == 0 && continue
         r1 = page.start_pos + 1          # 0-based page origin → 1-based rows
-        @views dest[r1:(r1+take-1), :, :] .= page.storage[1:take, :, :]
+        _copy_rows_storage!(dest, page.storage, r1, take)
         remaining -= take
     end
     return dest
@@ -409,6 +409,28 @@ function gather_kv(mgr::PagedKVManager, layer::Int, kind::Symbol; len::Int=-1)
     n = len < 0 ? filled_len(mgr, layer, kind) : len
     dest = similar(mgr.prototype, n, mgr.n_kv_heads, mgr.d_head)
     return gather_kv!(dest, mgr, layer, kind; len=n)
+end
+
+# --- Phase 10E fence expansion: KV row copies, over STORAGE ------------------
+#
+# `KVPage.storage` and the caller's `dest` / `row` are all untyped at the
+# append/gather call sites, so those broadcasts dispatched dynamically once per
+# page and built their `@views` index objects through `Any`. The two helpers
+# below take `AbstractArray` arguments, which moves the dispatch to the call
+# and specializes the body on the concrete storage type (Array / CuArray /
+# LavaArray) — the same expansion BREADTH-0 applied in Inference.jl. The bytes
+# written and their order are unchanged.
+
+# one token-row copy into a page (the append unit of work)
+function _copy_row_storage!(dst::AbstractArray, src::AbstractArray, i::Int)
+    @views dst[i, :, :] .= src
+    return dst
+end
+
+# `take` token-rows from a page's origin into `dest` at 1-based row `r1`
+function _copy_rows_storage!(dest::AbstractArray, src::AbstractArray, r1::Int, take::Int)
+    @views dest[r1:(r1+take-1), :, :] .= src[1:take, :, :]
+    return dest
 end
 
 # --- derived footprint (§LXXIX: memory accounting trustworthy) ----------------

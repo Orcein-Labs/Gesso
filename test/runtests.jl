@@ -175,6 +175,13 @@ using Gesso: reference_prefill, reference_generate
     # llama_micro. Always-on CPU; the §LXXV oracle stays the correctness law.
     include("test_type_stability.jl")
 
+    # Phase 10E (fused decode item D): the Session-owned decode workspace is
+    # REUSED and warmed `decode!` allocates O(1) per token — @allocated ceilings
+    # (toy2 / llama_micro / SmolLM2, CPU + CUDA skip-or-green) plus seqlen
+    # independence. Runs after test_type_stability so the packeted P-1
+    # @test_broken gates are already recorded when the alloc gates report.
+    include("test_decode_scratch.jl")
+
     @testset "package loads" begin
         @test Gesso.Log isa Module
         @test isdefined(Gesso, :CPUBackend)
