@@ -58,6 +58,11 @@ mutable struct Session
     tokenizer::Any
     eps::Float64
     theta::Float64
+    # BREADTH-1: the positional policy travels WITH the model, so the engine
+    # reads it once at construction and threads it to every `rope!`. `nothing`
+    # = unscaled = the literal `m * theta^(-2i/d)` expression the engine has
+    # always evaluated, so every existing model stays bit-identical (§XIII).
+    inv_freq::Union{Nothing, Vector{Float64}}
     sink::ReceiptSink
     mgr::PagedKVManager
     h::Any                                  # (context_length, dim) hidden rows
@@ -111,18 +116,14 @@ function Session(
     n_kv_heads = model.blocks[1].attention.n_kv_heads
     d_head = div(dim, n_heads)
     group = div(n_heads, n_kv_heads)
-    vocab = size(tensors.embedding.storage, 1)
-
-    # BREADTH-0 Pass D — the engine threads `theta` only, so a model carrying
-    # a SCALED positional policy must NOT silently run unscaled (§LXX: no
-    # silent representation change). A scaled policy is refused AT THE
-    # OPERATION, naming what is missing (capability lattice, §II). The CPU
-    # oracle (`reference_prefill` / `reference_generate`) DOES implement
-    # scaled policies today and remains their reference.
-    _policy = (tensors isa NamedTuple && haskey(tensors, :rope)) ? tensors.rope : nothing
-    if _policy !== nothing && _policy.kind !== :none
-        throw(LoweringNotImplemented(Symbol("rope_", _policy.kind), backend_name(backend)))
-    end
+    vocab = size(tensors.embedding.storage, 1)# BREADTH-1: the engine now threads the model's positional policy instead
+    # of refusing it. `tensors_rope_inv_freq` returns `nothing` for an unscaled
+    # model — the bit-identical default — and a frequency VECTOR for :linear
+    # and :llama3, exactly what the CPU oracle does (Inference.jl Pass D).
+    # Refusal is no longer needed HERE: a backend that cannot honor a scaled
+    # policy declines at the `rope!` operation with LoweringNotImplemented
+    # (§LXX, capability lattice §II). CPU runs it; CUDA and Lava still decline.
+    inv_freq = tensors_rope_inv_freq(tensors, d_head)
 
     T = typeof(tensors.embedding.storage)
     h = fill!(
@@ -152,6 +153,7 @@ function Session(
         tokenizer,
         Float64(eps),
         Float64(theta),
+        inv_freq,
         sink,
         mgr,
         h,
@@ -394,7 +396,7 @@ function _prefill_impl!(s::Session, tokens::AbstractVector{Int}, span::_EngineSp
         _split_heads!(qh, q, n_heads, d_head)
         _split_heads!(kh, k, n_kv_heads, d_head)
         _split_heads!(vh, v, n_kv_heads, d_head)
-        rope!(cpu, qh, kh, positions, wl; theta=s.theta)
+        rope!(cpu, qh, kh, positions, wl; theta=s.theta, inv_freq=s.inv_freq)
         # KV APPEND through the paged manager: post-RoPE rows 1..P, one page
         # row per token, K and V as a pair (§LXXVIII)
         for t in 1:P
@@ -608,7 +610,7 @@ function _session_consume!(s::Session, tok::Int)
         _split_heads!(qh, q, n_heads, d_head)
         _split_heads!(kh, k, n_kv_heads, d_head)
         _split_heads!(vh, v, n_kv_heads, d_head)
-        rope!(cpu, qh, kh, [pos0 - 1], wl; theta=s.theta)   # 0-based position
+        rope!(cpu, qh, kh, [pos0 - 1], wl; theta=s.theta, inv_freq=s.inv_freq)   # 0-based position
         # KV APPEND through the paged manager (K and V as a pair), THEN gather
         # rows 1..K — identical bytes and loop order to the oracle's decode.
         # _repeat_heads RETURNS an Activation — use it directly (oracle contract).

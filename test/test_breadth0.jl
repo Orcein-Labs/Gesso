@@ -556,7 +556,7 @@ end
     @test scaled_logits == Gesso.reference_prefill(model, scaled, [0, 1, 2])
 end
 
-@testset "BREADTH-0 Pass D: the engine fails CLOSED on a scaled policy" begin
+@testset "BREADTH-0 Pass D: the engine READS a scaled policy, and fails closed at the dimensions" begin
     dir = mktempdir()
     _b0_phi3_checkpoint(dir)
     spec = Gesso.architecture_spec(joinpath(dir, "config.json"))
@@ -578,16 +578,42 @@ end
         final_rms=bound.final_rms,
         rope=Gesso.RoPEPolicy(; theta=10000.0, kind=:linear, factor=8.0),
     )
-    # Session threads theta only ⇒ a scaled policy is REFUSED, naming the
-    # operation — never silently run unscaled (§LXX).
-    err = try
-        Gesso.Session(model, tensors; context_length=8, eos_token_id=2, theta=10000.0)
-        nothing
-    catch e
-        e
+    # BREADTH-1: the engine now READS the positional policy instead of
+    # refusing it. Refusal at CONSTRUCTION was correct while the engine
+    # threaded `theta` only — but the CPU oracle has implemented scaled
+    # policies since Pass D, so the door was shut on a working capability.
+    # §LXX is not weakened: what must never happen is a scaled policy running
+    # UNSCALED, and the engine now demonstrably does not.
+    s = Gesso.Session(model, tensors; context_length=8, eos_token_id=2, theta=10000.0)
+    @test s.inv_freq !== nothing                                  # policy was read
+    @test s.inv_freq == Gesso.rope_inv_freq(
+        Gesso.RoPEPolicy(; theta=10000.0, kind=:linear, factor=8.0),
+        32 ÷ 4,
+    )
+    # and it is NOT the unscaled frequency vector
+    @test s.inv_freq != Gesso.rope_inv_freq(Gesso.RoPEPolicy(), 32 ÷ 4)
+
+    # Fail-closed is preserved where it belongs: at the policy DIMENSIONS this
+    # build does not implement, refused at the operation (§LXX, lattice §II).
+    for rope in (
+        Gesso.RoPEPolicy(; theta=10000.0, kind=:linear, factor=8.0, interleaved=true),
+        Gesso.RoPEPolicy(; theta=10000.0, kind=:linear, factor=8.0, rotary_dim=4),
+    )
+        err = try
+            Gesso.Session(
+                model,
+                merge(tensors, (; rope));
+                context_length=8,
+                eos_token_id=2,
+                theta=10000.0,
+            )
+            nothing
+        catch e
+            e
+        end
+        @test err isa Gesso.LoweringNotImplemented
+        @test occursin("rope", sprint(showerror, err))
     end
-    @test err isa Gesso.LoweringNotImplemented
-    @test occursin("rope_linear", sprint(showerror, err))
 end
 
 # --- Pass I: the import report ------------------------------------------------
@@ -654,20 +680,52 @@ end
 
     # rows are internally consistent with required_semantics
     for r in rows
-        spec = Gesso.ArchitectureSpec(;
-            family=r.family,
-            hidden_size=8,
-            num_layers=1,
-            n_heads=4,
-            n_kv_heads=2,
-            vocab_size=8,
-            intermediate_size=8,
-        )
-        @test r.required == Gesso.required_semantics(spec)
-        @test (r.first_missing === nothing) == isempty(r.missing)
-        if r.first_missing !== nothing
-            @test r.first_missing == first(r.missing)
+        # the config space is actually swept, and every variant is consistent
+        @test r.total == length(r.variants)
+        @test r.total > 1                       # a single probe is the bug this replaced
+        @test r.runnable == count(v -> isempty(v.missing), r.variants)
+        @test 0 <= r.runnable <= r.total
+        for v in r.variants
+            @test (v.first_missing === nothing) == isempty(v.missing)
+            v.first_missing === nothing || @test v.first_missing == first(v.missing)
+            @test issubset(v.missing, r.unreachable)
         end
+
+        # base form (variant 1) is the constructor default and runs today
+        @test r.base_missing == r.variants[1].missing
+        @test r.base_first_missing == r.variants[1].first_missing
+
+        # the WORST case is the first of `unreachable` in required_semantics
+        # order — not the base form's, and not `nothing` unless truly total.
+        if isempty(r.unreachable)
+            @test r.first_missing === nothing
+            @test r.runnable == r.total
+        else
+            @test r.first_missing == first(r.unreachable)
+            @test r.first_missing !== r.base_first_missing ||
+                  r.base_first_missing === nothing
+        end
+    end
+
+    # THE FENCE. The matrix once reported every family green by probing only
+    # the default config, while `import_report` on a scaled-RoPE checkpoint
+    # correctly named `rope_llama3`. A report that overstates is worse than no
+    # report (§LXX), so: while any capability Gesso does not implement is
+    # reachable from a family's config space, NO family row may read total.
+    implemented = Set{Symbol}(Gesso.Inference._implemented_capabilities)
+    reachable_anywhere = Set{Symbol}()
+    for r in rows
+        union!(reachable_anywhere, r.unreachable)
+    end
+    if !isempty(setdiff(reachable_anywhere, implemented))
+        for r in rows
+            @test r.first_missing !== nothing   # worst case must be named
+        end
+        # and the rendered table must carry the runnable fraction, so the
+        # honest number is the one a reader actually sees
+        io = IOBuffer()
+        Gesso.compatibility_table(io)
+        @test occursin("runnable configs", String(take!(io)))
     end
 
     # the rendered table is generated from those rows
@@ -677,5 +735,9 @@ end
     @test occursin("| architecture |", table)
     for fam in fams
         @test occursin("| $fam |", table)   # no family may be silently dropped
+    end
+    # every row states its runnable fraction — "all green" is unrepresentable
+    for r in rows
+        @test occursin("| $(r.runnable)/$(r.total) |", table)
     end
 end

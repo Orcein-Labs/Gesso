@@ -193,3 +193,75 @@ _session(model, ts; kw...) =
         @test Gesso.generate(s, Gesso.encode(tk, "Hello"); max_new_tokens=3) == g1
     end
 end
+
+# --- BREADTH-1: the engine honors the model's positional policy -----------------
+#
+# Before this, a Session carrying a SCALED RoPE policy was refused at
+# CONSTRUCTION (`LoweringNotImplemented`), even though the CPU oracle had
+# implemented scaled policies since Pass D and the CPU operator already
+# accepted `inv_freq`. The capability existed; the door was shut. The engine
+# now reads the policy from the model and threads it to every `rope!`, and a
+# backend that cannot honor it declines at the OPERATION instead (§LXX).
+
+@testset "BREADTH-1: positional policy travels with the model (§LXX, §XIII)" begin
+    ts0 = toy2_tensors()
+    model = toy2_modelir()
+    d_head = div(model.embedding.dim, model.blocks[1].attention.n_heads)
+
+    @testset "scaled policy: engine matches the oracle on CPU" begin
+        for (label, rope) in (
+            ("linear", Gesso.RoPEPolicy(; kind=:linear, factor=4.0)),
+            (
+                "llama3",
+                Gesso.RoPEPolicy(;
+                    kind=:llama3,
+                    factor=8.0,
+                    original_max_position_embeddings=8192,
+                ),
+            ),
+        )
+            ts = merge(ts0, (; rope))
+            o = Gesso.reference_generate(model, ts, PROMPT; max_new_tokens=8)
+            s = _session(model, ts)
+            @test s.inv_freq !== nothing            # the engine actually read it
+            @test length(s.inv_freq) == d_head ÷ 2  # and it is the right length
+            @test Gesso.generate(s, PROMPT; max_new_tokens=8) == o
+        end
+    end
+
+    @testset "unscaled is untouched (regression law §XIII)" begin
+        @test Gesso.Inference.tensors_rope_inv_freq(ts0, d_head) === nothing
+        s = _session(model, ts0)
+        @test s.inv_freq === nothing
+        @test Gesso.generate(s, PROMPT; max_new_tokens=8) ==
+              Gesso.reference_generate(model, ts0, PROMPT; max_new_tokens=8)
+    end
+
+    @testset "the policy is not decorative" begin
+        # without this, "engine == oracle" could be true because BOTH ignore
+        # the policy and agree on the same wrong answer
+        plain = Gesso.reference_generate(model, ts0, PROMPT; max_new_tokens=8)
+        scaled = Gesso.reference_generate(
+            model,
+            merge(ts0, (; rope=Gesso.RoPEPolicy(; kind=:linear, factor=4.0))),
+            PROMPT;
+            max_new_tokens=8,
+        )
+        @test plain != scaled
+    end
+
+    @testset "unsupported policy DIMENSIONS still fail closed at the operation" begin
+        for rope in (
+            Gesso.RoPEPolicy(; kind=:linear, factor=2.0, interleaved=true),
+            Gesso.RoPEPolicy(; kind=:linear, factor=2.0, rotary_dim=4),
+        )
+            err = try
+                Gesso.generate(_session(model, merge(ts0, (; rope))), PROMPT; max_new_tokens=2)
+                nothing
+            catch e
+                e
+            end
+            @test err isa Gesso.LoweringNotImplemented
+        end
+    end
+end
