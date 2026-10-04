@@ -666,7 +666,9 @@ why each is still there:
    no way under this from the public `CUDA.jl` API without graph capture.
 3. **`_session_greedy_id!` ~6,200 B — out of fence.** The `haskey` and
    `getproperty` calls on `s.tensors` are `::Any` boxing. That is P-1, and
-   P-1 is a packet: resolving it is a canon decision, not this item's.
+   P-1 is a packet: resolving it is a canon decision, not this item's. It is
+   now recorded as `docs/DECISION_PACKETS.md` PACKET 3 (2026-10-04), with
+   the CPU-side attribution measured there.
 4. **`_cuda_rope!` 2,976 B / 60 — the next named target.**
    `pos_d = CuArray{Int}(positions)` uploads the position vector on every
    call. The engine's `ws.pos_buf` is a HOST `Vector{Int}` (it is written
@@ -718,7 +720,11 @@ llama_micro cuda-vs-cpu max|Δlogit|      5.5006127839263286e-6  (unchanged)
 toy2 lava-vs-cpu max|Δlogit|             0.0003999502122269405  (unchanged)
 llama_micro lava-vs-cpu max|Δlogit|      6.61393981626901e-6    (unchanged)
 fork unique_kv_bytes micro               2048 vs 4096 (suite green)
-P-1 @test_broken gates                   still Broken (7)
+P-1 @test_broken gates                   still Broken (3 executable gates,
+                                           all in test/test_type_stability.jl;
+                                           the suite's 8 broken = these 3 +
+                                           5 named skips — corrected 2026-10-04,
+                                           the "7" first written here was wrong)
 ```
 
 ---

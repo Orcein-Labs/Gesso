@@ -46,6 +46,15 @@ accident, and they are load-bearing: if a future change makes one pass
 unexpectedly, `@test_broken` errors and the packet is forced open on
 purpose.
 
+**P-1 is now `docs/DECISION_PACKETS.md` PACKET 3 (promoted 2026-10-04).**
+That file carries the question, four options (one storage type parameter /
+keep hoisting / a typed engine-side bundle / declare the cost), the
+measured blast radius (44 `::Any` field declarations on the decode path)
+and the attribution of what is left of the warmed `decode!` allocation.
+8,088 B of 10,368 B — 78% — is still boxing through `::Any`, and a
+counterfactual with an identical read pattern over a typed field infers at
+0.032 B/call against 32.0 B/call. Read that before re-deriving it here.
+
 **Depends on 10G is itself half true** — the 10G mechanism landed
 (`f938131`), its measurement did not
 (`PHASE10G_AUTOTUNE_RECEIPT.md`). 10H's premise line ("SmolLM2 CUDA
