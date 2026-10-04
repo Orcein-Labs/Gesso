@@ -101,7 +101,7 @@ function import_report(
         println(io, "    ", rpad(String(cap), 26), _cap_status(cap, backend))
     end
 
-    _missing = _missing_capabilities(caps, backend)
+    _missing = _missing_capabilities(reqs, backend)
     boundary = isempty(_missing) ? nothing : first(_missing)
     println(io)
     if boundary === nothing
@@ -119,38 +119,24 @@ _cap_status(cap::Symbol, backend::AbstractGessoBackend) =
     supports(backend, cap) ? "READY" : "NOT IMPLEMENTED"
 
 """
-    _missing_capabilities(caps, backend) -> Vector{Symbol}
+    _missing_capabilities(reqs, backend) -> Vector{Symbol}
 
 Every required capability `backend` cannot run, in `required_semantics` order.
 The FIRST one is the failure boundary a model actually hits.
+
+It takes the spec's OWN `required_semantics` list. It used to take
+`ArchitectureCapabilities` and rebuild a probe — and that probe was LOSSY: it
+propagated `qk_norm` but not `moe`, because an earlier version had reported a
+plain Llama as missing `:moe_routing` and the fix for that false positive
+overcorrected into a false negative. A `moe` spec was declared fully supported
+while the compatibility matrix correctly named `:moe_routing`. Two surfaces,
+two answers, one commit after the split-brain was supposedly closed.
+
+Re-deriving a list you already hold is how a declaration drifts from the thing
+it describes. Filter the real list.
 """
-function _missing_capabilities(
-    caps::ArchitectureCapabilities,
-    backend::AbstractGessoBackend,
-)
-    probe = ArchitectureSpec(;
-        family=:probe,
-        hidden_size=8,
-        num_layers=1,
-        n_heads=caps.grouped_query_attention ? 4 : 1,
-        n_kv_heads=caps.grouped_query_attention ? 2 : 1,
-        vocab_size=8,
-        intermediate_size=8,
-        activation_kind=caps.gated_ffn ? :swiglu : :gelu,
-        tie_word_embeddings=caps.tied_embeddings,
-        sliding_window=caps.sliding_window ? 4 : nothing,
-        # ONLY qk_norm is probed here. An earlier version used
-        # `caps.qk_norm ? [:qk_norm] : [:moe]`, which reported a Llama model as
-        # missing :moe_routing — an invented capability requirement, and exactly
-        # the kind of false claim Pass J exists to prevent.
-        features=Set{Symbol}(caps.qk_norm ? [:qk_norm] : Symbol[]),
-        rope=RoPEPolicy(;
-            kind=caps.rope_scaling,
-            factor=caps.rope_scaling === :none ? 1.0 : 2.0,
-            original_max_position_embeddings=caps.rope_scaling === :llama3 ? 4096 : 0,
-        ),
-    )
-    return [c for c in required_semantics(probe) if !supports(backend, c)]
+function _missing_capabilities(reqs::AbstractVector{Symbol}, backend::AbstractGessoBackend)
+    return [c for c in reqs if !supports(backend, c)]
 end
 
 # --- Pass J: the machine-readable compatibility matrix --------------------------

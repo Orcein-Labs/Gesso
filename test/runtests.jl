@@ -33,6 +33,13 @@ using Gesso: reference_prefill, reference_generate
     # CPU reference operator methods (§LXXV item A): needs the lab helpers
     include("test_cpu_ops.jl")
 
+    # CAPABILITY-0a: `supports(backend, cap)` is a hand-written Set, so the
+    # declaration is tied to EXECUTION here — every claimed capability must
+    # have a probe that runs, every absent one must be named as a failure
+    # boundary, and the report and matrix must agree. Right after the operator
+    # suite because every probe below calls an operator directly.
+    include("test_capability_conformance.jl")
+
     # ModelIR tests build toy2 from the fixture pack, so they come after it;
     # the Phase 1 exit test composes the whole chain (fixture → IR → tensors
     # → named operators) and therefore comes last
