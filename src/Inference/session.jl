@@ -596,7 +596,7 @@ function _prefill_impl!(s::Session, tokens::AbstractVector{Int}, span::_EngineSp
             Q2 = reshape(qh.storage, P, n_heads * d_head)
             K2 = reshape(kx.storage, P, n_heads * d_head)
             mul!(scores.storage, Q2, transpose(K2))
-            scores.storage ./= sqrt(d_head)
+            _scale_storage!(scores.storage, sqrt(d_head))
         else
             # Device backends without the :attn_gemm cap (Lava): the original
             # per-head broadcasts, unchanged.
@@ -625,13 +625,13 @@ function _prefill_impl!(s::Session, tokens::AbstractVector{Int}, span::_EngineSp
         end
         _merge_heads!(merged, attn, n_heads, d_head)
         matmul!(cpu, sub, merged, bt.wo, wl)
-        hp.storage .+= sub.storage              # residual
+        _add_storage!(hp.storage, sub.storage)  # residual
         rmsnorm!(cpu, normed2, hp, bt.ffn_rms, wl; eps=s.eps)
         matmul!(cpu, gate, normed2, bt.wgate, wl)
         matmul!(cpu, up, normed2, bt.wup, wl)
         swiglu!(cpu, act, gate, up, wl)
         matmul!(cpu, down, act, bt.wdown, wl)
-        hp.storage .+= down.storage             # residual
+        _add_storage!(hp.storage, down.storage) # residual
     end
 
     if haskey(tensors, :final_rms) && tensors.final_rms !== nothing
@@ -834,9 +834,9 @@ function _session_consume!(s::Session, tok::Int)
                 n_heads * d_head,
             )
             mul!(ws.scores.storage, Q1, transpose(K2))
-            ws.scores.storage ./= sqrt(d_head)
+            _scale_storage!(ws.scores.storage, sqrt(d_head))
             if K < s.context_length
-                @views ws.scores.storage[:, (K+1):s.context_length] .= 0
+                _zero_tail_storage!(ws.scores.storage, K + 1)
             end
         else
             for hh in 1:n_heads
@@ -867,16 +867,16 @@ function _session_consume!(s::Session, tok::Int)
         end
         _merge_heads!(merged, attn, n_heads, d_head)
         matmul!(cpu, sub, merged, bt.wo, wl)
-        hp.storage .+= sub.storage              # residual
+        _add_storage!(hp.storage, sub.storage)  # residual
         rmsnorm!(cpu, normed2, hp, bt.ffn_rms, wl; eps=s.eps)
         matmul!(cpu, gate, normed2, bt.wgate, wl)
         matmul!(cpu, up, normed2, bt.wup, wl)
         swiglu!(cpu, act, gate, up, wl)
         matmul!(cpu, down, act, bt.wdown, wl)
-        hp.storage .+= down.storage             # residual
+        _add_storage!(hp.storage, down.storage) # residual
     end
     # write the new hidden row (storage CONTENT, not a field reassignment)
-    @views s.h[pos0, :] .= hp.storage[1, :]
+    _write_hidden_row_storage!(s.h, hp.storage, pos0)
     s.seqlen = pos0
     return s
 end

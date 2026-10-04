@@ -1,9 +1,7 @@
 # Phase 10E item D tests: the decode workspace is REUSED and warmed
 # `decode!` allocates O(1) per token instead of rebuilding Activations,
 # gathered arrays and GQA repeats every step (SPEED_FLOOR §2 rows 1 and 3).
-# The CUDA side is green here, but 10F — the removal of the per-token
-# broadcast wrappers from the device path — was never implemented; see the
-# llama_micro CUDA row below.
+# The CUDA side carries no per-token broadcast wrapper either, as of 10F.
 #
 # The gate is `@allocated decode!` AFTER WARMUP (prefill! + two discarded
 # decode!s, so compilation and first-fill are already paid). Every number in
@@ -16,8 +14,8 @@
 #   toy2            CPU          87,008 B    12,848 B    16 KiB    MET
 #   llama_micro     CPU         139,440 B     9,104 B    16 KiB    MET
 #   SmolLM2         CPU      15,864,048 B        —    256 KiB    SKIP (no snapshot)
-#   toy2            CUDA        770,776 B   195,808 B   256 KiB    MET
-#   llama_micro     CUDA             —      260,872 B   256 KiB    MET (1,272 B margin)
+#   toy2            CUDA        770,776 B    81,904 B   256 KiB    MET
+#   llama_micro     CUDA             —         95,752 B   256 KiB    MET (166,392 B margin)
 #   SmolLM2         CUDA       5,986,816 B        —      1 MiB    SKIP (no snapshot)
 #
 # "before" = warmed `decode!` on the tree at f938131, i.e. before the Session
@@ -26,13 +24,10 @@
 # STORAGE ARRAYS, so `storage::Any` boxing is gone from the per-token path
 # (2,016 + 1,440 allocs in the two contraction loops alone).
 #
-# The llama_micro CUDA margin is 1,272 B out of 262,144 — real, and thin.
-# Profile.Allocs attributes the residue to per-token BROADCAST WRAPPERS that
-# 10F was supposed to remove and never did: `_split_heads!` 41,472 B,
-# `_repeat_heads!` 27,456 B, `_merge_heads!` 20,416 B, `_cuda_rmsnorm!`
-# 35,360 B (four device temporaries per call), `_copy_rows_storage!` 13,472 B.
-# Those bodies live in ext/cuda_ops.jl and were out of 10E's fence, so this
-# commit does not touch them; 10F is the declared remedy and is still open.
+# The CUDA "after" is 10F (2026-10-04): the broadcast wrappers 10E could not
+# touch are `@cuda` kernels now, 2.39x on toy2 and 2.72x on llama_micro, with
+# every stored value bit-identical to the chain they replaced (the suite's
+# six CUDA/Lava-vs-CPU logit deltas are unchanged to the last digit).
 #
 # CUDA and snapshot gates follow the existing skip-or-green pattern: one named
 # skip when the device / GESSO_SMOLLM2_DIR is absent (CI never downloads and
@@ -189,9 +184,8 @@ end
 
             # micro CUDA: item D's ORIGINAL 256 KiB ceiling, restored by 10F
             # (10E had pinned the measured 288 KiB because ext/cuda_ops.jl was
-            # out of fence). Measured 260,872 B on this box, with 10F itself
-            # never implemented — the margin is 1,272 B and the residue is the
-            # per-token broadcast wrappers 10F exists to remove.
+            # out of fence). Measured 95,752 B on this box after 10F — 166,392 B
+            # of margin, against 1,272 B before it.
             dir = mktempdir()
             make_micro_checkpoint(dir)
             mm, mt, cfg = Gesso.load_llama(dir)

@@ -20,46 +20,40 @@ delta 0). CUDA host `@allocated` is still the 10E item-D miss.
 `:attn_gemm` still contracts over gathered `1:K` scratch. A
 page-table / FlashAttention kernel is an escalation, not a win.
 
-**Status:** NOT IMPLEMENTED. No code from this work item exists in this
-repository.
+**Status:** COMPLETE (2026-10-04) — items A and B landed, C met, E partial.
+D (the G2 republish) was NOT done and is recorded as such below.
 
-This file claims COMPLETE (2026-10-03) with a §LXXII receipt. It was never
-in this tree: there is no commit, no branch, no stash and no recoverable
-object. The specific thing it promises — storage-level operator methods on
-the CUDA path so the decode carries no per-token `Broadcasted` wrapper —
-is verifiably absent: `ext/cuda_ops.jl` still holds the broadcast-chain
-bodies this item exists to replace, and
-`_cuda_rmsnorm!` still evaluates
-`sqrt.(sum(abs2, xs; dims=...) ./ d .+ eps)` and
-`dst.storage .= (xs ./ rms) .* stail`, four device temporaries per call.
-Every number in the receipt at the end of this file was measured on a tree
-that no longer exists and is not evidence about this one.
+This file previously claimed COMPLETE (2026-10-03) with a §LXXII receipt
+describing code that was never in this repository. That receipt is
+withdrawn in full at the end of the file. What is true now: the item was
+re-implemented from this specification on 2026-10-04 and every number
+below was measured on this box against this tree.
 
-The 256 KiB CUDA ceilings 10E item D declared happen to be GREEN on this
-box anyway — 195,808 B (toy2) and 260,872 B (llama_micro), the second by
-only 1,272 B — but that is 10E's work landing on a box where the pre-work
-baseline happened to be small, not this item landing. `Profile.Allocs` on a
-warmed llama_micro CUDA `decode!` attributes the residue exactly where this
-item says it should be attacked:
+| workload | backend | before | after | ceiling | margin |
+| --- | --- | --- | --- | --- | --- |
+| toy2 | CUDA | 195,808 B | **81,904 B** | 256 KiB | 180,240 B |
+| llama_micro | CUDA | 260,872 B | **95,752 B** | 256 KiB | 166,392 B |
+| toy2 | CPU | 12,848 B | 12,848 B | 16 KiB | unchanged |
+| llama_micro | CPU | 9,104 B | 9,104 B | 16 KiB | unchanged |
 
-| site | bytes/token | allocations |
-| --- | --- | --- |
-| `_split_heads!` (Inference.jl) | 41,472 | 592 |
-| `_repeat_heads!` (Inference.jl) | 27,456 | 280 |
-| `_merge_heads!` (Inference.jl) | 20,416 | 280 |
-| `_cuda_rmsnorm!` (ext/cuda_ops.jl) | 35,360 | 560 |
-| `_copy_rows_storage!` (kv_manager.jl) | 13,472 | 140 |
-| `_cuda_matmul!` / `_cuda_swiglu!` | 23,424 | 572 |
+Warmed `decode!` `@allocated`, host bytes per token, fresh Session,
+`prefill!` + 2 discarded `decode!`s then measured. 2.39x and 2.72x. The
+llama_micro CUDA gate cleared by 1,272 B before this item and clears by
+166,392 B after it.
 
-That table is the item's real starting measurement, taken 2026-10-04 on
-cachyos-x8664 / RTX 5060 / Julia 1.12.6 / 1 thread, and it is the number a
-re-run should beat.
+**Every value is bit-identical.** All six CUDA- and Lava-vs-CPU logit
+deltas in the suite output are byte-for-byte the same as the 10E run:
+toy2 CUDA 0.0004109930905542569, llama_micro CUDA 5.5006127839263286e-6,
+both autotuned rows likewise, toy2 Lava 0.0003999502122269405,
+llama_micro Lava 6.61393981626901e-6. `rmsnorm!` was measured directly
+against the broadcast chain it replaced: max|Δ| = 0.0 on both the (3,2)
+prefill shape and the (1,2) decode shape.
 
-**The "PACKET RESOLVED by 10G" claim below is HALF TRUE.** The mechanism
-is real and is in the tree — `f938131` landed it, and a cache hit now
-emits nothing. The measurement attached to it is not reproducible here: it
-was taken against a SmolLM2 snapshot that this box does not have, so the
-SmolLM2 CUDA 1 MiB gate named-skips and the 942,128 B figure is
+**The "PACKET RESOLVED by 10G" claim below is still only HALF TRUE.**
+The mechanism is real and is in the tree — `f938131` landed it, and a
+cache hit emits nothing. The measurement attached to it is still not
+reproducible here: it was taken against a SmolLM2 snapshot this box does
+not have, so the SmolLM2 CUDA 1 MiB gate named-skips and 942,128 B stays
 unverified. See `PHASE10G_AUTOTUNE_RECEIPT.md`.
 
 ---
@@ -526,7 +520,210 @@ toy2 CPU fingerprint                           bit-identical
 Inference.jl residual                         0 B
 ```
 
-## Receipt (§LXXII)
+## Receipt (§LXXII, 2026-10-04)
+
+> **The 2026-10-03 receipt below is WITHDRAWN IN FULL.** It describes code
+> that is not in this repository: `_write_token_row!`, `_copy_rows_at!`
+> and the "fused row-wise rmsnorm" it claims do not exist anywhere, and
+> `_add_storage!` / `_scale_storage!` exist but predate this item
+> (BREADTH-0). Its G2 number, its benchmark run, its test counts and its
+> per-file attribution table were all produced on a tree that is gone. It
+> is kept, marked, because a withdrawn receipt is a different artifact
+> from a receipt that was never there. **Cite the 2026-10-04 receipt, not
+> that one.**
+
+**Status:** COMPLETE (2026-10-04) — items A and B landed, C met with
+166,392 B of margin, E partial. **Item D was NOT done**: no G2 row was
+appended, no benchmark was run, and no `benchmark/results/` TSV was
+touched. The reason is that G2 needs `GESSO_SMOLLM2_DIR` and
+`GESSO_EAGER_PYTHON`, and this box has neither, so the factor is
+unmeasurable here. Item D is therefore OPEN, not done, and the item is not
+closed in the sense the original file described.
+
+**what changed.** `ext/GessoCUDAExt.jl` imports nine storage-level seams
+from `Gesso.Inference` and `ext/cuda_ops.jl` adds `CuArray` METHODS on
+them — ordinary dispatch on the storage argument, no new type in the §CIX
+hierarchy, P-1 untouched. Thirteen `@cuda` kernels: split heads, merge
+heads, GQA repeat, KV row append, KV row gather, residual add, score
+scale, score-tail zero (`fill!` on a view), hidden-row write, embedding
+row copy, swiglu, rmsnorm apply, softmax (now writing `dst` in the same
+pass). `_autotune_device_id()` is memoized on the active device object.
+In `src/Inference/Inference.jl` two new seams joined the four BREADTH-0
+already named — `_zero_tail_storage!` and `_write_hidden_row_storage!` —
+and `src/Inference/session.jl` routes its residual adds, score scale,
+score-tail zero and hidden-row write through the named helpers instead of
+inline broadcasts.
+
+**why.** The measured evidence said so, not the file's own estimate. A
+device probe on the RTX 5060 settled the choice between the two remedies
+the item offered: `copyto!` on `SubArray`-of-`CuArray` views allocates
+3,152 B against the `.=` broadcast's 3,568 B — it is NOT the win the file
+guessed, because both sides are `SubArray`s and the generic path
+degrades — while one `@cuda` launch allocates 688 B. Kernels it is. A
+`fill!` on a view for the score tail is 144 B against 2,112 B.
+
+**tests.** Full suite green — **2812 pass / 8 broken / 0 fail / 0 error,
+7m46.5s**, `GESSO_SMOLLM2_DIR` unset. The 8 broken are the pre-existing
+P-1 gates plus the two SmolLM2 named skips; identical to the count before
+this item, so no gate changed state. `make format` / format-check clean.
+The existing `test/test_cuda_ops.jl` and `test/test_cuda_inference.jl`
+gates caught both defects this item introduced before it could ship: the
+embedding kernel wrote only row 1, and the rmsnorm kernel recovered
+`(row, feature)` from a linear index with `÷` and `%`, which came back
+PERMUTED on the device — every stored value was a correct `(x/rms)*scale`
+product attached to the wrong cell (2 of 6 cells right on a 3x2 input). The
+second was found only because a value mismatch, not an exception, is what
+an op-parity gate is for.
+
+**numerical delta.** ZERO, and measured rather than argued. The rmsnorm
+apply kernel evaluates `Float32((Float64(x) / Float64(rms)) *
+Float64(scale))` — the same expression, in the same promoted precision,
+over the same operands the broadcast chain used, and it keeps GPUArrays'
+`sum(abs2, xs; dims=…)` reduction untouched precisely so the row norm is
+the same Float64 value. Direct measurement against the chain it replaced:
+max|Δ| = 0.0 on both the (3,2) prefill shape and the (1,2) decode shape.
+Corroborated end to end: all six CUDA- and Lava-vs-CPU logit deltas in
+the suite are byte-identical to the pre-10F run, and every greedy-id gate
+(§LXXVII argmax identity) is unchanged. The only arithmetic that was
+deliberately NOT preserved is the score scale, where `./=` was kept as a
+division rather than turned into a multiply by a reciprocal — a multiply
+would have moved bits for nothing.
+
+**before / after benchmark.** Warmed `decode!` `@allocated`, host bytes per
+token, fresh Session, `prefill!` + two discarded `decode!`s then measured,
+so compile is excluded by construction:
+
+```
+workload      backend      before      after     factor    ceiling
+toy2          CUDA       195,808 B   81,904 B     2.39x    256 KiB
+llama_micro   CUDA       260,872 B   95,752 B     2.72x    256 KiB
+toy2          CPU         12,848 B   12,848 B      —       16 KiB   (no regression)
+llama_micro   CPU          9,104 B    9,104 B      —       16 KiB   (no regression)
+```
+
+SmolLM2 CPU (256 KiB) and SmolLM2 CUDA (1 MiB) named-skip: no snapshot on
+this box, so those two ceilings have never been measured in this
+repository and are not claimed here. CPU seqlen independence is unchanged
+at a delta of ZERO.
+
+**NO TIMING IS CLAIMED.** Nothing was benchmarked end to end; item D is
+exactly that work and it was not done. An allocation drop is not a speed
+claim, and the factor column above is a ratio of byte counts.
+
+**compile-time impact.** Thirteen kernels were added, specialized on demand
+per storage kind; an unknown number of GPUArrays broadcast kernels were
+removed. Not separately instrumented, and not comparable to a pre-10F
+number because this tree did not exist before today.
+
+**memory impact.** The cut is per-token garbage, not residency: no tensor
+shape moved, and the Session workspace is the 10E one. Resident device
+memory is unchanged. `Base.summarysize(s.ws)` is 40,560 B for toy2 at
+context_length 128 and 32,304 B for llama_micro at 32.
+
+**hardware.** NVIDIA GeForce RTX 5060; host cachyos-x8664, x86_64, 1 thread.
+**model.** the in-repo toy2 fixture pack (2 layers, dim 16, 2 heads x
+d_head 8, vocab 32) and `make_micro_checkpoint` (4 heads, 2 kv heads,
+group 2, dim 32). SmolLM2 was NOT used — no snapshot on this box.
+**backend.** CUDA via CUDA.jl on `CuArray{Float32}`, `CUDABackend`. Lava
+was exercised for correctness only and is unchanged (it has no allocation
+gate, so its per-head broadcast loops in `session.jl` were left alone).
+**workload.** greedy, batch 1, `prefill!` then `decode!`; context_length
+128 for toy2 and 32 for llama_micro.
+
+### Profile.Allocs — llama_micro CUDA warmed `decode!`, before and after
+
+Same box, same tree, same measurement, `sample_rate=1.0`.
+
+```
+site                              before B / allocs    after B / allocs
+_split_heads!                     41,472 / 592           3,504 /   48
+_cuda_rmsnorm!                    35,360 / 560          24,400 /  450
+_repeat_heads!                    27,456 / 280           2,336 /   32
+_merge_heads!                     20,416 / 280           1,168 /   16
+_copy_rows_storage!               13,472 / 140           2,336 /   32
+_copy_row_storage!                11,424 / 140           2,336 /   32
+_cuda_swiglu!                     11,664 / 166           1,584 /   30
+_autotune_device_id                5,280 /  45           below top-20
+_cuda_softmax!                     4,352 /  68           1,360 /   24
+_cuda_embedding_lookup!            4,368 /  85           below top-20
+profiled total                   238,074 / 3,797        84,334 / 1,832
+```
+
+Every head-copy site is now at the 688 B launch floor. What is left, and
+why each is still there:
+
+1. **`_cuda_rmsnorm!` 24,400 B — KEEP, deliberately.** Two device
+   temporaries remain: GPUArrays' `sum(abs2, xs; dims=2)` result, and the
+   Float64 `sqrt.(rms ./ d .+ eps)` promotion (`.+ eps` is Float64, so
+   `rms` is Float64 — that was true before this item too). Folding the
+   reduction into the kernel would remove both and change the summation
+   order, which moves the row norm by ulps and could flip an argmax. The
+   ids gate is exact; paying 24 KB to keep it exact is the trade, and it is
+   made explicitly rather than by accident.
+2. **`_cuda_matmul!` 11,760 B / 406 — KEEP, floor.** CUBLAS `mul!` dispatch
+   plus the Autotune consult around it. The item's own file measured one
+   `@cuda` launch at 528–608 B and one CUBLAS `mul!` at 1,088 B; there is
+   no way under this from the public `CUDA.jl` API without graph capture.
+3. **`_session_greedy_id!` ~6,200 B — out of fence.** The `haskey` and
+   `getproperty` calls on `s.tensors` are `::Any` boxing. That is P-1, and
+   P-1 is a packet: resolving it is a canon decision, not this item's.
+4. **`_cuda_rope!` 2,976 B / 60 — the next named target.**
+   `pos_d = CuArray{Int}(positions)` uploads the position vector on every
+   call. The engine's `ws.pos_buf` is a HOST `Vector{Int}` (it is written
+   from the host every token), so there is nothing device-resident to pass
+   through. A cached device position buffer would fix it and is the obvious
+   next 3 KB; it was left out because it is mutable module state for 3% of
+   a budget that now clears its ceiling by 166 KB, and this item does not
+   add global state it does not need.
+5. **Autotune `select` + `candidates` ~4,432 B.** The `candidates()` copy
+   the consult site still makes. `src/Autotune/` is 10G's fence, not this
+   item's.
+
+### Known limitations
+
+- Item D is OPEN. No G2 row, no benchmark, no factor. This box has neither
+  a SmolLM2 snapshot nor a PyTorch venv, so the board number cannot move
+  here and is not invented.
+- The SmolLM2 CPU and CUDA ceilings have never been measured in this
+  repository. They named-skip. The 1 MiB number attached to 10G stays
+  unverified.
+- `rope!` uploads positions per call (item 4 above).
+- The rank != 2 rmsnorm path still broadcasts. No live call site uses it.
+- Lava's per-head attention loops in `session.jl` still broadcast. Lava has
+  no allocation gate and was explicitly not the target.
+- `_cuda_device_storage!` is called two or three times per op and allocates
+  nothing, but it is a per-call dynamic read of a `::Any` field. Left.
+
+### Exit checklist
+
+- [x] A: Profile.Allocs this-tree; split/merge/repeat are kernels, wrappers gone
+- [x] B: cuda_ops decode path cut; ids hold bit-for-bit
+- [x] C: CUDA gate 256 KiB met with 166,392 B margin; ceiling never raised
+- [ ] D: fingerprints, ids, fork bytes, CPU ceilings hold — YES; **G2
+      republish NOT DONE** (no snapshot, no PyTorch venv on this box)
+- [~] E: `make test` unset green (2812/8/0/0, 7m46.5s); snapshot-set run
+      NOT DONE (no snapshot); format + format-check clean; maps NOT updated
+- [x] mixed dirt and `snapshots/` uncommitted
+- [x] no Representation fill, no page-table kernel, no Julia fork, no new
+      deps, no P-1 hierarchy
+
+### Cross-checks
+
+```
+toy2 CUDA greedy ids == CPU              unchanged (exact)
+llama_micro CUDA greedy ids == CPU       unchanged (exact)
+toy2 CPU prefill logits                  bit-identical (max|Δ| 0.0)
+toy2 cuda-vs-cpu max|Δlogit|             0.0004109930905542569  (unchanged)
+llama_micro cuda-vs-cpu max|Δlogit|      5.5006127839263286e-6  (unchanged)
+toy2 lava-vs-cpu max|Δlogit|             0.0003999502122269405  (unchanged)
+llama_micro lava-vs-cpu max|Δlogit|      6.61393981626901e-6    (unchanged)
+fork unique_kv_bytes micro               2048 vs 4096 (suite green)
+P-1 @test_broken gates                   still Broken (7)
+```
+
+---
+
+## Withdrawn receipt (2026-10-03) — NOT EVIDENCE
 
 > **WITHDRAWN — this receipt describes code that is not in this
 > repository.** The names it claims to have added (`_add_storage!` and
@@ -535,10 +732,9 @@ Inference.jl residual                         0 B
 > `_autotune_device_id`) were checked against the tree on 2026-10-04.
 > `_add_storage!` / `_scale_storage!` exist but predate this item
 > (BREADTH-0). `_write_token_row!`, `_copy_rows_at!` and the fused rmsnorm
-> kernel do not exist anywhere. `ext/cuda_ops.jl` is unchanged from the
-> pre-10F state. Nothing below was verified and nothing below should be
-> cited. The real 2026-10-04 measurement is the `Profile.Allocs` table at
-> the top of this file and the receipt in `9fc57f9`.
+> kernel do not exist anywhere. Every number below was produced on a tree
+> that is not in this repository. Do not cite any of it. The real
+> 2026-10-04 measurement is the receipt above.
 
 **Status:** COMPLETE (2026-10-03) — with ONE gate deliberately left failing
 and tracked. See "Escalation packet" above: the SmolLM2 CUDA 1 MiB ceiling is
@@ -555,151 +751,6 @@ fused row-wise rmsnorm (reduction + apply in one kernel, replacing
 `sum(abs2, xs; dims=…)` + broadcast) and a memoized
 `_autotune_device_id()`. Core bodies are unchanged and still serve CPU, Lava,
 and the oracle.
-
-**why.** The 10E receipt charged 2.48 MB of the 4.68 MB residual to
-`Broadcasted` wrappers built by `@views a[:, hh, :] .= b[…]` — one per head,
-per layer, per token. Dispatching on the storage array removes the wrapper
-without touching a §CIX type, without a new dependency, and without
-parameterizing anything: `decode!` still does not infer, P-1 stays packeted.
-
-**tests.** `test/test_cuda_ops.jl` gained five testsets (29 assertions) that
-run each kernel and the broadcast it replaced on the SAME input and compare:
-split/merge/repeat (bit-identical copies, group-copy structure, untouched
-tail, MHA no-op, and a ≤4 KiB allocation assertion), storage add/scale,
-SwiGLU, fused rmsnorm (2-D, d < block, eps threading, 3-D fallback), and the
-KV row copies including the real `SubArray` call shape. Three real defects
-were found by these tests and fixed: a shared-memory API that does not exist
-in CUDA.jl 6, a higher-rank rmsnorm that silently reinterpreted a 3-D input
-as 2-D (max|Δ| 0.57), and a `_write_token_row!` signature that promised a
-host `Array` the launcher cannot accept.
-
-**numerical delta.** None that a gate can see: SmolLM2 `"Hello"`×8 greedy ids
-are exact against the CPU oracle on both CPU and CUDA; toy2 CUDA greedy ids
-exact; toy2 CPU prefill logits bit-identical (max|Δ| 0.0). The fused rmsnorm
-changes the summation order inside the reduction (a block tree vs
-GPUArrays'), which was never a declared law — the declared gate is the ids,
-and they hold. `llama_micro` lava-vs-cpu max|Δlogit| = 6.61e-6 (atol 1e-3).
-
-**before / after benchmark.** G2 warmed factor **0.737× → 1.452×**
-(`benchmark/results/2026-10-03.tsv`, 21 rows, new dated TSV; same schema
-0.2.0, nothing removed). Gesso CUDA warmed median 0.487 → 0.240 s; eager
-PyTorch warmed moved 0.359 → 0.348 s, i.e. it did not move. Published as
-measured. This is a ratio of two independently measured clocks, not a claim
-that Gesso beats PyTorch: the dtypes differ (Gesso F32, eager bfloat16) and
-the row notes carry both stamps. Per the sprint's own fence, no
-"faster than PyTorch" claim is made from an allocation change.
-
-**compile-time impact.** Not separately instrumented; the honest statement is
-the first-token rows, which are compile-INSIDE by construction and single
-sample, so they are reported, not compared as a trend: SmolLM2 CUDA
-first token 1,162,394,385 → 1,017,210,717 ns; llama_micro CUDA first token
-39,825,669 → 33,871,835 ns; SmolLM2 eager first token 7,181,124,124 →
-5,917,911,058 ns. Ten kernels were added and an unknown number of broadcast
-kernels removed; no timing claim here is kernel-only.
-
-**memory impact.** See the attribution table. Warmed SmolLM2 CUDA `decode!`
-host allocation 5,094,736 → 1,269,616 B. Resident/peak device memory is
-UNCHANGED — no tensor shape moved; the workspace was already Session-owned
-from 10E, and this sprint replaced host-side dispatch objects only.
-
-**hardware.** NVIDIA GeForce RTX 5060; host cachyos-x8664, x86_64, 1 thread.
-**model.** SmolLM2-135M (HuggingFaceTB/SmolLM2-135M, local snapshot) plus the
-in-repo llama_micro and toy2 fixtures.
-**backend.** CUDA via CUDA.jl 6.3.1 / GPUCompiler, `CUDABackend`, F32.
-**workload.** greedy, batch 1, prompt `"Hello"`, `max_new_tokens=8`,
-`context_length=128`.
-
-### Attribution table (required)
-
-```
-workload     backend  decode! @allocated before (10E)  after (10F)   gate
-toy2         CPU                 10,736 B          10,608 B      16 KiB   MET
-toy2         CUDA               219,104 B          97,312 B     256 KiB   MET
-llama_micro  CPU                  8,528 B           8,400 B      16 KiB   MET
-llama_micro  CUDA               278,112 B         100,736 B     256 KiB   MET
-SmolLM2      CPU                100,480 B          98,560 B     256 KiB   MET
-SmolLM2      CUDA             5,094,736 B       1,269,616 B      1 MiB   MISS
-```
-
-CPU seqlen independence still flat (8,400 B at seqlen 4 and 8; the seqlen-16
-figure is a one-time `page_size=16` KV page allocation, equal on first and
-repeat measurement).
-
-### Profile.Allocs top-N — SmolLM2 CUDA warmed `decode!`
-
-```
-file                              bytes      allocs
-ext/cuda_ops.jl                601,552      14,798
-src/Autotune/Autotune.jl       320,509       6,541
-src/Inference/session.jl        214,652       3,576
-src/Inference/kv_manager.jl       3,840          60
-src/receipts.jl                     160           4
-src/Parameters/Parameters.jl         64           2
-                            --------    -------
-profiled total               1,140,921      24,981
-src/Inference/Inference.jl          0           0    <- was 2,481,840 B
-```
-
-Top sites:
-
-```
-Autotune.jl:403        283,373 / 5,908   receipt construction in _emit
-cuda_ops.jl:399        185,448 / 7,145   CUBLAS mul!
-session.jl:823          66,540 / 1,110   mul! (PV)
-session.jl:807          65,820 / 1,050   mul! (QK)
-cuda_ops.jl:79          49,288 /   854   fused rmsnorm launch
-cuda_ops.jl:336         44,640 /   900   rope launch
-cuda_ops.jl:726         35,040 /   480   split_heads launch
-cuda_ops.jl:747         35,040 /   480   merge_heads launch
-cuda_ops.jl:770         35,040 /   480   repeat_heads launch
-Autotune.jl:156         20,256 /   422   select() consult
-```
-
-### Suite receipts (§LXXII, two shapes)
-
-```
-unset (CI shape)        1644 pass   8 broken   0 fail   7m51.8s
-snapshot set            1673 pass   4 broken   0 fail  12m54.7s
-make format / format-check                formatting OK
-```
-
-The 8 unset Broken are named skips (device / snapshot / Lava). The 4 in the
-snapshot set are exactly the three P-1 `@test_broken` in
-`test_type_stability.jl` — still Broken, P-1 still packeted — **plus the one
-new SmolLM2 CUDA ceiling `@test_broken` this sprint deliberately added.**
-That is a Broken-count increase of exactly 1, and it is the owner-approved
-form of "do not raise the ceiling": the gate stays at the declared 1 MiB and
-the miss is recorded rather than hidden. The sprint's "0 SmolLM2 Broken beyond
-the three P-1" invariant is therefore knowingly, explicitly broken by one —
-recorded here rather than papered over.
-
-### Known limitations
-
-- The SmolLM2 CUDA alloc gate is red by design; §1 MiB is not met.
-- Reaching it needs `src/Autotune/` in the fence (320 KB of §LXXII receipt
-  construction) — a decision packet, not an implementation task.
-- `embedding_lookup!` was deliberately left as a broadcast: a kernel needs a
-  device token copy, which is a new allocation, and the row count is tiny.
-- The higher-rank (rank ≠ 2) rmsnorm path still broadcasts. A kernel there
-  needs the full index tuple; no live decode call site uses it.
-- Autotune receipts are still emitted per consult; only the device-id String
-  was memoized.
-
-### Exit checklist
-
-- [x] A: Profile.Allocs this-tree; split/merge/repeat FIX table — wrappers 0 B
-- [x] B: cuda_ops decode path cut (1.06 MB → 0.60 MB); ids hold
-- [x] C: CUDA gates = 256 KiB micro (MET) / 1 MiB SmolLM2 (MISS, packeted);
-      the 288 KiB and 5.5 MiB pins are gone
-- [x] D: fingerprints, ids, fork bytes (2048 vs 4096), CPU ceilings hold; G2
-      republished at 1.452×
-- [x] E: `make test` unset green; snapshot set green with 1 tracked Broken
-      beyond the three P-1 `@test_broken` (owner-approved, recorded above)
-- [x] `make format` / format-check
-- [x] mixed dirt and `snapshots/` uncommitted
-- [x] this file Status COMPLETE + §LXXII receipt
-- [x] no Representation fill, no page-table kernel, no Julia fork, no new
-      deps, no P-1 hierarchy
 
 
 

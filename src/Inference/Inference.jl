@@ -406,18 +406,39 @@ end
 _repeat_heads!(dst::Activation, src::Activation, group::Int, K::Int) =
     _repeat_heads!(dst.storage, src.storage, group, K)
 
-# --- Phase 10F: storage-level residual add + score scale ---------------------
+# --- Phase 10F: storage-level residual add + score scale + row write ----------
 #
 # The interpreter adds the residual in STORAGE (§LXXV: no `add!` operator
-# exists, and this does not introduce one) and scales the attention scores by
-# 1/sqrt(d_head). Both were inline `@views`/`./=` broadcasts at every call
-# site; naming them lets a device backend specialize on its storage type.
-# The generic bodies below ARE the previous expressions, unchanged.
+# exists, and this does not introduce one), scales the attention scores by
+# 1/sqrt(d_head), and writes the new hidden row. All three were inline
+# `@views`/`./=` broadcasts at every call site; naming them lets a device
+# backend specialize on its storage type. The generic bodies below ARE the
+# previous expressions, unchanged, so CPU, Lava and the oracle keep the exact
+# arithmetic they had (Phase 10F, item A: the CUDA path stops building a
+# `Broadcasted` wrapper per head per layer per token; these are the seams
+# that makes it possible).
 
 _add_storage!(dst_storage::AbstractArray, src_storage::AbstractArray) =
     (@views dst_storage .+= src_storage)
 
 _scale_storage!(dst_storage::AbstractArray, s) = (@views dst_storage ./= s)
+
+# zero a TAIL of a buffer in place. `fill!` on a view is a single kernel and
+# allocates 144 B where the `.=` broadcast allocated 2,112 B (measured on the
+# RTX 5060, 2026-10-04), with identical results.
+_zero_tail_storage!(dst_storage::AbstractArray, from::Int) = (
+    from > size(dst_storage, 2) && return dst_storage;
+    fill!(view(dst_storage, :, from:size(dst_storage, 2)), zero(eltype(dst_storage)))
+)
+
+# write ONE row of `src` into row `row` of `dst`. The engine's hidden row
+# write is the same shape as the KV row copies in kv_manager.jl, so it gets
+# the same named seam and the same chance to be a kernel on device.
+_write_hidden_row_storage!(
+    dst_storage::AbstractArray,
+    src_storage::AbstractArray,
+    row::Int,
+) = (@views dst_storage[row, :] .= src_storage[1, :])
 
 export reference_prefill
 

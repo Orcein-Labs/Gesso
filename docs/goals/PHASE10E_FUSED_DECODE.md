@@ -61,12 +61,11 @@ and a different machine and are NOT reproduced here; they are kept for
 the record and are not evidence of anything in this repository.
 
 **The "Superseded in part by 10F" claim below is WITHDRAWN.** 10F was
-never implemented — see `PHASE10F_CUDA_DECODE_ALLOC.md`, which now says
-so. The 97,312 / 100,736 B CUDA figures it quotes come from that same
-lost tree. What exists on this box is 195,808 B (toy2) and 260,872 B
-(llama_micro), both under the declared 256 KiB, with the residue
-attributed by `Profile.Allocs` to the broadcast wrappers 10F exists to
-remove.
+re-implemented from spec on 2026-10-04 (see
+`PHASE10F_CUDA_DECODE_ALLOC.md`); the 97,312 / 100,736 B CUDA figures the
+original 10F quotes come from the lost tree. What exists on this box is
+81,904 B (toy2) and 95,752 B (llama_micro), both under the declared
+256 KiB.
 
 **The receipt at the end of this file describes code that is not in this
 repository.** It is retained as a historical record of a sprint that

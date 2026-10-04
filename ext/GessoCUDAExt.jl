@@ -35,6 +35,25 @@ import Gesso:
     execution_tier,
     supports
 
+# Phase 10F (item A): the CORE already exposes the head split/merge/repeat,
+# residual add, score scale, score-tail zero, hidden-row write and the two KV
+# row copies as named STORAGE-level seams (BREADTH-0 named the first four;
+# 10E named the KV copies and the contraction loops). This extension adds
+# `CuArray` METHODS on those same functions — ordinary dispatch on the storage
+# argument, the sanctioned extension mechanism, adding no type to the §CIX
+# hierarchy (P-1 stays packeted). The generic `AbstractArray` bodies in core
+# keep serving CPU, Lava and the oracle unchanged.
+import Gesso.Inference:
+    _split_heads!,
+    _merge_heads!,
+    _repeat_heads!,
+    _add_storage!,
+    _scale_storage!,
+    _zero_tail_storage!,
+    _write_hidden_row_storage!,
+    _copy_row_storage!,
+    _copy_rows_storage!
+
 using Gesso:
     AbstractGessoBackend,
     Activation,
