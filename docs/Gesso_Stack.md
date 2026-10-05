@@ -3019,6 +3019,138 @@ G1∧G2∧G3 exist and the encoding owner opens that phase):
     §LXXXIII remains NOT COMPLETE — no Representation fill, no fused decode,
     no cages, no Julia fork.
 
+    Phase 10E close (2026-10-02, docs/goals/PHASE10E_FUSED_DECODE.md):
+    fused decode — the Session now OWNS its decode workspace (private,
+    `::Any` storage, constructed with the Session, kept by reset, unique per
+    fork child; pages are still the cache and scratch is never shared —
+    `_assert_disjoint_scratch!` enforces it at fork). `gather_kv!` accepts a
+    destination LONGER than `len` and writes `dest[1:len, :, :]`, leaving the
+    tail untouched, so attention gathers in place; GQA repeat is in place
+    (`_repeat_heads!`, identity when `group == 1`); the decode contraction
+    and the last-token logits read length-K views of a context-length
+    buffer. Oracle signatures are untouched and the CPU fingerprint is
+    bit-identical (toy2 generate == reference_generate; SmolLM2 "Hello" x 8
+    ids equal on CPU and CUDA). Warmed `decode!` host allocation is now
+    O(1) in seqlen, the seqlen delta measured at exactly zero:
+    87,008 → 12,848 B (toy2 CPU), 139,440 → 9,104 B (llama_micro CPU).
+    SmolLM2 CPU is NOT measured in this repository — no local snapshot —
+    so the 15,864,048 → 100,480 B pair an earlier version of this note
+    carried is WITHDRAWN. Re-measured 2026-10-04 after 10F landed; 10F
+    left the CPU numbers unchanged, which is its intent. The CPU op
+    bodies reach storage through typed helper ARGUMENTS — ordinary
+    dispatch, no new §CIX type, no parameterization, `decode!` still does
+    NOT infer, and packet P-1 (§CIX `storage::Any`) stays OPEN with its
+    `@test_broken` gates intact. The G2 factor of 0.737× that this note published
+    (`benchmark/results/2026-10-02.tsv`) is NOT REPRODUCIBLE and is not
+    republished: that row is stamped commit=97772b2 dirty=true — a working
+    tree that is not in this repository — and the 0.630 → 0.487 s /
+    0.436 → 0.359 s pair travels with it. No G2 factor is published from
+    this box at all. SmolLM2 CUDA host allocation is likewise NOT measured
+    here; §LXXXIII remains NOT COMPLETE — no
+    Representation fill, no page-table/FlashAttention kernel, no Lowering,
+    no cages, no Julia fork.
+
+SPEED FLOOR status note (2026-10-04, Phase 10F — RE-MEASURED on the tree as
+it now stands; this is NOT §LXXXIII completion; §LXXXIII stays NOT COMPLETE
+and nothing below fills Representation, Planning, Runtime, Agents, CAPI, or
+Lowering).
+
+    The CUDA decode path no longer builds a `Broadcasted` wrapper per head
+    per layer per token. Nine core helpers gained a named storage seam in
+    `src/Inference/Inference.jl` (`_split_heads!`, `_merge_heads!`,
+    `_repeat_heads!`, `_add_storage!`, `_scale_storage!`,
+    `_zero_tail_storage!`, `_write_hidden_row_storage!`,
+    `_copy_row_storage!`, `_copy_rows_storage!`) and `ext/GessoCUDAExt.jl`
+    implements them as `CuArray` methods backed by thirteen `@cuda`
+    kernels. Ordinary dispatch on the storage argument: no §CIX type is
+    added, no field is parameterized, `decode!` still does NOT infer, and
+    packet P-1 (§CIX `storage::Any`) stays OPEN with its `@test_broken`
+    gates intact.
+
+    Warmed `decode!` host allocation, measured on this box against this
+    tree (toy2 and llama_micro fixtures, RTX 5060, Julia 1.12.6):
+
+        toy2        CUDA    195,808 B ->    81,904 B    2.39x
+        llama_micro CUDA    260,872 B ->    95,752 B    2.72x
+
+    Both clear item D's 256 KiB gate — llama_micro by 166,392 B. CPU is
+    unchanged by 10F (toy2 12,848 B, llama_micro 9,104 B), which is the
+    intent: 10F moved device code only. `Profile.Allocs` on llama_micro
+    CUDA goes 238,074 B / 3,797 allocs -> 84,334 B / 1,832 allocs, with
+    every head-copy site sitting at the 688 B one-launch floor.
+
+    NUMERICAL DELTA: ZERO. The fused rmsnorm apply measures max|Δ| = 0.0
+    against the chain it replaced, on both the (3,2) prefill and the (1,2)
+    decode shape, and all six suite CUDA/Lava-vs-CPU `max|Δlogit|` values
+    are byte-identical to the pre-10F run (toy2 CUDA
+    0.0004109930905542569, llama_micro CUDA 5.5006127839263286e-6, both
+    autotuned rows likewise, toy2 lava 0.0003999502122269405, llama_micro
+    lava 6.61393981626901e-6). Every greedy-id gate holds exactly.
+
+    THE SMOLLM2 COLUMN IS NOT MEASURED IN THIS REPOSITORY. There is no
+    local SmolLM2 snapshot and no PyTorch venv on this box, so
+    `GESSO_SMOLLM2_DIR` and `GESSO_EAGER_PYTHON` are unset, the SmolLM2
+    CUDA 1 MiB gate NAMED-SKIPS, and the 5,094,736 -> 1,269,616 B figure
+    and the "221,040 B over, recorded as a @test_broken" that an earlier
+    version of this note carried are WITHDRAWN. The 1 MiB ceiling stands
+    DECLARED, has never been tested here, and was not raised.
+
+    G2 IS NOT PUBLISHED AND NOT REPRODUCIBLE HERE. The earlier 1.452×
+    (`benchmark/results/2026-10-03.tsv`) is withdrawn as evidence: that row
+    is stamped commit=97772b2 dirty=true — a working tree that is not in
+    this repository — and this box cannot rerun it (no `GESSO_SMOLLM2_DIR`,
+    no `GESSO_EAGER_PYTHON`). Note the scope of the problem: EVERY
+    `smollm2_g2_factor_eager_over_gesso` row in `benchmark/results/` is
+    stamped `dirty=true`, on all three dated files. No G2 factor in this
+    repository was measured on a clean, recoverable tree, which includes
+    the 0.692× the earlier phase notes carry. 10F item D is OPEN for
+    exactly this reason and no speed claim is made. §LXXXIII remains NOT
+    COMPLETE — no Representation fill, no page-table/FlashAttention kernel,
+    no Lowering, no cages, no Julia fork, no new dependency.
+
+SPEED FLOOR status note (2026-10-04, Phase 10G — MECHANISM LANDED,
+MEASUREMENT NOT REPRODUCIBLE; the same §LXXXIII caveat as the note above).
+
+    A cache hit is not a decision. §LXXII records a CHANGE, and the
+    Autotune miss receipt already named the winner; re-emitting that
+    receipt on every consult copied one decision hundreds of times per
+    warmed CUDA `decode!` token. `select` on a hit now emits NOTHING — no
+    `new_receipt`, no `Dict`, no `emit!` — and returns the cached
+    `TuneResult` with `cache_hit = true`; the winner, `medians`,
+    `rejected` and `key` are the SAME objects the cache holds, and the
+    stored entry stays the search record (`cache_hit = false`). The
+    receipt SCHEMA did not bump: the `:autotune_select` fields are
+    unchanged, miss receipts are kept, and an `invalidate!` still forces
+    a new miss receipt. No CUDA or Lava import enters `src/Autotune/`; the
+    device id stays a `String` argument.
+
+    THAT PARAGRAPH IS THE WHOLE OF 10G, and it is in the tree and tested
+    (`test/test_autotune.jl`, landed in f938131). The measurement
+    paragraph an earlier version of this note carried is WITHDRAWN: the
+    1,269,616 -> 942,128 B SmolLM2 CUDA figure, the "106,448 B UNDER the
+    DECLARED 1 MiB", and the 320,509 -> 37,136 B charge to
+    `src/Autotune/Autotune.jl` were all measured against a SmolLM2
+    snapshot this box does not have. That 1 MiB gate named-skips here, so
+    the ceiling has never been measured in this repository and 942,128 B
+    is not evidence about anything in it.
+
+    WHAT IS TRUE INSTEAD, measured here: 10G touched no kernel, no
+    candidate and no §CIX type, so every number this repository can
+    measure is unchanged by it — toy2 CPU 12,848 B, llama_micro CPU
+    9,104 B, toy2 CUDA 81,904 B, llama_micro CUDA 95,752 B, fork
+    unique_kv_bytes 2048 against 4096 isolated. Whether making Autotune
+    receipts miss-only is SUFFICIENT to bring the SmolLM2 CUDA ceiling
+    under 1 MiB is unmeasured, and is not asserted anywhere.
+
+    The suite's 8 broken are the three packeted P-1 `@test_broken` gates
+    (`test/test_type_stability.jl` lines 46, 60, 85) plus five named skips
+    for the absent snapshot — not the "returns to three" of the earlier
+    version, which counted a snapshot-set run this box cannot perform.
+    G2 is not republished and no speed claim is made from an allocation
+    change. §LXXXIII remains NOT COMPLETE — no Representation fill, no
+    page-table/FlashAttention kernel, no Lowering, no cages, no Julia
+    fork, no new dependency.
+
 
 ===============================================================================
 LXXXIV. PHASE 11 — MEMORY PLANNER
@@ -3584,6 +3716,34 @@ Three layers, always.
              queue pressure, actual storage pointer, device residency.
              Fields or a small metadata struct. Never type parameters.
 
+    §CIX AMENDMENT (Phase 10H, 2026-10-03) — **WITHDRAWN 2026-10-04. NOT
+    LAW. Do not implement it.** It is kept here only as the record of what
+    was asserted, so the retraction is on the page:
+
+        Shape, batch, sequence length, free memory, and the *identity of
+        a particular allocation* remain METADATA (fields). The **array
+        type** that physically holds a loaded tensor (e.g.
+        `Array{Float64,2}`, `CuArray{Float32,2}`, `Nothing` when unset) is
+        a TRAIT-equivalent: slow-changing, optimization-relevant, one
+        axis. It may be a **single** type parameter `S` on the §XI family
+        struct. `to_device` constructs a new value with a new `S`.
+
+    Why it is withdrawn, in order of force:
+      1. It decided by ASSERTION the question that is still open. Whether
+         array type may become a type parameter is decision packet 3
+         (`docs/DECISION_PACKETS.md`), OPEN. An amendment that grants it
+         is the resolution, and resolution is not an agent's to make.
+      2. It justified itself with "the 10H receipt, not theory". That
+         receipt is WITHDRAWN in `docs/goals/PHASE10H_TYPE_STABILITY.md`
+         — no code from that work item exists in this repository. §LXXII:
+         a receipt is evidence; a withdrawn receipt is not evidence.
+      3. The tree does not implement it and is not supposed to. All eleven
+         §XI families still declare `storage::Any`; the three `@test_broken`
+         gates in `test/test_type_stability.jl` are still Broken. The
+         METADATA rule above is unchanged and still binding.
+
+    Nothing else in §CIX reopens. The rule above stands exactly as written.
+
 Physical bytes are a realization of the logical object (Representation,
 Phase 10). Working-state representation is a lowering decision
 (KV memory program).
@@ -3632,6 +3792,90 @@ When the first persistence or cross-process consumer lands:
 
 In-memory sinks keep the UInt64. Hybrid is the law: local now, global at
 the serialization/swarm boundary. §LXIX: never silently reinterpret old ids.
+
+
+STORAGE ENCODING (Decision Packet 3 — OPEN, 2026-10-04)
+-------------------------------------------------------
+
+The METADATA rule in SEMANTICTENSOR/PARAMETER above is NOT resolved. The
+full option analysis, the measurements and the reversibility argument live
+in `docs/DECISION_PACKETS.md` PACKET 3. What follows is the canon-facing
+summary: the question, the four options, the measured price of not
+deciding, and what agents are forbidden to do meanwhile.
+
+QUESTION
+
+    Is the ARRAY TYPE that physically holds a tensor a TRAIT-equivalent
+    (possibly one type parameter `S` on the §XI family structs and on the
+    Session engine buffers), or does "never type parameters" above stand as
+    the end state?
+
+THE FOUR OPTIONS, none chosen
+
+    A   one storage type parameter `S`. The only option that makes
+        `@inferred decode!` / `@inferred reference_prefill` green by
+        construction. Also the widest: 44 `::Any` field declarations, the
+        structural-identity `==`, every construction site and every
+        extension method gain an `S` dimension, and one compiled method
+        instance per (array type x backend) on top of a launch count
+        §LXXXIII already names KEEP.
+
+    B   keep `storage::Any`, keep hoisting storage arrays into op bodies
+        by hand. Zero canon change, zero new type parameter. No
+        machine-checked end state: the `@test_broken` gates stay broken
+        forever and nothing prevents a new block from re-boxing.
+
+    C   a concretely-typed engine-side tensor bundle; the §XI families
+        keep `storage::Any` and keep their identity law. Narrowest hit on
+        the hot path, but it builds the parallel hierarchy 10H was told
+        not to build, and it still leaves the return-value gates broken.
+
+    D   declare the cost. Accept it, write the number into this section,
+        and stop spending sprint items rediscovering it.
+
+THE MEASURED PRICE OF NOT DECIDING (this box, this tree, 2026-10-04)
+
+    reproduce with:  julia --project=. scripts/p1_storage_any_cost.jl
+
+        toy2 CPU warmed `decode!` host allocation      10,912 B/token
+        allocations inside one warmed `decode!`      164 / 10,368 B
+        of which still boxing through `::Any`       8,088 B   (78%)
+        one `::Any` read                              39.792 B
+          (39.824 B through `::Any` vs 0.032 B through a typed field)
+        `::Any` field declarations on the decode path        44
+
+    The attribution is not theory. Three structs with BYTE-IDENTICAL read
+    patterns (`x.storage[1, 1]`) differ only in the field declaration:
+    `Gesso.Activation` does not infer, a replica with `storage::S` does.
+    The field declaration is the whole difference, so no further local
+    rewriting reaches it.
+
+    10E and 10F already took 8.0x off this number (87,008 B -> 10,912 B on
+    toy2 CPU) WITHOUT changing a field type, by hoisting storage arrays
+    into the op bodies. That mechanism is correct and is now close to
+    exhausted: 78% of what is left is one dynamic read per weight per
+    block.
+
+INTERIM LAW, until this packet resolves into canon
+
+    1. `storage::Any` stands on all eleven §XI families, and `::Any` on
+       `Session.{model,tensors,tokenizer,h,ws}` and on `DecodeWorkspace`.
+       No work item may parameterize them (that is option A).
+    2. The three executable `@test_broken` gates in
+       `test/test_type_stability.jl` STAY broken. They are load-bearing:
+       `@test_broken` ERRORS if the expression starts passing, which is
+       what forces this packet open on purpose if a change resolves it by
+       accident.
+    3. Removing allocation boxing by hoisting (option B) is ALLOWED and is
+       not packet resolution. 10E and 10F did it. What is forbidden is
+       changing a field type, adding a storage type parameter, or adding a
+       parallel typed bundle.
+    4. `docs/DECISION_PACKETS.md` PACKET 3 is the record. This section is
+       the canon-facing summary and does not supersede it.
+
+Resolution happens here, in canon, by choosing A, B, C or D and writing the
+choice into this section. It is not made by an agent implementing one
+option and calling it done.
 
 
 WHAT PHASE 1 IMPLEMENTS
