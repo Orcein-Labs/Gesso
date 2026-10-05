@@ -195,6 +195,13 @@ is rejected: §XLII already names it as a receipt id.
 Until it is resolved into canon, the three `@test_broken` gates in
 `test/test_type_stability.jl` STAY broken and no field type changes.
 
+**Canon-facing summary: `docs/Gesso_Stack.md` §CIX, section
+`STORAGE ENCODING (Decision Packet 3 — OPEN, 2026-10-04)`.** That section
+carries the question, the four options, the measured price and the interim
+law. The same edit WITHDRAWN the `§CIX AMENDMENT (Phase 10H, 2026-10-03)`
+that had already granted option A by assertion, citing a withdrawn receipt.
+This file remains the full record; canon does not supersede it.
+
 **QUESTION**
 §CIX says storage pointer and device residency are METADATA, never type
 parameters, and every §XI family is written that way: `storage::Any`.
@@ -470,4 +477,6 @@ warmed `decode!` host allocation 8.0x under it and measured what is left
 (8,088 B of 10,368 B, 78%, still boxing through `::Any`). The three
 `@test_broken` gates in `test/test_type_stability.jl` remain Broken and
 load-bearing. Resolution happens in §CIX; do not resolve it by
-parameterising a family.
+parameterising a family. Canon now carries the question, the four options,
+the measurements and the interim law as `STORAGE ENCODING (Decision
+Packet 3 — OPEN, 2026-10-04)`.
