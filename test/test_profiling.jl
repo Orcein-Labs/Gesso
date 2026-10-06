@@ -63,12 +63,28 @@ _prof_session(model, ts; kw...) =
         reports = Gesso.Profiling.engine_report(sink)
         @test length(reports) == 1
         rep = reports[1]
-        for k in (:prefill_ns, :decode_ns, :ttft_ns, :kv_bytes, :kv_len)
+        for k in (
+            :prefill_ns,
+            :decode_ns,
+            :ttft_ns,
+            :ttft_ms,
+            :decode_tokens_per_s,
+            :decode_ms_per_token,
+            :kv_bytes,
+            :kv_len,
+        )
             @test haskey(rep, k)
         end
         @test rep.prefill_ns isa UInt64
         @test rep.decode_ns isa UInt64
         @test rep.ttft_ns isa UInt64
+        @test rep.ttft_ms isa Float64
+        @test rep.decode_tokens_per_s isa Float64
+        @test rep.decode_ms_per_token isa Float64
+        @test rep.decode_tokens_per_s ≈
+              Float64(rep.new_tokens) * 1.0e9 / Float64(rep.decode_ns)
+        @test rep.decode_ms_per_token ≈
+              Float64(rep.decode_ns) / 1.0e6 / Float64(rep.new_tokens)
         @test rep.kv_bytes isa Int
         @test rep.kv_len isa Int
         @test rep.task == :generate
@@ -119,6 +135,9 @@ _prof_session(model, ts; kw...) =
         text = sprint(Gesso.Profiling.print_report, r)
         @test occursin("task=generate", text)
         @test occursin("prefill_ns=", text)
+        @test occursin("ttft_ms=", text)
+        @test occursin("decode_tok_s=", text)
+        @test occursin("decode_ms_per_token=", text)
         @test occursin("kv_bytes=", text)
         @test occursin("failed=false", text)
     end
