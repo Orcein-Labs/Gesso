@@ -85,8 +85,28 @@ function _project(r::Receipt)
         decode_ns=get(t, :decode_ns, nothing),
         ttft_ns=get(t, :ttft_ns, nothing),
         total_ns=get(t, :total_ns, nothing),
+        ttft_ms=get(t, :ttft_ns, nothing) === nothing ? nothing :
+                Float64(get(t, :ttft_ns, nothing)) / 1.0e6,
+        prefill_ms=get(t, :prefill_ns, nothing) === nothing ? nothing :
+                   Float64(get(t, :prefill_ns, nothing)) / 1.0e6,
+        decode_ms=get(t, :decode_ns, nothing) === nothing ? nothing :
+                  Float64(get(t, :decode_ns, nothing)) / 1.0e6,
+        total_ms=get(t, :total_ns, nothing) === nothing ? nothing :
+                 Float64(get(t, :total_ns, nothing)) / 1.0e6,
         prompt_tokens=get(tu, :prompt_tokens, nothing),
         new_tokens=get(tu, :new_tokens, nothing),
+        decode_tokens_per_s=begin
+            dns = get(t, :decode_ns, nothing)
+            ntok = get(tu, :new_tokens, nothing)
+            dns === nothing || ntok === nothing || dns == 0 || ntok == 0 ?
+                nothing : Float64(ntok) * 1.0e9 / Float64(dns)
+        end,
+        decode_ms_per_token=begin
+            dns = get(t, :decode_ns, nothing)
+            ntok = get(tu, :new_tokens, nothing)
+            dns === nothing || ntok === nothing || ntok == 0 ?
+                nothing : Float64(dns) / 1.0e6 / Float64(ntok)
+        end,
         total_tokens=get(tu, :total_tokens, nothing),
         kv_bytes=get(m, :kv_bytes, nothing),
         page_count=get(m, :page_count, nothing),
@@ -132,6 +152,9 @@ function print_report(io::IO, r::Receipt)
     print(io, " decode_ns=", p.decode_ns)
     print(io, " ttft_ns=", p.ttft_ns)
     print(io, " total_ns=", p.total_ns)
+    print(io, " ttft_ms=", p.ttft_ms)
+    print(io, " decode_tok_s=", p.decode_tokens_per_s)
+    print(io, " decode_ms_per_token=", p.decode_ms_per_token)
     print(io, " prompt_tokens=", p.prompt_tokens)
     print(io, " new_tokens=", p.new_tokens)
     print(io, " kv_bytes=", p.kv_bytes)
