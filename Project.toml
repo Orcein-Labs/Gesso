@@ -2,6 +2,7 @@ name = "Gesso"
 uuid = "05f31162-62af-44f0-af37-0e48a49f1899"
 version = "0.1.0"
 authors = ["Matt <liravossai@gmail.com>"]
+license = "MIT"
 
 [deps]
 # Intentionally minimal (Phase 0, Gesso_Stack.md §LXXIII).

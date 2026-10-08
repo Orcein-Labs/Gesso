@@ -167,3 +167,8 @@ julia --project=. -e 'using Pkg; Pkg.instantiate(); Pkg.activate("test"); Pkg.in
 julia --project=test --check-bounds=yes test/runtests.jl
 julia --project=benchmark benchmark/runbenchmarks.jl
 ```
+
+## License
+
+Gesso is open source under the [MIT License](LICENSE).
+
