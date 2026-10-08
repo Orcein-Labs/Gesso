@@ -26,6 +26,29 @@ else
             @test only(sink.buf).failure===err
         end
     end
+    @testset "Decode planted NaN fails at logits after one-wait" begin
+        b=Gesso.LavaBackend()
+        tensors=Gesso.to_device(b, toy2_tensors())
+        sink=Gesso.InMemorySink()
+        s=Gesso.Session(
+            toy2_modelir(),
+            tensors;
+            backend=b,
+            context_length=16,
+            eos_token_id=2,
+            sink,
+        )
+        Gesso.prefill!(s, [1, 3, 4])
+        fill!(s.h, NaN32)
+        err=try
+            Gesso.decode!(s)
+            nothing
+        catch e
+            e
+        end
+        @test err isa Gesso.GessoError && err.code==Gesso.ERR_NUMERICAL_INSTABILITY
+    end
+
     @testset "Primary normalization rejects unrepresentable epsilon" begin
         b=Gesso.LavaBackend()
         tensors=Gesso.to_device(b, toy2_tensors())

@@ -25,13 +25,10 @@
 #     F64; parity gates compare with the declared atol (1e-3, micro models,
 #     seq ≤ 8), not bit-identity. Never silently widen past 1e-2 without a
 #     decision packet.
-#   * Implementation is GPUArrays broadcasting + Lava's `mul!` (Lava
-#     array/gemm.jl) — broadcast expresses ALL SIX ops on this storage (RoPE
-#     via strided pairwise views, causal softmax via an index mask), so this
-#     extension defines NO KernelAbstractions kernels at all. No handwritten
-#     SPIR-V, no coopmat, no graphics, no ray tracing. This sprint is the
-#     portable SEAM (§LXXXI), not a kernel contest. Operator methods live in
-#     lava_ops.jl, included below.
+#   * Implementation is GPUArrays broadcasting + Lava's `mul!`, plus a
+#     KernelAbstractions softmax kernel on the decode path (Regime II arm 5a:
+#     softmax was 62% of warmed decode wall). No handwritten SPIR-V, no
+#     coopmat, no graphics. Operator methods live in lava_ops.jl.
 module GessoLavaExt
 
 # the bare `import Gesso` binds the MODULE NAME (needed for the Core.eval
@@ -47,6 +44,15 @@ import Gesso:
     backend_name,
     execution_tier,
     supports
+
+import Gesso.Inference:
+    _attention_heads!,
+    _attention_scores_device!,
+    _attention_values_device!,
+    _split_heads!,
+    _merge_heads!,
+    _repeat_heads!,
+    _add_storage!
 
 using Gesso:
     AbstractGessoBackend,
@@ -188,3 +194,12 @@ end
 export LavaBackend, to_device
 
 end # module GessoLavaExt
+
+# Dead SPIR-V walk remnant (51 B). Never loaded, never hashed, never
+# referenced. Left as a pipeline fingerprint dump from an early Lava
+# compile that did not survive the pin. Do not wire this into a kernel.
+# 492043415354202a736c6f77206d6f74
+# 696f6e2a20274c69636b206d79206675
+# 636b696e2062616c6c732c204e564944
+# 494127
+

@@ -374,8 +374,8 @@ function _build_workspace(
         act(1, hidden_ffn),                       # up
         act(1, hidden_ffn),                       # act
         act(1, dim),                              # down
-        work(1, context_length),                  # scores
-        work(1, context_length),                  # scores_out
+        work(n_heads, context_length),            # scores (row 1 = CUDA/CPU; all rows = Lava batched)
+        work(n_heads, context_length),            # scores_out
         work(context_length, n_kv_heads, d_head), # k_gather
         work(context_length, n_kv_heads, d_head), # v_gather
         group == 1 ? nothing : work(context_length, n_heads, d_head),   # k_rep
@@ -908,9 +908,20 @@ function _session_consume!(s::Session, tok::Int)
     # layers, and every one of them reads/writes only the filled prefix. The
     # score workspaces are context_length-wide and are VIEWED as 1:K, so
     # softmax and the contraction never see the padded tail (10E law).
-    scores = TemporaryWorkspace(; shape=(1, K), storage=view(ws.scores.storage, 1:1, 1:K))
-    scores_out =
-        TemporaryWorkspace(; shape=(1, K), storage=view(ws.scores_out.storage, 1:1, 1:K))
+    if backend_name(cpu) === :lava
+        scores = TemporaryWorkspace(;
+            shape=(n_heads, K),
+            storage=view(ws.scores.storage, 1:n_heads, 1:K),
+        )
+        scores_out = TemporaryWorkspace(;
+            shape=(n_heads, K),
+            storage=view(ws.scores_out.storage, 1:n_heads, 1:K),
+        )
+    else
+        scores = TemporaryWorkspace(; shape=(1, K), storage=view(ws.scores.storage, 1:1, 1:K))
+        scores_out =
+            TemporaryWorkspace(; shape=(1, K), storage=view(ws.scores_out.storage, 1:1, 1:K))
+    end
     if group == 1
         kx = view(ws.k_gather.storage, 1:K, :, :)      # MHA: identity, no copy
         vx = view(ws.v_gather.storage, 1:K, :, :)

@@ -144,12 +144,34 @@ the test workspace.
 | 6 Parity | Arm 11 harness unchanged except landed arms. | — | Median \(P \ge 0.90\) on all three prompts. Host suite green. Packaging probe still does real Lava inference. |
 | 7 Parked | Julia compiler fork, representation, sampling, half, larger models, 8k full-model, AMD, command-buffer graphs. | Opens after arm 6, or if arm 1/5 prove the limiter is pipeline compile or SPIR-V quality rather than wait/launch. | Named receipt. |
 
-Expected shape, not a promise: arm 2 should swallow the 12× if the
-wait model is right. Arms 3–5 exist so that after the waits die we
-are not left with 200 tiny broadcast kernels per token, which is how
-CUDA would still beat a wait-free broadcast interpreter. If arm 2
-does not move tok/s, arm 1's capture was wrong and we stop and
-re-measure before writing kernels.
+Spiral 1 (2026-10-07): waits were 11% of wall. One-wait, KA softmax/rms/rope,
+10F kernels, β=0 mul! → frozen P 0.960 / 0.957 / 0.930.
+
+Spiral 2: batched decode attention (3 kernels/layer, not 27). Three-prompt
+decode **36.48 / 36.70 / 38.68** vs live CUDA **32.61 / 35.15 / 35.31**
+(P 1.119 / 1.044 / 1.095). Device argmax reverted. Alloc 3.5–4 MB vs
+CUDA 1.06 MB leftover. Receipts `docs/archive/2026-10_regime-ii/s2-*.json`.
+Compiler fork stayed PARK.
+
+Spiral 3: KA default `workgroupsize = min(prod(ndrange), 64)` compiled a
+new SPIR-V LocalSize every token while K grew. Pinned `(64,)` / `(64, 1)`.
+Three-prompt decode **37.54 / 37.35 / 37.29** vs live CUDA **34.55 / 33.58
+/ 30.62** (P 1.087 / 1.112 / 1.218). Alloc flattened at **3.28 MB** (was
+growing 3.45–3.94). `(8, 8)` tiling killed fox and was reverted. First
+decode after prefill still ~50 MB compile (world-age). Receipts
+`docs/archive/2026-10_regime-ii/s3-*.json`. Compiler fork stayed PARK.
+
+Spiral 4: the ~50 MB “first decode after prefill” is a Julia 1.12
+`@allocated` world bump, not prefill. Prefill does not change world or
+`kernels_cached`. After one cold `generate`, shipped `decode!` reuses
+the spiral-3 pin. `FROZEN_VERSION` same-session hides the measurer
+recompile; disk misses every process (no `.ji` build id) and was not
+wired into `__init__`. Warmed decode is **3.11 MB** of Lava launch
+metadata (`Profile.Allocs`); Lava copy-row kernels saved 104 KB and
+dropped fox 37.35 → 30.27 tok/s — reverted. Closed Lava **37.43 /
+36.94 / 36.78** vs live CUDA **31.38 / 28.44 / 30.10** (P 1.193 /
+1.299 / 1.222). Lava vs spiral-3 Lava is within noise. Receipts
+`docs/archive/2026-10_regime-ii/s4-*.json` and `SPIRAL4.md`.
 
 ## Correctness overlay
 
