@@ -1,0 +1,55 @@
+WARNING: Imported binding Gesso.PrefillWorkload was undeclared at import time during import to Inference.
+WARNING: Imported binding Gesso.DecodeWorkload was undeclared at import time during import to Inference.
+WARNING: Imported binding Gesso.KVCache was undeclared at import time during import to Inference.
+┌ Info: Lava: initialized Vulkan device with RT
+│   device = "NVIDIA GeForce RTX 5060"
+│   queue_family = 0x00000000
+│   handle_size = 0x00000020
+│   max_recursion = 0x0000001f
+│   validation = false
+│   gpu_assisted = false
+│   sync_val = false
+└   debug_utils = true
+┌ Warning: Vulkan driver note (type=1, not a validation error)
+│   message = "loader_create_device_chain: Failed to find 'vkGetInstanceProcAddr' in layer \"/home/mattc/.local/share/vulkan/implicit_layer.d/../../../lib/liblsfg-vk-layer.so\".  Skipping layer."
+└ @ Lava ~/.julia/packages/Lava/V2Q5P/src/runtime/device.jl:1799
+Test Summary:                 | Pass  Total  Time
+cpu embedding_lookup! (§LXXV) |    1      1  0.5s
+Test Summary:        | Pass  Total  Time
+cpu rmsnorm! (§LXXV) |    5      5  0.8s
+Test Summary:                            | Pass  Total  Time
+cpu rope! (§LXXV): LLaMA pairwise rotate |    3      3  0.2s
+Test Summary:                       | Pass  Total  Time
+cpu matmul! (§LXXV): W is (out, in) |    1      1  0.2s
+Test Summary:                                    | Pass  Total  Time
+cpu softmax! (§LXXV): causal mask before softmax |    8      8  0.7s
+Test Summary:                                               | Pass  Total  Time
+cpu softmax! (§LXXV): decode row attends to the whole cache |    1      1  0.0s
+Test Summary:       | Pass  Total  Time
+cpu swiglu! (§LXXV) |    1      1  0.3s
+Test Summary:                                                                 | Pass  Total  Time
+cpu: decode workload shares prefill math (goal: identical elementwise/matmul) |    3      3  0.4s
+Test Summary:                              | Pass  Total  Time
+cpu: stub invariants survive (§LXX, §LXXV) |    6      6  0.1s
+Test Summary:                                  | Pass  Total     Time
+lava embedding_lookup!: rows land, 0-based ids |    1      1  1m40.0s
+Test Summary:                                   | Pass  Total   Time
+lava rmsnorm!: matches CPU F64 within atol=1e-3 |    2      2  15.7s
+Test Summary:                                                 | Pass  Total  Time
+lava rope!: pairwise rotate on device (position 0 = identity) |    4      4  5.7s
+Test Summary:                                    | Pass  Total  Time
+lava softmax!: causal mask + stability on device |    5      5  8.4s
+Test Summary:                                      | Pass  Total  Time
+lava swiglu! + matmul!: match CPU within atol=1e-3 |    2      2  3.4s
+Test Summary:                                                   | Pass  Total  Time
+lava: host storage through a Lava op is ERR_INVALID_PLAN (§LXX) |    3      3  0.1s
+Test Summary:                                      | Pass  Total  Time
+lava: quantize!/dequantize! still decline (§LXXXI) |    2      2  0.1s
+Test Summary:                                                   | Pass  Total  Time
+to_device: F64→F32 copy, source untouched, tied head stays tied |    7      7  0.2s
+Test Summary:                 | Pass  Total  Time
+Explicit CPU storage boundary |    4      4  0.3s
+Test Summary:                          | Pass  Total  Time
+Actual Lava backend/storage boundaries |    7      7  0.8s
+Test Summary:                                       | Pass  Total   Time
+Primary Lava real-model interpreter external parity |    6      6  54.5s

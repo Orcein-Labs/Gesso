@@ -1,0 +1,32 @@
+WARNING: Imported binding Gesso.PrefillWorkload was undeclared at import time during import to Inference.
+WARNING: Imported binding Gesso.DecodeWorkload was undeclared at import time during import to Inference.
+WARNING: Imported binding Gesso.KVCache was undeclared at import time during import to Inference.
+┌ Info: CUDA independent parity
+│   prompt = "Hello"
+└   delta = 0.00010967254638671875
+┌ Info: CUDA independent parity
+│   prompt = "The quick brown fox"
+└   delta = 6.80685043334961e-5
+┌ Info: CUDA independent parity
+│   prompt = "Julia is a programming language."
+└   delta = 2.9087066650390625e-5
+┌ Info: Warmed CUDA decode allocation
+└   bytes = 1103680
+ERROR: LoadError: Some tests did not pass: 8 passed, 1 failed, 0 errored, 0 broken.
+in expression starting at /home/mattc/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/gesso/test/regime_i_cuda.jl:11
+Regime I CUDA real-model parity and memory: Test Failed at /home/mattc/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/gesso/test/regime_i_cuda.jl:61
+  Expression: bytes <= 1024 ^ 2
+   Evaluated: 1103680 <= 1048576
+
+Stacktrace:
+ [1] macro expansion
+   @ ~/.julia/juliaup/julia-1.12.6+0.x64.linux.gnu/share/julia/stdlib/v1.12/Test/src/Test.jl:680 [inlined]
+ [2] macro expansion
+   @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/gesso/test/regime_i_cuda.jl:61 [inlined]
+ [3] macro expansion
+   @ ~/.julia/juliaup/julia-1.12.6+0.x64.linux.gnu/share/julia/stdlib/v1.12/Test/src/Test.jl:1777 [inlined]
+ [4] top-level scope
+   @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/gesso/test/regime_i_cuda.jl:12
+Test Summary:                              | Pass  Fail  Total     Time
+Regime I CUDA real-model parity and memory |    8     1      9  1m40.2s
+RNG of the outermost testset: Random.Xoshiro(0x52dbf7b9541ddb0c, 0x93a9d22efa1efb21, 0x208e09551cc4d27e, 0xfba5991e254cc07c, 0x9226ccc2d76c2c49)

@@ -1,0 +1,61 @@
+ERROR: LoadError: Some tests did not pass: 1 passed, 1 failed, 0 errored, 0 broken.
+in expression starting at /home/mattc/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/gesso/test/test_cuda_inference.jl:21
+in expression starting at /home/mattc/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/arm12-cuda-targeted.jl:9
+Test Summary:                                        | Pass  Total  Time
+ModelIR primitives (§CIX): construction + validation |   11     11  0.4s
+Test Summary:                                    | Pass  Total  Time
+ModelIR (§CIX): toy2 round-trip from the fixture |    8      8  1.5s
+Test Summary:                          | Pass  Total  Time
+ModelIR (§CIX): identity is structural |    6      6  0.0s
+Test Summary:                              | Pass  Total  Time
+ModelIR (§CIX): nodes are immutable values |    5      5  0.0s
+Test Summary:                                              | Pass  Total   Time
+prefill oracle: shape + determinism (atol=0, same process) |    4      4  12.4s
+Test Summary:                                                      | Pass  Total  Time
+prefill oracle: causal property (position 0 cannot see position 3) |    3      3  0.1s
+Test Summary:                                                        | Pass  Total  Time
+prefill oracle: last-position argmax drives generation (item C seam) |    4      4  0.1s
+Test Summary:                                                | Pass  Total  Time
+prefill oracle: greedy path is stable under prompt prefixing |    4      4  0.2s
+Test Summary:                                                              | Pass  Total  Time
+known logits: persisted slot vs recomputed (atol=1e-10, cross-commit gate) |    5      5  0.0s
+Test Summary:                                 | Pass  Total  Time
+load_llama_config: validates the micro config |    9      9  6.7s
+Test Summary:                                           | Pass  Total  Time
+config_to_model: composition is a Model, GQA-expressive |    8      8  0.2s
+Test Summary:                                   | Pass  Total  Time
+config refusals name the offending field (§LXX) |   21     21  5.0s
+Test Summary:                                    | Pass  Total  Time
+load_safetensors: all four dtypes upcast EXACTLY |    5      5  2.1s
+Test Summary:                                                     | Pass  Total  Time
+load_safetensors: unsupported dtype and bad span error with names |    3      3  0.1s
+Test Summary:                                                    | Pass  Total  Time
+load_llama end-to-end: prefill runs, deterministic, shapes right |   14     14  5.5s
+Test Summary:                                 | Pass  Total  Time
+load_llama: sharded checkpoint via weight_map |    3      3  0.1s
+Test Summary:                                                   | Pass  Total  Time
+load_llama: unknown / missing / untied keys error WITH THE NAME |    7      7  0.1s
+Test Summary:                                                                      | Pass  Total  Time
+materialize_llama: 0-based HF layers load; 1-based fixtures still load; mix errors |   12     12  0.0s
+Test Summary:                                                                        | Pass  Total  Time
+materialize_llama: leftover real weight still errors; rotary_emb.inv_freq is ignored |    8      8  0.0s
+Test Summary:                                                            | Pass  Total  Time
+materialize_llama: absent model.norm ⇒ final_rms is nothing (toy2 shape) |    1      1  0.0s
+Test Summary:                                                     | Pass  Total  Time
+gqa micro checkpoint: interpreter GQA path matches repeat formula |    1      1  0.8s
+toy2 CUDA prefill vs CPU oracle (atol=1e-3): Test Failed at /home/mattc/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/gesso/test/test_cuda_inference.jl:40
+  Expression: approx_eq(got, cpu_logits; atol = 0.001)
+
+Stacktrace:
+ [1] top-level scope
+   @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/gesso/test/test_cuda_inference.jl:34
+ [2] macro expansion
+   @ ~/.julia/juliaup/julia-1.12.6+0.x64.linux.gnu/share/julia/stdlib/v1.12/Test/src/Test.jl:1777 [inlined]
+ [3] macro expansion
+   @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/gesso/test/test_cuda_inference.jl:40 [inlined]
+ [4] macro expansion
+   @ ~/.julia/juliaup/julia-1.12.6+0.x64.linux.gnu/share/julia/stdlib/v1.12/Test/src/Test.jl:680 [inlined]
+toy2 cuda-vs-cpu max|Δlogit| = 0.0013446400256498237
+Test Summary:                               | Pass  Fail  Total     Time
+toy2 CUDA prefill vs CPU oracle (atol=1e-3) |    1     1      2  1m14.6s
+RNG of the outermost testset: Random.Xoshiro(0x4e01d2989e0ca185, 0xd3b6f350e3d060a2, 0x84546ed4650f8765, 0x7791f6cfbec639e5, 0xa3ca965f7a36fda7)

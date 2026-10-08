@@ -1,0 +1,1168 @@
+Relocated fresh-depot lava real inference: Error During Test at /home/mattc/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/relocated-gesso/test/regime_i_package.jl:23
+  Got exception outside of a @test
+  GessoError(ERR_RUNTIME): engine operation failed  detail = Dict{Symbol, Any}(:cause => "LavaCompilationError during kernel compilation:\n  Cannot compile DataType(typeof(AcceleratedKernels.gpu__mapreduce_block!), KernelAbstractions.CompilerMetadata{KernelAbstractions.NDIteration.DynamicSize, KernelAbstractions.NDIteration.DynamicCheck, Nothing, CartesianIndices{1, Tuple{Base.OneTo{Int64}}}, KernelAbstractions.NDIteration.NDRange{1, KernelAbstractions.NDIteration.DynamicSize, KernelAbstractions.NDIteration.StaticSize{(64,)}, CartesianIndices{1, Tuple{Base.OneTo{Int64}}}, Nothing}}, SubArray{Float32, 1, Base.ReshapedArray{Float32, 1, SubArray{Float32, 2, LavaDeviceArray{Float32, 2}, Tuple{UnitRange{Int64}, Base.Slice{Base.OneTo{Int64}}}, false}, Tuple{Base.MultiplicativeInverses.SignedMultiplicativeInverse{Int64}}}, Tuple{UnitRange{Int64}}, false}, LavaDeviceArray{Float32, 1}, typeof(abs2), typeof(+), Float32) to GPU code\n\n  Call chain(s) with GPU-incompatible code:\n  1. gpu__mapreduce_block! @ ./none:0 → macro expansion @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/mapreduce_1d_gpu.jl:19 → setindex! @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/Lava/V2Q5P/src/array/ka_backend.jl:1261\n     Problem: dynamic dispatch (type instability)\n  2. gpu__mapreduce_block! @ ./none:0 → macro expansion @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/mapreduce_1d_gpu.jl:21 → setindex! @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/Lava/V2Q5P/src/array/ka_backend.jl:1261\n     Problem: dynamic dispatch (type instability)\n  3. gpu__mapreduce_block! @ ./none:0 → macro expansion @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/mapreduce_1d_gpu.jl:23 → setindex! @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/Lava/V2Q5P/src/array/ka_backend.jl:1261\n     Problem: dynamic dispatch (type instability)\n  4. gpu__mapreduce_block! @ ./none:0 → macro expansion @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/mapreduce_1d_gpu.jl:28 → reduce_group! @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/utilities.jl:68 → getindex @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/Lava/V2Q5P/src/array/ka_backend.jl:1256\n     Problem: dynamic dispatch (type instability)\n  5. gpu__mapreduce_block! @ ./none:0 → macro expansion @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/mapreduce_1d_gpu.jl:28 → reduce_group! @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/utilities.jl:68\n     Problem: dynamic dispatch (type instability)\n  6. gpu__mapreduce_block! @ ./none:0 → macro expansion @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/mapreduce_1d_gpu.jl:28 → reduce_group! @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/utilities.jl:68 → setindex! @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/Lava/V2Q5P/src/array/ka_backend.jl:1261\n     Problem: dynamic dispatch (type instability)\n  7. gpu__mapreduce_block! @ ./none:0 → macro expansion @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/mapreduce_1d_gpu.jl:28 → reduce_group! @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/utilities.jl:74 → getindex @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/Lava/V2Q5P/src/array/ka_backend.jl:1256\n     Problem: dynamic dispatch (type instability)\n  8. gpu__mapreduce_block! @ ./none:0 → macro expansion @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/mapreduce_1d_gpu.jl:28 → reduce_group! @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/utilities.jl:74\n     Problem: dynamic dispatch (type instability)\n  9. gpu__mapreduce_block! @ ./none:0 → macro expansion @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/mapreduce_1d_gpu.jl:28 → reduce_group! @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/utilities.jl:74 → setindex! @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/Lava/V2Q5P/src/array/ka_backend.jl:1261\n     Problem: dynamic dispatch (type instability)\n  10. gpu__mapreduce_block! @ ./none:0 → macro expansion @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/mapreduce_1d_gpu.jl:28 → reduce_group! @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/utilities.jl:80 → getindex @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/Lava/V2Q5P/src/array/ka_backend.jl:1256\n     Problem: dynamic dispatch (type instability)\n  11. gpu__mapreduce_block! @ ./none:0 → macro expansion @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/mapreduce_1d_gpu.jl:28 → reduce_group! @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/utilities.jl:80\n     Problem: dynamic dispatch (type instability)\n  12. gpu__mapreduce_block! @ ./none:0 → macro expansion @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/mapreduce_1d_gpu.jl:28 → reduce_group! @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/utilities.jl:80 → setindex! @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/Lava/V2Q5P/src/array/ka_backend.jl:1261\n     Problem: dynamic dispatch (type instability)\n  13. gpu__mapreduce_block! @ ./none:0 → macro expansion @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/mapreduce_1d_gpu.jl:28 → reduce_group! @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/utilities.jl:86 → getindex @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/Lava/V2Q5P/src/array/ka_backend.jl:1256\n     Problem: dynamic dispatch (type instability)\n  14. gpu__mapreduce_block! @ ./none:0 → macro expansion @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/mapreduce_1d_gpu.jl:28 → reduce_group! @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/utilities.jl:86\n     Problem: dynamic dispatch (type instability)\n  15. gpu__mapreduce_block! @ ./none:0 → macro expansion @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/mapreduce_1d_gpu.jl:28 → reduce_group! @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/utilities.jl:86 → setindex! @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/Lava/V2Q5P/src/array/ka_backend.jl:1261\n     Problem: dynamic dispatch (type instability)\n  16. gpu__mapreduce_block! @ ./none:0 → macro expansion @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/mapreduce_1d_gpu.jl:28 → reduce_group! @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/utilities.jl:92 → getindex @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/Lava/V2Q5P/src/array/ka_backend.jl:1256\n     Problem: dynamic dispatch (type instability)\n  17. gpu__mapreduce_block! @ ./none:0 → macro expansion @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/mapreduce_1d_gpu.jl:28 → reduce_group! @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/utilities.jl:92\n     Problem: dynamic dispatch (type instability)\n  18. gpu__mapreduce_block! @ ./none:0 → macro expansion @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/mapreduce_1d_gpu.jl:28 → reduce_group! @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/utilities.jl:92 → setindex! @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/Lava/V2Q5P/src/array/ka_backend.jl:1261\n     Problem: dynamic dispatch (type instability)\n  19. gpu__mapreduce_block! @ ./none:0 → macro expansion @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/mapreduce_1d_gpu.jl:28 → reduce_group! @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/utilities.jl:98 → getindex @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/Lava/V2Q5P/src/array/ka_backend.jl:1256\n     Problem: dynamic dispatch (type instability)\n  20. gpu__mapreduce_block! @ ./none:0 → macro expansion @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/mapreduce_1d_gpu.jl:28 → reduce_group! @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/utilities.jl:98\n     Problem: dynamic dispatch (type instability)\n  21. gpu__mapreduce_block! @ ./none:0 → macro expansion @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/mapreduce_1d_gpu.jl:28 → reduce_group! @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/utilities.jl:98 → setindex! @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/Lava/V2Q5P/src/array/ka_backend.jl:1261\n     Problem: dynamic dispatch (type instability)\n  22. gpu__mapreduce_block! @ ./none:0 → macro expansion @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/mapreduce_1d_gpu.jl:44 → getindex @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/Lava/V2Q5P/src/array/ka_backend.jl:1256\n     Problem: dynamic dispatch (type instability)\n  23. gpu__mapreduce_block! @ ./none:0 → macro expansion @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/mapreduce_1d_gpu.jl:44 → setindex! @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/Lava/V2Q5P/src/array/ka_backend.jl:973\n     Problem: dynamic dispatch (type instability)\n\n  Suggestion: Type instability: the function contains dynamic dispatch. Ensure all types are inferrable — use @code_warntype to check.\n  Method lookup at runtime: an operation doesn't have a concrete method for the given types. Check that all operations are GPU-compatible.\n\n  Raw error (full GPUCompiler output):\n  InvalidIRError: compiling MethodInstance for AcceleratedKernels.gpu__mapreduce_block!(::KernelAbstractions.CompilerMetadata{KernelAbstractions.NDIteration.DynamicSize, KernelAbstractions.NDIteration.DynamicCheck, Nothing, CartesianIndices{1, Tuple{Base.OneTo{Int64}}}, KernelAbstractions.NDIteration.NDRange{1, KernelAbstractions.NDIteration.DynamicSize, KernelAbstractions.NDIteration.StaticSize{(64,)}, CartesianIndices{1, Tuple{Base.OneTo{Int64}}}, Nothing}}, ::SubArray{Float32, 1, Base.ReshapedArray{Float32, 1, SubArray{Float32, 2, LavaDeviceArray{Float32, 2}, Tuple{UnitRange{Int64}, Base.Slice{Base.OneTo{Int64}}}, false}, Tuple{Base.MultiplicativeInverses.SignedMultiplicativeInverse{Int64}}}, Tuple{UnitRange{Int64}}, false}, ::LavaDeviceArray{Float32, 1}, ::typeof(abs2), ::typeof(+), ::Float32) resulted in invalid LLVM IR\nReason: unsupported dynamic function invocation (call to pointerset(ptr::Core.LLVMPtr{T, A}, x::T, i::Int64, ::Val{align}) where {T, A, align} @ LLVM.Interop none:0)\nStacktrace:\n [1] unsafe_store! (repeats 2 times)\n   @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/LLVM/JGisQ/src/interop/pointer.jl:95\n [2] setindex!\n   @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/Lava/V2Q5P/src/array/ka_backend.jl:1261\n [3] macro expansion\n   @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/mapreduce_1d_gpu.jl:19\n [4] gpu__mapreduce_block!\n   @ ./none:0\nReason: unsupported dynamic function invocation (call to pointerset(ptr::Core.LLVMPtr{T, A}, x::T, i::Int64, ::Val{align}) where {T, A, align} @ LLVM.Interop none:0)\nStacktrace:\n [1] unsafe_store! (repeats 2 times)\n   @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/LLVM/JGisQ/src/interop/pointer.jl:95\n [2] setindex!\n   @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/Lava/V2Q5P/src/array/ka_backend.jl:1261\n [3] macro expansion\n   @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/mapreduce_1d_gpu.jl:21\n [4] gpu__mapreduce_block!\n   @ ./none:0\nReason: unsupported dynamic function invocation (call to pointerset(ptr::Core.LLVMPtr{T, A}, x::T, i::Int64, ::Val{align}) where {T, A, align} @ LLVM.Interop none:0)\nStacktrace:\n [1] unsafe_store! (repeats 2 times)\n   @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/LLVM/JGisQ/src/interop/pointer.jl:95\n [2] setindex!\n   @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/Lava/V2Q5P/src/array/ka_backend.jl:1261\n [3] macro expansion\n   @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/mapreduce_1d_gpu.jl:23\n [4] gpu__mapreduce_block!\n   @ ./none:0\nReason: unsupported dynamic function invocation (call to pointerref(ptr::Core.LLVMPtr{T, A}, i::Int64, ::Val{align}) where {T, A, align} @ LLVM.Interop none:0)\nStacktrace:\n [1] unsafe_load (repeats 2 times)\n   @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/LLVM/JGisQ/src/interop/pointer.jl:92\n [2] getindex\n   @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/Lava/V2Q5P/src/array/ka_backend.jl:1256\n [3] reduce_group!\n   @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/utilities.jl:68\n [4] macro expansion\n   @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/mapreduce_1d_gpu.jl:28\n [5] gpu__mapreduce_block!\n   @ ./none:0\nReason: unsupported dynamic function invocation (call to +)\nStacktrace:\n [1] reduce_group!\n   @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/utilities.jl:68\n [2] macro expansion\n   @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/mapreduce_1d_gpu.jl:28\n [3] gpu__mapreduce_block!\n   @ ./none:0\nReason: unsupported dynamic function invocation (call to convert)\nStacktrace:\n [1] setindex!\n   @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/Lava/V2Q5P/src/array/ka_backend.jl:1261\n [2] reduce_group!\n   @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/utilities.jl:68\n [3] macro expansion\n   @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/mapreduce_1d_gpu.jl:28\n [4] gpu__mapreduce_block!\n   @ ./none:0\nReason: unsupported dynamic function invocation (call to convert)\nStacktrace:\n [1] unsafe_store! (repeats 2 times)\n   @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/LLVM/JGisQ/src/interop/pointer.jl:95\n [2] setindex!\n   @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/Lava/V2Q5P/src/array/ka_backend.jl:1261\n [3] reduce_group!\n   @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/utilities.jl:68\n [4] macro expansion\n   @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/mapreduce_1d_gpu.jl:28\n [5] gpu__mapreduce_block!\n   @ ./none:0\nReason: unsupported call to an unknown function (call to jl_f_throw_methoderror)\nStacktrace:\n [1] unsafe_store! (repeats 2 times)\n   @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/LLVM/JGisQ/src/interop/pointer.jl:95\n [2] setindex!\n   @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/Lava/V2Q5P/src/array/ka_backend.jl:1261\n [3] reduce_group!\n   @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/utilities.jl:68\n [4] macro expansion\n   @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/mapreduce_1d_gpu.jl:28\n [5] gpu__mapreduce_block!\n   @ ./none:0\nReason: unsupported dynamic function invocation (call to pointerset(ptr::Core.LLVMPtr{T, A}, x::T, i::Int64, ::Val{align}) where {T, A, align} @ LLVM.Interop none:0)\nStacktrace:\n [1] unsafe_store! (repeats 2 times)\n   @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/LLVM/JGisQ/src/interop/pointer.jl:95\n [2] setindex!\n   @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/Lava/V2Q5P/src/array/ka_backend.jl:1261\n [3] reduce_group!\n   @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/utilities.jl:68\n [4] macro expansion\n   @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/mapreduce_1d_gpu.jl:28\n [5] gpu__mapreduce_block!\n   @ ./none:0\nReason: unsupported dynamic function invocation (call to pointerref(ptr::Core.LLVMPtr{T, A}, i::Int64, ::Val{align}) where {T, A, align} @ LLVM.Interop none:0)\nStacktrace:\n [1] unsafe_load (repeats 2 times)\n   @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/LLVM/JGisQ/src/interop/pointer.jl:92\n [2] getindex\n   @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/Lava/V2Q5P/src/array/ka_backend.jl:1256\n [3] reduce_group!\n   @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/utilities.jl:74\n [4] macro expansion\n   @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/mapreduce_1d_gpu.jl:28\n [5] gpu__mapreduce_block!\n   @ ./none:0\nReason: unsupported dynamic function invocation (call to +)\nStacktrace:\n [1] reduce_group!\n   @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/utilities.jl:74\n [2] macro expansion\n   @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/mapreduce_1d_gpu.jl:28\n [3] gpu__mapreduce_block!\n   @ ./none:0\nReason: unsupported dynamic function invocation (call to convert)\nStacktrace:\n [1] setindex!\n   @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/Lava/V2Q5P/src/array/ka_backend.jl:1261\n [2] reduce_group!\n   @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/utilities.jl:74\n [3] macro expansion\n   @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/mapreduce_1d_gpu.jl:28\n [4] gpu__mapreduce_block!\n   @ ./none:0\nReason: unsupported dynamic function invocation (call to convert)\nStacktrace:\n [1] unsafe_store! (repeats 2 times)\n   @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/LLVM/JGisQ/src/interop/pointer.jl:95\n [2] setindex!\n   @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/Lava/V2Q5P/src/array/ka_backend.jl:1261\n [3] reduce_group!\n   @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/utilities.jl:74\n [4] macro expansion\n   @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/mapreduce_1d_gpu.jl:28\n [5] gpu__mapreduce_block!\n   @ ./none:0\nReason: unsupported call to an unknown function (call to jl_f_throw_methoderror)\nStacktrace:\n [1] unsafe_store! (repeats 2 times)\n   @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/LLVM/JGisQ/src/interop/pointer.jl:95\n [2] setindex!\n   @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/Lava/V2Q5P/src/array/ka_backend.jl:1261\n [3] reduce_group!\n   @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/utilities.jl:74\n [4] macro expansion\n   @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/mapreduce_1d_gpu.jl:28\n [5] gpu__mapreduce_block!\n   @ ./none:0\nReason: unsupported dynamic function invocation (call to pointerset(ptr::Core.LLVMPtr{T, A}, x::T, i::Int64, ::Val{align}) where {T, A, align} @ LLVM.Interop none:0)\nStacktrace:\n [1] unsafe_store! (repeats 2 times)\n   @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/LLVM/JGisQ/src/interop/pointer.jl:95\n [2] setindex!\n   @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/Lava/V2Q5P/src/array/ka_backend.jl:1261\n [3] reduce_group!\n   @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/utilities.jl:74\n [4] macro expansion\n   @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/mapreduce_1d_gpu.jl:28\n [5] gpu__mapreduce_block!\n   @ ./none:0\nReason: unsupported dynamic function invocation (call to pointerref(ptr::Core.LLVMPtr{T, A}, i::Int64, ::Val{align}) where {T, A, align} @ LLVM.Interop none:0)\nStacktrace:\n [1] unsafe_load (repeats 2 times)\n   @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/LLVM/JGisQ/src/interop/pointer.jl:92\n [2] getindex\n   @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/Lava/V2Q5P/src/array/ka_backend.jl:1256\n [3] reduce_group!\n   @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/utilities.jl:80\n [4] macro expansion\n   @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/mapreduce_1d_gpu.jl:28\n [5] gpu__mapreduce_block!\n   @ ./none:0\nReason: unsupported dynamic function invocation (call to +)\nStacktrace:\n [1] reduce_group!\n   @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/utilities.jl:80\n [2] macro expansion\n   @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/mapreduce_1d_gpu.jl:28\n [3] gpu__mapreduce_block!\n   @ ./none:0\nReason: unsupported dynamic function invocation (call to convert)\nStacktrace:\n [1] setindex!\n   @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/Lava/V2Q5P/src/array/ka_backend.jl:1261\n [2] reduce_group!\n   @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/utilities.jl:80\n [3] macro expansion\n   @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/mapreduce_1d_gpu.jl:28\n [4] gpu__mapreduce_block!\n   @ ./none:0\nReason: unsupported dynamic function invocation (call to convert)\nStacktrace:\n [1] unsafe_store! (repeats 2 times)\n   @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/LLVM/JGisQ/src/interop/pointer.jl:95\n [2] setindex!\n   @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/Lava/V2Q5P/src/array/ka_backend.jl:1261\n [3] reduce_group!\n   @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/utilities.jl:80\n [4] macro expansion\n   @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/mapreduce_1d_gpu.jl:28\n [5] gpu__mapreduce_block!\n   @ ./none:0\nReason: unsupported call to an unknown function (call to jl_f_throw_methoderror)\nStacktrace:\n [1] unsafe_store! (repeats 2 times)\n   @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/LLVM/JGisQ/src/interop/pointer.jl:95\n [2] setindex!\n   @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/Lava/V2Q5P/src/array/ka_backend.jl:1261\n [3] reduce_group!\n   @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/utilities.jl:80\n [4] macro expansion\n   @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/mapreduce_1d_gpu.jl:28\n [5] gpu__mapreduce_block!\n   @ ./none:0\nReason: unsupported dynamic function invocation (call to pointerset(ptr::Core.LLVMPtr{T, A}, x::T, i::Int64, ::Val{align}) where {T, A, align} @ LLVM.Interop none:0)\nStacktrace:\n [1] unsafe_store! (repeats 2 times)\n   @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/LLVM/JGisQ/src/interop/pointer.jl:95\n [2] setindex!\n   @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/Lava/V2Q5P/src/array/ka_backend.jl:1261\n [3] reduce_group!\n   @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/utilities.jl:80\n [4] macro expansion\n   @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/mapreduce_1d_gpu.jl:28\n [5] gpu__mapreduce_block!\n   @ ./none:0\nReason: unsupported dynamic function invocation (call to pointerref(ptr::Core.LLVMPtr{T, A}, i::Int64, ::Val{align}) where {T, A, align} @ LLVM.Interop none:0)\nStacktrace:\n [1] unsafe_load (repeats 2 times)\n   @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/LLVM/JGisQ/src/interop/pointer.jl:92\n [2] getindex\n   @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/Lava/V2Q5P/src/array/ka_backend.jl:1256\n [3] reduce_group!\n   @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/utilities.jl:86\n [4] macro expansion\n   @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/mapreduce_1d_gpu.jl:28\n [5] gpu__mapreduce_block!\n   @ ./none:0\nReason: unsupported dynamic function invocation (call to +)\nStacktrace:\n [1] reduce_group!\n   @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/utilities.jl:86\n [2] macro expansion\n   @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/mapreduce_1d_gpu.jl:28\n [3] gpu__mapreduce_block!\n   @ ./none:0\nReason: unsupported dynamic function invocation (call to convert)\nStacktrace:\n [1] setindex!\n   @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/Lava/V2Q5P/src/array/ka_backend.jl:1261\n [2] reduce_group!\n   @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/utilities.jl:86\n [3] macro expansion\n   @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/mapreduce_1d_gpu.jl:28\n [4] gpu__mapreduce_block!\n   @ ./none:0\nReason: unsupported dynamic function invocation (call to convert)\nStacktrace:\n [1] unsafe_store! (repeats 2 times)\n   @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/LLVM/JGisQ/src/interop/pointer.jl:95\n [2] setindex!\n   @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/Lava/V2Q5P/src/array/ka_backend.jl:1261\n [3] reduce_group!\n   @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/utilities.jl:86\n [4] macro expansion\n   @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/mapreduce_1d_gpu.jl:28\n [5] gpu__mapreduce_block!\n   @ ./none:0\nReason: unsupported call to an unknown function (call to jl_f_throw_methoderror)\nStacktrace:\n [1] unsafe_store! (repeats 2 times)\n   @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/LLVM/JGisQ/src/interop/pointer.jl:95\n [2] setindex!\n   @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/Lava/V2Q5P/src/array/ka_backend.jl:1261\n [3] reduce_group!\n   @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/utilities.jl:86\n [4] macro expansion\n   @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/mapreduce_1d_gpu.jl:28\n [5] gpu__mapreduce_block!\n   @ ./none:0\nReason: unsupported dynamic function invocation (call to pointerset(ptr::Core.LLVMPtr{T, A}, x::T, i::Int64, ::Val{align}) where {T, A, align} @ LLVM.Interop none:0)\nStacktrace:\n [1] unsafe_store! (repeats 2 times)\n   @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/LLVM/JGisQ/src/interop/pointer.jl:95\n [2] setindex!\n   @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/Lava/V2Q5P/src/array/ka_backend.jl:1261\n [3] reduce_group!\n   @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/utilities.jl:86\n [4] macro expansion\n   @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/mapreduce_1d_gpu.jl:28\n [5] gpu__mapreduce_block!\n   @ ./none:0\nReason: unsupported dynamic function invocation (call to pointerref(ptr::Core.LLVMPtr{T, A}, i::Int64, ::Val{align}) where {T, A, align} @ LLVM.Interop none:0)\nStacktrace:\n [1] unsafe_load (repeats 2 times)\n   @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/LLVM/JGisQ/src/interop/pointer.jl:92\n [2] getindex\n   @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/Lava/V2Q5P/src/array/ka_backend.jl:1256\n [3] reduce_group!\n   @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/utilities.jl:92\n [4] macro expansion\n   @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/mapreduce_1d_gpu.jl:28\n [5] gpu__mapreduce_block!\n   @ ./none:0\nReason: unsupported dynamic function invocation (call to +)\nStacktrace:\n [1] reduce_group!\n   @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/utilities.jl:92\n [2] macro expansion\n   @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/mapreduce_1d_gpu.jl:28\n [3] gpu__mapreduce_block!\n   @ ./none:0\nReason: unsupported dynamic function invocation (call to convert)\nStacktrace:\n [1] setindex!\n   @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/Lava/V2Q5P/src/array/ka_backend.jl:1261\n [2] reduce_group!\n   @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/utilities.jl:92\n [3] macro expansion\n   @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/mapreduce_1d_gpu.jl:28\n [4] gpu__mapreduce_block!\n   @ ./none:0\nReason: unsupported dynamic function invocation (call to convert)\nStacktrace:\n [1] unsafe_store! (repeats 2 times)\n   @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/LLVM/JGisQ/src/interop/pointer.jl:95\n [2] setindex!\n   @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/Lava/V2Q5P/src/array/ka_backend.jl:1261\n [3] reduce_group!\n   @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/utilities.jl:92\n [4] macro expansion\n   @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/mapreduce_1d_gpu.jl:28\n [5] gpu__mapreduce_block!\n   @ ./none:0\nReason: unsupported call to an unknown function (call to jl_f_throw_methoderror)\nStacktrace:\n [1] unsafe_store! (repeats 2 times)\n   @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/LLVM/JGisQ/src/interop/pointer.jl:95\n [2] setindex!\n   @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/Lava/V2Q5P/src/array/ka_backend.jl:1261\n [3] reduce_group!\n   @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/utilities.jl:92\n [4] macro expansion\n   @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/mapreduce_1d_gpu.jl:28\n [5] gpu__mapreduce_block!\n   @ ./none:0\nReason: unsupported dynamic function invocation (call to pointerset(ptr::Core.LLVMPtr{T, A}, x::T, i::Int64, ::Val{align}) where {T, A, align} @ LLVM.Interop none:0)\nStacktrace:\n [1] unsafe_store! (repeats 2 times)\n   @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/LLVM/JGisQ/src/interop/pointer.jl:95\n [2] setindex!\n   @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/Lava/V2Q5P/src/array/ka_backend.jl:1261\n [3] reduce_group!\n   @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/utilities.jl:92\n [4] macro expansion\n   @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/mapreduce_1d_gpu.jl:28\n [5] gpu__mapreduce_block!\n   @ ./none:0\nReason: unsupported dynamic function invocation (call to pointerref(ptr::Core.LLVMPtr{T, A}, i::Int64, ::Val{align}) where {T, A, align} @ LLVM.Interop none:0)\nStacktrace:\n [1] unsafe_load (repeats 2 times)\n   @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/LLVM/JGisQ/src/interop/pointer.jl:92\n [2] getindex\n   @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/Lava/V2Q5P/src/array/ka_backend.jl:1256\n [3] reduce_group!\n   @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/utilities.jl:98\n [4] macro expansion\n   @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/mapreduce_1d_gpu.jl:28\n [5] gpu__mapreduce_block!\n   @ ./none:0\nReason: unsupported dynamic function invocation (call to +)\nStacktrace:\n [1] reduce_group!\n   @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/utilities.jl:98\n [2] macro expansion\n   @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/mapreduce_1d_gpu.jl:28\n [3] gpu__mapreduce_block!\n   @ ./none:0\nReason: unsupported dynamic function invocation (call to convert)\nStacktrace:\n [1] setindex!\n   @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/Lava/V2Q5P/src/array/ka_backend.jl:1261\n [2] reduce_group!\n   @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/utilities.jl:98\n [3] macro expansion\n   @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/mapreduce_1d_gpu.jl:28\n [4] gpu__mapreduce_block!\n   @ ./none:0\nReason: unsupported dynamic function invocation (call to convert)\nStacktrace:\n [1] unsafe_store! (repeats 2 times)\n   @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/LLVM/JGisQ/src/interop/pointer.jl:95\n [2] setindex!\n   @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/Lava/V2Q5P/src/array/ka_backend.jl:1261\n [3] reduce_group!\n   @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/utilities.jl:98\n [4] macro expansion\n   @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/mapreduce_1d_gpu.jl:28\n [5] gpu__mapreduce_block!\n   @ ./none:0\nReason: unsupported call to an unknown function (call to jl_f_throw_methoderror)\nStacktrace:\n [1] unsafe_store! (repeats 2 times)\n   @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/LLVM/JGisQ/src/interop/pointer.jl:95\n [2] setindex!\n   @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/Lava/V2Q5P/src/array/ka_backend.jl:1261\n [3] reduce_group!\n   @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/utilities.jl:98\n [4] macro expansion\n   @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/mapreduce_1d_gpu.jl:28\n [5] gpu__mapreduce_block!\n   @ ./none:0\nReason: unsupported dynamic function invocation (call to pointerset(ptr::Core.LLVMPtr{T, A}, x::T, i::Int64, ::Val{align}) where {T, A, align} @ LLVM.Interop none:0)\nStacktrace:\n [1] unsafe_store! (repeats 2 times)\n   @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/LLVM/JGisQ/src/interop/pointer.jl:95\n [2] setindex!\n   @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/Lava/V2Q5P/src/array/ka_backend.jl:1261\n [3] reduce_group!\n   @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/utilities.jl:98\n [4] macro expansion\n   @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/mapreduce_1d_gpu.jl:28\n [5] gpu__mapreduce_block!\n   @ ./none:0\nReason: unsupported dynamic function invocation (call to pointerref(ptr::Core.LLVMPtr{T, A}, i::Int64, ::Val{align}) where {T, A, align} @ LLVM.Interop none:0)\nStacktrace:\n [1] unsafe_load (repeats 2 times)\n   @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/LLVM/JGisQ/src/interop/pointer.jl:92\n [2] getindex\n   @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/Lava/V2Q5P/src/array/ka_backend.jl:1256\n [3] macro expansion\n   @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/mapreduce_1d_gpu.jl:44\n [4] gpu__mapreduce_block!\n   @ ./none:0\nReason: unsupported dynamic function invocation (call to convert)\nStacktrace:\n [1] setindex!\n   @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/Lava/V2Q5P/src/array/ka_backend.jl:973\n [2] macro expansion\n   @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/mapreduce_1d_gpu.jl:44\n [3] gpu__mapreduce_block!\n   @ ./none:0\nReason: unsupported dynamic function invocation (call to convert)\nStacktrace:\n [1] unsafe_store!\n   @ ./pointer.jl:178\n [2] setindex!\n   @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/Lava/V2Q5P/src/array/ka_backend.jl:973\n [3] macro expansion\n   @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/mapreduce_1d_gpu.jl:44\n [4] gpu__mapreduce_block!\n   @ ./none:0\nHint: catch this exception as `err` and call `code_typed(err; interactive = true)` to introspect the erroneous code with Cthulhu.jl", :interrupted => false, :cause_type => "Lava.LavaCompilationError")
+  Stacktrace:
+    [1] _audited_owned(f::Gesso.Inference.var"#prefill!##0#prefill!##1"{Session, Vector{Int64}}, s::Session, task::Symbol; max_new_tokens::Nothing)
+      @ Gesso.Inference ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/relocated-gesso/src/Inference/session.jl:621
+    [2] _audited(f::Function, s::Session, task::Symbol; max_new_tokens::Nothing)
+      @ Gesso.Inference ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/relocated-gesso/src/Inference/session.jl:649
+    [3] _audited
+      @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/relocated-gesso/src/Inference/session.jl:642 [inlined]
+    [4] prefill!(s::Session, tokens::Vector{Int64})
+      @ Gesso.Inference ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/relocated-gesso/src/Inference/session.jl:669
+    [5] macro expansion
+      @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/relocated-gesso/test/regime_i_package.jl:30 [inlined]
+    [6] macro expansion
+      @ ~/.julia/juliaup/julia-1.12.6+0.x64.linux.gnu/share/julia/stdlib/v1.12/Test/src/Test.jl:1777 [inlined]
+    [7] top-level scope
+      @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/relocated-gesso/test/regime_i_package.jl:24
+    [8] include(mod::Module, _path::String)
+      @ Base ./Base.jl:306
+    [9] exec_options(opts::Base.JLOptions)
+      @ Base ./client.jl:317
+   [10] _start()
+      @ Base ./client.jl:550
+  
+  caused by: LavaCompilationError during kernel compilation:
+    Cannot compile DataType(typeof(AcceleratedKernels.gpu__mapreduce_block!), KernelAbstractions.CompilerMetadata{KernelAbstractions.NDIteration.DynamicSize, KernelAbstractions.NDIteration.DynamicCheck, Nothing, CartesianIndices{1, Tuple{Base.OneTo{Int64}}}, KernelAbstractions.NDIteration.NDRange{1, KernelAbstractions.NDIteration.DynamicSize, KernelAbstractions.NDIteration.StaticSize{(64,)}, CartesianIndices{1, Tuple{Base.OneTo{Int64}}}, Nothing}}, SubArray{Float32, 1, Base.ReshapedArray{Float32, 1, SubArray{Float32, 2, LavaDeviceArray{Float32, 2}, Tuple{UnitRange{Int64}, Base.Slice{Base.OneTo{Int64}}}, false}, Tuple{Base.MultiplicativeInverses.SignedMultiplicativeInverse{Int64}}}, Tuple{UnitRange{Int64}}, false}, LavaDeviceArray{Float32, 1}, typeof(abs2), typeof(+), Float32) to GPU code
+  
+    Call chain(s) with GPU-incompatible code:
+    1. gpu__mapreduce_block! @ ./none:0 → macro expansion @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/mapreduce_1d_gpu.jl:19 → setindex! @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/Lava/V2Q5P/src/array/ka_backend.jl:1261
+       Problem: dynamic dispatch (type instability)
+    2. gpu__mapreduce_block! @ ./none:0 → macro expansion @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/mapreduce_1d_gpu.jl:21 → setindex! @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/Lava/V2Q5P/src/array/ka_backend.jl:1261
+       Problem: dynamic dispatch (type instability)
+    3. gpu__mapreduce_block! @ ./none:0 → macro expansion @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/mapreduce_1d_gpu.jl:23 → setindex! @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/Lava/V2Q5P/src/array/ka_backend.jl:1261
+       Problem: dynamic dispatch (type instability)
+    4. gpu__mapreduce_block! @ ./none:0 → macro expansion @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/mapreduce_1d_gpu.jl:28 → reduce_group! @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/utilities.jl:68 → getindex @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/Lava/V2Q5P/src/array/ka_backend.jl:1256
+       Problem: dynamic dispatch (type instability)
+    5. gpu__mapreduce_block! @ ./none:0 → macro expansion @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/mapreduce_1d_gpu.jl:28 → reduce_group! @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/utilities.jl:68
+       Problem: dynamic dispatch (type instability)
+    6. gpu__mapreduce_block! @ ./none:0 → macro expansion @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/mapreduce_1d_gpu.jl:28 → reduce_group! @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/utilities.jl:68 → setindex! @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/Lava/V2Q5P/src/array/ka_backend.jl:1261
+       Problem: dynamic dispatch (type instability)
+    7. gpu__mapreduce_block! @ ./none:0 → macro expansion @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/mapreduce_1d_gpu.jl:28 → reduce_group! @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/utilities.jl:74 → getindex @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/Lava/V2Q5P/src/array/ka_backend.jl:1256
+       Problem: dynamic dispatch (type instability)
+    8. gpu__mapreduce_block! @ ./none:0 → macro expansion @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/mapreduce_1d_gpu.jl:28 → reduce_group! @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/utilities.jl:74
+       Problem: dynamic dispatch (type instability)
+    9. gpu__mapreduce_block! @ ./none:0 → macro expansion @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/mapreduce_1d_gpu.jl:28 → reduce_group! @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/utilities.jl:74 → setindex! @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/Lava/V2Q5P/src/array/ka_backend.jl:1261
+       Problem: dynamic dispatch (type instability)
+    10. gpu__mapreduce_block! @ ./none:0 → macro expansion @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/mapreduce_1d_gpu.jl:28 → reduce_group! @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/utilities.jl:80 → getindex @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/Lava/V2Q5P/src/array/ka_backend.jl:1256
+       Problem: dynamic dispatch (type instability)
+    11. gpu__mapreduce_block! @ ./none:0 → macro expansion @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/mapreduce_1d_gpu.jl:28 → reduce_group! @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/utilities.jl:80
+       Problem: dynamic dispatch (type instability)
+    12. gpu__mapreduce_block! @ ./none:0 → macro expansion @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/mapreduce_1d_gpu.jl:28 → reduce_group! @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/utilities.jl:80 → setindex! @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/Lava/V2Q5P/src/array/ka_backend.jl:1261
+       Problem: dynamic dispatch (type instability)
+    13. gpu__mapreduce_block! @ ./none:0 → macro expansion @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/mapreduce_1d_gpu.jl:28 → reduce_group! @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/utilities.jl:86 → getindex @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/Lava/V2Q5P/src/array/ka_backend.jl:1256
+       Problem: dynamic dispatch (type instability)
+    14. gpu__mapreduce_block! @ ./none:0 → macro expansion @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/mapreduce_1d_gpu.jl:28 → reduce_group! @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/utilities.jl:86
+       Problem: dynamic dispatch (type instability)
+    15. gpu__mapreduce_block! @ ./none:0 → macro expansion @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/mapreduce_1d_gpu.jl:28 → reduce_group! @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/utilities.jl:86 → setindex! @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/Lava/V2Q5P/src/array/ka_backend.jl:1261
+       Problem: dynamic dispatch (type instability)
+    16. gpu__mapreduce_block! @ ./none:0 → macro expansion @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/mapreduce_1d_gpu.jl:28 → reduce_group! @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/utilities.jl:92 → getindex @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/Lava/V2Q5P/src/array/ka_backend.jl:1256
+       Problem: dynamic dispatch (type instability)
+    17. gpu__mapreduce_block! @ ./none:0 → macro expansion @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/mapreduce_1d_gpu.jl:28 → reduce_group! @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/utilities.jl:92
+       Problem: dynamic dispatch (type instability)
+    18. gpu__mapreduce_block! @ ./none:0 → macro expansion @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/mapreduce_1d_gpu.jl:28 → reduce_group! @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/utilities.jl:92 → setindex! @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/Lava/V2Q5P/src/array/ka_backend.jl:1261
+       Problem: dynamic dispatch (type instability)
+    19. gpu__mapreduce_block! @ ./none:0 → macro expansion @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/mapreduce_1d_gpu.jl:28 → reduce_group! @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/utilities.jl:98 → getindex @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/Lava/V2Q5P/src/array/ka_backend.jl:1256
+       Problem: dynamic dispatch (type instability)
+    20. gpu__mapreduce_block! @ ./none:0 → macro expansion @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/mapreduce_1d_gpu.jl:28 → reduce_group! @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/utilities.jl:98
+       Problem: dynamic dispatch (type instability)
+    21. gpu__mapreduce_block! @ ./none:0 → macro expansion @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/mapreduce_1d_gpu.jl:28 → reduce_group! @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/utilities.jl:98 → setindex! @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/Lava/V2Q5P/src/array/ka_backend.jl:1261
+       Problem: dynamic dispatch (type instability)
+    22. gpu__mapreduce_block! @ ./none:0 → macro expansion @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/mapreduce_1d_gpu.jl:44 → getindex @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/Lava/V2Q5P/src/array/ka_backend.jl:1256
+       Problem: dynamic dispatch (type instability)
+    23. gpu__mapreduce_block! @ ./none:0 → macro expansion @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/mapreduce_1d_gpu.jl:44 → setindex! @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/Lava/V2Q5P/src/array/ka_backend.jl:973
+       Problem: dynamic dispatch (type instability)
+  
+    Suggestion: Type instability: the function contains dynamic dispatch. Ensure all types are inferrable — use @code_warntype to check.
+    Method lookup at runtime: an operation doesn't have a concrete method for the given types. Check that all operations are GPU-compatible.
+  
+    Raw error (full GPUCompiler output):
+    InvalidIRError: compiling MethodInstance for AcceleratedKernels.gpu__mapreduce_block!(::KernelAbstractions.CompilerMetadata{KernelAbstractions.NDIteration.DynamicSize, KernelAbstractions.NDIteration.DynamicCheck, Nothing, CartesianIndices{1, Tuple{Base.OneTo{Int64}}}, KernelAbstractions.NDIteration.NDRange{1, KernelAbstractions.NDIteration.DynamicSize, KernelAbstractions.NDIteration.StaticSize{(64,)}, CartesianIndices{1, Tuple{Base.OneTo{Int64}}}, Nothing}}, ::SubArray{Float32, 1, Base.ReshapedArray{Float32, 1, SubArray{Float32, 2, LavaDeviceArray{Float32, 2}, Tuple{UnitRange{Int64}, Base.Slice{Base.OneTo{Int64}}}, false}, Tuple{Base.MultiplicativeInverses.SignedMultiplicativeInverse{Int64}}}, Tuple{UnitRange{Int64}}, false}, ::LavaDeviceArray{Float32, 1}, ::typeof(abs2), ::typeof(+), ::Float32) resulted in invalid LLVM IR
+  Reason: unsupported dynamic function invocation (call to pointerset(ptr::Core.LLVMPtr{T, A}, x::T, i::Int64, ::Val{align}) where {T, A, align} @ LLVM.Interop none:0)
+  Stacktrace:
+   [1] unsafe_store! (repeats 2 times)
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/LLVM/JGisQ/src/interop/pointer.jl:95
+   [2] setindex!
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/Lava/V2Q5P/src/array/ka_backend.jl:1261
+   [3] macro expansion
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/mapreduce_1d_gpu.jl:19
+   [4] gpu__mapreduce_block!
+     @ ./none:0
+  Reason: unsupported dynamic function invocation (call to pointerset(ptr::Core.LLVMPtr{T, A}, x::T, i::Int64, ::Val{align}) where {T, A, align} @ LLVM.Interop none:0)
+  Stacktrace:
+   [1] unsafe_store! (repeats 2 times)
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/LLVM/JGisQ/src/interop/pointer.jl:95
+   [2] setindex!
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/Lava/V2Q5P/src/array/ka_backend.jl:1261
+   [3] macro expansion
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/mapreduce_1d_gpu.jl:21
+   [4] gpu__mapreduce_block!
+     @ ./none:0
+  Reason: unsupported dynamic function invocation (call to pointerset(ptr::Core.LLVMPtr{T, A}, x::T, i::Int64, ::Val{align}) where {T, A, align} @ LLVM.Interop none:0)
+  Stacktrace:
+   [1] unsafe_store! (repeats 2 times)
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/LLVM/JGisQ/src/interop/pointer.jl:95
+   [2] setindex!
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/Lava/V2Q5P/src/array/ka_backend.jl:1261
+   [3] macro expansion
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/mapreduce_1d_gpu.jl:23
+   [4] gpu__mapreduce_block!
+     @ ./none:0
+  Reason: unsupported dynamic function invocation (call to pointerref(ptr::Core.LLVMPtr{T, A}, i::Int64, ::Val{align}) where {T, A, align} @ LLVM.Interop none:0)
+  Stacktrace:
+   [1] unsafe_load (repeats 2 times)
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/LLVM/JGisQ/src/interop/pointer.jl:92
+   [2] getindex
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/Lava/V2Q5P/src/array/ka_backend.jl:1256
+   [3] reduce_group!
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/utilities.jl:68
+   [4] macro expansion
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/mapreduce_1d_gpu.jl:28
+   [5] gpu__mapreduce_block!
+     @ ./none:0
+  Reason: unsupported dynamic function invocation (call to +)
+  Stacktrace:
+   [1] reduce_group!
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/utilities.jl:68
+   [2] macro expansion
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/mapreduce_1d_gpu.jl:28
+   [3] gpu__mapreduce_block!
+     @ ./none:0
+  Reason: unsupported dynamic function invocation (call to convert)
+  Stacktrace:
+   [1] setindex!
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/Lava/V2Q5P/src/array/ka_backend.jl:1261
+   [2] reduce_group!
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/utilities.jl:68
+   [3] macro expansion
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/mapreduce_1d_gpu.jl:28
+   [4] gpu__mapreduce_block!
+     @ ./none:0
+  Reason: unsupported dynamic function invocation (call to convert)
+  Stacktrace:
+   [1] unsafe_store! (repeats 2 times)
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/LLVM/JGisQ/src/interop/pointer.jl:95
+   [2] setindex!
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/Lava/V2Q5P/src/array/ka_backend.jl:1261
+   [3] reduce_group!
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/utilities.jl:68
+   [4] macro expansion
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/mapreduce_1d_gpu.jl:28
+   [5] gpu__mapreduce_block!
+     @ ./none:0
+  Reason: unsupported call to an unknown function (call to jl_f_throw_methoderror)
+  Stacktrace:
+   [1] unsafe_store! (repeats 2 times)
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/LLVM/JGisQ/src/interop/pointer.jl:95
+   [2] setindex!
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/Lava/V2Q5P/src/array/ka_backend.jl:1261
+   [3] reduce_group!
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/utilities.jl:68
+   [4] macro expansion
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/mapreduce_1d_gpu.jl:28
+   [5] gpu__mapreduce_block!
+     @ ./none:0
+  Reason: unsupported dynamic function invocation (call to pointerset(ptr::Core.LLVMPtr{T, A}, x::T, i::Int64, ::Val{align}) where {T, A, align} @ LLVM.Interop none:0)
+  Stacktrace:
+   [1] unsafe_store! (repeats 2 times)
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/LLVM/JGisQ/src/interop/pointer.jl:95
+   [2] setindex!
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/Lava/V2Q5P/src/array/ka_backend.jl:1261
+   [3] reduce_group!
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/utilities.jl:68
+   [4] macro expansion
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/mapreduce_1d_gpu.jl:28
+   [5] gpu__mapreduce_block!
+     @ ./none:0
+  Reason: unsupported dynamic function invocation (call to pointerref(ptr::Core.LLVMPtr{T, A}, i::Int64, ::Val{align}) where {T, A, align} @ LLVM.Interop none:0)
+  Stacktrace:
+   [1] unsafe_load (repeats 2 times)
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/LLVM/JGisQ/src/interop/pointer.jl:92
+   [2] getindex
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/Lava/V2Q5P/src/array/ka_backend.jl:1256
+   [3] reduce_group!
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/utilities.jl:74
+   [4] macro expansion
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/mapreduce_1d_gpu.jl:28
+   [5] gpu__mapreduce_block!
+     @ ./none:0
+  Reason: unsupported dynamic function invocation (call to +)
+  Stacktrace:
+   [1] reduce_group!
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/utilities.jl:74
+   [2] macro expansion
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/mapreduce_1d_gpu.jl:28
+   [3] gpu__mapreduce_block!
+     @ ./none:0
+  Reason: unsupported dynamic function invocation (call to convert)
+  Stacktrace:
+   [1] setindex!
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/Lava/V2Q5P/src/array/ka_backend.jl:1261
+   [2] reduce_group!
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/utilities.jl:74
+   [3] macro expansion
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/mapreduce_1d_gpu.jl:28
+   [4] gpu__mapreduce_block!
+     @ ./none:0
+  Reason: unsupported dynamic function invocation (call to convert)
+  Stacktrace:
+   [1] unsafe_store! (repeats 2 times)
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/LLVM/JGisQ/src/interop/pointer.jl:95
+   [2] setindex!
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/Lava/V2Q5P/src/array/ka_backend.jl:1261
+   [3] reduce_group!
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/utilities.jl:74
+   [4] macro expansion
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/mapreduce_1d_gpu.jl:28
+   [5] gpu__mapreduce_block!
+     @ ./none:0
+  Reason: unsupported call to an unknown function (call to jl_f_throw_methoderror)
+  Stacktrace:
+   [1] unsafe_store! (repeats 2 times)
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/LLVM/JGisQ/src/interop/pointer.jl:95
+   [2] setindex!
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/Lava/V2Q5P/src/array/ka_backend.jl:1261
+   [3] reduce_group!
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/utilities.jl:74
+   [4] macro expansion
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/mapreduce_1d_gpu.jl:28
+   [5] gpu__mapreduce_block!
+     @ ./none:0
+  Reason: unsupported dynamic function invocation (call to pointerset(ptr::Core.LLVMPtr{T, A}, x::T, i::Int64, ::Val{align}) where {T, A, align} @ LLVM.Interop none:0)
+  Stacktrace:
+   [1] unsafe_store! (repeats 2 times)
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/LLVM/JGisQ/src/interop/pointer.jl:95
+   [2] setindex!
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/Lava/V2Q5P/src/array/ka_backend.jl:1261
+   [3] reduce_group!
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/utilities.jl:74
+   [4] macro expansion
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/mapreduce_1d_gpu.jl:28
+   [5] gpu__mapreduce_block!
+     @ ./none:0
+  Reason: unsupported dynamic function invocation (call to pointerref(ptr::Core.LLVMPtr{T, A}, i::Int64, ::Val{align}) where {T, A, align} @ LLVM.Interop none:0)
+  Stacktrace:
+   [1] unsafe_load (repeats 2 times)
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/LLVM/JGisQ/src/interop/pointer.jl:92
+   [2] getindex
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/Lava/V2Q5P/src/array/ka_backend.jl:1256
+   [3] reduce_group!
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/utilities.jl:80
+   [4] macro expansion
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/mapreduce_1d_gpu.jl:28
+   [5] gpu__mapreduce_block!
+     @ ./none:0
+  Reason: unsupported dynamic function invocation (call to +)
+  Stacktrace:
+   [1] reduce_group!
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/utilities.jl:80
+   [2] macro expansion
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/mapreduce_1d_gpu.jl:28
+   [3] gpu__mapreduce_block!
+     @ ./none:0
+  Reason: unsupported dynamic function invocation (call to convert)
+  Stacktrace:
+   [1] setindex!
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/Lava/V2Q5P/src/array/ka_backend.jl:1261
+   [2] reduce_group!
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/utilities.jl:80
+   [3] macro expansion
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/mapreduce_1d_gpu.jl:28
+   [4] gpu__mapreduce_block!
+     @ ./none:0
+  Reason: unsupported dynamic function invocation (call to convert)
+  Stacktrace:
+   [1] unsafe_store! (repeats 2 times)
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/LLVM/JGisQ/src/interop/pointer.jl:95
+   [2] setindex!
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/Lava/V2Q5P/src/array/ka_backend.jl:1261
+   [3] reduce_group!
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/utilities.jl:80
+   [4] macro expansion
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/mapreduce_1d_gpu.jl:28
+   [5] gpu__mapreduce_block!
+     @ ./none:0
+  Reason: unsupported call to an unknown function (call to jl_f_throw_methoderror)
+  Stacktrace:
+   [1] unsafe_store! (repeats 2 times)
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/LLVM/JGisQ/src/interop/pointer.jl:95
+   [2] setindex!
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/Lava/V2Q5P/src/array/ka_backend.jl:1261
+   [3] reduce_group!
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/utilities.jl:80
+   [4] macro expansion
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/mapreduce_1d_gpu.jl:28
+   [5] gpu__mapreduce_block!
+     @ ./none:0
+  Reason: unsupported dynamic function invocation (call to pointerset(ptr::Core.LLVMPtr{T, A}, x::T, i::Int64, ::Val{align}) where {T, A, align} @ LLVM.Interop none:0)
+  Stacktrace:
+   [1] unsafe_store! (repeats 2 times)
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/LLVM/JGisQ/src/interop/pointer.jl:95
+   [2] setindex!
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/Lava/V2Q5P/src/array/ka_backend.jl:1261
+   [3] reduce_group!
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/utilities.jl:80
+   [4] macro expansion
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/mapreduce_1d_gpu.jl:28
+   [5] gpu__mapreduce_block!
+     @ ./none:0
+  Reason: unsupported dynamic function invocation (call to pointerref(ptr::Core.LLVMPtr{T, A}, i::Int64, ::Val{align}) where {T, A, align} @ LLVM.Interop none:0)
+  Stacktrace:
+   [1] unsafe_load (repeats 2 times)
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/LLVM/JGisQ/src/interop/pointer.jl:92
+   [2] getindex
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/Lava/V2Q5P/src/array/ka_backend.jl:1256
+   [3] reduce_group!
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/utilities.jl:86
+   [4] macro expansion
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/mapreduce_1d_gpu.jl:28
+   [5] gpu__mapreduce_block!
+     @ ./none:0
+  Reason: unsupported dynamic function invocation (call to +)
+  Stacktrace:
+   [1] reduce_group!
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/utilities.jl:86
+   [2] macro expansion
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/mapreduce_1d_gpu.jl:28
+   [3] gpu__mapreduce_block!
+     @ ./none:0
+  Reason: unsupported dynamic function invocation (call to convert)
+  Stacktrace:
+   [1] setindex!
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/Lava/V2Q5P/src/array/ka_backend.jl:1261
+   [2] reduce_group!
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/utilities.jl:86
+   [3] macro expansion
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/mapreduce_1d_gpu.jl:28
+   [4] gpu__mapreduce_block!
+     @ ./none:0
+  Reason: unsupported dynamic function invocation (call to convert)
+  Stacktrace:
+   [1] unsafe_store! (repeats 2 times)
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/LLVM/JGisQ/src/interop/pointer.jl:95
+   [2] setindex!
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/Lava/V2Q5P/src/array/ka_backend.jl:1261
+   [3] reduce_group!
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/utilities.jl:86
+   [4] macro expansion
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/mapreduce_1d_gpu.jl:28
+   [5] gpu__mapreduce_block!
+     @ ./none:0
+  Reason: unsupported call to an unknown function (call to jl_f_throw_methoderror)
+  Stacktrace:
+   [1] unsafe_store! (repeats 2 times)
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/LLVM/JGisQ/src/interop/pointer.jl:95
+   [2] setindex!
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/Lava/V2Q5P/src/array/ka_backend.jl:1261
+   [3] reduce_group!
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/utilities.jl:86
+   [4] macro expansion
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/mapreduce_1d_gpu.jl:28
+   [5] gpu__mapreduce_block!
+     @ ./none:0
+  Reason: unsupported dynamic function invocation (call to pointerset(ptr::Core.LLVMPtr{T, A}, x::T, i::Int64, ::Val{align}) where {T, A, align} @ LLVM.Interop none:0)
+  Stacktrace:
+   [1] unsafe_store! (repeats 2 times)
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/LLVM/JGisQ/src/interop/pointer.jl:95
+   [2] setindex!
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/Lava/V2Q5P/src/array/ka_backend.jl:1261
+   [3] reduce_group!
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/utilities.jl:86
+   [4] macro expansion
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/mapreduce_1d_gpu.jl:28
+   [5] gpu__mapreduce_block!
+     @ ./none:0
+  Reason: unsupported dynamic function invocation (call to pointerref(ptr::Core.LLVMPtr{T, A}, i::Int64, ::Val{align}) where {T, A, align} @ LLVM.Interop none:0)
+  Stacktrace:
+   [1] unsafe_load (repeats 2 times)
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/LLVM/JGisQ/src/interop/pointer.jl:92
+   [2] getindex
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/Lava/V2Q5P/src/array/ka_backend.jl:1256
+   [3] reduce_group!
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/utilities.jl:92
+   [4] macro expansion
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/mapreduce_1d_gpu.jl:28
+   [5] gpu__mapreduce_block!
+     @ ./none:0
+  Reason: unsupported dynamic function invocation (call to +)
+  Stacktrace:
+   [1] reduce_group!
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/utilities.jl:92
+   [2] macro expansion
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/mapreduce_1d_gpu.jl:28
+   [3] gpu__mapreduce_block!
+     @ ./none:0
+  Reason: unsupported dynamic function invocation (call to convert)
+  Stacktrace:
+   [1] setindex!
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/Lava/V2Q5P/src/array/ka_backend.jl:1261
+   [2] reduce_group!
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/utilities.jl:92
+   [3] macro expansion
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/mapreduce_1d_gpu.jl:28
+   [4] gpu__mapreduce_block!
+     @ ./none:0
+  Reason: unsupported dynamic function invocation (call to convert)
+  Stacktrace:
+   [1] unsafe_store! (repeats 2 times)
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/LLVM/JGisQ/src/interop/pointer.jl:95
+   [2] setindex!
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/Lava/V2Q5P/src/array/ka_backend.jl:1261
+   [3] reduce_group!
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/utilities.jl:92
+   [4] macro expansion
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/mapreduce_1d_gpu.jl:28
+   [5] gpu__mapreduce_block!
+     @ ./none:0
+  Reason: unsupported call to an unknown function (call to jl_f_throw_methoderror)
+  Stacktrace:
+   [1] unsafe_store! (repeats 2 times)
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/LLVM/JGisQ/src/interop/pointer.jl:95
+   [2] setindex!
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/Lava/V2Q5P/src/array/ka_backend.jl:1261
+   [3] reduce_group!
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/utilities.jl:92
+   [4] macro expansion
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/mapreduce_1d_gpu.jl:28
+   [5] gpu__mapreduce_block!
+     @ ./none:0
+  Reason: unsupported dynamic function invocation (call to pointerset(ptr::Core.LLVMPtr{T, A}, x::T, i::Int64, ::Val{align}) where {T, A, align} @ LLVM.Interop none:0)
+  Stacktrace:
+   [1] unsafe_store! (repeats 2 times)
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/LLVM/JGisQ/src/interop/pointer.jl:95
+   [2] setindex!
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/Lava/V2Q5P/src/array/ka_backend.jl:1261
+   [3] reduce_group!
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/utilities.jl:92
+   [4] macro expansion
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/mapreduce_1d_gpu.jl:28
+   [5] gpu__mapreduce_block!
+     @ ./none:0
+  Reason: unsupported dynamic function invocation (call to pointerref(ptr::Core.LLVMPtr{T, A}, i::Int64, ::Val{align}) where {T, A, align} @ LLVM.Interop none:0)
+  Stacktrace:
+   [1] unsafe_load (repeats 2 times)
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/LLVM/JGisQ/src/interop/pointer.jl:92
+   [2] getindex
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/Lava/V2Q5P/src/array/ka_backend.jl:1256
+   [3] reduce_group!
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/utilities.jl:98
+   [4] macro expansion
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/mapreduce_1d_gpu.jl:28
+   [5] gpu__mapreduce_block!
+     @ ./none:0
+  Reason: unsupported dynamic function invocation (call to +)
+  Stacktrace:
+   [1] reduce_group!
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/utilities.jl:98
+   [2] macro expansion
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/mapreduce_1d_gpu.jl:28
+   [3] gpu__mapreduce_block!
+     @ ./none:0
+  Reason: unsupported dynamic function invocation (call to convert)
+  Stacktrace:
+   [1] setindex!
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/Lava/V2Q5P/src/array/ka_backend.jl:1261
+   [2] reduce_group!
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/utilities.jl:98
+   [3] macro expansion
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/mapreduce_1d_gpu.jl:28
+   [4] gpu__mapreduce_block!
+     @ ./none:0
+  Reason: unsupported dynamic function invocation (call to convert)
+  Stacktrace:
+   [1] unsafe_store! (repeats 2 times)
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/LLVM/JGisQ/src/interop/pointer.jl:95
+   [2] setindex!
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/Lava/V2Q5P/src/array/ka_backend.jl:1261
+   [3] reduce_group!
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/utilities.jl:98
+   [4] macro expansion
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/mapreduce_1d_gpu.jl:28
+   [5] gpu__mapreduce_block!
+     @ ./none:0
+  Reason: unsupported call to an unknown function (call to jl_f_throw_methoderror)
+  Stacktrace:
+   [1] unsafe_store! (repeats 2 times)
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/LLVM/JGisQ/src/interop/pointer.jl:95
+   [2] setindex!
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/Lava/V2Q5P/src/array/ka_backend.jl:1261
+   [3] reduce_group!
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/utilities.jl:98
+   [4] macro expansion
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/mapreduce_1d_gpu.jl:28
+   [5] gpu__mapreduce_block!
+     @ ./none:0
+  Reason: unsupported dynamic function invocation (call to pointerset(ptr::Core.LLVMPtr{T, A}, x::T, i::Int64, ::Val{align}) where {T, A, align} @ LLVM.Interop none:0)
+  Stacktrace:
+   [1] unsafe_store! (repeats 2 times)
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/LLVM/JGisQ/src/interop/pointer.jl:95
+   [2] setindex!
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/Lava/V2Q5P/src/array/ka_backend.jl:1261
+   [3] reduce_group!
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/utilities.jl:98
+   [4] macro expansion
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/mapreduce_1d_gpu.jl:28
+   [5] gpu__mapreduce_block!
+     @ ./none:0
+  Reason: unsupported dynamic function invocation (call to pointerref(ptr::Core.LLVMPtr{T, A}, i::Int64, ::Val{align}) where {T, A, align} @ LLVM.Interop none:0)
+  Stacktrace:
+   [1] unsafe_load (repeats 2 times)
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/LLVM/JGisQ/src/interop/pointer.jl:92
+   [2] getindex
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/Lava/V2Q5P/src/array/ka_backend.jl:1256
+   [3] macro expansion
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/mapreduce_1d_gpu.jl:44
+   [4] gpu__mapreduce_block!
+     @ ./none:0
+  Reason: unsupported dynamic function invocation (call to convert)
+  Stacktrace:
+   [1] setindex!
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/Lava/V2Q5P/src/array/ka_backend.jl:973
+   [2] macro expansion
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/mapreduce_1d_gpu.jl:44
+   [3] gpu__mapreduce_block!
+     @ ./none:0
+  Reason: unsupported dynamic function invocation (call to convert)
+  Stacktrace:
+   [1] unsafe_store!
+     @ ./pointer.jl:178
+   [2] setindex!
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/Lava/V2Q5P/src/array/ka_backend.jl:973
+   [3] macro expansion
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/mapreduce_1d_gpu.jl:44
+   [4] gpu__mapreduce_block!
+     @ ./none:0
+  Hint: catch this exception as `err` and call `code_typed(err; interactive = true)` to introspect the erroneous code with Cthulhu.jl
+  Stacktrace:
+    [1] wrap_gpu_compiler_error(e::Any, f::Any, tt::Any)
+      @ Lava ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/Lava/V2Q5P/src/compiler/compilation.jl:57
+    [2] (::Lava.var"#145#146"{Bool, Bool, Bool, GPUCompiler.CompilerJob{GPUCompiler.SPIRVCompilerTarget, Lava.LavaCompilerParams}, Tuple{Int64, Int64, Int64}})(ctx::LLVM.Context)
+      @ Lava ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/Lava/V2Q5P/src/compiler/compilation.jl:670
+    [3] JuliaContext(f::Lava.var"#145#146"{Bool, Bool, Bool, GPUCompiler.CompilerJob{GPUCompiler.SPIRVCompilerTarget, Lava.LavaCompilerParams}, Tuple{Int64, Int64, Int64}}; kwargs::@Kwargs{})
+      @ GPUCompiler ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/GPUCompiler/wym4d/src/driver.jl:34
+    [4] JuliaContext
+      @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/GPUCompiler/wym4d/src/driver.jl:25 [inlined]
+    [5] #lava_compile_gpu_from_job#143
+      @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/Lava/V2Q5P/src/compiler/compilation.jl:665 [inlined]
+    [6] lava_compile_gpu_from_job
+      @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/Lava/V2Q5P/src/compiler/compilation.jl:660 [inlined]
+    [7] lava_kernel_compile
+      @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/Lava/V2Q5P/src/runtime/launch.jl:464 [inlined]
+    [8] actual_compilation(cache::Dict{Any, Lava.LavaLinkedKernel}, src::Core.MethodInstance, world::UInt64, cfg::GPUCompiler.CompilerConfig{GPUCompiler.SPIRVCompilerTarget, Lava.LavaCompilerParams}, compiler::typeof(Lava.lava_kernel_compile), linker::Lava.LavaLinker)
+      @ GPUCompiler ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/GPUCompiler/wym4d/src/deprecated.jl:303
+    [9] cached_compilation(cache::Dict{Any, Lava.LavaLinkedKernel}, src::Core.MethodInstance, cfg::GPUCompiler.CompilerConfig{GPUCompiler.SPIRVCompilerTarget, Lava.LavaCompilerParams}, compiler::Function, linker::Function)
+      @ GPUCompiler ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/GPUCompiler/wym4d/src/deprecated.jl:282
+   [10] get_compiled_kernel_and_pipeline(ctx::Lava.VkContext, f::Any, tt::Any, workgroup_size::Tuple{Int64, Int64, Int64}; enable_ray_query::Bool)
+      @ Lava ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/Lava/V2Q5P/src/runtime/launch.jl:541
+   [11] get_compiled_kernel_and_pipeline
+      @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/Lava/V2Q5P/src/runtime/launch.jl:515 [inlined]
+   [12] build_launch_plan!(bq::BatchQueue, f::Any, all_args::Tuple{typeof(AcceleratedKernels.gpu__mapreduce_block!), KernelAbstractions.CompilerMetadata{KernelAbstractions.NDIteration.DynamicSize, KernelAbstractions.NDIteration.DynamicCheck, Nothing, CartesianIndices{1, Tuple{Base.OneTo{Int64}}}, KernelAbstractions.NDIteration.NDRange{1, KernelAbstractions.NDIteration.DynamicSize, KernelAbstractions.NDIteration.StaticSize{(64,)}, CartesianIndices{1, Tuple{Base.OneTo{Int64}}}, Nothing}}, SubArray{Float32, 1, Base.ReshapedArray{Float32, 1, SubArray{Float32, 2, LavaDeviceArray{Float32, 2}, Tuple{UnitRange{Int64}, Base.Slice{Base.OneTo{Int64}}}, false}, Tuple{Base.MultiplicativeInverses.SignedMultiplicativeInverse{Int64}}}, Tuple{UnitRange{Int64}}, false}, LavaDeviceArray{Float32, 1}, typeof(abs2), typeof(+), Float32}, wg::Tuple{Int64, Int64, Int64}, ray_query::Bool, key::DataType, world::UInt64)
+      @ Lava ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/Lava/V2Q5P/src/array/ka_backend.jl:735
+   [13] launch_plan(bq::BatchQueue, f::Any, all_args::Tuple{typeof(AcceleratedKernels.gpu__mapreduce_block!), KernelAbstractions.CompilerMetadata{KernelAbstractions.NDIteration.DynamicSize, KernelAbstractions.NDIteration.DynamicCheck, Nothing, CartesianIndices{1, Tuple{Base.OneTo{Int64}}}, KernelAbstractions.NDIteration.NDRange{1, KernelAbstractions.NDIteration.DynamicSize, KernelAbstractions.NDIteration.StaticSize{(64,)}, CartesianIndices{1, Tuple{Base.OneTo{Int64}}}, Nothing}}, SubArray{Float32, 1, Base.ReshapedArray{Float32, 1, SubArray{Float32, 2, LavaDeviceArray{Float32, 2}, Tuple{UnitRange{Int64}, Base.Slice{Base.OneTo{Int64}}}, false}, Tuple{Base.MultiplicativeInverses.SignedMultiplicativeInverse{Int64}}}, Tuple{UnitRange{Int64}}, false}, LavaDeviceArray{Float32, 1}, typeof(abs2), typeof(+), Float32}, wg::Tuple{Int64, Int64, Int64}, ray_query::Bool)
+      @ Lava ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/Lava/V2Q5P/src/array/ka_backend.jl:726
+   [14] ka_launch!(bq::BatchQueue, f::Any, all_args::Tuple{typeof(AcceleratedKernels.gpu__mapreduce_block!), KernelAbstractions.CompilerMetadata{KernelAbstractions.NDIteration.DynamicSize, KernelAbstractions.NDIteration.DynamicCheck, Nothing, CartesianIndices{1, Tuple{Base.OneTo{Int64}}}, KernelAbstractions.NDIteration.NDRange{1, KernelAbstractions.NDIteration.DynamicSize, KernelAbstractions.NDIteration.StaticSize{(64,)}, CartesianIndices{1, Tuple{Base.OneTo{Int64}}}, Nothing}}, SubArray{Float32, 1, Base.ReshapedArray{Float32, 1, SubArray{Float32, 2, LavaDeviceArray{Float32, 2}, Tuple{UnitRange{Int64}, Base.Slice{Base.OneTo{Int64}}}, false}, Tuple{Base.MultiplicativeInverses.SignedMultiplicativeInverse{Int64}}}, Tuple{UnitRange{Int64}}, false}, LavaDeviceArray{Float32, 1}, typeof(abs2), typeof(+), Float32}, block_dims::Tuple{Int64, Int64, Int64}, workgroup_size::Tuple{Int64, Int64, Int64}, tlas::Nothing)
+      @ Lava ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/Lava/V2Q5P/src/array/ka_backend.jl:753
+   [15] (::KernelAbstractions.Kernel{LavaBackend, KernelAbstractions.NDIteration.StaticSize{(64,)}, KernelAbstractions.NDIteration.DynamicSize, typeof(AcceleratedKernels.gpu__mapreduce_block!)})(::SubArray{Float32, 1, Base.ReshapedArray{Float32, 1, SubArray{Float32, 2, LavaArray{Float32, 2}, Tuple{UnitRange{Int64}, Base.Slice{Base.OneTo{Int64}}}, false}, Tuple{Base.MultiplicativeInverses.SignedMultiplicativeInverse{Int64}}}, Tuple{UnitRange{Int64}}, false}, ::Vararg{Any}; ndrange::Tuple{Int64}, workgroupsize::Nothing)
+      @ Lava ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/Lava/V2Q5P/src/array/ka_backend.jl:630
+   [16] mapreduce_1d_gpu(f::typeof(abs2), op::typeof(+), src::SubArray{Float32, 2, LavaArray{Float32, 2}, Tuple{UnitRange{Int64}, Base.Slice{Base.OneTo{Int64}}}, false}, backend::LavaBackend; init::Float32, neutral::Float32, max_tasks::Int64, min_elems::Int64, block_size::Int64, temp::LavaArray{Float32, 1}, switch_below::Int64)
+      @ AcceleratedKernels ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/mapreduce_1d_gpu.jl:95
+   [17] #_mapreduce_impl#83
+      @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/reduce.jl:187 [inlined]
+   [18] _mapreduce_impl
+      @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/reduce.jl:169 [inlined]
+   [19] #mapreduce#82
+      @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/reduce.jl:161 [inlined]
+   [20] mapreduce
+      @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/reduce.jl:156 [inlined]
+   [21] _lava_dimreduce(f::Function, op::Function, a::SubArray{Float32, 2, LavaArray{Float32, 2}, Tuple{UnitRange{Int64}, Base.Slice{Base.OneTo{Int64}}}, false}, dim::Int64, init::Float32)
+      @ GessoLavaExt ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/relocated-gesso/ext/lava_ops.jl:81
+   [22] _lava_rmsnorm!(dst::Activation, x::Activation, scale::FrozenParameter; eps::Float64)
+      @ GessoLavaExt ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/relocated-gesso/ext/lava_ops.jl:108
+   [23] _lava_rmsnorm!
+      @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/relocated-gesso/ext/lava_ops.jl:98 [inlined]
+   [24] #rmsnorm!#7
+      @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/relocated-gesso/ext/lava_ops.jl:230 [inlined]
+   [25] rmsnorm!
+      @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/relocated-gesso/ext/lava_ops.jl:220 [inlined]
+   [26] _prefill_impl!(s::Session, tokens::Vector{Int64}, span::Gesso.Inference._EngineSpan)
+      @ Gesso.Inference ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/relocated-gesso/src/Inference/session.jl:740
+   [27] #prefill!##0
+      @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/relocated-gesso/src/Inference/session.jl:670 [inlined]
+   [28] _audited_owned(f::Gesso.Inference.var"#prefill!##0#prefill!##1"{Session, Vector{Int64}}, s::Session, task::Symbol; max_new_tokens::Nothing)
+      @ Gesso.Inference ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/relocated-gesso/src/Inference/session.jl:612
+   [29] _audited(f::Function, s::Session, task::Symbol; max_new_tokens::Nothing)
+      @ Gesso.Inference ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/relocated-gesso/src/Inference/session.jl:649
+   [30] _audited
+      @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/relocated-gesso/src/Inference/session.jl:642 [inlined]
+   [31] prefill!(s::Session, tokens::Vector{Int64})
+      @ Gesso.Inference ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/relocated-gesso/src/Inference/session.jl:669
+   [32] macro expansion
+      @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/relocated-gesso/test/regime_i_package.jl:30 [inlined]
+   [33] macro expansion
+      @ ~/.julia/juliaup/julia-1.12.6+0.x64.linux.gnu/share/julia/stdlib/v1.12/Test/src/Test.jl:1777 [inlined]
+   [34] top-level scope
+      @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/relocated-gesso/test/regime_i_package.jl:24
+   [35] include(mod::Module, _path::String)
+      @ Base ./Base.jl:306
+   [36] exec_options(opts::Base.JLOptions)
+      @ Base ./client.jl:317
+   [37] _start()
+      @ Base ./client.jl:550
+  
+  caused by: InvalidIRError: compiling MethodInstance for AcceleratedKernels.gpu__mapreduce_block!(::KernelAbstractions.CompilerMetadata{KernelAbstractions.NDIteration.DynamicSize, KernelAbstractions.NDIteration.DynamicCheck, Nothing, CartesianIndices{1, Tuple{Base.OneTo{Int64}}}, KernelAbstractions.NDIteration.NDRange{1, KernelAbstractions.NDIteration.DynamicSize, KernelAbstractions.NDIteration.StaticSize{(64,)}, CartesianIndices{1, Tuple{Base.OneTo{Int64}}}, Nothing}}, ::SubArray{Float32, 1, Base.ReshapedArray{Float32, 1, SubArray{Float32, 2, LavaDeviceArray{Float32, 2}, Tuple{UnitRange{Int64}, Base.Slice{Base.OneTo{Int64}}}, false}, Tuple{Base.MultiplicativeInverses.SignedMultiplicativeInverse{Int64}}}, Tuple{UnitRange{Int64}}, false}, ::LavaDeviceArray{Float32, 1}, ::typeof(abs2), ::typeof(+), ::Float32) resulted in invalid LLVM IR
+  Reason: unsupported dynamic function invocation (call to pointerset(ptr::Core.LLVMPtr{T, A}, x::T, i::Int64, ::Val{align}) where {T, A, align} @ LLVM.Interop none:0)
+  Stacktrace:
+   [1] unsafe_store! (repeats 2 times)
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/LLVM/JGisQ/src/interop/pointer.jl:95
+   [2] setindex!
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/Lava/V2Q5P/src/array/ka_backend.jl:1261
+   [3] macro expansion
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/mapreduce_1d_gpu.jl:19
+   [4] gpu__mapreduce_block!
+     @ ./none:0
+  Reason: unsupported dynamic function invocation (call to pointerset(ptr::Core.LLVMPtr{T, A}, x::T, i::Int64, ::Val{align}) where {T, A, align} @ LLVM.Interop none:0)
+  Stacktrace:
+   [1] unsafe_store! (repeats 2 times)
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/LLVM/JGisQ/src/interop/pointer.jl:95
+   [2] setindex!
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/Lava/V2Q5P/src/array/ka_backend.jl:1261
+   [3] macro expansion
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/mapreduce_1d_gpu.jl:21
+   [4] gpu__mapreduce_block!
+     @ ./none:0
+  Reason: unsupported dynamic function invocation (call to pointerset(ptr::Core.LLVMPtr{T, A}, x::T, i::Int64, ::Val{align}) where {T, A, align} @ LLVM.Interop none:0)
+  Stacktrace:
+   [1] unsafe_store! (repeats 2 times)
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/LLVM/JGisQ/src/interop/pointer.jl:95
+   [2] setindex!
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/Lava/V2Q5P/src/array/ka_backend.jl:1261
+   [3] macro expansion
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/mapreduce_1d_gpu.jl:23
+   [4] gpu__mapreduce_block!
+     @ ./none:0
+  Reason: unsupported dynamic function invocation (call to pointerref(ptr::Core.LLVMPtr{T, A}, i::Int64, ::Val{align}) where {T, A, align} @ LLVM.Interop none:0)
+  Stacktrace:
+   [1] unsafe_load (repeats 2 times)
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/LLVM/JGisQ/src/interop/pointer.jl:92
+   [2] getindex
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/Lava/V2Q5P/src/array/ka_backend.jl:1256
+   [3] reduce_group!
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/utilities.jl:68
+   [4] macro expansion
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/mapreduce_1d_gpu.jl:28
+   [5] gpu__mapreduce_block!
+     @ ./none:0
+  Reason: unsupported dynamic function invocation (call to +)
+  Stacktrace:
+   [1] reduce_group!
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/utilities.jl:68
+   [2] macro expansion
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/mapreduce_1d_gpu.jl:28
+   [3] gpu__mapreduce_block!
+     @ ./none:0
+  Reason: unsupported dynamic function invocation (call to convert)
+  Stacktrace:
+   [1] setindex!
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/Lava/V2Q5P/src/array/ka_backend.jl:1261
+   [2] reduce_group!
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/utilities.jl:68
+   [3] macro expansion
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/mapreduce_1d_gpu.jl:28
+   [4] gpu__mapreduce_block!
+     @ ./none:0
+  Reason: unsupported dynamic function invocation (call to convert)
+  Stacktrace:
+   [1] unsafe_store! (repeats 2 times)
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/LLVM/JGisQ/src/interop/pointer.jl:95
+   [2] setindex!
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/Lava/V2Q5P/src/array/ka_backend.jl:1261
+   [3] reduce_group!
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/utilities.jl:68
+   [4] macro expansion
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/mapreduce_1d_gpu.jl:28
+   [5] gpu__mapreduce_block!
+     @ ./none:0
+  Reason: unsupported call to an unknown function (call to jl_f_throw_methoderror)
+  Stacktrace:
+   [1] unsafe_store! (repeats 2 times)
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/LLVM/JGisQ/src/interop/pointer.jl:95
+   [2] setindex!
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/Lava/V2Q5P/src/array/ka_backend.jl:1261
+   [3] reduce_group!
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/utilities.jl:68
+   [4] macro expansion
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/mapreduce_1d_gpu.jl:28
+   [5] gpu__mapreduce_block!
+     @ ./none:0
+  Reason: unsupported dynamic function invocation (call to pointerset(ptr::Core.LLVMPtr{T, A}, x::T, i::Int64, ::Val{align}) where {T, A, align} @ LLVM.Interop none:0)
+  Stacktrace:
+   [1] unsafe_store! (repeats 2 times)
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/LLVM/JGisQ/src/interop/pointer.jl:95
+   [2] setindex!
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/Lava/V2Q5P/src/array/ka_backend.jl:1261
+   [3] reduce_group!
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/utilities.jl:68
+   [4] macro expansion
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/mapreduce_1d_gpu.jl:28
+   [5] gpu__mapreduce_block!
+     @ ./none:0
+  Reason: unsupported dynamic function invocation (call to pointerref(ptr::Core.LLVMPtr{T, A}, i::Int64, ::Val{align}) where {T, A, align} @ LLVM.Interop none:0)
+  Stacktrace:
+   [1] unsafe_load (repeats 2 times)
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/LLVM/JGisQ/src/interop/pointer.jl:92
+   [2] getindex
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/Lava/V2Q5P/src/array/ka_backend.jl:1256
+   [3] reduce_group!
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/utilities.jl:74
+   [4] macro expansion
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/mapreduce_1d_gpu.jl:28
+   [5] gpu__mapreduce_block!
+     @ ./none:0
+  Reason: unsupported dynamic function invocation (call to +)
+  Stacktrace:
+   [1] reduce_group!
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/utilities.jl:74
+   [2] macro expansion
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/mapreduce_1d_gpu.jl:28
+   [3] gpu__mapreduce_block!
+     @ ./none:0
+  Reason: unsupported dynamic function invocation (call to convert)
+  Stacktrace:
+   [1] setindex!
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/Lava/V2Q5P/src/array/ka_backend.jl:1261
+   [2] reduce_group!
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/utilities.jl:74
+   [3] macro expansion
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/mapreduce_1d_gpu.jl:28
+   [4] gpu__mapreduce_block!
+     @ ./none:0
+  Reason: unsupported dynamic function invocation (call to convert)
+  Stacktrace:
+   [1] unsafe_store! (repeats 2 times)
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/LLVM/JGisQ/src/interop/pointer.jl:95
+   [2] setindex!
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/Lava/V2Q5P/src/array/ka_backend.jl:1261
+   [3] reduce_group!
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/utilities.jl:74
+   [4] macro expansion
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/mapreduce_1d_gpu.jl:28
+   [5] gpu__mapreduce_block!
+     @ ./none:0
+  Reason: unsupported call to an unknown function (call to jl_f_throw_methoderror)
+  Stacktrace:
+   [1] unsafe_store! (repeats 2 times)
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/LLVM/JGisQ/src/interop/pointer.jl:95
+   [2] setindex!
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/Lava/V2Q5P/src/array/ka_backend.jl:1261
+   [3] reduce_group!
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/utilities.jl:74
+   [4] macro expansion
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/mapreduce_1d_gpu.jl:28
+   [5] gpu__mapreduce_block!
+     @ ./none:0
+  Reason: unsupported dynamic function invocation (call to pointerset(ptr::Core.LLVMPtr{T, A}, x::T, i::Int64, ::Val{align}) where {T, A, align} @ LLVM.Interop none:0)
+  Stacktrace:
+   [1] unsafe_store! (repeats 2 times)
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/LLVM/JGisQ/src/interop/pointer.jl:95
+   [2] setindex!
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/Lava/V2Q5P/src/array/ka_backend.jl:1261
+   [3] reduce_group!
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/utilities.jl:74
+   [4] macro expansion
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/mapreduce_1d_gpu.jl:28
+   [5] gpu__mapreduce_block!
+     @ ./none:0
+  Reason: unsupported dynamic function invocation (call to pointerref(ptr::Core.LLVMPtr{T, A}, i::Int64, ::Val{align}) where {T, A, align} @ LLVM.Interop none:0)
+  Stacktrace:
+   [1] unsafe_load (repeats 2 times)
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/LLVM/JGisQ/src/interop/pointer.jl:92
+   [2] getindex
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/Lava/V2Q5P/src/array/ka_backend.jl:1256
+   [3] reduce_group!
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/utilities.jl:80
+   [4] macro expansion
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/mapreduce_1d_gpu.jl:28
+   [5] gpu__mapreduce_block!
+     @ ./none:0
+  Reason: unsupported dynamic function invocation (call to +)
+  Stacktrace:
+   [1] reduce_group!
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/utilities.jl:80
+   [2] macro expansion
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/mapreduce_1d_gpu.jl:28
+   [3] gpu__mapreduce_block!
+     @ ./none:0
+  Reason: unsupported dynamic function invocation (call to convert)
+  Stacktrace:
+   [1] setindex!
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/Lava/V2Q5P/src/array/ka_backend.jl:1261
+   [2] reduce_group!
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/utilities.jl:80
+   [3] macro expansion
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/mapreduce_1d_gpu.jl:28
+   [4] gpu__mapreduce_block!
+     @ ./none:0
+  Reason: unsupported dynamic function invocation (call to convert)
+  Stacktrace:
+   [1] unsafe_store! (repeats 2 times)
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/LLVM/JGisQ/src/interop/pointer.jl:95
+   [2] setindex!
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/Lava/V2Q5P/src/array/ka_backend.jl:1261
+   [3] reduce_group!
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/utilities.jl:80
+   [4] macro expansion
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/mapreduce_1d_gpu.jl:28
+   [5] gpu__mapreduce_block!
+     @ ./none:0
+  Reason: unsupported call to an unknown function (call to jl_f_throw_methoderror)
+  Stacktrace:
+   [1] unsafe_store! (repeats 2 times)
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/LLVM/JGisQ/src/interop/pointer.jl:95
+   [2] setindex!
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/Lava/V2Q5P/src/array/ka_backend.jl:1261
+   [3] reduce_group!
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/utilities.jl:80
+   [4] macro expansion
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/mapreduce_1d_gpu.jl:28
+   [5] gpu__mapreduce_block!
+     @ ./none:0
+  Reason: unsupported dynamic function invocation (call to pointerset(ptr::Core.LLVMPtr{T, A}, x::T, i::Int64, ::Val{align}) where {T, A, align} @ LLVM.Interop none:0)
+  Stacktrace:
+   [1] unsafe_store! (repeats 2 times)
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/LLVM/JGisQ/src/interop/pointer.jl:95
+   [2] setindex!
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/Lava/V2Q5P/src/array/ka_backend.jl:1261
+   [3] reduce_group!
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/utilities.jl:80
+   [4] macro expansion
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/mapreduce_1d_gpu.jl:28
+   [5] gpu__mapreduce_block!
+     @ ./none:0
+  Reason: unsupported dynamic function invocation (call to pointerref(ptr::Core.LLVMPtr{T, A}, i::Int64, ::Val{align}) where {T, A, align} @ LLVM.Interop none:0)
+  Stacktrace:
+   [1] unsafe_load (repeats 2 times)
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/LLVM/JGisQ/src/interop/pointer.jl:92
+   [2] getindex
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/Lava/V2Q5P/src/array/ka_backend.jl:1256
+   [3] reduce_group!
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/utilities.jl:86
+   [4] macro expansion
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/mapreduce_1d_gpu.jl:28
+   [5] gpu__mapreduce_block!
+     @ ./none:0
+  Reason: unsupported dynamic function invocation (call to +)
+  Stacktrace:
+   [1] reduce_group!
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/utilities.jl:86
+   [2] macro expansion
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/mapreduce_1d_gpu.jl:28
+   [3] gpu__mapreduce_block!
+     @ ./none:0
+  Reason: unsupported dynamic function invocation (call to convert)
+  Stacktrace:
+   [1] setindex!
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/Lava/V2Q5P/src/array/ka_backend.jl:1261
+   [2] reduce_group!
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/utilities.jl:86
+   [3] macro expansion
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/mapreduce_1d_gpu.jl:28
+   [4] gpu__mapreduce_block!
+     @ ./none:0
+  Reason: unsupported dynamic function invocation (call to convert)
+  Stacktrace:
+   [1] unsafe_store! (repeats 2 times)
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/LLVM/JGisQ/src/interop/pointer.jl:95
+   [2] setindex!
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/Lava/V2Q5P/src/array/ka_backend.jl:1261
+   [3] reduce_group!
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/utilities.jl:86
+   [4] macro expansion
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/mapreduce_1d_gpu.jl:28
+   [5] gpu__mapreduce_block!
+     @ ./none:0
+  Reason: unsupported call to an unknown function (call to jl_f_throw_methoderror)
+  Stacktrace:
+   [1] unsafe_store! (repeats 2 times)
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/LLVM/JGisQ/src/interop/pointer.jl:95
+   [2] setindex!
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/Lava/V2Q5P/src/array/ka_backend.jl:1261
+   [3] reduce_group!
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/utilities.jl:86
+   [4] macro expansion
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/mapreduce_1d_gpu.jl:28
+   [5] gpu__mapreduce_block!
+     @ ./none:0
+  Reason: unsupported dynamic function invocation (call to pointerset(ptr::Core.LLVMPtr{T, A}, x::T, i::Int64, ::Val{align}) where {T, A, align} @ LLVM.Interop none:0)
+  Stacktrace:
+   [1] unsafe_store! (repeats 2 times)
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/LLVM/JGisQ/src/interop/pointer.jl:95
+   [2] setindex!
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/Lava/V2Q5P/src/array/ka_backend.jl:1261
+   [3] reduce_group!
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/utilities.jl:86
+   [4] macro expansion
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/mapreduce_1d_gpu.jl:28
+   [5] gpu__mapreduce_block!
+     @ ./none:0
+  Reason: unsupported dynamic function invocation (call to pointerref(ptr::Core.LLVMPtr{T, A}, i::Int64, ::Val{align}) where {T, A, align} @ LLVM.Interop none:0)
+  Stacktrace:
+   [1] unsafe_load (repeats 2 times)
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/LLVM/JGisQ/src/interop/pointer.jl:92
+   [2] getindex
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/Lava/V2Q5P/src/array/ka_backend.jl:1256
+   [3] reduce_group!
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/utilities.jl:92
+   [4] macro expansion
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/mapreduce_1d_gpu.jl:28
+   [5] gpu__mapreduce_block!
+     @ ./none:0
+  Reason: unsupported dynamic function invocation (call to +)
+  Stacktrace:
+   [1] reduce_group!
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/utilities.jl:92
+   [2] macro expansion
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/mapreduce_1d_gpu.jl:28
+   [3] gpu__mapreduce_block!
+     @ ./none:0
+  Reason: unsupported dynamic function invocation (call to convert)
+  Stacktrace:
+   [1] setindex!
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/Lava/V2Q5P/src/array/ka_backend.jl:1261
+   [2] reduce_group!
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/utilities.jl:92
+   [3] macro expansion
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/mapreduce_1d_gpu.jl:28
+   [4] gpu__mapreduce_block!
+     @ ./none:0
+  Reason: unsupported dynamic function invocation (call to convert)
+  Stacktrace:
+   [1] unsafe_store! (repeats 2 times)
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/LLVM/JGisQ/src/interop/pointer.jl:95
+   [2] setindex!
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/Lava/V2Q5P/src/array/ka_backend.jl:1261
+   [3] reduce_group!
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/utilities.jl:92
+   [4] macro expansion
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/mapreduce_1d_gpu.jl:28
+   [5] gpu__mapreduce_block!
+     @ ./none:0
+  Reason: unsupported call to an unknown function (call to jl_f_throw_methoderror)
+  Stacktrace:
+   [1] unsafe_store! (repeats 2 times)
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/LLVM/JGisQ/src/interop/pointer.jl:95
+   [2] setindex!
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/Lava/V2Q5P/src/array/ka_backend.jl:1261
+   [3] reduce_group!
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/utilities.jl:92
+   [4] macro expansion
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/mapreduce_1d_gpu.jl:28
+   [5] gpu__mapreduce_block!
+     @ ./none:0
+  Reason: unsupported dynamic function invocation (call to pointerset(ptr::Core.LLVMPtr{T, A}, x::T, i::Int64, ::Val{align}) where {T, A, align} @ LLVM.Interop none:0)
+  Stacktrace:
+   [1] unsafe_store! (repeats 2 times)
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/LLVM/JGisQ/src/interop/pointer.jl:95
+   [2] setindex!
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/Lava/V2Q5P/src/array/ka_backend.jl:1261
+   [3] reduce_group!
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/utilities.jl:92
+   [4] macro expansion
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/mapreduce_1d_gpu.jl:28
+   [5] gpu__mapreduce_block!
+     @ ./none:0
+  Reason: unsupported dynamic function invocation (call to pointerref(ptr::Core.LLVMPtr{T, A}, i::Int64, ::Val{align}) where {T, A, align} @ LLVM.Interop none:0)
+  Stacktrace:
+   [1] unsafe_load (repeats 2 times)
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/LLVM/JGisQ/src/interop/pointer.jl:92
+   [2] getindex
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/Lava/V2Q5P/src/array/ka_backend.jl:1256
+   [3] reduce_group!
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/utilities.jl:98
+   [4] macro expansion
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/mapreduce_1d_gpu.jl:28
+   [5] gpu__mapreduce_block!
+     @ ./none:0
+  Reason: unsupported dynamic function invocation (call to +)
+  Stacktrace:
+   [1] reduce_group!
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/utilities.jl:98
+   [2] macro expansion
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/mapreduce_1d_gpu.jl:28
+   [3] gpu__mapreduce_block!
+     @ ./none:0
+  Reason: unsupported dynamic function invocation (call to convert)
+  Stacktrace:
+   [1] setindex!
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/Lava/V2Q5P/src/array/ka_backend.jl:1261
+   [2] reduce_group!
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/utilities.jl:98
+   [3] macro expansion
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/mapreduce_1d_gpu.jl:28
+   [4] gpu__mapreduce_block!
+     @ ./none:0
+  Reason: unsupported dynamic function invocation (call to convert)
+  Stacktrace:
+   [1] unsafe_store! (repeats 2 times)
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/LLVM/JGisQ/src/interop/pointer.jl:95
+   [2] setindex!
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/Lava/V2Q5P/src/array/ka_backend.jl:1261
+   [3] reduce_group!
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/utilities.jl:98
+   [4] macro expansion
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/mapreduce_1d_gpu.jl:28
+   [5] gpu__mapreduce_block!
+     @ ./none:0
+  Reason: unsupported call to an unknown function (call to jl_f_throw_methoderror)
+  Stacktrace:
+   [1] unsafe_store! (repeats 2 times)
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/LLVM/JGisQ/src/interop/pointer.jl:95
+   [2] setindex!
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/Lava/V2Q5P/src/array/ka_backend.jl:1261
+   [3] reduce_group!
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/utilities.jl:98
+   [4] macro expansion
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/mapreduce_1d_gpu.jl:28
+   [5] gpu__mapreduce_block!
+     @ ./none:0
+  Reason: unsupported dynamic function invocation (call to pointerset(ptr::Core.LLVMPtr{T, A}, x::T, i::Int64, ::Val{align}) where {T, A, align} @ LLVM.Interop none:0)
+  Stacktrace:
+   [1] unsafe_store! (repeats 2 times)
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/LLVM/JGisQ/src/interop/pointer.jl:95
+   [2] setindex!
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/Lava/V2Q5P/src/array/ka_backend.jl:1261
+   [3] reduce_group!
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/utilities.jl:98
+   [4] macro expansion
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/mapreduce_1d_gpu.jl:28
+   [5] gpu__mapreduce_block!
+     @ ./none:0
+  Reason: unsupported dynamic function invocation (call to pointerref(ptr::Core.LLVMPtr{T, A}, i::Int64, ::Val{align}) where {T, A, align} @ LLVM.Interop none:0)
+  Stacktrace:
+   [1] unsafe_load (repeats 2 times)
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/LLVM/JGisQ/src/interop/pointer.jl:92
+   [2] getindex
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/Lava/V2Q5P/src/array/ka_backend.jl:1256
+   [3] macro expansion
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/mapreduce_1d_gpu.jl:44
+   [4] gpu__mapreduce_block!
+     @ ./none:0
+  Reason: unsupported dynamic function invocation (call to convert)
+  Stacktrace:
+   [1] setindex!
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/Lava/V2Q5P/src/array/ka_backend.jl:973
+   [2] macro expansion
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/mapreduce_1d_gpu.jl:44
+   [3] gpu__mapreduce_block!
+     @ ./none:0
+  Reason: unsupported dynamic function invocation (call to convert)
+  Stacktrace:
+   [1] unsafe_store!
+     @ ./pointer.jl:178
+   [2] setindex!
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/Lava/V2Q5P/src/array/ka_backend.jl:973
+   [3] macro expansion
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/mapreduce_1d_gpu.jl:44
+   [4] gpu__mapreduce_block!
+     @ ./none:0
+  Hint: catch this exception as `err` and call `code_typed(err; interactive = true)` to introspect the erroneous code with Cthulhu.jl
+  Stacktrace:
+    [1] check_ir(job::GPUCompiler.CompilerJob{GPUCompiler.SPIRVCompilerTarget, Lava.LavaCompilerParams}, mod::LLVM.Module, relocs::GPUCompiler.Relocations)
+      @ GPUCompiler ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/GPUCompiler/wym4d/src/validation.jl:169
+    [2] emit_llvm(job::GPUCompiler.CompilerJob; resolve_relocations::Bool)
+      @ GPUCompiler ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/GPUCompiler/wym4d/src/driver.jl:424
+    [3] compile_unhooked(output::Symbol, job::GPUCompiler.CompilerJob; resolve_relocations::Bool)
+      @ GPUCompiler ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/GPUCompiler/wym4d/src/driver.jl:80
+    [4] compile_unhooked
+      @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/GPUCompiler/wym4d/src/driver.jl:64 [inlined]
+    [5] compile
+      @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/GPUCompiler/wym4d/src/driver.jl:61 [inlined]
+    [6] (::Lava.var"#145#146"{Bool, Bool, Bool, GPUCompiler.CompilerJob{GPUCompiler.SPIRVCompilerTarget, Lava.LavaCompilerParams}, Tuple{Int64, Int64, Int64}})(ctx::LLVM.Context)
+      @ Lava ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/Lava/V2Q5P/src/compiler/compilation.jl:668
+    [7] JuliaContext(f::Lava.var"#145#146"{Bool, Bool, Bool, GPUCompiler.CompilerJob{GPUCompiler.SPIRVCompilerTarget, Lava.LavaCompilerParams}, Tuple{Int64, Int64, Int64}}; kwargs::@Kwargs{})
+      @ GPUCompiler ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/GPUCompiler/wym4d/src/driver.jl:34
+    [8] JuliaContext
+      @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/GPUCompiler/wym4d/src/driver.jl:25 [inlined]
+    [9] #lava_compile_gpu_from_job#143
+      @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/Lava/V2Q5P/src/compiler/compilation.jl:665 [inlined]
+   [10] lava_compile_gpu_from_job
+      @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/Lava/V2Q5P/src/compiler/compilation.jl:660 [inlined]
+   [11] lava_kernel_compile
+      @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/Lava/V2Q5P/src/runtime/launch.jl:464 [inlined]
+┌ Info: Lava: initialized Vulkan device with RT
+│   device = "NVIDIA GeForce RTX 5060"
+│   queue_family = 0x00000000
+│   handle_size = 0x00000020
+│   max_recursion = 0x0000001f
+│   validation = false
+│   gpu_assisted = false
+│   sync_val = false
+└   debug_utils = true
+┌ Warning: Vulkan driver note (type=1, not a validation error)
+│   message = "loader_create_device_chain: Failed to find 'vkGetInstanceProcAddr' in layer \"/home/mattc/.local/share/vulkan/implicit_layer.d/../../../lib/liblsfg-vk-layer.so\".  Skipping layer."
+└ @ Lava ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/Lava/V2Q5P/src/runtime/device.jl:1799
+ERROR: LoadError: Some tests did not pass: 4 passed, 0 failed, 1 errored, 0 broken.
+in expression starting at /home/mattc/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/relocated-gesso/test/regime_i_package.jl:23
+   [12] actual_compilation(cache::Dict{Any, Lava.LavaLinkedKernel}, src::Core.MethodInstance, world::UInt64, cfg::GPUCompiler.CompilerConfig{GPUCompiler.SPIRVCompilerTarget, Lava.LavaCompilerParams}, compiler::typeof(Lava.lava_kernel_compile), linker::Lava.LavaLinker)
+      @ GPUCompiler ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/GPUCompiler/wym4d/src/deprecated.jl:303
+   [13] cached_compilation(cache::Dict{Any, Lava.LavaLinkedKernel}, src::Core.MethodInstance, cfg::GPUCompiler.CompilerConfig{GPUCompiler.SPIRVCompilerTarget, Lava.LavaCompilerParams}, compiler::Function, linker::Function)
+      @ GPUCompiler ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/GPUCompiler/wym4d/src/deprecated.jl:282
+   [14] get_compiled_kernel_and_pipeline(ctx::Lava.VkContext, f::Any, tt::Any, workgroup_size::Tuple{Int64, Int64, Int64}; enable_ray_query::Bool)
+      @ Lava ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/Lava/V2Q5P/src/runtime/launch.jl:541
+   [15] get_compiled_kernel_and_pipeline
+      @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/Lava/V2Q5P/src/runtime/launch.jl:515 [inlined]
+   [16] build_launch_plan!(bq::BatchQueue, f::Any, all_args::Tuple{typeof(AcceleratedKernels.gpu__mapreduce_block!), KernelAbstractions.CompilerMetadata{KernelAbstractions.NDIteration.DynamicSize, KernelAbstractions.NDIteration.DynamicCheck, Nothing, CartesianIndices{1, Tuple{Base.OneTo{Int64}}}, KernelAbstractions.NDIteration.NDRange{1, KernelAbstractions.NDIteration.DynamicSize, KernelAbstractions.NDIteration.StaticSize{(64,)}, CartesianIndices{1, Tuple{Base.OneTo{Int64}}}, Nothing}}, SubArray{Float32, 1, Base.ReshapedArray{Float32, 1, SubArray{Float32, 2, LavaDeviceArray{Float32, 2}, Tuple{UnitRange{Int64}, Base.Slice{Base.OneTo{Int64}}}, false}, Tuple{Base.MultiplicativeInverses.SignedMultiplicativeInverse{Int64}}}, Tuple{UnitRange{Int64}}, false}, LavaDeviceArray{Float32, 1}, typeof(abs2), typeof(+), Float32}, wg::Tuple{Int64, Int64, Int64}, ray_query::Bool, key::DataType, world::UInt64)
+      @ Lava ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/Lava/V2Q5P/src/array/ka_backend.jl:735
+   [17] launch_plan(bq::BatchQueue, f::Any, all_args::Tuple{typeof(AcceleratedKernels.gpu__mapreduce_block!), KernelAbstractions.CompilerMetadata{KernelAbstractions.NDIteration.DynamicSize, KernelAbstractions.NDIteration.DynamicCheck, Nothing, CartesianIndices{1, Tuple{Base.OneTo{Int64}}}, KernelAbstractions.NDIteration.NDRange{1, KernelAbstractions.NDIteration.DynamicSize, KernelAbstractions.NDIteration.StaticSize{(64,)}, CartesianIndices{1, Tuple{Base.OneTo{Int64}}}, Nothing}}, SubArray{Float32, 1, Base.ReshapedArray{Float32, 1, SubArray{Float32, 2, LavaDeviceArray{Float32, 2}, Tuple{UnitRange{Int64}, Base.Slice{Base.OneTo{Int64}}}, false}, Tuple{Base.MultiplicativeInverses.SignedMultiplicativeInverse{Int64}}}, Tuple{UnitRange{Int64}}, false}, LavaDeviceArray{Float32, 1}, typeof(abs2), typeof(+), Float32}, wg::Tuple{Int64, Int64, Int64}, ray_query::Bool)
+      @ Lava ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/Lava/V2Q5P/src/array/ka_backend.jl:726
+   [18] ka_launch!(bq::BatchQueue, f::Any, all_args::Tuple{typeof(AcceleratedKernels.gpu__mapreduce_block!), KernelAbstractions.CompilerMetadata{KernelAbstractions.NDIteration.DynamicSize, KernelAbstractions.NDIteration.DynamicCheck, Nothing, CartesianIndices{1, Tuple{Base.OneTo{Int64}}}, KernelAbstractions.NDIteration.NDRange{1, KernelAbstractions.NDIteration.DynamicSize, KernelAbstractions.NDIteration.StaticSize{(64,)}, CartesianIndices{1, Tuple{Base.OneTo{Int64}}}, Nothing}}, SubArray{Float32, 1, Base.ReshapedArray{Float32, 1, SubArray{Float32, 2, LavaDeviceArray{Float32, 2}, Tuple{UnitRange{Int64}, Base.Slice{Base.OneTo{Int64}}}, false}, Tuple{Base.MultiplicativeInverses.SignedMultiplicativeInverse{Int64}}}, Tuple{UnitRange{Int64}}, false}, LavaDeviceArray{Float32, 1}, typeof(abs2), typeof(+), Float32}, block_dims::Tuple{Int64, Int64, Int64}, workgroup_size::Tuple{Int64, Int64, Int64}, tlas::Nothing)
+      @ Lava ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/Lava/V2Q5P/src/array/ka_backend.jl:753
+   [19] (::KernelAbstractions.Kernel{LavaBackend, KernelAbstractions.NDIteration.StaticSize{(64,)}, KernelAbstractions.NDIteration.DynamicSize, typeof(AcceleratedKernels.gpu__mapreduce_block!)})(::SubArray{Float32, 1, Base.ReshapedArray{Float32, 1, SubArray{Float32, 2, LavaArray{Float32, 2}, Tuple{UnitRange{Int64}, Base.Slice{Base.OneTo{Int64}}}, false}, Tuple{Base.MultiplicativeInverses.SignedMultiplicativeInverse{Int64}}}, Tuple{UnitRange{Int64}}, false}, ::Vararg{Any}; ndrange::Tuple{Int64}, workgroupsize::Nothing)
+      @ Lava ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/Lava/V2Q5P/src/array/ka_backend.jl:630
+   [20] mapreduce_1d_gpu(f::typeof(abs2), op::typeof(+), src::SubArray{Float32, 2, LavaArray{Float32, 2}, Tuple{UnitRange{Int64}, Base.Slice{Base.OneTo{Int64}}}, false}, backend::LavaBackend; init::Float32, neutral::Float32, max_tasks::Int64, min_elems::Int64, block_size::Int64, temp::LavaArray{Float32, 1}, switch_below::Int64)
+      @ AcceleratedKernels ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/mapreduce_1d_gpu.jl:95
+   [21] #_mapreduce_impl#83
+      @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/reduce.jl:187 [inlined]
+   [22] _mapreduce_impl
+      @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/reduce.jl:169 [inlined]
+   [23] #mapreduce#82
+      @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/reduce.jl:161 [inlined]
+   [24] mapreduce
+      @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/AcceleratedKernels/AdYRJ/src/reduce/reduce.jl:156 [inlined]
+   [25] _lava_dimreduce(f::Function, op::Function, a::SubArray{Float32, 2, LavaArray{Float32, 2}, Tuple{UnitRange{Int64}, Base.Slice{Base.OneTo{Int64}}}, false}, dim::Int64, init::Float32)
+      @ GessoLavaExt ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/relocated-gesso/ext/lava_ops.jl:81
+   [26] _lava_rmsnorm!(dst::Activation, x::Activation, scale::FrozenParameter; eps::Float64)
+      @ GessoLavaExt ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/relocated-gesso/ext/lava_ops.jl:108
+   [27] _lava_rmsnorm!
+      @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/relocated-gesso/ext/lava_ops.jl:98 [inlined]
+   [28] #rmsnorm!#7
+      @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/relocated-gesso/ext/lava_ops.jl:230 [inlined]
+   [29] rmsnorm!
+      @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/relocated-gesso/ext/lava_ops.jl:220 [inlined]
+   [30] _prefill_impl!(s::Session, tokens::Vector{Int64}, span::Gesso.Inference._EngineSpan)
+      @ Gesso.Inference ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/relocated-gesso/src/Inference/session.jl:740
+   [31] #prefill!##0
+      @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/relocated-gesso/src/Inference/session.jl:670 [inlined]
+   [32] _audited_owned(f::Gesso.Inference.var"#prefill!##0#prefill!##1"{Session, Vector{Int64}}, s::Session, task::Symbol; max_new_tokens::Nothing)
+      @ Gesso.Inference ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/relocated-gesso/src/Inference/session.jl:612
+   [33] _audited(f::Function, s::Session, task::Symbol; max_new_tokens::Nothing)
+      @ Gesso.Inference ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/relocated-gesso/src/Inference/session.jl:649
+   [34] _audited
+      @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/relocated-gesso/src/Inference/session.jl:642 [inlined]
+   [35] prefill!(s::Session, tokens::Vector{Int64})
+      @ Gesso.Inference ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/relocated-gesso/src/Inference/session.jl:669
+   [36] macro expansion
+      @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/relocated-gesso/test/regime_i_package.jl:30 [inlined]
+   [37] macro expansion
+      @ ~/.julia/juliaup/julia-1.12.6+0.x64.linux.gnu/share/julia/stdlib/v1.12/Test/src/Test.jl:1777 [inlined]
+   [38] top-level scope
+      @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/relocated-gesso/test/regime_i_package.jl:24
+   [39] include(mod::Module, _path::String)
+      @ Base ./Base.jl:306
+   [40] exec_options(opts::Base.JLOptions)
+      @ Base ./client.jl:317
+   [41] _start()
+      @ Base ./client.jl:550
+Test Summary:                             | Pass  Error  Total   Time
+Relocated fresh-depot lava real inference |    4      1      5  27.3s
+RNG of the outermost testset: Random.Xoshiro(0x2e19e7e9e332c2f8, 0xb38659e4d0df900d, 0xb723f6083dd5eea1, 0x13b13b2ab6b726fe, 0x663961ec8a012d36)

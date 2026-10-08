@@ -35,19 +35,18 @@ module Inference
 using ..Gesso:
     AbstractGessoBackend,
     CPUBackend,
-    PrefillWorkload,
-    DecodeWorkload,
     Activation,
     EmbeddingTable,
     ProjectionWeight,
     FrozenParameter,
     TemporaryWorkspace,
-    KVCache,
     backend_name,
+    _backend_storage_root,
     gesso_error,
     LoweringNotImplemented,
     ERR_INVALID_PLAN,
     ERR_RESOURCE_LIMIT,
+    ERR_NUMERICAL_INSTABILITY,
     ReceiptSink,
     default_receipt_sink,
     emit!,
@@ -58,6 +57,9 @@ using ..Gesso:
     matmul!,
     softmax!,
     swiglu!
+using ..Semantics: PrefillWorkload, DecodeWorkload
+using ..Parameters: KVCache
+
 # Phase 3 (§LXXVI item B): the importer composes ModelIR primitives — same
 # vocabulary, a new composition (§VIII: no LlamaModel type)
 using ..ModelIR: Embedding, RMSNorm, RoPE, Attention, SwiGLU, Block, Model
@@ -100,9 +102,10 @@ function reference_prefill(
     tokens::AbstractVector{Int};
     backend::AbstractGessoBackend=CPUBackend(),
     eps::Real=1e-6,
-    theta::Real=10000.0,
+    theta=nothing,
 )
     isempty(tokens) && error("reference_prefill: token sequence is empty")
+    theta=_resolved_rope_theta(tensors, theta)
     _infer_device_storage!(:reference_prefill, backend, tensors)
     cpu = backend
     wl = PrefillWorkload()
@@ -127,7 +130,7 @@ function reference_prefill(
     # BREADTH-0 Pass D: the positional policy TRAVELS WITH the imported model.
     # `nothing` for every unscaled model ⇒ the oracle evaluates its original
     # expression ⇒ Llama is bit-identical (regression law §XIII).
-    inv_freq = tensors_rope_inv_freq(tensors, d_head)
+    inv_freq = tensors_rope_inv_freq(tensors, d_head; theta)
     on_cpu = backend_name(cpu) === :cpu
     T = typeof(tensors.embedding.storage)      # buffers live where the data lives
     zeros_like =
@@ -196,42 +199,36 @@ function reference_prefill(
         _split_heads!(kh, k, n_kv_heads, d_head)
         _split_heads!(vh, v, n_kv_heads, d_head)
 
-        rope!(cpu, qh, kh, positions, wl; theta, inv_freq)
+        rope!(
+            cpu,
+            qh,
+            kh,
+            positions,
+            wl;
+            theta,
+            inv_freq,
+            interleaved=_tensors_rope_interleaved(tensors),
+        )
 
         # repeat KV heads for the contraction only (identity when MHA)
         kx = _repeat_heads(kh, group)
         vx = _repeat_heads(vh, group)
 
-        # scores per head: (seq, seq), scaled by √d_head. CPU keeps its
-        # scalar loops (bit-identical, §LXXV); device storage gets the same
-        # math as broadcasts (§LXXVII).
-        fill!(scores.storage, zero(eltype(scores.storage)))
-        if on_cpu
-            for t in 1:seq, u in 1:seq, hh in 1:n_heads, j in 1:d_head
-                scores.storage[t, u] +=
-                    qh.storage[t, hh, j] * kx.storage[u, hh, j] / sqrt(d_head)
-            end
-        else
-            for hh in 1:n_heads, j in 1:d_head
-                @views scores.storage[:, :] .+=
-                    qh.storage[:, hh, j] .* kx.storage[:, hh, j]' ./ sqrt(d_head)
-            end
-        end
-        softmax!(cpu, scores_out, scores, wl)   # causal mask applied inside
+        _attention_heads!(
+            cpu,
+            attn.storage,
+            scores,
+            scores_out,
+            qh.storage,
+            kx.storage,
+            vx.storage,
+            n_heads,
+            d_head,
+            seq,
+            seq,
+            wl,
+        )
 
-        # attention @ v, per head
-        fill!(attn.storage, zero(eltype(attn.storage)))
-        if on_cpu
-            for t in 1:seq, hh in 1:n_heads, j in 1:d_head, u in 1:seq
-                attn.storage[t, hh, j] += scores_out.storage[t, u] * vx.storage[u, hh, j]
-            end
-        else
-            for hh in 1:n_heads, j in 1:d_head
-                @views attn.storage[:, hh, j] .= scores_out.storage * vx.storage[:, hh, j]
-            end
-        end
-
-        # merge heads back to (seq, dim), then output projection + residual
         _merge_heads!(merged, attn, n_heads, d_head)
         matmul!(cpu, sub, merged, bt.wo, wl)
         h.storage .+= sub.storage               # residual (interpreter add)
@@ -265,6 +262,87 @@ function reference_prefill(
     )
     matmul!(cpu, seqvocab, hhead, lm_head, wl)
     return permutedims(seqvocab.storage)        # (vocab, seq)
+end
+
+# Each query head owns its softmax distribution. The 2D score workspace
+# is reused head by head; reducing across heads before softmax changes the
+# model. GQA repetition has already mapped each query head to its KV head.
+function _attention_heads!(
+    backend,
+    attn::AbstractArray,
+    scores,
+    scores_out,
+    q::AbstractArray,
+    k::AbstractArray,
+    v::AbstractArray,
+    n_heads::Int,
+    d_head::Int,
+    L::Int,
+    K::Int,
+    workload,
+)
+    sc, probs = scores.storage, scores_out.storage
+    on_cpu = backend_name(backend) === :cpu
+    on_cpu && fill!(attn, zero(eltype(attn)))
+    for hh in 1:n_heads
+        if on_cpu
+            fill!(sc, zero(eltype(sc)))
+            _attention_scores_cpu!(sc, q, k, hh, d_head, L, K)
+        else
+            # Ordinary per-head GEMM over explicit device slices. No host
+            # transfer, no cross-head contraction, no padded keys.
+            _attention_scores_device!(backend, sc, q, k, hh, d_head, K)
+        end
+        softmax!(backend, scores_out, scores, workload)
+        if on_cpu
+            _attention_values_cpu!(attn, probs, v, hh, d_head, L, K)
+        else
+            _attention_values_device!(backend, attn, probs, v, hh, K)
+        end
+    end
+    return attn
+end
+
+# Backend-specific in-place realizations may replace these ordinary slice
+# contractions without altering the shared attention/softmax semantics.
+function _attention_scores_device!(
+    backend,
+    sc,
+    q::AbstractArray,
+    k::AbstractArray,
+    hh,
+    d_head,
+    K,
+)
+    qh, kh = q[:, hh, :], k[1:K, hh, :]
+    sc .= (qh * transpose(kh)) ./ sqrt(d_head)
+    return sc
+end
+function _attention_values_device!(
+    backend,
+    attn::AbstractArray,
+    probs,
+    v::AbstractArray,
+    hh,
+    K,
+)
+    vh = v[1:K, hh, :]
+    @views attn[:, hh, :] .= probs * vh
+    return attn
+end
+
+function _attention_scores_cpu!(sc, q, k, hh, d_head, L, K)
+    for t in 1:L, u in 1:K, j in 1:d_head
+        sc[t, u] += q[t, hh, j] * k[u, hh, j] / sqrt(d_head)
+    end
+    return sc
+end
+
+function _attention_values_cpu!(attn, probs, v, hh, d_head, L, K)
+    for t in 1:L, j in 1:d_head, u in 1:K
+        attn[t, hh, j] += probs[t, u] * v[u, hh, j]
+    end
+    return attn
 end
 
 # head-major split/merge between (seq, dim) and (seq, n_heads, d_head).
@@ -325,7 +403,6 @@ _merge_heads!(dst::Activation, src::Activation, n_heads, d_head) =
 # (to_device is the explicit transfer). Host Array storage under CUDA is
 # ERR_INVALID_PLAN, not a silent transfer (§LXX).
 function _infer_device_storage!(where::Symbol, backend::AbstractGessoBackend, tensors)
-    backend_name(backend) === :cpu && return nothing
     _check_device_storage(where, backend, tensors.embedding)
     tensors.lm_head === tensors.embedding ||
         _check_device_storage(where, backend, tensors.lm_head)
@@ -339,18 +416,28 @@ function _infer_device_storage!(where::Symbol, backend::AbstractGessoBackend, te
     return nothing
 end
 
+# Inspect wrappers without copying: CPU views and another device are not
+# interchangeable with the explicitly requested backend.
+_storage_root(s) = _backend_storage_root(s)
+
 function _check_device_storage(where::Symbol, backend, t)
-    s = t.storage
-    s === nothing &&
-        error("$where: tensor storage is unset — materialize before calling (§LXXV)")
-    s isa Array || return nothing             # already device (or otherwise OK)
     throw(
         gesso_error(
             ERR_INVALID_PLAN,
-            "$where: backend :$(backend_name(backend)) received host Array " *
-            "storage — call to_device(tensors, backend) first; the " *
-            "interpreter does not copy host memory to the device (§LXXVII)";
+            "$where: unsupported backend storage";
             backend=backend_name(backend),
+            storage_type=string(typeof(t.storage)),
+        ),
+    )
+end
+function _check_device_storage(where::Symbol, backend::CPUBackend, t)
+    _storage_root(t.storage) isa Array && eltype(t.storage) === Float64 && return nothing
+    throw(
+        gesso_error(
+            ERR_INVALID_PLAN,
+            "$where: CPUBackend requires materialized host Array Float64 storage";
+            backend=:cpu,
+            storage_type=string(typeof(t.storage)),
         ),
     )
 end
@@ -478,9 +565,10 @@ function reference_generate(
     max_new_tokens::Int=8,
     info=nothing,
     eps::Real=1e-6,
-    theta::Real=10000.0,
+    theta=nothing,
 )
     isempty(prompt) && error("reference_generate: prompt is empty")
+    theta=_resolved_rope_theta(tensors, theta)
     _infer_device_storage!(:reference_generate, backend, tensors)
     cpu = backend
     wp, wd = PrefillWorkload(), DecodeWorkload()
@@ -552,7 +640,7 @@ function reference_generate(
 
     positions = collect(0:(P-1))
     # BREADTH-0 Pass D — see reference_prefill. `nothing` = unscaled model.
-    inv_freq = tensors_rope_inv_freq(tensors, d_head)
+    inv_freq = tensors_rope_inv_freq(tensors, d_head; theta)
     # the prefill phase works on rows 1..P of h through a VIEW (Activation
     # storage is untyped by design; scratch stays exactly (P, …)-shaped so
     # softmax never sees padded zero columns — they would poison the
@@ -568,7 +656,16 @@ function reference_generate(
         _split_heads!(qh, q, n_heads, d_head)
         _split_heads!(kh, k, n_kv_heads, d_head)
         _split_heads!(vh, v, n_kv_heads, d_head)
-        rope!(cpu, qh, kh, positions, wp; theta, inv_freq)
+        rope!(
+            cpu,
+            qh,
+            kh,
+            positions,
+            wp;
+            theta,
+            inv_freq,
+            interleaved=_tensors_rope_interleaved(tensors),
+        )
         # KV APPEND: the prefill's post-rope K/V become cache rows 1..P,
         # stored at n_kv_heads (GQA caches the small side, §LXXVI)
         kc[bi].storage[1:P, :, :] .= kh.storage
@@ -576,30 +673,21 @@ function reference_generate(
         # repeat KV heads for the contraction only (identity when MHA)
         kx = _repeat_heads(kh, group)
         vx = _repeat_heads(vh, group)
-        # attention over the cache (identical math/order to reference_prefill)
-        fill!(scores.storage, zero(eltype(scores.storage)))
-        if on_cpu
-            for t in 1:P, u in 1:P, hh in 1:n_heads, j in 1:d_head
-                scores.storage[t, u] +=
-                    qh.storage[t, hh, j] * kx.storage[u, hh, j] / sqrt(d_head)
-            end
-        else
-            for hh in 1:n_heads, j in 1:d_head
-                @views scores.storage[:, :] .+=
-                    qh.storage[:, hh, j] .* kx.storage[:, hh, j]' ./ sqrt(d_head)
-            end
-        end
-        softmax!(cpu, scores_out, scores, wp)
-        fill!(attn.storage, zero(eltype(attn.storage)))
-        if on_cpu
-            for t in 1:P, hh in 1:n_heads, j in 1:d_head, u in 1:P
-                attn.storage[t, hh, j] += scores_out.storage[t, u] * vx.storage[u, hh, j]
-            end
-        else
-            for hh in 1:n_heads, j in 1:d_head
-                @views attn.storage[:, hh, j] .= scores_out.storage * vx.storage[:, hh, j]
-            end
-        end
+        _attention_heads!(
+            cpu,
+            attn.storage,
+            scores,
+            scores_out,
+            qh.storage,
+            kx.storage,
+            vx.storage,
+            n_heads,
+            d_head,
+            P,
+            P,
+            wp,
+        )
+
         _merge_heads!(merged, attn, n_heads, d_head)
         matmul!(cpu, sub, merged, bt.wo, wp)
         hp.storage .+= sub.storage
@@ -618,7 +706,7 @@ function reference_generate(
         # argmax may run over device storage — only the scalar id crosses
         # back to the host
         logits_row = _last_logits(model, tensors, h, cpu, wd, vocab, P + steps; eps)
-        next = Int(argmax(logits_row)) - 1            # 0-based id
+        next = _greedy_id(logits_row)            # 0-based id
         push!(ids, next)
         steps += 1
         (next == TOY_EOS || steps >= cap) && break
@@ -745,7 +833,16 @@ function _decode_step!(
         _split_heads!(qh, q, n_heads, d_head)
         _split_heads!(kh, k, n_kv_heads, d_head)
         _split_heads!(vh, v, n_kv_heads, d_head)
-        rope!(cpu, qh, kh, [pos0 - 1], wl; theta, inv_freq)  # 0-based position
+        rope!(
+            cpu,
+            qh,
+            kh,
+            [pos0 - 1],
+            wl;
+            theta,
+            inv_freq,
+            interleaved=_tensors_rope_interleaved(tensors),
+        )  # 0-based position
         # KV APPEND: exactly one row per layer per step, at n_kv_heads
         kc[bi].storage[pos0, :, :] .= kh.storage[1, :, :]
         vc[bi].storage[pos0, :, :] .= vh.storage[1, :, :]
@@ -754,38 +851,21 @@ function _decode_step!(
         # new row; it was consumed by the append)
         kx = _repeat_heads(kc[bi], group)
         vx = _repeat_heads(vc[bi], group)
-        fill!(scores.storage, zero(eltype(scores.storage)))
-        if on_cpu
-            for u in 1:K, hh in 1:n_heads, j in 1:d_head
-                scores.storage[1, u] +=
-                    qh.storage[1, hh, j] * kx.storage[u, hh, j] / sqrt(d_head)
-            end
-        else
-            # one-row contraction: per query head, q's (d_head,) row against
-            # the (K, d_head) slice of k — CUBLAS matvec over device copies
-            # (real gathers, no scalar indexing on device storage, §LXXVII)
-            for hh in 1:n_heads
-                q1 = vec(qh.storage[1, hh, :])          # (d_head,) device copy
-                # rows 1..K ONLY: the cache buffer is (P + cap) rows and
-                # decode attends to filled rows 1..K (the CPU loop is
-                # `u in 1:K`); indexing (not view) drops the head dim → (K, d_head)
-                Kmat = kx.storage[1:K, hh, :]
-                @views scores.storage[1, :] .+= (Kmat * q1) ./ sqrt(d_head)
-            end
-        end
-        softmax!(cpu, scores_out, scores, wl)   # offset mask: nothing masked
-        fill!(attn.storage, zero(eltype(attn.storage)))
-        if on_cpu
-            for hh in 1:n_heads, j in 1:d_head, u in 1:K
-                attn.storage[1, hh, j] += scores_out.storage[1, u] * vx.storage[u, hh, j]
-            end
-        else
-            for hh in 1:n_heads
-                V = vx.storage[1:K, hh, :]              # (K, d_head) device copy
-                # (1,K)·(K,d) → (1,d): vec to the (d,) row shape the view wants
-                @views attn.storage[1, hh, :] .= vec(scores_out.storage * V)
-            end
-        end
+        _attention_heads!(
+            cpu,
+            attn.storage,
+            scores,
+            scores_out,
+            qh.storage,
+            kx.storage,
+            vx.storage,
+            n_heads,
+            d_head,
+            1,
+            K,
+            wl,
+        )
+
         _merge_heads!(merged, attn, n_heads, d_head)
         matmul!(cpu, sub, merged, bt.wo, wl)
         hp.storage .+= sub.storage              # residual

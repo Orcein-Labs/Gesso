@@ -1,0 +1,97 @@
+┌ Info: Lava: initialized Vulkan device with RT
+│   device = "NVIDIA GeForce RTX 5060"
+│   queue_family = 0x00000000
+│   handle_size = 0x00000020
+│   max_recursion = 0x0000001f
+│   validation = false
+│   gpu_assisted = false
+│   sync_val = false
+└   debug_utils = true
+┌ Warning: Vulkan driver note (type=1, not a validation error)
+│   message = "loader_create_device_chain: Failed to find 'vkGetInstanceProcAddr' in layer \"/home/mattc/.local/share/vulkan/implicit_layer.d/../../../lib/liblsfg-vk-layer.so\".  Skipping layer."
+└ @ Lava ~/.julia/packages/Lava/V2Q5P/src/runtime/device.jl:1799
+┌ Info: Numerical rejection
+│   actual_type = GessoError
+└   actual_error = "GessoError(ERR_NUMERICAL_INSTABILITY): inference: nonfinite logits; no token may be emitted"
+┌ Info: Numerical rejection
+│   actual_type = GessoError
+└   actual_error = "GessoError(ERR_NUMERICAL_INSTABILITY): inference: nonfinite logits; no token may be emitted"
+┌ Info: Numerical rejection
+│   actual_type = GessoError
+└   actual_error = "GessoError(ERR_NUMERICAL_INSTABILITY): inference: nonfinite logits; no token may be emitted"
+┌ Info: Numerical rejection
+│   actual_type = GessoError
+└   actual_error = "GessoError(ERR_NUMERICAL_INSTABILITY): softmax!: no finite unmasked maximum"
+┌ Info: Numerical rejection
+│   actual_type = GessoError
+└   actual_error = "GessoError(ERR_NUMERICAL_INSTABILITY): rmsnorm!: nonfinite normalization denominator"
+┌ Info: Numerical rejection
+│   actual_type = GessoError
+└   actual_error = "GessoError(ERR_NUMERICAL_INSTABILITY): inference: nonfinite logits; no token may be emitted"
+┌ Info: Numerical rejection
+│   actual_type = GessoError
+└   actual_error = "GessoError(ERR_NUMERICAL_INSTABILITY): inference: nonfinite logits; no token may be emitted"
+┌ Info: Numerical rejection
+│   actual_type = GessoError
+└   actual_error = "GessoError(ERR_NUMERICAL_INSTABILITY): inference: nonfinite logits; no token may be emitted"
+┌ Info: Numerical rejection
+│   actual_type = GessoError
+└   actual_error = "GessoError(ERR_NUMERICAL_INSTABILITY): softmax!: no finite unmasked maximum"
+┌ Info: Numerical rejection
+│   actual_type = GessoError
+└   actual_error = "GessoError(ERR_NUMERICAL_INSTABILITY): rmsnorm!: nonfinite normalization denominator"
+┌ Info: Numerical rejection
+│   actual_type = GessoError
+└   actual_error = "GessoError(ERR_NUMERICAL_INSTABILITY): inference: nonfinite logits; no token may be emitted"
+┌ Info: Numerical rejection
+│   actual_type = GessoError
+└   actual_error = "GessoError(ERR_NUMERICAL_INSTABILITY): inference: nonfinite logits; no token may be emitted"
+┌ Info: Numerical rejection
+│   actual_type = GessoError
+└   actual_error = "GessoError(ERR_NUMERICAL_INSTABILITY): inference: nonfinite logits; no token may be emitted"
+┌ Info: Numerical rejection
+│   actual_type = GessoError
+└   actual_error = "GessoError(ERR_NUMERICAL_INSTABILITY): inference: nonfinite logits; no token may be emitted"
+┌ Info: Numerical rejection
+│   actual_type = GessoError
+└   actual_error = "GessoError(ERR_NUMERICAL_INSTABILITY): inference: nonfinite logits; no token may be emitted"
+┌ Info: Numerical rejection
+│   actual_type = GessoError
+└   actual_error = "GessoError(ERR_NUMERICAL_INSTABILITY): inference: nonfinite logits; no token may be emitted"
+┌ Info: Numerical rejection
+│   actual_type = GessoError
+└   actual_error = "GessoError(ERR_NUMERICAL_INSTABILITY): inference: nonfinite logits; no token may be emitted"
+┌ Info: Numerical rejection
+│   actual_type = GessoError
+└   actual_error = "GessoError(ERR_NUMERICAL_INSTABILITY): inference: nonfinite logits; no token may be emitted"
+┌ Info: Numerical rejection
+│   actual_type = GessoError
+└   actual_error = "GessoError(ERR_NUMERICAL_INSTABILITY): inference: nonfinite logits; no token may be emitted"
+┌ Info: Numerical rejection
+│   actual_type = GessoError
+└   actual_error = "GessoError(ERR_NUMERICAL_INSTABILITY): inference: nonfinite logits; no token may be emitted"
+┌ Info: Numerical rejection
+│   actual_type = GessoError
+└   actual_error = "GessoError(ERR_NUMERICAL_INSTABILITY): inference: nonfinite logits; no token may be emitted"
+Test Summary:                         | Pass  Total     Time
+Independent native lava numeric gates |   47     47  3m28.8s
+Test Summary:                                        | Pass  Total  Time
+ModelIR primitives (§CIX): construction + validation |   11     11  0.2s
+Test Summary:                                    | Pass  Total  Time
+ModelIR (§CIX): toy2 round-trip from the fixture |    8      8  1.5s
+Test Summary:                          | Pass  Total  Time
+ModelIR (§CIX): identity is structural |    6      6  0.0s
+Test Summary:                              | Pass  Total  Time
+ModelIR (§CIX): nodes are immutable values |    5      5  0.0s
+Test Summary:                                              | Pass  Total  Time
+prefill oracle: shape + determinism (atol=0, same process) |    4      4  3.2s
+Test Summary:                                                      | Pass  Total  Time
+prefill oracle: causal property (position 0 cannot see position 3) |    3      3  0.1s
+Test Summary:                                                        | Pass  Total  Time
+prefill oracle: last-position argmax drives generation (item C seam) |    4      4  0.1s
+Test Summary:                                                | Pass  Total  Time
+prefill oracle: greedy path is stable under prompt prefixing |    4      4  0.3s
+Test Summary:                                                              | Pass  Total  Time
+known logits: persisted slot vs recomputed (atol=1e-10, cross-commit gate) |    5      5  0.0s
+Test Summary:                              | Pass  Total  Time
+Primary Lava rejects poisoned model output |   15     15  1.4s

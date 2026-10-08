@@ -1,0 +1,18 @@
+ERROR: LoadError: Some tests did not pass: 2 passed, 1 failed, 0 errored, 0 broken.
+in expression starting at /home/mattc/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/regime_i_context.jl:4
+External HF positional frequencies: Test Failed at /home/mattc/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/regime_i_context.jl:10
+  Expression: isapprox(freq, Float64.(case["inv_freq"]); atol = 1.0e-8, rtol = 1.0e-6)
+   Evaluated: isapprox([1.0, 0.09457416090031757, 0.00894427190999916, 0.0008458970107524513], [0.125, 0.007029266096651554, 0.00039528473280370235, 2.2228492525755428e-5]; atol = 1.0e-8, rtol = 1.0e-6)
+
+Stacktrace:
+ [1] top-level scope
+   @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/regime_i_context.jl:5
+ [2] macro expansion
+   @ ~/.julia/juliaup/julia-1.12.6+0.x64.linux.gnu/share/julia/stdlib/v1.12/Test/src/Test.jl:1777 [inlined]
+ [3] macro expansion
+   @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/regime_i_context.jl:10 [inlined]
+ [4] macro expansion
+   @ ~/.julia/juliaup/julia-1.12.6+0.x64.linux.gnu/share/julia/stdlib/v1.12/Test/src/Test.jl:680 [inlined]
+Test Summary:                      | Pass  Fail  Total  Time
+External HF positional frequencies |    2     1      3  3.2s
+RNG of the outermost testset: Random.Xoshiro(0xa115bd29350627b1, 0x57782772666c5c34, 0xc2f24dd68fd4feb1, 0x0e825af67b2c0f3a, 0xdbca356e95a8a058)

@@ -83,7 +83,10 @@ mutable struct InMemorySink <: ReceiptSink
     dropped::UInt64
     function InMemorySink(capacity::Int=10_000)
         capacity > 0 || throw(ArgumentError("capacity must be positive"))
-        new(Vector{Receipt}(undef, 0), capacity, ReentrantLock(), UInt64(0))
+        buf=Vector{Receipt}(undef, 0)
+        # Push-before-drop needs one transient slot; reserve outside action timing.
+        sizehint!(buf, capacity+1)
+        new(buf, capacity, ReentrantLock(), UInt64(0))
     end
 end
 
@@ -108,7 +111,8 @@ function emit!(sink::InMemorySink, r::Receipt)
             # us the receipt we are currently auditing.
             push!(sink.buf, r)
             while length(sink.buf) > sink.capacity
-                deleteat!(sink.buf, 1)
+                copyto!(sink.buf, 1, sink.buf, 2, length(sink.buf)-1)
+                pop!(sink.buf)
                 sink.dropped += UInt64(1)
             end
             sink.dropped == 1 &&

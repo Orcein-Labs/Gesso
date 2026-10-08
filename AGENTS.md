@@ -1,5 +1,8 @@
 # AGENTS.md — Gesso Agent Charter
 
+## SPECIAL NOTE FOR CODEX!!
+## IF THE TASK IS SIMPLE, IT IS PREFERRED TO DEPLOY A CHEAP LUNA 6 MAX OR MULTIPLE OF THEM TO QUICKLY FINISH BATCH WORK
+
 **Every agent working in this repository operates under this charter.**
 It transcribes laws from `docs/Gesso_Stack.md` (canon, sections referenced
 as §NNN). Reading the charter is not a substitute for reading the canon —
@@ -109,7 +112,8 @@ run in this repo produced.
 src/           package core (see docs/ARCHITECTURE.md for the module map)
 test/          test harness — per-area files included from runtests.jl
 benchmark/     benchmark harness — results land in benchmark/results/
-docs/          Gesso_Stack.md is CANON; docs/research/ is research program
+RPD_SOP.md     R&D SOP for team leads (identical copies in Palette and Cyan)
+docs/          Gesso_Stack.md is CANON; docs/research/README.md is the research index
 libs/          DO NOT TOUCH (local dev checkouts)
 scripts/       dev commands (test/bench/format/freeze)
 ```

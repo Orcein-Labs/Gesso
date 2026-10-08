@@ -1,0 +1,1 @@
+{"schema":"gesso-containment-v1","backend":"lava","interrupted_callbacks":["ErrorException","InterruptException"],"invalid_ids":[-1,49152,"9223372036854775807"],"recovery":"exact HF eight-token sequence","driver_loss":"not forced or certified"}

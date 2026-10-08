@@ -159,3 +159,45 @@ end
     @test err.code == Gesso.ERR_VERIFY_MISMATCH
     @test occursin("no registered candidates", sprint(showerror, err))
 end
+
+@testset "Ordinary registry winner lookup preserves name replacement" begin
+    A=Gesso.Autotune
+    @test A._candidate(:regime_i_lookup, :cpu, :missing)===nothing
+    first=A.Candidate(:same, x->(x[]=1), x->true)
+    A.register!(:regime_i_lookup, :cpu, first)
+    @test A._candidate(:regime_i_lookup, :cpu, :same)===first
+    copy_list=A.candidates(:regime_i_lookup, :cpu)
+    empty!(copy_list)
+    @test A._candidate(:regime_i_lookup, :cpu, :same)===first
+    replacement=A.Candidate(:same, x->(x[]=2), x->true)
+    A.register!(:regime_i_lookup, :cpu, replacement)
+    @test A._candidate(:regime_i_lookup, :cpu, :same)===replacement
+    value=Ref(0)
+    A._candidate(:regime_i_lookup, :cpu, :same).run!(value)
+    @test value[]==2
+    @test A._candidate(:regime_i_lookup, :cpu, :missing)===nothing
+    @test :_candidate ∉ names(A)
+end
+
+@testset "Existing cached winner consult preserves miss and invalidation" begin
+    A=Gesso.Autotune
+    @test A._cached_winner(:regime_i_consult, :cpu, :r, "probe")===nothing
+    A.register!(:regime_i_consult, :cpu, A.Candidate(:same, b->(b[]+=1), b->true))
+    result=A.select(:regime_i_consult, :cpu, :r, "probe", Ref(0); samples=1, warmup=1)
+    @test A._cached_winner(:regime_i_consult, :cpu, :r, "probe")===result.winner
+    @test A.cached_result(:regime_i_consult, :cpu, :r; device="probe").cache_hit===false
+    A.invalidate!(:regime_i_consult, :cpu, :r; device="probe")
+    @test A._cached_winner(:regime_i_consult, :cpu, :r, "probe")===nothing
+    @test :_cached_winner ∉ names(A)
+end
+
+@testset "Private registry runner preserves current function identity" begin
+    A=Gesso.Autotune
+    f=x->x
+    g=x->2x
+    A.register!(:runner_probe, :cpu, A.Candidate(:same, f, x->true))
+    @test A._candidate_runner(:runner_probe, :cpu, :same)===f
+    A.register!(:runner_probe, :cpu, A.Candidate(:same, g, x->true))
+    @test A._candidate_runner(:runner_probe, :cpu, :same)===g
+    @test A._candidate_runner(:runner_probe, :cpu, :missing)===nothing
+end

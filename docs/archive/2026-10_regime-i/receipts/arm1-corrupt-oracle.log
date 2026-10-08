@@ -1,0 +1,54 @@
+WARNING: Imported binding Gesso.PrefillWorkload was undeclared at import time during import to Inference.
+WARNING: Imported binding Gesso.DecodeWorkload was undeclared at import time during import to Inference.
+WARNING: Imported binding Gesso.KVCache was undeclared at import time during import to Inference.
+┌ Info: HF parity
+│   prompt = "Hello"
+└   max_abs_delta = 0.9999969567759877
+┌ Info: HF parity
+│   prompt = "The quick brown fox"
+└   max_abs_delta = 4.1132091650908364e-5
+┌ Info: HF parity
+│   prompt = "Julia is a programming language."
+└   max_abs_delta = 2.4394184665155194e-5
+ERROR: LoadError: Some tests did not pass: 43 passed, 2 failed, 0 errored, 0 broken.
+in expression starting at /home/mattc/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/gesso/test/test_hf_parity.jl:6
+Hello: Test Failed at /home/mattc/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/gesso/test/test_hf_parity.jl:61
+  Expression: delta <= 0.01
+   Evaluated: 0.9999969567759877 <= 0.01
+
+Stacktrace:
+ [1] top-level scope
+   @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/gesso/test/test_hf_parity.jl:7
+ [2] macro expansion
+   @ ~/.julia/juliaup/julia-1.12.6+0.x64.linux.gnu/share/julia/stdlib/v1.12/Test/src/Test.jl:1777 [inlined]
+ [3] macro expansion
+   @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/gesso/test/test_hf_parity.jl:37 [inlined]
+ [4] macro expansion
+   @ ~/.julia/juliaup/julia-1.12.6+0.x64.linux.gnu/share/julia/stdlib/v1.12/Test/src/Test.jl:1777 [inlined]
+ [5] macro expansion
+   @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/gesso/test/test_hf_parity.jl:61 [inlined]
+ [6] macro expansion
+   @ ~/.julia/juliaup/julia-1.12.6+0.x64.linux.gnu/share/julia/stdlib/v1.12/Test/src/Test.jl:680 [inlined]
+Hello: Test Failed at /home/mattc/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/gesso/test/test_hf_parity.jl:62
+  Expression: maximum(abs.(engine[:, end] .- expected)) <= 0.01
+   Evaluated: 0.9999969567759877 <= 0.01
+
+Stacktrace:
+ [1] top-level scope
+   @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/gesso/test/test_hf_parity.jl:7
+ [2] macro expansion
+   @ ~/.julia/juliaup/julia-1.12.6+0.x64.linux.gnu/share/julia/stdlib/v1.12/Test/src/Test.jl:1777 [inlined]
+ [3] macro expansion
+   @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/gesso/test/test_hf_parity.jl:37 [inlined]
+ [4] macro expansion
+   @ ~/.julia/juliaup/julia-1.12.6+0.x64.linux.gnu/share/julia/stdlib/v1.12/Test/src/Test.jl:1777 [inlined]
+ [5] macro expansion
+   @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/gesso/test/test_hf_parity.jl:62 [inlined]
+ [6] macro expansion
+   @ ~/.julia/juliaup/julia-1.12.6+0.x64.linux.gnu/share/julia/stdlib/v1.12/Test/src/Test.jl:680 [inlined]
+Test Summary:                                             | Pass  Fail  Total   Time
+Independent HF/PyTorch real-model parity (Regime I arm 1) |   43     2     45  43.1s
+  Hello                                                   |    5     2      7  20.6s
+  The quick brown fox                                     |    7            7   5.8s
+  Julia is a programming language.                        |    7            7   5.8s
+RNG of the outermost testset: Random.Xoshiro(0x6e23a05aeaa8ea7d, 0x33fa41c8505ee877, 0x53544880cc5882e0, 0xa7ed459c0dcecae4, 0x4234b77c3a27be7e)

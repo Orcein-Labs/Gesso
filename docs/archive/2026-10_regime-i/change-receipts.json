@@ -1,0 +1,637 @@
+{
+  "schema": "gesso-campaign-change-receipts-v1",
+  "baseline_commit": "a4e7f04bec4a775b59b1ca1356aaaa9f10d0d673",
+  "final_commit": "68d5d060300c773d7576b0ee7a5fbd6bfe5e2615",
+  "commits": [
+    {
+      "commit": "0a69c221b47150ce2422d3271bba53f0c1e0bc4c",
+      "change": "Fix checkpoint coordinates, positional layout and per-head attention; add independent HF gate"
+    },
+    {
+      "commit": "5ba1912d32612fff62b2eb34c9739f6ce532bb2e",
+      "change": "Refresh independently validated regression goldens and correct Phi-3 fixture transport"
+    },
+    {
+      "commit": "022f6f1bdd0db6e02362e1e0aa4a695e51d40963",
+      "change": "Reject ambiguous checkpoint transport and validate loader boundaries"
+    },
+    {
+      "commit": "11b983d6546e8c15f9539044ea1d929cc7f8b016",
+      "change": "Prove deterministic replay and primary Lava lifecycle; retain comparison receipts"
+    },
+    {
+      "commit": "64e3af878e7be27f37f0d906b68761e1b6c09b56",
+      "change": "Require explicit backend storage and prove primary Lava device execution"
+    },
+    {
+      "commit": "583f407eb86213714e45ca404c63453f5454479d",
+      "change": "Validate native numerics and reject nonfinite Lava model output reliably"
+    },
+    {
+      "commit": "533e9387076964caf78b57a154d8eb1b3e544ad5",
+      "change": "Reject unsupported native CPU arithmetic at every operator boundary"
+    },
+    {
+      "commit": "6cffc10456c9dd5ac21f19c0f71079612413abd2",
+      "change": "Validate primary positional scaling and cached context against HF"
+    },
+    {
+      "commit": "982f8010b18d9ae0b3398d4639ac87eafa7387d0",
+      "change": "Own ordinary sequences and bound primary reduction temporaries"
+    },
+    {
+      "commit": "61bc997668b10b1622beecba0b4dd81217499800",
+      "change": "Contain typed inference failures and prove same-session recovery"
+    },
+    {
+      "commit": "2d7f5efd5107c6a35583119915a1169f8009cdcf",
+      "change": "Make engine receipts truthful and preserve inference across faulty sinks"
+    },
+    {
+      "commit": "78ada786dd3f13379ed68048e2bff6057c88345b",
+      "change": "Establish ordinary performance floor and bound dispatch bookkeeping"
+    },
+    {
+      "commit": "68d5d060300c773d7576b0ee7a5fbd6bfe5e2615",
+      "change": "Verify relocated Regime I package and close combined-host regressions"
+    }
+  ],
+  "gates": {
+    "1": {
+      "status": "passed",
+      "cpu_suite": {
+        "pass": 2607,
+        "broken_or_skipped": 20,
+        "fail": 0
+      },
+      "receipt": "arm1-make-test-final.log"
+    },
+    "2": {
+      "status": "passed",
+      "pass": 2647,
+      "fail": 0,
+      "broken_or_skipped": 20,
+      "malformed_boundary_checks": 40,
+      "receipt": "arm2-make-test.log"
+    },
+    "3": {
+      "status": "passed",
+      "assertions": 57,
+      "variants": [
+        "j1-b1",
+        "j2-b2",
+        "j4-b1"
+      ],
+      "receipt_pattern": "arm3-*.json"
+    },
+    "4": {
+      "status": "passed",
+      "cpu_assertions": 67,
+      "lava_assertions": 40,
+      "receipt": "arm4-lava-final.json",
+      "owned_gpu_bytes": 539395328,
+      "owned_julia_growth_bytes": 7472,
+      "trimmed_device_growth_bytes": 0
+    },
+    "5": {
+      "status": "passed",
+      "assertions": 75,
+      "receipt": "arm5-primary-device.json",
+      "unavailable_device_receipt": "arm5-device-unavailable.log",
+      "primary_backend": "Lava Vulkan",
+      "hardware": "RTX 5060",
+      "amd": "not available, no certification"
+    },
+    "6": {
+      "status": "passed",
+      "cpu_numeric_assertions": 47,
+      "lava_numeric_assertions": 47,
+      "lava_poison_regression_assertions": 15,
+      "cpu_suite_pass": 2668,
+      "cpu_suite_broken_or_skipped": 21,
+      "receipt": "arm6-lava.json",
+      "negative_control": "arm6-lava-initial.log",
+      "finding": "GPU isfinite incorrectly returns true for NaN/Inf; Gesso uses on-device IEEE classification",
+      "cpu_dtype_checks": 12,
+      "dtype_receipt": "arm6-dtype-make-test.log"
+    },
+    "7": {
+      "status": "passed",
+      "cpu_assertions": 46,
+      "lava_assertions": 46,
+      "cpu_suite_pass": 2673,
+      "cpu_suite_broken_or_skipped": 21,
+      "receipt": "arm7-lava.json",
+      "real_model_lengths": [
+        17,
+        33,
+        65,
+        129
+      ],
+      "rotary_max_position": 32768,
+      "negative_control": "arm7-linear-negative.log"
+    },
+    "8": {
+      "status": "passed",
+      "cpu_assertions": 24,
+      "lava_assertions": 21,
+      "cpu_suite_pass": 2691,
+      "cpu_suite_broken_or_skipped": 21,
+      "receipt": "arm8-lava.json",
+      "numeric_revalidation": "arm8-numeric-revalidation.json",
+      "context_revalidation": "arm8-context-revalidation.json",
+      "mapped_buffers_per_completed_token": 5,
+      "negative_controls": [
+        "arm8-lava-initial.log",
+        "arm8-lava-full-gc.log",
+        "arm8-pooled-nd-negative.log"
+      ]
+    },
+    "9": {
+      "status": "passed",
+      "cpu_assertions": 29,
+      "lava_assertions": 29,
+      "cpu_suite_pass": 2738,
+      "cpu_suite_broken_or_skipped": 21,
+      "receipt": "arm9-lava.json",
+      "operation_failure": "host projection after KV write, permanent regression",
+      "recovery": "exact independent HF output on same Session"
+    },
+    "10": {
+      "status": "passed",
+      "cpu_assertions": 39,
+      "lava_assertions": 39,
+      "cpu_suite_pass": 2754,
+      "cpu_suite_broken_or_skipped": 21,
+      "receipt": "arm10-lava.json",
+      "allocation_limits": "unchanged; passed",
+      "digest_reference": "digest-reference.json"
+    },
+    "11": {
+      "status": "passed",
+      "cpu_suite_pass": 2772,
+      "cpu_device_skips": 18,
+      "lava_performance_pass": 27,
+      "cuda_performance_pass": 27,
+      "cuda_parity_pass": 9,
+      "cuda_allocation_bytes": 1025696,
+      "unchanged_cuda_ceiling_bytes": 1048576,
+      "runner_replacement_pass": 4,
+      "lava_numeric_pass": 51,
+      "lava_context_pass": 46,
+      "lava_containment_pass": 29,
+      "lava_observability_pass": 39,
+      "lava_lifecycle_pass": 40,
+      "receipts": [
+        "arm11-cpu-dispatch-final.log",
+        "arm11-final-primary.log",
+        "arm11-lava-after.json",
+        "arm11-cuda-after.log",
+        "arm11-cuda-after.json",
+        "arm11-pytorch.json",
+        "arm11-dispatch-replacement.log",
+        "final-cuda-parity.json",
+        "arm12-final-primary.log"
+      ],
+      "primary_speed_claim": "reproducible measured baseline, not a clear normalization speed gain",
+      "default_receipt_storage": "reserved before actions, bounded through overflow",
+      "cpu_expected_broken": 3,
+      "final_revalidation": "arm12-final-primary.log",
+      "cuda_normalization": "legacy Float64 intermediates, Float32 storage; rejected native attempt retained"
+    },
+    "12": {
+      "status": "passed",
+      "cpu_suite_pass": 2772,
+      "cpu_device_skips": 18,
+      "cpu_expected_broken": 3,
+      "host_suite_pass": 3113,
+      "host_device_skips": 0,
+      "host_expected_broken": 3,
+      "fresh_cpu_pass": 13,
+      "fresh_lava_pass": 13,
+      "lava_final_performance_pass": 27,
+      "lava_final_observability_pass": 39,
+      "lava_final_containment_pass": 29,
+      "lava_final_lifecycle_pass": 40,
+      "cuda_final_performance_pass": 27,
+      "cuda_final_parity_pass": 9,
+      "cuda_allocation_bytes": 1025696,
+      "cuda_allocation_ceiling_bytes": 1048576,
+      "core_dependencies_unchanged": true,
+      "installed_dependency_identities_unchanged": 180,
+      "relocated_source_files_identical": 188,
+      "format_and_diff_check": "passed",
+      "compiler_prerequisite_helper_cold_exit": 0,
+      "lava_revision": "11c7e31bdf62408d22bf379e9e59510f69d2103e",
+      "automatic_lava_precompile": "not certified; documented source execution after locked compiler prerequisite preparation passes",
+      "type_stability_limit": "three inherited @inferred checks remain expected-broken on unchanged storage::Any hierarchy",
+      "receipts": [
+        "arm12-host-full.log",
+        "arm12-cpu-final.log",
+        "arm12-fresh-cpu-final.log",
+        "arm12-final-primary.log",
+        "arm12-fresh-cpu.json",
+        "arm12-fresh-lava.json",
+        "arm12-install-evidence.json",
+        "arm12-manifest-resolve.json",
+        "arm12-relocation-identities.json",
+        "arm12-integration-repair.json",
+        "arm12-prerequisite-helper-cold.log",
+        "arm12-format-check.log",
+        "lava-source-pin.json"
+      ]
+    }
+  },
+  "isolation": "receipts/final-isolation.json",
+  "hardware": {
+    "gpu": "NVIDIA GeForce RTX 5060",
+    "driver": "615.71.09",
+    "gpu_memory_mib": 8151,
+    "cpu": "Intel(R) Xeon(R) CPU E5-2699 v3 @ 2.30GHz",
+    "julia": "1.12.6",
+    "julia_threads": 2,
+    "blas_threads": 2,
+    "model": "SmolLM2-135M",
+    "primary_backend": "Lava/Vulkan",
+    "comparison_backend": "CUDA",
+    "independent_reference": "2.11.0+cu128"
+  },
+  "model": "SmolLM2-135M",
+  "primary_backend": "Lava/Vulkan",
+  "comparison_backend": "CUDA",
+  "numerical_delta": "fixed atol=0.01 rtol=0; exact 8-token greedy continuations; see per-gate independent receipts",
+  "benchmark_before": {
+    "lava": {
+      "schema": "gesso-performance-floor-v1",
+      "backend": "lava",
+      "initialization_seconds": 82.460455829,
+      "load_seconds": 7.661199077,
+      "transfer_seconds": 7.855354764,
+      "records": [
+        {
+          "prompt": "Hello",
+          "first_use_seconds": 74.043637973,
+          "samples_seconds": [
+            3.37560946,
+            3.609866393,
+            3.377098746
+          ],
+          "median_seconds": 3.377098746,
+          "end_to_end_new_tokens_per_second": 2.368897270023741,
+          "median_decode_tokens_per_second": 2.6623258809837846,
+          "host_allocations_bytes": [
+            331419928,
+            331417224,
+            331417224
+          ],
+          "warmed_decode_allocation_bytes": 36378144,
+          "gc_seconds": [
+            0.0,
+            0.0,
+            0.0
+          ]
+        },
+        {
+          "prompt": "The quick brown fox",
+          "first_use_seconds": 12.671901085,
+          "samples_seconds": [
+            3.23779168,
+            3.427968016,
+            3.195192119
+          ],
+          "median_seconds": 3.23779168,
+          "end_to_end_new_tokens_per_second": 2.470819864482449,
+          "median_decode_tokens_per_second": 2.738301922842456,
+          "host_allocations_bytes": [
+            338581064,
+            338581064,
+            338581064
+          ],
+          "warmed_decode_allocation_bytes": 37185520,
+          "gc_seconds": [
+            0.0,
+            0.0,
+            0.0
+          ]
+        },
+        {
+          "prompt": "Julia is a programming language.",
+          "first_use_seconds": 5.499785301,
+          "samples_seconds": [
+            3.390846305,
+            3.329480002,
+            3.262600394
+          ],
+          "median_seconds": 3.329480002,
+          "end_to_end_new_tokens_per_second": 2.4027776094748865,
+          "median_decode_tokens_per_second": 2.657473050067523,
+          "host_allocations_bytes": [
+            348916936,
+            348916936,
+            348916936
+          ],
+          "warmed_decode_allocation_bytes": 37970816,
+          "gc_seconds": [
+            0.0,
+            0.0,
+            0.0
+          ]
+        }
+      ],
+      "device": {
+        "live_bytes": 855638064,
+        "live_buffers": 6,
+        "deferred_frees": 0,
+        "ARG_SLABS": 1,
+        "pipelines_cached": 88,
+        "kernels_cached": 91
+      },
+      "warmup_calls": 2,
+      "samples": 3,
+      "compile_excluded": true,
+      "storage_dtype": "Float32",
+      "normalization_intermediate": "Float64 promoted intermediate baseline",
+      "workload": "single session greedy, host-visible IDs",
+      "comparison": "implementation pipelines; not identical floating point instruction sequences"
+    },
+    "cuda": {
+      "schema": "gesso-performance-floor-v1",
+      "backend": "cuda",
+      "initialization_seconds": 72.436463102,
+      "load_seconds": 7.860046648,
+      "transfer_seconds": 1.154895071,
+      "records": [
+        {
+          "prompt": "Hello",
+          "first_use_seconds": 90.807120656,
+          "samples_seconds": [
+            0.266081743,
+            0.260701803,
+            0.271958018
+          ],
+          "median_seconds": 0.266081743,
+          "end_to_end_new_tokens_per_second": 30.06594856829392,
+          "median_decode_tokens_per_second": 34.759493632386636,
+          "host_allocations_bytes": [
+            11335608,
+            11332904,
+            11332968
+          ],
+          "warmed_decode_allocation_bytes": 1108368,
+          "gc_seconds": [
+            0.0,
+            0.0,
+            0.0
+          ]
+        },
+        {
+          "prompt": "The quick brown fox",
+          "first_use_seconds": 1.338730923,
+          "samples_seconds": [
+            0.275029964,
+            0.30983101,
+            0.280021561
+          ],
+          "median_seconds": 0.280021561,
+          "end_to_end_new_tokens_per_second": 28.569228638790428,
+          "median_decode_tokens_per_second": 34.389258081933455,
+          "host_allocations_bytes": [
+            12345400,
+            12345384,
+            12345400
+          ],
+          "warmed_decode_allocation_bytes": 1108448,
+          "gc_seconds": [
+            0.0,
+            0.0,
+            0.0
+          ]
+        },
+        {
+          "prompt": "Julia is a programming language.",
+          "first_use_seconds": 0.285806668,
+          "samples_seconds": [
+            0.278925674,
+            0.285552242,
+            0.285062006
+          ],
+          "median_seconds": 0.285062006,
+          "end_to_end_new_tokens_per_second": 28.064069681737948,
+          "median_decode_tokens_per_second": 34.39070729729841,
+          "host_allocations_bytes": [
+            13087528,
+            13087528,
+            13087528
+          ],
+          "warmed_decode_allocation_bytes": 1108368,
+          "gc_seconds": [
+            0.0,
+            0.0,
+            0.0
+          ]
+        }
+      ],
+      "device": {
+        "name": "NVIDIA GeForce RTX 5060"
+      },
+      "warmup_calls": 2,
+      "samples": 3,
+      "compile_excluded": true,
+      "storage_dtype": "Float32",
+      "normalization_intermediate": "Float64 promoted intermediate baseline",
+      "workload": "single session greedy, host-visible IDs",
+      "comparison": "implementation pipelines; not identical floating point instruction sequences"
+    }
+  },
+  "benchmark_after": {
+    "lava": {
+      "schema": "gesso-performance-floor-v1",
+      "backend": "lava",
+      "initialization_seconds": 10.325645119,
+      "load_seconds": 13.472866273,
+      "transfer_seconds": 7.897898596,
+      "records": [
+        {
+          "prompt": "Hello",
+          "first_use_seconds": 74.483558688,
+          "samples_seconds": [
+            3.572009255,
+            3.330548636,
+            3.226600066
+          ],
+          "median_seconds": 3.330548636,
+          "end_to_end_new_tokens_per_second": 2.4020066584609396,
+          "median_decode_tokens_per_second": 2.6825306782901444,
+          "host_allocations_bytes": [
+            331471720,
+            331470648,
+            331470648
+          ],
+          "warmed_decode_allocation_bytes": 36355200,
+          "gc_seconds": [
+            0.0,
+            0.0,
+            0.0
+          ]
+        },
+        {
+          "prompt": "The quick brown fox",
+          "first_use_seconds": 12.323016566,
+          "samples_seconds": [
+            3.214426706,
+            3.388903848,
+            3.105879527
+          ],
+          "median_seconds": 3.214426706,
+          "end_to_end_new_tokens_per_second": 2.4887797208339895,
+          "median_decode_tokens_per_second": 2.7574646672833585,
+          "host_allocations_bytes": [
+            338596264,
+            338596264,
+            338596264
+          ],
+          "warmed_decode_allocation_bytes": 37187056,
+          "gc_seconds": [
+            0.0,
+            0.0,
+            0.0
+          ]
+        },
+        {
+          "prompt": "Julia is a programming language.",
+          "first_use_seconds": 5.083778611,
+          "samples_seconds": [
+            3.267806801,
+            3.214143103,
+            3.111890093
+          ],
+          "median_seconds": 3.214143103,
+          "end_to_end_new_tokens_per_second": 2.4889993207001275,
+          "median_decode_tokens_per_second": 2.7578974624286214,
+          "host_allocations_bytes": [
+            348927560,
+            348927560,
+            348927560
+          ],
+          "warmed_decode_allocation_bytes": 37973280,
+          "gc_seconds": [
+            0.0,
+            0.0,
+            0.0
+          ]
+        }
+      ],
+      "device": {
+        "live_bytes": 855638064,
+        "live_buffers": 6,
+        "deferred_frees": 0,
+        "ARG_SLABS": 1,
+        "pipelines_cached": 87,
+        "kernels_cached": 90
+      },
+      "warmup_calls": 2,
+      "samples": 3,
+      "compile_excluded": true,
+      "storage_dtype": "Float32",
+      "normalization_intermediate": "Float32 native",
+      "workload": "single session greedy, host-visible IDs",
+      "comparison": "implementation pipelines; not identical floating point instruction sequences"
+    },
+    "cuda": {
+      "schema": "gesso-performance-floor-v1",
+      "backend": "cuda",
+      "initialization_seconds": 0.728308692,
+      "load_seconds": 8.079371183,
+      "transfer_seconds": 1.033199288,
+      "records": [
+        {
+          "prompt": "Hello",
+          "first_use_seconds": 94.101818589,
+          "samples_seconds": [
+            0.262590209,
+            0.267508302,
+            0.267274021
+          ],
+          "median_seconds": 0.267274021,
+          "end_to_end_new_tokens_per_second": 29.93182790481534,
+          "median_decode_tokens_per_second": 34.805152901146755,
+          "host_allocations_bytes": [
+            10592280,
+            10591208,
+            10591272
+          ],
+          "warmed_decode_allocation_bytes": 1025616,
+          "gc_seconds": [
+            0.0,
+            0.0,
+            0.0
+          ]
+        },
+        {
+          "prompt": "The quick brown fox",
+          "first_use_seconds": 1.390322937,
+          "samples_seconds": [
+            0.277680791,
+            0.274882083,
+            0.279233658
+          ],
+          "median_seconds": 0.277680791,
+          "end_to_end_new_tokens_per_second": 28.810059101279354,
+          "median_decode_tokens_per_second": 34.96704312476687,
+          "host_allocations_bytes": [
+            11603688,
+            11603688,
+            11603688
+          ],
+          "warmed_decode_allocation_bytes": 1025696,
+          "gc_seconds": [
+            0.0,
+            0.0,
+            0.0
+          ]
+        },
+        {
+          "prompt": "Julia is a programming language.",
+          "first_use_seconds": 0.279862503,
+          "samples_seconds": [
+            0.277800461,
+            0.276137314,
+            0.291868437
+          ],
+          "median_seconds": 0.277800461,
+          "end_to_end_new_tokens_per_second": 28.79764839555108,
+          "median_decode_tokens_per_second": 34.54918672920306,
+          "host_allocations_bytes": [
+            12345832,
+            12345816,
+            12345832
+          ],
+          "warmed_decode_allocation_bytes": 1025616,
+          "gc_seconds": [
+            0.0,
+            0.0,
+            0.0
+          ]
+        }
+      ],
+      "device": {
+        "name": "NVIDIA GeForce RTX 5060"
+      },
+      "warmup_calls": 2,
+      "samples": 3,
+      "compile_excluded": true,
+      "storage_dtype": "Float32",
+      "normalization_intermediate": "Float64 normalization intermediates, Float32 storage (legacy tolerance)",
+      "workload": "single session greedy, host-visible IDs",
+      "comparison": "implementation pipelines; not identical floating point instruction sequences"
+    }
+  },
+  "compile_time_impact": "Import/load/transfer/first-use separately recorded; warmed timings exclude compilation. Not an isolated compiler benchmark.",
+  "memory_impact": "Owned storage/lifecycle receipts and host allocation samples retained. Default receipt sink reserves capacity plus one transient slot at construction (~2 MB).",
+  "scope": "Regime I only; full source bundle includes carried baseline, campaign patch excludes unrelated historical changes",
+  "artifact_sha256": {
+    "gesso-regime-i.patch": "43ffa61cfbb6d94df1b5da2e57fe8ba4dd55b2d0908400bf205ec144f7cae33a",
+    "gesso-regime-i-source.tar.gz": "c7662c13c22ce3ee1316855f5579f2a9d207a55060b3463f36aa1a65746ff830",
+    "Gesso-Manifest.toml": "86fee480c43335b0dbcc2b19949b2012766b16159b3623154409e0b3a462f837"
+  }
+}

@@ -133,30 +133,20 @@ function gqa_reference_formula(
         vr[u, hh, j] = vh[u, div(hh-1, g)+1, j]
     end
 
-    # scores (causal mask BEFORE softmax, max-subtract)
-    scores = zeros(seq, seq)
-    for t in 1:seq, u in 1:seq, hh in 1:nh, j in 1:dh
-        scores[t, u] += qh[t, hh, j] * kr[u, hh, j] / sqrt(dh)
-    end
-    for t in 1:seq, u in 1:seq
-        u > t && (scores[t, u] = -Inf)
-    end
-    probs = similar(scores)
-    for t in 1:seq
-        mx = maximum(scores[t, :])
-        acc = 0.0
-        for u in 1:seq
-            probs[t, u] = exp(scores[t, u] - mx)
-            acc += probs[t, u]
-        end
-        for u in 1:seq
-            probs[t, u] /= acc
-        end
-    end
-
+    # Independent per-head probabilities, never aggregate heads before softmax.
     attn = zeros(seq, nh, dh)
-    for t in 1:seq, hh in 1:nh, j in 1:dh, u in 1:seq
-        attn[t, hh, j] += probs[t, u] * vr[u, hh, j]
+    for hh in 1:nh
+        scores = qh[:, hh, :] * transpose(kr[:, hh, :]) / sqrt(dh)
+        for t in 1:seq, u in 1:seq
+            u > t && (scores[t, u] = -Inf)
+        end
+        for t in 1:seq
+            weights = exp.(scores[t, :] .- maximum(scores[t, :]))
+            weights ./= sum(weights)
+            for j in 1:dh
+                attn[t, hh, j] = sum(weights .* vr[:, hh, j])
+            end
+        end
     end
     merged = zeros(seq, dim)
     for t in 1:seq, hh in 1:nh, j in 1:dh

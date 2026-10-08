@@ -617,7 +617,7 @@ known_families() = sort(collect(keys(_ADAPTERS)))
 canonical doorway.
 """
 function architecture_spec(path::AbstractString)
-    raw = JSON.parsefile(String(path))
+    raw = _strict_jsonfile(path)
     return parse_config(adapter_for(String(raw["model_type"])), raw)
 end
 

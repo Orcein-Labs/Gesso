@@ -1,0 +1,28 @@
+{
+  "initial_source_probe": {
+    "pass": 4,
+    "errors": 1,
+    "exit_code": 1,
+    "receipt": "arm12-fresh-lava-source-compiler-failure.log",
+    "cause": "source-loaded LLVM pointer intrinsics inferred Any, ordinary shared-memory reduction rejected by compiler"
+  },
+  "compiler_before": "arm12-llvm-source-diagnostic.log",
+  "compiler_after": "arm12-llvm-built-diagnostic.log",
+  "compiler_dependency_versions": {
+    "LLVM": "9.13.2",
+    "GPUCompiler": "2.6.0"
+  },
+  "compiler_prerequisite_helper_cold_exit": 0,
+  "cold_helper_receipt": "arm12-prerequisite-helper-cold.log",
+  "fresh_cpu_pass": 13,
+  "fresh_lava_pass": 13,
+  "gesso_lava_compiled_cache_inherited": false,
+  "shader_cache_inherited": false,
+  "dependencies_upgraded": false,
+  "installed_package_identities": 180,
+  "source_files_identical": 188,
+  "known_limitation": "Lava overwrites a KernelAbstractions method; clean Lava automatic precompilation is not certified; source execution after local compiler preparation passes",
+  "fresh_cpu_receipt": "arm12-fresh-cpu-final.log",
+  "fresh_lava_receipt": "arm12-final-primary.log",
+  "final_source_files_identical": 188
+}

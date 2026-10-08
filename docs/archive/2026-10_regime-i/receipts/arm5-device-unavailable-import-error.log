@@ -1,0 +1,47 @@
+WARNING: Imported binding Gesso.PrefillWorkload was undeclared at import time during import to Inference.
+WARNING: Imported binding Gesso.DecodeWorkload was undeclared at import time during import to Inference.
+WARNING: Imported binding Gesso.KVCache was undeclared at import time during import to Inference.
+ERROR: LoadError: InitError: Exception[GLFW.GLFWError(65550, "X11: Failed to open display :0"), ErrorException("glfwInit failed")]
+Stacktrace:
+  [1] __init__()
+    @ GLFW ~/.julia/packages/GLFW/wA4ue/src/GLFW.jl:69
+  [2] include(mod::Module, _path::String)
+    @ Base ./Base.jl:306
+  [3] __require_prelocked(pkg::Base.PkgId, env::String)
+    @ Base ./loading.jl:2723
+  [4] _require_prelocked(uuidkey::Base.PkgId, env::String)
+    @ Base ./loading.jl:2495
+  [5] macro expansion
+    @ ./loading.jl:2423 [inlined]
+  [6] macro expansion
+    @ ./lock.jl:376 [inlined]
+  [7] __require(into::Module, mod::Symbol)
+    @ Base ./loading.jl:2388
+  [8] require(into::Module, mod::Symbol)
+    @ Base ./loading.jl:2364
+  [9] top-level scope
+    @ ~/.julia/packages/Lava/V2Q5P/src/Lava.jl:109
+ [10] include(mod::Module, _path::String)
+    @ Base ./Base.jl:306
+ [11] __require_prelocked(pkg::Base.PkgId, env::String)
+    @ Base ./loading.jl:2723
+ [12] _require_prelocked(uuidkey::Base.PkgId, env::String)
+    @ Base ./loading.jl:2495
+ [13] macro expansion
+    @ ./loading.jl:2423 [inlined]
+ [14] macro expansion
+    @ ./lock.jl:376 [inlined]
+ [15] __require(into::Module, mod::Symbol)
+    @ Base ./loading.jl:2388
+ [16] require(into::Module, mod::Symbol)
+    @ Base ./loading.jl:2364
+ [17] include(mod::Module, _path::String)
+    @ Base ./Base.jl:306
+ [18] exec_options(opts::Base.JLOptions)
+    @ Base ./client.jl:317
+ [19] _start()
+    @ Base ./client.jl:550
+during initialization of module GLFW
+in expression starting at /home/mattc/.julia/packages/GLFW/wA4ue/src/GLFW.jl:1
+in expression starting at /home/mattc/.julia/packages/Lava/V2Q5P/src/Lava.jl:1
+in expression starting at /home/mattc/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/gesso/test/regime_i_unavailable.jl:1

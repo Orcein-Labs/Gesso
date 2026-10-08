@@ -157,6 +157,48 @@ function candidates(op::Symbol, backend::Symbol)
     end
 end
 
+# Consult a winner without copying the public candidate list on every projection.
+function _candidate(op::Symbol, backend::Symbol, name::Symbol)
+    lock(_LOCK)
+    try
+        list=get(_REGISTRY, (op, backend), nothing)
+        list===nothing && return nothing
+        for c in list
+            c.name===name && return c
+        end
+        return nothing
+    finally
+        unlock(_LOCK)
+    end
+end
+
+# Retrieve the current runner without returning a boxed Candidate value.
+function _candidate_runner(op::Symbol, backend::Symbol, name::Symbol)
+    lock(_LOCK)
+    try
+        list=get(_REGISTRY, (op, backend), nothing)
+        list===nothing && return nothing
+        for c in list
+            c.name===name && return c.run!
+        end
+        return nothing
+    finally
+        unlock(_LOCK)
+    end
+end
+
+# Read an existing winner without constructing a consult result or operands.
+function _cached_winner(op::Symbol, backend::Symbol, regime::Symbol, device::AbstractString)
+    key=_cache_key(op, backend, regime, device)
+    lock(_LOCK)
+    try
+        result=get(_CACHE, key, nothing)
+        return result===nothing ? nothing : result.winner
+    finally
+        unlock(_LOCK)
+    end
+end
+
 # --- the loop (§XXVI) ----------------------------------------------------------
 
 """
@@ -307,8 +349,9 @@ function select(
         # `TuneResult` is a non-isbits struct (Dict + Vector fields) for which
         # `===` is FIELD-WISE. So a hit is NOT `===` the stored entry (the
         # `cache_hit` field differs) but every other field is identical by
-        # object identity; tests pin that rather than `===`. Reconstructing
-        # the wrapper allocates nothing.
+        # object identity; tests pin that rather than `===`. The public
+        # wrapper can allocate; consult sites that need only the name use
+        # `_cached_winner` to avoid constructing it.
         #
         # The STORED `_CACHE` entry keeps `cache_hit = false`: it is the
         # search record, and it is what `cached_result` hands back.

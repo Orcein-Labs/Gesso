@@ -1,0 +1,329 @@
+Test Summary:                                        | Pass  Total  Time
+ModelIR primitives (§CIX): construction + validation |   11     11  0.5s
+Test Summary:                                    | Pass  Total  Time
+ModelIR (§CIX): toy2 round-trip from the fixture |    8      8  1.5s
+Test Summary:                          | Pass  Total  Time
+ModelIR (§CIX): identity is structural |    6      6  0.0s
+Test Summary:                              | Pass  Total  Time
+ModelIR (§CIX): nodes are immutable values |    5      5  0.0s
+Test Summary:                                              | Pass  Total   Time
+prefill oracle: shape + determinism (atol=0, same process) |    4      4  11.6s
+Test Summary:                                                      | Pass  Total  Time
+prefill oracle: causal property (position 0 cannot see position 3) |    3      3  0.1s
+Test Summary:                                                        | Pass  Total  Time
+prefill oracle: last-position argmax drives generation (item C seam) |    4      4  0.1s
+Test Summary:                                                | Pass  Total  Time
+prefill oracle: greedy path is stable under prompt prefixing |    4      4  0.2s
+Test Summary:                                                              | Pass  Total  Time
+known logits: persisted slot vs recomputed (atol=1e-10, cross-commit gate) |    5      5  0.0s
+16 Gesso.Inference.var"#decode!##0#decode!##1"{Session} at _audited at session.jl:642 [inlined]
+32 Vector{Int64} at _EngineSpan at session.jl:512 [inlined]
+64 Gesso.Inference._EngineSpan at _EngineSpan at session.jl:504 [inlined]
+32 Model at _session_greedy_id!(s::Session, cpu::CPUBackend, wl::DecodeWorkload) at session.jl:466
+8 Embedding at _session_greedy_id!(s::Session, cpu::CPUBackend, wl::DecodeWorkload) at session.jl:466
+16 Tuple{Int64, Int64} at _session_greedy_id!(s::Session, cpu::CPUBackend, wl::DecodeWorkload) at session.jl:467
+8 Tuple{Int64, Colon} at _session_greedy_id!(s::Session, cpu::CPUBackend, wl::DecodeWorkload) at session.jl:467
+144 Memory{Float64} at _session_greedy_id!(s::Session, cpu::CPUBackend, wl::DecodeWorkload) at session.jl:467
+32 Vector{Float64} at _session_greedy_id!(s::Session, cpu::CPUBackend, wl::DecodeWorkload) at session.jl:467
+16 Tuple{Int64, Int64} at _session_greedy_id!(s::Session, cpu::CPUBackend, wl::DecodeWorkload) at session.jl:467
+48 Matrix{Float64} at _session_greedy_id!(s::Session, cpu::CPUBackend, wl::DecodeWorkload) at session.jl:467
+24 Tuple{Tuple{Int64, Int64}, Matrix{Float64}} at _session_greedy_id!(s::Session, cpu::CPUBackend, wl::DecodeWorkload) at session.jl:467
+24 @NamedTuple{shape::Tuple{Int64, Int64}, storage::Matrix{Float64}} at _session_greedy_id!(s::Session, cpu::CPUBackend, wl::DecodeWorkload) at session.jl:467
+32 Tuple{Int64, Int64} at _session_greedy_id!(s::Session, cpu::CPUBackend, wl::DecodeWorkload) at session.jl:467
+32 Activation at _session_greedy_id!(s::Session, cpu::CPUBackend, wl::DecodeWorkload) at session.jl:467
+448 @NamedTuple{fixture::@NamedTuple{name::String, vocab_size::Int64, dim::Int64, blocks::Vector{NamedTuple{names, Tuple{Symbol, Int64}} where names}, tokenizer::@NamedTuple{pad::Int64, bos::Int64, eos::Int64, id_text::Vector{String}}, seed::UInt64, expected_logits::Matrix{Float64}}, model::Model, embedding::EmbeddingTable, blocks::Tuple{@NamedTuple{wq::ProjectionWeight, wk::ProjectionWeight, wv::ProjectionWeight, wo::ProjectionWeight, wgate::ProjectionWeight, wup::ProjectionWeight, wdown::ProjectionWeight, attn_rms::FrozenParameter, ffn_rms::FrozenParameter}, @NamedTuple{wq::ProjectionWeight, wk::ProjectionWeight, wv::ProjectionWeight, wo::ProjectionWeight, wgate::ProjectionWeight, wup::ProjectionWeight, wdown::ProjectionWeight, attn_rms::FrozenParameter, ffn_rms::FrozenParameter}}, lm_head::EmbeddingTable} at _session_greedy_id!(s::Session, cpu::CPUBackend, wl::DecodeWorkload) at session.jl:468
+448 @NamedTuple{fixture::@NamedTuple{name::String, vocab_size::Int64, dim::Int64, blocks::Vector{NamedTuple{names, Tuple{Symbol, Int64}} where names}, tokenizer::@NamedTuple{pad::Int64, bos::Int64, eos::Int64, id_text::Vector{String}}, seed::UInt64, expected_logits::Matrix{Float64}}, model::Model, embedding::EmbeddingTable, blocks::Tuple{@NamedTuple{wq::ProjectionWeight, wk::ProjectionWeight, wv::ProjectionWeight, wo::ProjectionWeight, wgate::ProjectionWeight, wup::ProjectionWeight, wdown::ProjectionWeight, attn_rms::FrozenParameter, ffn_rms::FrozenParameter}, @NamedTuple{wq::ProjectionWeight, wk::ProjectionWeight, wv::ProjectionWeight, wo::ProjectionWeight, wgate::ProjectionWeight, wup::ProjectionWeight, wdown::ProjectionWeight, attn_rms::FrozenParameter, ffn_rms::FrozenParameter}}, lm_head::EmbeddingTable} at _session_greedy_id!(s::Session, cpu::CPUBackend, wl::DecodeWorkload) at session.jl:473
+16 EmbeddingTable at _session_greedy_id!(s::Session, cpu::CPUBackend, wl::DecodeWorkload) at session.jl:473
+32 Activation at _session_greedy_id!(s::Session, cpu::CPUBackend, wl::DecodeWorkload) at session.jl:473
+32 Activation at _session_greedy_id!(s::Session, cpu::CPUBackend, wl::DecodeWorkload) at session.jl:473
+32 EmbeddingTable at _session_greedy_id!(s::Session, cpu::CPUBackend, wl::DecodeWorkload) at session.jl:473
+16 LinearAlgebra.Transpose{Float64, Matrix{Float64}} at _session_greedy_id!(s::Session, cpu::CPUBackend, wl::DecodeWorkload) at session.jl:473
+32 Vector{Float64} at _session_greedy_id!(s::Session, cpu::CPUBackend, wl::DecodeWorkload) at session.jl:480
+32 UnitRange{Int64} at _session_consume!(s::Session, tok::Int64) at session.jl:910
+64 SubArray{Float64, 2, Matrix{Float64}, Tuple{UnitRange{Int64}, UnitRange{Int64}}, false} at _session_consume!(s::Session, tok::Int64) at session.jl:910
+32 Tuple{Int64, Int64} at _session_consume!(s::Session, tok::Int64) at session.jl:910
+32 UnitRange{Int64} at _session_consume!(s::Session, tok::Int64) at session.jl:911
+64 SubArray{Float64, 2, Matrix{Float64}, Tuple{UnitRange{Int64}, UnitRange{Int64}}, false} at _session_consume!(s::Session, tok::Int64) at session.jl:911
+32 Tuple{Int64, Int64} at _session_consume!(s::Session, tok::Int64) at session.jl:911
+32 UnitRange{Int64} at _session_consume!(s::Session, tok::Int64) at session.jl:914
+32 UnitRange{Int64} at _session_consume!(s::Session, tok::Int64) at session.jl:914
+16 Tuple{UnitRange{Int64}, Colon, Colon} at _session_consume!(s::Session, tok::Int64) at session.jl:914
+32 Tuple{Base.OneTo{Int64}, Base.OneTo{Int64}, Base.OneTo{Int64}} at _session_consume!(s::Session, tok::Int64) at session.jl:914
+48 Tuple{UnitRange{Int64}, Base.Slice{Base.OneTo{Int64}}, Base.Slice{Base.OneTo{Int64}}} at _session_consume!(s::Session, tok::Int64) at session.jl:914
+64 SubArray{Float64, 3, Array{Float64, 3}, Tuple{UnitRange{Int64}, Base.Slice{Base.OneTo{Int64}}, Base.Slice{Base.OneTo{Int64}}}, false} at _session_consume!(s::Session, tok::Int64) at session.jl:914
+32 UnitRange{Int64} at _session_consume!(s::Session, tok::Int64) at session.jl:915
+32 UnitRange{Int64} at _session_consume!(s::Session, tok::Int64) at session.jl:915
+16 Tuple{UnitRange{Int64}, Colon, Colon} at _session_consume!(s::Session, tok::Int64) at session.jl:915
+32 Tuple{Base.OneTo{Int64}, Base.OneTo{Int64}, Base.OneTo{Int64}} at _session_consume!(s::Session, tok::Int64) at session.jl:915
+48 Tuple{UnitRange{Int64}, Base.Slice{Base.OneTo{Int64}}, Base.Slice{Base.OneTo{Int64}}} at _session_consume!(s::Session, tok::Int64) at session.jl:915
+64 SubArray{Float64, 3, Array{Float64, 3}, Tuple{UnitRange{Int64}, Base.Slice{Base.OneTo{Int64}}, Base.Slice{Base.OneTo{Int64}}}, false} at _session_consume!(s::Session, tok::Int64) at session.jl:915
+448 @NamedTuple{fixture::@NamedTuple{name::String, vocab_size::Int64, dim::Int64, blocks::Vector{NamedTuple{names, Tuple{Symbol, Int64}} where names}, tokenizer::@NamedTuple{pad::Int64, bos::Int64, eos::Int64, id_text::Vector{String}}, seed::UInt64, expected_logits::Matrix{Float64}}, model::Model, embedding::EmbeddingTable, blocks::Tuple{@NamedTuple{wq::ProjectionWeight, wk::ProjectionWeight, wv::ProjectionWeight, wo::ProjectionWeight, wgate::ProjectionWeight, wup::ProjectionWeight, wdown::ProjectionWeight, attn_rms::FrozenParameter, ffn_rms::FrozenParameter}, @NamedTuple{wq::ProjectionWeight, wk::ProjectionWeight, wv::ProjectionWeight, wo::ProjectionWeight, wgate::ProjectionWeight, wup::ProjectionWeight, wdown::ProjectionWeight, attn_rms::FrozenParameter, ffn_rms::FrozenParameter}}, lm_head::EmbeddingTable} at _session_consume!(s::Session, tok::Int64) at session.jl:923
+16 EmbeddingTable at _session_consume!(s::Session, tok::Int64) at session.jl:923
+32 Activation at _session_consume!(s::Session, tok::Int64) at session.jl:923
+32 EmbeddingTable at _session_consume!(s::Session, tok::Int64) at session.jl:923
+16 Tuple{Int64, Int64} at _session_consume!(s::Session, tok::Int64) at session.jl:923
+32 Tuple{Int64, Int64} at _session_consume!(s::Session, tok::Int64) at session.jl:923
+32 Tuple{Int64, Int64} at _session_consume!(s::Session, tok::Int64) at session.jl:923
+144 Memory{Float64} at _session_consume!(s::Session, tok::Int64) at session.jl:923
+32 Vector{Float64} at _session_consume!(s::Session, tok::Int64) at session.jl:923
+32 Activation at _session_consume!(s::Session, tok::Int64) at session.jl:923
+32 Model at _session_consume!(s::Session, tok::Int64) at session.jl:925
+64 Base.Iterators.Enumerate{Tuple{Block, Block}} at _session_consume!(s::Session, tok::Int64) at session.jl:925
+64 Tuple{Tuple{Int64, Block}, Tuple{Int64, Int64}} at _session_consume!(s::Session, tok::Int64) at session.jl:925
+32 Tuple{Int64, Block} at _session_consume!(s::Session, tok::Int64) at session.jl:925
+16 Tuple{Int64, Int64} at _session_consume!(s::Session, tok::Int64) at session.jl:925
+448 @NamedTuple{fixture::@NamedTuple{name::String, vocab_size::Int64, dim::Int64, blocks::Vector{NamedTuple{names, Tuple{Symbol, Int64}} where names}, tokenizer::@NamedTuple{pad::Int64, bos::Int64, eos::Int64, id_text::Vector{String}}, seed::UInt64, expected_logits::Matrix{Float64}}, model::Model, embedding::EmbeddingTable, blocks::Tuple{@NamedTuple{wq::ProjectionWeight, wk::ProjectionWeight, wv::ProjectionWeight, wo::ProjectionWeight, wgate::ProjectionWeight, wup::ProjectionWeight, wdown::ProjectionWeight, attn_rms::FrozenParameter, ffn_rms::FrozenParameter}, @NamedTuple{wq::ProjectionWeight, wk::ProjectionWeight, wv::ProjectionWeight, wo::ProjectionWeight, wgate::ProjectionWeight, wup::ProjectionWeight, wdown::ProjectionWeight, attn_rms::FrozenParameter, ffn_rms::FrozenParameter}}, lm_head::EmbeddingTable} at _session_consume!(s::Session, tok::Int64) at session.jl:926
+288 Tuple{@NamedTuple{wq::ProjectionWeight, wk::ProjectionWeight, wv::ProjectionWeight, wo::ProjectionWeight, wgate::ProjectionWeight, wup::ProjectionWeight, wdown::ProjectionWeight, attn_rms::FrozenParameter, ffn_rms::FrozenParameter}, @NamedTuple{wq::ProjectionWeight, wk::ProjectionWeight, wv::ProjectionWeight, wo::ProjectionWeight, wgate::ProjectionWeight, wup::ProjectionWeight, wdown::ProjectionWeight, attn_rms::FrozenParameter, ffn_rms::FrozenParameter}} at _session_consume!(s::Session, tok::Int64) at session.jl:926
+144 @NamedTuple{wq::ProjectionWeight, wk::ProjectionWeight, wv::ProjectionWeight, wo::ProjectionWeight, wgate::ProjectionWeight, wup::ProjectionWeight, wdown::ProjectionWeight, attn_rms::FrozenParameter, ffn_rms::FrozenParameter} at _session_consume!(s::Session, tok::Int64) at session.jl:926
+160 @NamedTuple{wq::ProjectionWeight, wk::ProjectionWeight, wv::ProjectionWeight, wo::ProjectionWeight, wgate::ProjectionWeight, wup::ProjectionWeight, wdown::ProjectionWeight, attn_rms::FrozenParameter, ffn_rms::FrozenParameter} at _session_consume!(s::Session, tok::Int64) at session.jl:927
+16 FrozenParameter at _session_consume!(s::Session, tok::Int64) at session.jl:927
+16 @NamedTuple{eps::Float64} at _session_consume!(s::Session, tok::Int64) at session.jl:927
+32 Activation at _session_consume!(s::Session, tok::Int64) at session.jl:927
+32 Activation at _session_consume!(s::Session, tok::Int64) at session.jl:927
+32 FrozenParameter at _session_consume!(s::Session, tok::Int64) at session.jl:927
+16 Float64 at _session_consume!(s::Session, tok::Int64) at session.jl:927
+48 Matrix{Float64} at _session_consume!(s::Session, tok::Int64) at session.jl:927
+32 Activation at _session_consume!(s::Session, tok::Int64) at session.jl:927
+160 @NamedTuple{wq::ProjectionWeight, wk::ProjectionWeight, wv::ProjectionWeight, wo::ProjectionWeight, wgate::ProjectionWeight, wup::ProjectionWeight, wdown::ProjectionWeight, attn_rms::FrozenParameter, ffn_rms::FrozenParameter} at _session_consume!(s::Session, tok::Int64) at session.jl:928
+16 ProjectionWeight at _session_consume!(s::Session, tok::Int64) at session.jl:928
+32 Activation at _session_consume!(s::Session, tok::Int64) at session.jl:928
+32 Activation at _session_consume!(s::Session, tok::Int64) at session.jl:928
+32 ProjectionWeight at _session_consume!(s::Session, tok::Int64) at session.jl:928
+16 LinearAlgebra.Transpose{Float64, Matrix{Float64}} at _session_consume!(s::Session, tok::Int64) at session.jl:928
+32 Activation at _session_consume!(s::Session, tok::Int64) at session.jl:928
+160 @NamedTuple{wq::ProjectionWeight, wk::ProjectionWeight, wv::ProjectionWeight, wo::ProjectionWeight, wgate::ProjectionWeight, wup::ProjectionWeight, wdown::ProjectionWeight, attn_rms::FrozenParameter, ffn_rms::FrozenParameter} at _session_consume!(s::Session, tok::Int64) at session.jl:929
+16 ProjectionWeight at _session_consume!(s::Session, tok::Int64) at session.jl:929
+32 Activation at _session_consume!(s::Session, tok::Int64) at session.jl:929
+32 Activation at _session_consume!(s::Session, tok::Int64) at session.jl:929
+32 ProjectionWeight at _session_consume!(s::Session, tok::Int64) at session.jl:929
+16 LinearAlgebra.Transpose{Float64, Matrix{Float64}} at _session_consume!(s::Session, tok::Int64) at session.jl:929
+32 Activation at _session_consume!(s::Session, tok::Int64) at session.jl:929
+160 @NamedTuple{wq::ProjectionWeight, wk::ProjectionWeight, wv::ProjectionWeight, wo::ProjectionWeight, wgate::ProjectionWeight, wup::ProjectionWeight, wdown::ProjectionWeight, attn_rms::FrozenParameter, ffn_rms::FrozenParameter} at _session_consume!(s::Session, tok::Int64) at session.jl:930
+16 ProjectionWeight at _session_consume!(s::Session, tok::Int64) at session.jl:930
+32 Activation at _session_consume!(s::Session, tok::Int64) at session.jl:930
+32 Activation at _session_consume!(s::Session, tok::Int64) at session.jl:930
+32 ProjectionWeight at _session_consume!(s::Session, tok::Int64) at session.jl:930
+16 LinearAlgebra.Transpose{Float64, Matrix{Float64}} at _session_consume!(s::Session, tok::Int64) at session.jl:930
+32 Activation at _session_consume!(s::Session, tok::Int64) at session.jl:930
+16 Float64 at _session_consume!(s::Session, tok::Int64) at session.jl:934
+16 Tuple{Float64, Nothing, Bool} at _session_consume!(s::Session, tok::Int64) at session.jl:934
+16 Float64 at _session_consume!(s::Session, tok::Int64) at session.jl:934
+16 @NamedTuple{theta::Float64, inv_freq::Nothing, interleaved::Bool} at _session_consume!(s::Session, tok::Int64) at session.jl:934
+32 Activation at _session_consume!(s::Session, tok::Int64) at session.jl:934
+32 Activation at _session_consume!(s::Session, tok::Int64) at session.jl:934
+16 Float64 at _session_consume!(s::Session, tok::Int64) at session.jl:934
+16 Float64 at _session_consume!(s::Session, tok::Int64) at session.jl:934
+32 Activation at _session_consume!(s::Session, tok::Int64) at session.jl:934
+8 Tuple{Int64, Colon, Colon} at _session_consume!(s::Session, tok::Int64) at session.jl:947
+8 Tuple{Int64, Colon, Colon} at _session_consume!(s::Session, tok::Int64) at session.jl:947
+32 Tuple{Base.OneTo{Int64}, Base.OneTo{Int64}, Base.OneTo{Int64}} at _session_consume!(s::Session, tok::Int64) at session.jl:947
+32 Tuple{Int64, Base.Slice{Base.OneTo{Int64}}, Base.Slice{Base.OneTo{Int64}}} at _session_consume!(s::Session, tok::Int64) at session.jl:947
+64 SubArray{Float64, 2, Array{Float64, 3}, Tuple{Int64, Base.Slice{Base.OneTo{Int64}}, Base.Slice{Base.OneTo{Int64}}}, true} at _session_consume!(s::Session, tok::Int64) at session.jl:947
+8 Tuple{Int64, Colon, Colon} at _session_consume!(s::Session, tok::Int64) at session.jl:947
+8 Tuple{Int64, Colon, Colon} at _session_consume!(s::Session, tok::Int64) at session.jl:947
+32 Tuple{Base.OneTo{Int64}, Base.OneTo{Int64}, Base.OneTo{Int64}} at _session_consume!(s::Session, tok::Int64) at session.jl:947
+32 Tuple{Int64, Base.Slice{Base.OneTo{Int64}}, Base.Slice{Base.OneTo{Int64}}} at _session_consume!(s::Session, tok::Int64) at session.jl:947
+64 SubArray{Float64, 2, Array{Float64, 3}, Tuple{Int64, Base.Slice{Base.OneTo{Int64}}, Base.Slice{Base.OneTo{Int64}}}, true} at _session_consume!(s::Session, tok::Int64) at session.jl:947
+64 SubArray{Float64, 2, Array{Float64, 3}, Tuple{Int64, Base.Slice{Base.OneTo{Int64}}, Base.Slice{Base.OneTo{Int64}}}, true} at _session_consume!(s::Session, tok::Int64) at session.jl:947
+64 SubArray{Float64, 2, Array{Float64, 3}, Tuple{Int64, Base.Slice{Base.OneTo{Int64}}, Base.Slice{Base.OneTo{Int64}}}, true} at _session_consume!(s::Session, tok::Int64) at session.jl:947
+16 @NamedTuple{len::Int64} at _session_consume!(s::Session, tok::Int64) at session.jl:948
+16 @NamedTuple{len::Int64} at _session_consume!(s::Session, tok::Int64) at session.jl:949
+32 TemporaryWorkspace at _session_consume!(s::Session, tok::Int64) at session.jl:955
+32 TemporaryWorkspace at _session_consume!(s::Session, tok::Int64) at session.jl:955
+64 SubArray{Float64, 3, Array{Float64, 3}, Tuple{UnitRange{Int64}, Base.Slice{Base.OneTo{Int64}}, Base.Slice{Base.OneTo{Int64}}}, false} at _session_consume!(s::Session, tok::Int64) at session.jl:955
+32 TemporaryWorkspace at _session_consume!(s::Session, tok::Int64) at session.jl:955
+32 TemporaryWorkspace at _session_consume!(s::Session, tok::Int64) at session.jl:955
+64 SubArray{Float64, 2, Matrix{Float64}, Tuple{UnitRange{Int64}, UnitRange{Int64}}, false} at _session_consume!(s::Session, tok::Int64) at session.jl:955
+64 SubArray{Float64, 2, Matrix{Float64}, Tuple{UnitRange{Int64}, UnitRange{Int64}}, false} at _session_consume!(s::Session, tok::Int64) at session.jl:955
+64 SubArray{Float64, 3, Array{Float64, 3}, Tuple{UnitRange{Int64}, Base.Slice{Base.OneTo{Int64}}, Base.Slice{Base.OneTo{Int64}}}, false} at _session_consume!(s::Session, tok::Int64) at session.jl:955
+64 SubArray{Float64, 3, Array{Float64, 3}, Tuple{UnitRange{Int64}, Base.Slice{Base.OneTo{Int64}}, Base.Slice{Base.OneTo{Int64}}}, false} at _session_consume!(s::Session, tok::Int64) at session.jl:955
+32 TemporaryWorkspace at _session_consume!(s::Session, tok::Int64) at session.jl:955
+32 TemporaryWorkspace at _session_consume!(s::Session, tok::Int64) at session.jl:955
+64 SubArray{Float64, 2, Matrix{Float64}, Tuple{UnitRange{Int64}, UnitRange{Int64}}, false} at _session_consume!(s::Session, tok::Int64) at session.jl:955
+64 SubArray{Float64, 2, Matrix{Float64}, Tuple{UnitRange{Int64}, UnitRange{Int64}}, false} at _session_consume!(s::Session, tok::Int64) at session.jl:955
+64 SubArray{Float64, 3, Array{Float64, 3}, Tuple{UnitRange{Int64}, Base.Slice{Base.OneTo{Int64}}, Base.Slice{Base.OneTo{Int64}}}, false} at _session_consume!(s::Session, tok::Int64) at session.jl:955
+160 @NamedTuple{wq::ProjectionWeight, wk::ProjectionWeight, wv::ProjectionWeight, wo::ProjectionWeight, wgate::ProjectionWeight, wup::ProjectionWeight, wdown::ProjectionWeight, attn_rms::FrozenParameter, ffn_rms::FrozenParameter} at _session_consume!(s::Session, tok::Int64) at session.jl:970
+16 ProjectionWeight at _session_consume!(s::Session, tok::Int64) at session.jl:970
+32 Activation at _session_consume!(s::Session, tok::Int64) at session.jl:970
+32 Activation at _session_consume!(s::Session, tok::Int64) at session.jl:970
+32 ProjectionWeight at _session_consume!(s::Session, tok::Int64) at session.jl:970
+16 LinearAlgebra.Transpose{Float64, Matrix{Float64}} at _session_consume!(s::Session, tok::Int64) at session.jl:970
+32 Activation at _session_consume!(s::Session, tok::Int64) at session.jl:970
+160 @NamedTuple{wq::ProjectionWeight, wk::ProjectionWeight, wv::ProjectionWeight, wo::ProjectionWeight, wgate::ProjectionWeight, wup::ProjectionWeight, wdown::ProjectionWeight, attn_rms::FrozenParameter, ffn_rms::FrozenParameter} at _session_consume!(s::Session, tok::Int64) at session.jl:972
+16 FrozenParameter at _session_consume!(s::Session, tok::Int64) at session.jl:972
+16 @NamedTuple{eps::Float64} at _session_consume!(s::Session, tok::Int64) at session.jl:972
+32 Activation at _session_consume!(s::Session, tok::Int64) at session.jl:972
+32 Activation at _session_consume!(s::Session, tok::Int64) at session.jl:972
+32 FrozenParameter at _session_consume!(s::Session, tok::Int64) at session.jl:972
+16 Float64 at _session_consume!(s::Session, tok::Int64) at session.jl:972
+48 Matrix{Float64} at _session_consume!(s::Session, tok::Int64) at session.jl:972
+32 Activation at _session_consume!(s::Session, tok::Int64) at session.jl:972
+160 @NamedTuple{wq::ProjectionWeight, wk::ProjectionWeight, wv::ProjectionWeight, wo::ProjectionWeight, wgate::ProjectionWeight, wup::ProjectionWeight, wdown::ProjectionWeight, attn_rms::FrozenParameter, ffn_rms::FrozenParameter} at _session_consume!(s::Session, tok::Int64) at session.jl:973
+16 ProjectionWeight at _session_consume!(s::Session, tok::Int64) at session.jl:973
+32 Activation at _session_consume!(s::Session, tok::Int64) at session.jl:973
+32 Activation at _session_consume!(s::Session, tok::Int64) at session.jl:973
+32 ProjectionWeight at _session_consume!(s::Session, tok::Int64) at session.jl:973
+16 LinearAlgebra.Transpose{Float64, Matrix{Float64}} at _session_consume!(s::Session, tok::Int64) at session.jl:973
+32 Activation at _session_consume!(s::Session, tok::Int64) at session.jl:973
+160 @NamedTuple{wq::ProjectionWeight, wk::ProjectionWeight, wv::ProjectionWeight, wo::ProjectionWeight, wgate::ProjectionWeight, wup::ProjectionWeight, wdown::ProjectionWeight, attn_rms::FrozenParameter, ffn_rms::FrozenParameter} at _session_consume!(s::Session, tok::Int64) at session.jl:974
+16 ProjectionWeight at _session_consume!(s::Session, tok::Int64) at session.jl:974
+32 Activation at _session_consume!(s::Session, tok::Int64) at session.jl:974
+32 Activation at _session_consume!(s::Session, tok::Int64) at session.jl:974
+32 ProjectionWeight at _session_consume!(s::Session, tok::Int64) at session.jl:974
+16 LinearAlgebra.Transpose{Float64, Matrix{Float64}} at _session_consume!(s::Session, tok::Int64) at session.jl:974
+32 Activation at _session_consume!(s::Session, tok::Int64) at session.jl:974
+32 Activation at _session_consume!(s::Session, tok::Int64) at session.jl:975
+32 Activation at _session_consume!(s::Session, tok::Int64) at session.jl:975
+32 Activation at _session_consume!(s::Session, tok::Int64) at session.jl:975
+32 Activation at _session_consume!(s::Session, tok::Int64) at session.jl:975
+160 @NamedTuple{wq::ProjectionWeight, wk::ProjectionWeight, wv::ProjectionWeight, wo::ProjectionWeight, wgate::ProjectionWeight, wup::ProjectionWeight, wdown::ProjectionWeight, attn_rms::FrozenParameter, ffn_rms::FrozenParameter} at _session_consume!(s::Session, tok::Int64) at session.jl:976
+16 ProjectionWeight at _session_consume!(s::Session, tok::Int64) at session.jl:976
+32 Activation at _session_consume!(s::Session, tok::Int64) at session.jl:976
+32 Activation at _session_consume!(s::Session, tok::Int64) at session.jl:976
+32 ProjectionWeight at _session_consume!(s::Session, tok::Int64) at session.jl:976
+16 LinearAlgebra.Transpose{Float64, Matrix{Float64}} at _session_consume!(s::Session, tok::Int64) at session.jl:976
+32 Activation at _session_consume!(s::Session, tok::Int64) at session.jl:976
+64 Tuple{Tuple{Int64, Block}, Tuple{Int64, Int64}} at _session_consume!(s::Session, tok::Int64) at session.jl:978
+32 Tuple{Int64, Block} at _session_consume!(s::Session, tok::Int64) at session.jl:925
+16 Tuple{Int64, Int64} at _session_consume!(s::Session, tok::Int64) at session.jl:925
+448 @NamedTuple{fixture::@NamedTuple{name::String, vocab_size::Int64, dim::Int64, blocks::Vector{NamedTuple{names, Tuple{Symbol, Int64}} where names}, tokenizer::@NamedTuple{pad::Int64, bos::Int64, eos::Int64, id_text::Vector{String}}, seed::UInt64, expected_logits::Matrix{Float64}}, model::Model, embedding::EmbeddingTable, blocks::Tuple{@NamedTuple{wq::ProjectionWeight, wk::ProjectionWeight, wv::ProjectionWeight, wo::ProjectionWeight, wgate::ProjectionWeight, wup::ProjectionWeight, wdown::ProjectionWeight, attn_rms::FrozenParameter, ffn_rms::FrozenParameter}, @NamedTuple{wq::ProjectionWeight, wk::ProjectionWeight, wv::ProjectionWeight, wo::ProjectionWeight, wgate::ProjectionWeight, wup::ProjectionWeight, wdown::ProjectionWeight, attn_rms::FrozenParameter, ffn_rms::FrozenParameter}}, lm_head::EmbeddingTable} at _session_consume!(s::Session, tok::Int64) at session.jl:926
+288 Tuple{@NamedTuple{wq::ProjectionWeight, wk::ProjectionWeight, wv::ProjectionWeight, wo::ProjectionWeight, wgate::ProjectionWeight, wup::ProjectionWeight, wdown::ProjectionWeight, attn_rms::FrozenParameter, ffn_rms::FrozenParameter}, @NamedTuple{wq::ProjectionWeight, wk::ProjectionWeight, wv::ProjectionWeight, wo::ProjectionWeight, wgate::ProjectionWeight, wup::ProjectionWeight, wdown::ProjectionWeight, attn_rms::FrozenParameter, ffn_rms::FrozenParameter}} at _session_consume!(s::Session, tok::Int64) at session.jl:926
+144 @NamedTuple{wq::ProjectionWeight, wk::ProjectionWeight, wv::ProjectionWeight, wo::ProjectionWeight, wgate::ProjectionWeight, wup::ProjectionWeight, wdown::ProjectionWeight, attn_rms::FrozenParameter, ffn_rms::FrozenParameter} at _session_consume!(s::Session, tok::Int64) at session.jl:926
+160 @NamedTuple{wq::ProjectionWeight, wk::ProjectionWeight, wv::ProjectionWeight, wo::ProjectionWeight, wgate::ProjectionWeight, wup::ProjectionWeight, wdown::ProjectionWeight, attn_rms::FrozenParameter, ffn_rms::FrozenParameter} at _session_consume!(s::Session, tok::Int64) at session.jl:927
+16 FrozenParameter at _session_consume!(s::Session, tok::Int64) at session.jl:927
+16 @NamedTuple{eps::Float64} at _session_consume!(s::Session, tok::Int64) at session.jl:927
+32 Activation at _session_consume!(s::Session, tok::Int64) at session.jl:927
+32 Activation at _session_consume!(s::Session, tok::Int64) at session.jl:927
+32 FrozenParameter at _session_consume!(s::Session, tok::Int64) at session.jl:927
+16 Float64 at _session_consume!(s::Session, tok::Int64) at session.jl:927
+48 Matrix{Float64} at _session_consume!(s::Session, tok::Int64) at session.jl:927
+32 Activation at _session_consume!(s::Session, tok::Int64) at session.jl:927
+160 @NamedTuple{wq::ProjectionWeight, wk::ProjectionWeight, wv::ProjectionWeight, wo::ProjectionWeight, wgate::ProjectionWeight, wup::ProjectionWeight, wdown::ProjectionWeight, attn_rms::FrozenParameter, ffn_rms::FrozenParameter} at _session_consume!(s::Session, tok::Int64) at session.jl:928
+16 ProjectionWeight at _session_consume!(s::Session, tok::Int64) at session.jl:928
+32 Activation at _session_consume!(s::Session, tok::Int64) at session.jl:928
+32 Activation at _session_consume!(s::Session, tok::Int64) at session.jl:928
+32 ProjectionWeight at _session_consume!(s::Session, tok::Int64) at session.jl:928
+16 LinearAlgebra.Transpose{Float64, Matrix{Float64}} at _session_consume!(s::Session, tok::Int64) at session.jl:928
+32 Activation at _session_consume!(s::Session, tok::Int64) at session.jl:928
+160 @NamedTuple{wq::ProjectionWeight, wk::ProjectionWeight, wv::ProjectionWeight, wo::ProjectionWeight, wgate::ProjectionWeight, wup::ProjectionWeight, wdown::ProjectionWeight, attn_rms::FrozenParameter, ffn_rms::FrozenParameter} at _session_consume!(s::Session, tok::Int64) at session.jl:929
+16 ProjectionWeight at _session_consume!(s::Session, tok::Int64) at session.jl:929
+32 Activation at _session_consume!(s::Session, tok::Int64) at session.jl:929
+32 Activation at _session_consume!(s::Session, tok::Int64) at session.jl:929
+32 ProjectionWeight at _session_consume!(s::Session, tok::Int64) at session.jl:929
+16 LinearAlgebra.Transpose{Float64, Matrix{Float64}} at _session_consume!(s::Session, tok::Int64) at session.jl:929
+32 Activation at _session_consume!(s::Session, tok::Int64) at session.jl:929
+160 @NamedTuple{wq::ProjectionWeight, wk::ProjectionWeight, wv::ProjectionWeight, wo::ProjectionWeight, wgate::ProjectionWeight, wup::ProjectionWeight, wdown::ProjectionWeight, attn_rms::FrozenParameter, ffn_rms::FrozenParameter} at _session_consume!(s::Session, tok::Int64) at session.jl:930
+16 ProjectionWeight at _session_consume!(s::Session, tok::Int64) at session.jl:930
+32 Activation at _session_consume!(s::Session, tok::Int64) at session.jl:930
+32 Activation at _session_consume!(s::Session, tok::Int64) at session.jl:930
+32 ProjectionWeight at _session_consume!(s::Session, tok::Int64) at session.jl:930
+16 LinearAlgebra.Transpose{Float64, Matrix{Float64}} at _session_consume!(s::Session, tok::Int64) at session.jl:930
+32 Activation at _session_consume!(s::Session, tok::Int64) at session.jl:930
+16 Float64 at _session_consume!(s::Session, tok::Int64) at session.jl:934
+16 Tuple{Float64, Nothing, Bool} at _session_consume!(s::Session, tok::Int64) at session.jl:934
+16 Float64 at _session_consume!(s::Session, tok::Int64) at session.jl:934
+16 @NamedTuple{theta::Float64, inv_freq::Nothing, interleaved::Bool} at _session_consume!(s::Session, tok::Int64) at session.jl:934
+32 Activation at _session_consume!(s::Session, tok::Int64) at session.jl:934
+32 Activation at _session_consume!(s::Session, tok::Int64) at session.jl:934
+16 Float64 at _session_consume!(s::Session, tok::Int64) at session.jl:934
+16 Float64 at _session_consume!(s::Session, tok::Int64) at session.jl:934
+32 Activation at _session_consume!(s::Session, tok::Int64) at session.jl:934
+8 Tuple{Int64, Colon, Colon} at _session_consume!(s::Session, tok::Int64) at session.jl:947
+8 Tuple{Int64, Colon, Colon} at _session_consume!(s::Session, tok::Int64) at session.jl:947
+32 Tuple{Base.OneTo{Int64}, Base.OneTo{Int64}, Base.OneTo{Int64}} at _session_consume!(s::Session, tok::Int64) at session.jl:947
+32 Tuple{Int64, Base.Slice{Base.OneTo{Int64}}, Base.Slice{Base.OneTo{Int64}}} at _session_consume!(s::Session, tok::Int64) at session.jl:947
+64 SubArray{Float64, 2, Array{Float64, 3}, Tuple{Int64, Base.Slice{Base.OneTo{Int64}}, Base.Slice{Base.OneTo{Int64}}}, true} at _session_consume!(s::Session, tok::Int64) at session.jl:947
+8 Tuple{Int64, Colon, Colon} at _session_consume!(s::Session, tok::Int64) at session.jl:947
+8 Tuple{Int64, Colon, Colon} at _session_consume!(s::Session, tok::Int64) at session.jl:947
+32 Tuple{Base.OneTo{Int64}, Base.OneTo{Int64}, Base.OneTo{Int64}} at _session_consume!(s::Session, tok::Int64) at session.jl:947
+32 Tuple{Int64, Base.Slice{Base.OneTo{Int64}}, Base.Slice{Base.OneTo{Int64}}} at _session_consume!(s::Session, tok::Int64) at session.jl:947
+64 SubArray{Float64, 2, Array{Float64, 3}, Tuple{Int64, Base.Slice{Base.OneTo{Int64}}, Base.Slice{Base.OneTo{Int64}}}, true} at _session_consume!(s::Session, tok::Int64) at session.jl:947
+64 SubArray{Float64, 2, Array{Float64, 3}, Tuple{Int64, Base.Slice{Base.OneTo{Int64}}, Base.Slice{Base.OneTo{Int64}}}, true} at _session_consume!(s::Session, tok::Int64) at session.jl:947
+64 SubArray{Float64, 2, Array{Float64, 3}, Tuple{Int64, Base.Slice{Base.OneTo{Int64}}, Base.Slice{Base.OneTo{Int64}}}, true} at _session_consume!(s::Session, tok::Int64) at session.jl:947
+16 @NamedTuple{len::Int64} at _session_consume!(s::Session, tok::Int64) at session.jl:948
+16 @NamedTuple{len::Int64} at _session_consume!(s::Session, tok::Int64) at session.jl:949
+32 TemporaryWorkspace at _session_consume!(s::Session, tok::Int64) at session.jl:955
+32 TemporaryWorkspace at _session_consume!(s::Session, tok::Int64) at session.jl:955
+64 SubArray{Float64, 3, Array{Float64, 3}, Tuple{UnitRange{Int64}, Base.Slice{Base.OneTo{Int64}}, Base.Slice{Base.OneTo{Int64}}}, false} at _session_consume!(s::Session, tok::Int64) at session.jl:955
+32 TemporaryWorkspace at _session_consume!(s::Session, tok::Int64) at session.jl:955
+32 TemporaryWorkspace at _session_consume!(s::Session, tok::Int64) at session.jl:955
+64 SubArray{Float64, 2, Matrix{Float64}, Tuple{UnitRange{Int64}, UnitRange{Int64}}, false} at _session_consume!(s::Session, tok::Int64) at session.jl:955
+64 SubArray{Float64, 2, Matrix{Float64}, Tuple{UnitRange{Int64}, UnitRange{Int64}}, false} at _session_consume!(s::Session, tok::Int64) at session.jl:955
+64 SubArray{Float64, 3, Array{Float64, 3}, Tuple{UnitRange{Int64}, Base.Slice{Base.OneTo{Int64}}, Base.Slice{Base.OneTo{Int64}}}, false} at _session_consume!(s::Session, tok::Int64) at session.jl:955
+64 SubArray{Float64, 3, Array{Float64, 3}, Tuple{UnitRange{Int64}, Base.Slice{Base.OneTo{Int64}}, Base.Slice{Base.OneTo{Int64}}}, false} at _session_consume!(s::Session, tok::Int64) at session.jl:955
+32 TemporaryWorkspace at _session_consume!(s::Session, tok::Int64) at session.jl:955
+32 TemporaryWorkspace at _session_consume!(s::Session, tok::Int64) at session.jl:955
+64 SubArray{Float64, 2, Matrix{Float64}, Tuple{UnitRange{Int64}, UnitRange{Int64}}, false} at _session_consume!(s::Session, tok::Int64) at session.jl:955
+64 SubArray{Float64, 2, Matrix{Float64}, Tuple{UnitRange{Int64}, UnitRange{Int64}}, false} at _session_consume!(s::Session, tok::Int64) at session.jl:955
+64 SubArray{Float64, 3, Array{Float64, 3}, Tuple{UnitRange{Int64}, Base.Slice{Base.OneTo{Int64}}, Base.Slice{Base.OneTo{Int64}}}, false} at _session_consume!(s::Session, tok::Int64) at session.jl:955
+160 @NamedTuple{wq::ProjectionWeight, wk::ProjectionWeight, wv::ProjectionWeight, wo::ProjectionWeight, wgate::ProjectionWeight, wup::ProjectionWeight, wdown::ProjectionWeight, attn_rms::FrozenParameter, ffn_rms::FrozenParameter} at _session_consume!(s::Session, tok::Int64) at session.jl:970
+16 ProjectionWeight at _session_consume!(s::Session, tok::Int64) at session.jl:970
+32 Activation at _session_consume!(s::Session, tok::Int64) at session.jl:970
+32 Activation at _session_consume!(s::Session, tok::Int64) at session.jl:970
+32 ProjectionWeight at _session_consume!(s::Session, tok::Int64) at session.jl:970
+16 LinearAlgebra.Transpose{Float64, Matrix{Float64}} at _session_consume!(s::Session, tok::Int64) at session.jl:970
+32 Activation at _session_consume!(s::Session, tok::Int64) at session.jl:970
+160 @NamedTuple{wq::ProjectionWeight, wk::ProjectionWeight, wv::ProjectionWeight, wo::ProjectionWeight, wgate::ProjectionWeight, wup::ProjectionWeight, wdown::ProjectionWeight, attn_rms::FrozenParameter, ffn_rms::FrozenParameter} at _session_consume!(s::Session, tok::Int64) at session.jl:972
+16 FrozenParameter at _session_consume!(s::Session, tok::Int64) at session.jl:972
+16 @NamedTuple{eps::Float64} at _session_consume!(s::Session, tok::Int64) at session.jl:972
+32 Activation at _session_consume!(s::Session, tok::Int64) at session.jl:972
+32 Activation at _session_consume!(s::Session, tok::Int64) at session.jl:972
+32 FrozenParameter at _session_consume!(s::Session, tok::Int64) at session.jl:972
+16 Float64 at _session_consume!(s::Session, tok::Int64) at session.jl:972
+48 Matrix{Float64} at _session_consume!(s::Session, tok::Int64) at session.jl:972
+32 Activation at _session_consume!(s::Session, tok::Int64) at session.jl:972
+160 @NamedTuple{wq::ProjectionWeight, wk::ProjectionWeight, wv::ProjectionWeight, wo::ProjectionWeight, wgate::ProjectionWeight, wup::ProjectionWeight, wdown::ProjectionWeight, attn_rms::FrozenParameter, ffn_rms::FrozenParameter} at _session_consume!(s::Session, tok::Int64) at session.jl:973
+16 ProjectionWeight at _session_consume!(s::Session, tok::Int64) at session.jl:973
+32 Activation at _session_consume!(s::Session, tok::Int64) at session.jl:973
+32 Activation at _session_consume!(s::Session, tok::Int64) at session.jl:973
+32 ProjectionWeight at _session_consume!(s::Session, tok::Int64) at session.jl:973
+16 LinearAlgebra.Transpose{Float64, Matrix{Float64}} at _session_consume!(s::Session, tok::Int64) at session.jl:973
+32 Activation at _session_consume!(s::Session, tok::Int64) at session.jl:973
+160 @NamedTuple{wq::ProjectionWeight, wk::ProjectionWeight, wv::ProjectionWeight, wo::ProjectionWeight, wgate::ProjectionWeight, wup::ProjectionWeight, wdown::ProjectionWeight, attn_rms::FrozenParameter, ffn_rms::FrozenParameter} at _session_consume!(s::Session, tok::Int64) at session.jl:974
+16 ProjectionWeight at _session_consume!(s::Session, tok::Int64) at session.jl:974
+32 Activation at _session_consume!(s::Session, tok::Int64) at session.jl:974
+32 Activation at _session_consume!(s::Session, tok::Int64) at session.jl:974
+32 ProjectionWeight at _session_consume!(s::Session, tok::Int64) at session.jl:974
+16 LinearAlgebra.Transpose{Float64, Matrix{Float64}} at _session_consume!(s::Session, tok::Int64) at session.jl:974
+32 Activation at _session_consume!(s::Session, tok::Int64) at session.jl:974
+32 Activation at _session_consume!(s::Session, tok::Int64) at session.jl:975
+32 Activation at _session_consume!(s::Session, tok::Int64) at session.jl:975
+32 Activation at _session_consume!(s::Session, tok::Int64) at session.jl:975
+32 Activation at _session_consume!(s::Session, tok::Int64) at session.jl:975
+160 @NamedTuple{wq::ProjectionWeight, wk::ProjectionWeight, wv::ProjectionWeight, wo::ProjectionWeight, wgate::ProjectionWeight, wup::ProjectionWeight, wdown::ProjectionWeight, attn_rms::FrozenParameter, ffn_rms::FrozenParameter} at _session_consume!(s::Session, tok::Int64) at session.jl:976
+16 ProjectionWeight at _session_consume!(s::Session, tok::Int64) at session.jl:976
+32 Activation at _session_consume!(s::Session, tok::Int64) at session.jl:976
+32 Activation at _session_consume!(s::Session, tok::Int64) at session.jl:976
+32 ProjectionWeight at _session_consume!(s::Session, tok::Int64) at session.jl:976
+16 LinearAlgebra.Transpose{Float64, Matrix{Float64}} at _session_consume!(s::Session, tok::Int64) at session.jl:976
+32 Activation at _session_consume!(s::Session, tok::Int64) at session.jl:976
+48 SubArray{Float64, 1, Matrix{Float64}, Tuple{Int64, Base.Slice{Base.OneTo{Int64}}}, true} at _session_consume!(s::Session, tok::Int64) at session.jl:980
+40 Memory{Int64} at _decode_impl!(s::Session, span::Gesso.Inference._EngineSpan) at session.jl:854
+40 Tuple{Symbol, Symbol, String, Int64, Nothing, Int64} at _engine_receipt(s::Session, task::Symbol, t0_ns::UInt64, span::Gesso.Inference._EngineSpan, failure::Nothing, max_new_tokens::Nothing) at session.jl:555
+40 @NamedTuple{backend::Symbol, actual_backend::Symbol, dtype::String, page_size::Int64, max_new_tokens::Nothing, eos_token_id::Int64} at _engine_receipt(s::Session, task::Symbol, t0_ns::UInt64, span::Gesso.Inference._EngineSpan, failure::Nothing, max_new_tokens::Nothing) at session.jl:555
+8 UInt64 at _engine_receipt(s::Session, task::Symbol, t0_ns::UInt64, span::Gesso.Inference._EngineSpan, failure::Nothing, max_new_tokens::Nothing) at session.jl:563
+8 UInt64 at _engine_receipt(s::Session, task::Symbol, t0_ns::UInt64, span::Gesso.Inference._EngineSpan, failure::Nothing, max_new_tokens::Nothing) at session.jl:563
+8 UInt64 at _engine_receipt(s::Session, task::Symbol, t0_ns::UInt64, span::Gesso.Inference._EngineSpan, failure::Nothing, max_new_tokens::Nothing) at session.jl:563
+8 UInt64 at _engine_receipt(s::Session, task::Symbol, t0_ns::UInt64, span::Gesso.Inference._EngineSpan, failure::Nothing, max_new_tokens::Nothing) at session.jl:563
+48 NTuple{6, UInt64} at _engine_receipt(s::Session, task::Symbol, t0_ns::UInt64, span::Gesso.Inference._EngineSpan, failure::Nothing, max_new_tokens::Nothing) at session.jl:563
+8 UInt64 at _engine_receipt(s::Session, task::Symbol, t0_ns::UInt64, span::Gesso.Inference._EngineSpan, failure::Nothing, max_new_tokens::Nothing) at session.jl:563
+8 UInt64 at _engine_receipt(s::Session, task::Symbol, t0_ns::UInt64, span::Gesso.Inference._EngineSpan, failure::Nothing, max_new_tokens::Nothing) at session.jl:563
+8 UInt64 at _engine_receipt(s::Session, task::Symbol, t0_ns::UInt64, span::Gesso.Inference._EngineSpan, failure::Nothing, max_new_tokens::Nothing) at session.jl:563
+8 UInt64 at _engine_receipt(s::Session, task::Symbol, t0_ns::UInt64, span::Gesso.Inference._EngineSpan, failure::Nothing, max_new_tokens::Nothing) at session.jl:563
+48 @NamedTuple{prefill_ns::UInt64, decode_ns::UInt64, total_ns::UInt64, ttft_ns::UInt64, first_decode_ns::UInt64, tokenize_ns::UInt64} at _engine_receipt(s::Session, task::Symbol, t0_ns::UInt64, span::Gesso.Inference._EngineSpan, failure::Nothing, max_new_tokens::Nothing) at session.jl:563
+25 String at _output_digest(ids::Vector{Int64}) at session.jl:523
+24 Memory{UInt8} at _output_digest(ids::Vector{Int64}) at session.jl:523
+32 Pair{Symbol, Vector{Int64}} at _finish_engine_receipt(s::Session, task::Symbol, span::Gesso.Inference._EngineSpan, failure::Nothing, request::@NamedTuple{backend::Symbol, actual_backend::Symbol, dtype::String, page_size::Int64, max_new_tokens::Nothing, eos_token_id::Int64}, timing::@NamedTuple{prefill_ns::UInt64, decode_ns::UInt64, total_ns::UInt64, ttft_ns::UInt64, first_decode_ns::UInt64, tokenize_ns::UInt64}) at session.jl:578
+80 Dict{Symbol, Any} at _finish_engine_receipt(s::Session, task::Symbol, span::Gesso.Inference._EngineSpan, failure::Nothing, request::@NamedTuple{backend::Symbol, actual_backend::Symbol, dtype::String, page_size::Int64, max_new_tokens::Nothing, eos_token_id::Int64}, timing::@NamedTuple{prefill_ns::UInt64, decode_ns::UInt64, total_ns::UInt64, ttft_ns::UInt64, first_decode_ns::UInt64, tokenize_ns::UInt64}) at session.jl:578
+32 Memory{UInt8} at _finish_engine_receipt(s::Session, task::Symbol, span::Gesso.Inference._EngineSpan, failure::Nothing, request::@NamedTuple{backend::Symbol, actual_backend::Symbol, dtype::String, page_size::Int64, max_new_tokens::Nothing, eos_token_id::Int64}, timing::@NamedTuple{prefill_ns::UInt64, decode_ns::UInt64, total_ns::UInt64, ttft_ns::UInt64, first_decode_ns::UInt64, tokenize_ns::UInt64}) at session.jl:578
+144 Memory{Symbol} at _finish_engine_receipt(s::Session, task::Symbol, span::Gesso.Inference._EngineSpan, failure::Nothing, request::@NamedTuple{backend::Symbol, actual_backend::Symbol, dtype::String, page_size::Int64, max_new_tokens::Nothing, eos_token_id::Int64}, timing::@NamedTuple{prefill_ns::UInt64, decode_ns::UInt64, total_ns::UInt64, ttft_ns::UInt64, first_decode_ns::UInt64, tokenize_ns::UInt64}) at session.jl:578
+144 Memory{Any} at _finish_engine_receipt(s::Session, task::Symbol, span::Gesso.Inference._EngineSpan, failure::Nothing, request::@NamedTuple{backend::Symbol, actual_backend::Symbol, dtype::String, page_size::Int64, max_new_tokens::Nothing, eos_token_id::Int64}, timing::@NamedTuple{prefill_ns::UInt64, decode_ns::UInt64, total_ns::UInt64, ttft_ns::UInt64, first_decode_ns::UInt64, tokenize_ns::UInt64}) at session.jl:578
+48 @NamedTuple{backend::Symbol, actual_backend::Symbol, dtype::String, page_size::Int64, max_new_tokens::Nothing, eos_token_id::Int64} at Receipt at receipts.jl:37 [inlined]
+64 @NamedTuple{prefill_ns::UInt64, decode_ns::UInt64, total_ns::UInt64, ttft_ns::UInt64, first_decode_ns::UInt64, tokenize_ns::UInt64} at Receipt at receipts.jl:37 [inlined]
+32 @NamedTuple{prompt_tokens::Int64, new_tokens::Int64, total_tokens::Int64} at Receipt at receipts.jl:37 [inlined]
+48 @NamedTuple{kv_bytes::Int64, page_count::Int64, kv_len::Int64, context_length::Int64, context_remaining::Int64} at Receipt at receipts.jl:37 [inlined]
+32 @NamedTuple{kind::Symbol, algorithm::Symbol, value::String} at Receipt at receipts.jl:37 [inlined]
+192 Receipt at _engine_receipt(s::Session, task::Symbol, t0_ns::UInt64, span::Gesso.Inference._EngineSpan, failure::Nothing, max_new_tokens::Nothing) at session.jl:572
+192 Receipt at _audited_owned(f::Gesso.Inference.var"#decode!##0#decode!##1"{Session}, s::Session, task::Symbol; max_new_tokens::Nothing) at session.jl:624
+receipt=1440
+decode=16480

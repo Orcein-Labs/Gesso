@@ -145,3 +145,35 @@ end
 # the stub resolves the backend from it. Documented contract: first positional
 # argument of every lowering op is backend-carrying (a backend tag or a semantic
 # object that chains to one). Phase 2 replaces stubs with real CPU methods.
+
+# Shared storage inspection belongs to the backend seam, below execution.
+function _backend_storage_root(s::AbstractArray)
+    while true
+        p=parent(s)
+        p===s && return s
+        s=p
+    end
+end
+_backend_storage_root(s) = s
+
+# Host token metadata is checked before any backend performs an inbounds gather.
+function _validate_embedding_inputs(dst, table, tokens)
+    ndims(table.storage)==2 && ndims(dst.storage)==2 ||
+        throw(gesso_error(ERR_INVALID_PLAN, "embedding_lookup!: expected matrices"))
+    shape=(length(tokens), size(table.storage, 2))
+    size(dst.storage)==shape && dst.shape==shape && table.shape==size(table.storage) ||
+        throw(gesso_error(ERR_INVALID_PLAN, "embedding_lookup!: shape mismatch"))
+    (tokens isa AbstractRange || _backend_storage_root(tokens) isa Array) || throw(
+        gesso_error(ERR_INVALID_PLAN, "embedding_lookup!: host token metadata required"),
+    )
+    for id in tokens
+        id isa Integer && !(id isa Bool) && 0<=id<size(table.storage, 1) || throw(
+            gesso_error(
+                ERR_INVALID_PLAN,
+                "embedding_lookup!: token ID outside vocabulary";
+                token_id=id,
+            ),
+        )
+    end
+    return nothing
+end

@@ -1,0 +1,9 @@
+WARNING: Imported binding Gesso.PrefillWorkload was undeclared at import time during import to Inference.
+WARNING: Imported binding Gesso.DecodeWorkload was undeclared at import time during import to Inference.
+WARNING: Imported binding Gesso.KVCache was undeclared at import time during import to Inference.
+ERROR: There was an error during testing
+[1.0 3.0 5.0; 2.0 4.0 6.0]
+Test Failed at none:1
+  Expression: a == [1.0 2.0 3.0; 4.0 5.0 6.0]
+   Evaluated: [1.0 3.0 5.0; 2.0 4.0 6.0] == [1.0 2.0 3.0; 4.0 5.0 6.0]
+

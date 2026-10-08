@@ -1,0 +1,4 @@
+make: Entering directory '/home/mattc/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/gesso'
+julia scripts/format.jl --check
+formatting OK
+make: Leaving directory '/home/mattc/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/gesso'

@@ -1,0 +1,6 @@
+WARNING: Imported binding Gesso.PrefillWorkload was undeclared at import time during import to Inference.
+WARNING: Imported binding Gesso.DecodeWorkload was undeclared at import time during import to Inference.
+WARNING: Imported binding Gesso.KVCache was undeclared at import time during import to Inference.
+oracle logits: (32, 4)   max_abs = 1686.4814860783201
+last-position argmax (0-based): 12
+wrote /home/mattc/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/gesso/scripts/../test/fixtures/toy/expected_logits.toml

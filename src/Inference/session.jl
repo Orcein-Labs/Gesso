@@ -36,8 +36,8 @@ import ..Gesso                                # binds the parent module NAME for
 using LinearAlgebra: mul!                     # device GEMM fast paths (Phase 10 C)
 #   * `eos_token_id` is a required Session field — the engine does NOT
 #     hardcode the oracle's TOY_EOS. The oracle still does (its contract).
-#   * Runtime stays contract-only (§XXXII): Session lives in Inference; there
-#     is no scheduler, no batching, no queues this sprint.
+#   * Session owns engine state; ordinary owned-sequence scheduling lives
+#     in Runtime (§XXXII), using these same prefill/decode entries.
 #
 # Phase 6 (§LXXIX item A): every generate / prefill! / decode! emits ONE
 # receipt (§XLII fields filled, no new Receipt fields — no schema bump).
@@ -63,6 +63,7 @@ mutable struct Session
     # = unscaled = the literal `m * theta^(-2i/d)` expression the engine has
     # always evaluated, so every existing model stays bit-identical (§XIII).
     inv_freq::Union{Nothing, Vector{Float64}}
+    interleaved::Bool
     sink::ReceiptSink
     mgr::PagedKVManager
     h::Any                                  # (context_length, dim) hidden rows
@@ -79,11 +80,13 @@ mutable struct Session
     d_head::Int
     group::Int
     vocab::Int
+    run_lock::ReentrantLock
+    busy::Bool
 end
 
 """
     Session(model, tensors; backend=CPUBackend(), page_size=16, context_length,
-            eos_token_id, tokenizer=nothing, eps=1e-6, theta=10000.0,
+            eos_token_id, tokenizer=nothing, eps=1e-6, theta=nothing,
             sink=default_receipt_sink())
 
 The Phase 5 engine surface (§LXVII): `prefill!` / `decode!` / `generate`.
@@ -95,6 +98,86 @@ off the tensor storage (CPU `Array{Float64}`, CUDA `CuArray{Float32}`).
 (toy2 uses 2; SmolLM2 uses 0). `eps`/`theta` thread to `rmsnorm!`/`rope!`
 exactly as in the interpreter (§LXXVI).
 """
+# Validate the supported plan before allocating workspace or launching kernels.
+function _validate_session_plan!(model, tensors, eos)
+    try
+        dim=model.embedding.dim
+        isempty(model.blocks) && error("model has no blocks")
+        length(model.blocks)==length(tensors.blocks) || error("block count mismatch")
+        heads=model.blocks[1].attention.n_heads
+        kvheads=model.blocks[1].attention.n_kv_heads
+        dim%heads==0 && heads%kvheads==0 || error("head grouping must divide exactly")
+        d=div(dim, heads)
+        iseven(d) || error("rotary head dimension must be even")
+        hidden=model.blocks[1].ffn.hidden
+        vocab=model.vocab_size
+        0<=eos<vocab || error("EOS ID outside vocabulary")
+        check(t, shape, name) = begin
+            hasproperty(t, :storage) && hasproperty(t, :shape) ||
+                error("$name lacks storage or shape")
+            size(t.storage)==shape && t.shape==shape ||
+                error("$name shape mismatch; expected $shape")
+        end
+        check(tensors.embedding, (vocab, dim), "embedding")
+        check(tensors.lm_head, (vocab, dim), "lm_head")
+        for (i, b) in enumerate(model.blocks)
+            b.attention.n_heads==heads && b.attention.n_kv_heads==kvheads ||
+                error("nonuniform heads at block $i")
+            b.ffn.hidden==hidden || error("nonuniform FFN scratch dimension at block $i")
+            bt=tensors.blocks[i]
+            kdim=kvheads*d
+            for (name, shape) in (
+                (:wq, (dim, dim)),
+                (:wk, (kdim, dim)),
+                (:wv, (kdim, dim)),
+                (:wo, (dim, dim)),
+                (:wgate, (hidden, dim)),
+                (:wup, (hidden, dim)),
+                (:wdown, (dim, hidden)),
+                (:attn_rms, (dim,)),
+                (:ffn_rms, (dim,)),
+            )
+                check(getproperty(bt, name), shape, "block $i $name")
+            end
+        end
+        fr=haskey(tensors, :final_rms) ? tensors.final_rms : nothing
+        fr===nothing || check(fr, (dim,), "final_rms")
+    catch err
+        err isa Gesso.GessoException && rethrow()
+        throw(
+            gesso_error(
+                ERR_INVALID_PLAN,
+                "Session: malformed model/tensor plan";
+                cause=sprint(showerror, err),
+            ),
+        )
+    end
+    return nothing
+end
+function _validate_token_ids!(s, tokens)
+    for (i, id) in enumerate(tokens)
+        0<=id<s.vocab || throw(
+            gesso_error(
+                ERR_INVALID_PLAN,
+                "token ID outside vocabulary";
+                index=i,
+                token_id=id,
+                vocab=s.vocab,
+            ),
+        )
+    end
+    return nothing
+end
+_engine_failure(err) =
+    err isa Gesso.GessoException ? err :
+    gesso_error(
+        err isa OutOfMemoryError ? Gesso.ERR_ALLOCATION : Gesso.ERR_RUNTIME,
+        "engine operation failed";
+        cause=sprint(showerror, err),
+        cause_type=string(typeof(err)),
+        interrupted=err isa InterruptException,
+    )
+
 function Session(
     model,
     tensors;
@@ -104,7 +187,7 @@ function Session(
     eos_token_id::Int,
     tokenizer=nothing,
     eps::Real=1e-6,
-    theta::Real=10000.0,
+    theta=nothing,
     sink::ReceiptSink=default_receipt_sink(),
 )
     context_length >= 1 || throw(
@@ -114,7 +197,11 @@ function Session(
             context_length=context_length,
         ),
     )
+    isfinite(eps) && eps > 0 ||
+        throw(gesso_error(ERR_INVALID_PLAN, "Session: eps must be finite and positive"))
     # the engine never copies: non-CPU backend REQUIRES device storage (§LXXVII)
+    theta=_resolved_rope_theta(tensors, theta)
+    _validate_session_plan!(model, tensors, eos_token_id)
     _infer_device_storage!(:Session, backend, tensors)
 
     dim = model.embedding.dim
@@ -128,8 +215,8 @@ function Session(
     # and :llama3, exactly what the CPU oracle does (Inference.jl Pass D).
     # Refusal is no longer needed HERE: a backend that cannot honor a scaled
     # policy declines at the `rope!` operation with LoweringNotImplemented
-    # (§LXX, capability lattice §II). CPU runs it; CUDA and Lava still decline.
-    inv_freq = tensors_rope_inv_freq(tensors, d_head)
+    # (§LXX, capability lattice §II). CPU and Lava run it; CUDA comparison still declines scaled policies.
+    inv_freq = tensors_rope_inv_freq(tensors, d_head; theta)
 
     T = typeof(tensors.embedding.storage)
     h = fill!(
@@ -171,6 +258,7 @@ function Session(
         Float64(eps),
         Float64(theta),
         inv_freq,
+        _tensors_rope_interleaved(tensors),
         sink,
         mgr,
         h,
@@ -182,6 +270,8 @@ function Session(
         d_head,
         group,
         vocab,
+        ReentrantLock(),
+        false,
     )
 end
 
@@ -342,7 +432,18 @@ end
 
 # greedy id from a logits row: argmax, ties = first index, 0-based (§LXXVIII;
 # no Random, no Sampler zoo)
-_greedy_id(logits_row) = Int(argmax(logits_row)) - 1
+_all_finite(a) = all(isfinite, a)
+
+function _require_finite_logits(logits)
+    _all_finite(logits) || throw(
+        gesso_error(
+            ERR_NUMERICAL_INSTABILITY,
+            "inference: nonfinite logits; no token may be emitted",
+        ),
+    )
+    return logits
+end
+_greedy_id(logits_row) = Int(argmax(_require_finite_logits(logits_row))) - 1
 
 # device greedy id over hidden row `row` (Phase 10 B): the `_last_logits`
 # math (final RMSNorm when present, tied lm_head matmul) runs on the device
@@ -376,7 +477,7 @@ function _session_greedy_id!(s::Session, cpu, wl)
     # and returns one Int — so the (vocab,) row never crosses to the host on the
     # decode hot path (§LXXVII), and nothing about the branch was ever about
     # WHERE the reduction ran, only about avoiding the transfer.
-    return Int(argmax(vec(ws.logits.storage))) - 1
+    return _greedy_id(vec(ws.logits.storage))
 end
 
 function _session_reset!(s::Session)
@@ -404,8 +505,41 @@ mutable struct _EngineSpan
     decode_ns::UInt64
     prompt_tokens::Int
     new_tokens::Int
+    first_token_ns::UInt64
+    ids::Vector{Int}
+    tokenize_ns::UInt64
 end
-_EngineSpan() = _EngineSpan(UInt64(0), UInt64(0), 0, 0)
+_EngineSpan() = _EngineSpan(UInt64(0), UInt64(0), 0, 0, UInt64(0), Int[], UInt64(0))
+
+# Stable replay identity; no authentication/security claim.
+function _output_digest(ids)
+    h=UInt64(0xcbf29ce484222325)
+    for id in ids
+        value=UInt64(id)
+        for shift in 0:8:56
+            h=(h ⊻ ((value>>shift)&UInt64(0xff)))*UInt64(0x100000001b3)
+        end
+    end
+    return (;
+        kind=:committed_token_ids,
+        algorithm=:fnv1a64_u64le_v1,
+        value=string(h; base=16, pad=16),
+    )
+end
+function _safe_emit!(sink::ReceiptSink, receipt::Gesso.Receipt)
+    try
+        emit!(sink, receipt)
+    catch
+        # A custom sink can violate the delivery contract. Never fail inference.
+    end
+    return nothing
+end
+
+function _receipt_dtype(tensors)
+    native=eltype(tensors.embedding.storage)
+    return native===Float64 ? "Float64" :
+           native===Float32 ? "Float32" : String(nameof(native))
+end
 
 # one auditable record of an engine call. `failure` is the CONSTRUCTED
 # GessoError when the call threw (the throw still propagates); timing is
@@ -418,22 +552,35 @@ function _engine_receipt(
     failure,
     max_new_tokens=nothing,
 )
-    kv_len = s.seqlen
-    return new_receipt(
-        task=task,
+    actual=backend_name(s.backend)::Symbol
+    request=(
+        backend=actual,
+        actual_backend=actual,
+        dtype=_receipt_dtype(s.tensors),
+        page_size=s.page_size,
+        max_new_tokens=max_new_tokens,
+        eos_token_id=s.eos_token_id,
+    )
+    timing=(
+        prefill_ns=span.prefill_ns,
+        decode_ns=span.decode_ns,
+        total_ns=time_ns() - t0_ns,
+        ttft_ns=span.new_tokens > 0 ?
+                span.tokenize_ns + span.prefill_ns + span.first_token_ns : nothing,
+        first_decode_ns=span.first_token_ns,
+        tokenize_ns=span.tokenize_ns,
+    )
+    return _finish_engine_receipt(s, s.sink, task, span, failure, request, timing)
+end
+
+# Concrete request/timing dispatch avoids boxing every keyword record.
+function _finish_engine_receipt(s, sink, task, span, failure, request, timing)
+    # The private per-action span is finished; hand its owned ID vector to the receipt.
+    receipt=new_receipt(;
+        task,
         model=nameof(typeof(s.model)),
-        inference_request=(
-            backend=backend_name(s.backend),
-            page_size=s.page_size,
-            max_new_tokens=max_new_tokens,
-            eos_token_id=s.eos_token_id,
-        ),
-        timing=(
-            prefill_ns=span.prefill_ns,
-            decode_ns=span.decode_ns,
-            total_ns=time_ns() - t0_ns,
-            ttft_ns=span.prefill_ns + (span.new_tokens > 0 ? span.decode_ns : UInt64(0)),
-        ),
+        inference_request=request,
+        timing,
         token_usage=(
             prompt_tokens=span.prompt_tokens,
             new_tokens=span.new_tokens,
@@ -442,35 +589,71 @@ function _engine_receipt(
         memory_usage=(
             kv_bytes=kv_bytes(s.mgr),
             page_count=page_count(s.mgr),
-            kv_len=kv_len,
+            kv_len=s.seqlen,
             context_length=s.context_length,
-            context_remaining=s.context_length - kv_len,
+            context_remaining=s.context_length - s.seqlen,
         ),
         failure=failure,
-        context=Dict{Symbol, Any}(:gap_class => :algorithm),   # §L label, not a detective
+        output_digest=_output_digest(span.ids),
+        context=Dict{Symbol, Any}(:gap_class => :algorithm, :committed_ids=>span.ids),   # §L label, not a detective
     )
+    _safe_emit!(sink, receipt)
+    return nothing
 end
 
 # wrap one engine call: run f(span) → result, build the receipt from the
 # span (on success) or from the caught error (on failure), emit exactly one
 # receipt, then rethrow the ORIGINAL error. emit! never throws (receipts.jl
 # law) — a telemetry failure cannot change ids or suppress the throw.
-function _audited(f, s::Session, task::Symbol; max_new_tokens=nothing)
+_engine_boundary!(::AbstractGessoBackend) = nothing
+
+function _audited_owned(f, s::Session, task::Symbol; max_new_tokens=nothing)
     t0 = time_ns()
     span = _EngineSpan()
     result = nothing
     try
         result = f(span)
+        _engine_boundary!(s.backend)
     catch err
         # failure receipt carries the CONSTRUCTED error; the throw still
         # propagates (§LXXIX item A)
-        receipt = _engine_receipt(s, task, t0, span, err, max_new_tokens)
-        emit!(s.sink, receipt)
-        rethrow()
+        s.ready=false
+        failure=_engine_failure(err)
+        _engine_receipt(s, task, t0, span, failure, max_new_tokens)
+        throw(failure)
     end
-    receipt = _engine_receipt(s, task, t0, span, nothing, max_new_tokens)
-    emit!(s.sink, receipt)
+    _engine_receipt(s, task, t0, span, nothing, max_new_tokens)
     return result
+end
+
+# An engine call has one owner. Reject contention before touching mutable cache.
+function _ownership_error(s, task, message)
+    err=gesso_error(ERR_INVALID_PLAN, message)
+    _safe_emit!(
+        s.sink,
+        new_receipt(;
+            task,
+            failure=err,
+            inference_request=(; backend=backend_name(s.backend)),
+            context=Dict{Symbol, Any}(:ownership=>:rejected),
+        ),
+    )
+    return err
+end
+function _audited(f, s::Session, task::Symbol; max_new_tokens=nothing)
+    trylock(s.run_lock) ||
+        throw(_ownership_error(s, task, "Session is owned by another task"))
+    try
+        s.busy && throw(_ownership_error(s, task, "Session operation already active"))
+        s.busy=true
+        try
+            return _audited_owned(f, s, task; max_new_tokens)
+        finally
+            s.busy=false
+        end
+    finally
+        unlock(s.run_lock)
+    end
 end
 
 # --- prefill! (§XXX: prompt ingestion is PrefillWorkload, once) ----------------
@@ -499,6 +682,7 @@ function _prefill_impl!(s::Session, tokens::AbstractVector{Int}, span::_EngineSp
             "multi-turn extension is not supported this sprint; build a new Session",
         ),
     )
+    _validate_token_ids!(s, tokens)
     P = length(tokens)
     P <= s.context_length || throw(
         gesso_error(
@@ -561,7 +745,16 @@ function _prefill_impl!(s::Session, tokens::AbstractVector{Int}, span::_EngineSp
         _split_heads!(qh, q, n_heads, d_head)
         _split_heads!(kh, k, n_kv_heads, d_head)
         _split_heads!(vh, v, n_kv_heads, d_head)
-        rope!(cpu, qh, kh, positions, wl; theta=s.theta, inv_freq=s.inv_freq)
+        rope!(
+            cpu,
+            qh,
+            kh,
+            positions,
+            wl;
+            theta=s.theta,
+            inv_freq=s.inv_freq,
+            interleaved=s.interleaved,
+        )
         # KV APPEND through the paged manager: post-RoPE rows 1..P, one page
         # row per token, K and V as a pair (§LXXVIII)
         for t in 1:P
@@ -578,51 +771,20 @@ function _prefill_impl!(s::Session, tokens::AbstractVector{Int}, span::_EngineSp
             Activation(; shape=(P, n_kv_heads, d_head), storage=gather_kv(s.mgr, bi, :v)),
             group,
         )
-        # scores per head: (P, P), scaled by √d_head — SAME loop order as the
-        # oracle prefill (bit-identical on CPU)
-        fill!(scores.storage, zero(eltype(scores.storage)))
-        if on_cpu
-            for t in 1:P, u in 1:P, hh in 1:n_heads, j in 1:d_head
-                scores.storage[t, u] +=
-                    qh.storage[t, hh, j] * kx.storage[u, hh, j] / sqrt(d_head)
-            end
-        elseif Gesso.supports(cpu, :attn_gemm)
-            # CUDA fast path (Phase 10 C): the same contraction, as one flat
-            # GEMM over (P, n_heads·d_head) reshapes — a plain device `mul!`
-            # (CUBLAS) on the SAME gathered scratch. Pages remain the cache;
-            # gather remains legal; no page-table kernel (that is the packet).
-            # reshape(CuArray) is zero-copy and stays a CuArray (probed); the
-            # non-contiguous inner axis disappears in the 2-D flatten.
-            Q2 = reshape(qh.storage, P, n_heads * d_head)
-            K2 = reshape(kx.storage, P, n_heads * d_head)
-            mul!(scores.storage, Q2, transpose(K2))
-            _scale_storage!(scores.storage, sqrt(d_head))
-        else
-            # Device backends without the :attn_gemm cap (Lava): the original
-            # per-head broadcasts, unchanged.
-            for hh in 1:n_heads, j in 1:d_head
-                @views scores.storage[:, :] .+=
-                    qh.storage[:, hh, j] .* kx.storage[:, hh, j]' ./ sqrt(d_head)
-            end
-        end
-        softmax!(cpu, scores_out, scores, wl)   # causal mask applied inside
-        # attention @ v, per head
-        fill!(attn.storage, zero(eltype(attn.storage)))
-        if on_cpu
-            for t in 1:P, hh in 1:n_heads, j in 1:d_head, u in 1:P
-                attn.storage[t, hh, j] += scores_out.storage[t, u] * vx.storage[u, hh, j]
-            end
-        elseif Gesso.supports(cpu, :attn_gemm)
-            # PV as one flat GEMM too: (P,P)·(P, H·d) → (P, H·d), reshaped back
-            # in place over the SAME (P, n_heads, d_head) buffer.
-            A2 = reshape(attn.storage, P, n_heads * d_head)
-            V2 = reshape(vx.storage, P, n_heads * d_head)
-            mul!(A2, scores_out.storage, V2)
-        else
-            for hh in 1:n_heads, j in 1:d_head
-                @views attn.storage[:, hh, j] .= scores_out.storage * vx.storage[:, hh, j]
-            end
-        end
+        _attention_heads!(
+            cpu,
+            attn.storage,
+            scores,
+            scores_out,
+            qh.storage,
+            kx.storage,
+            vx.storage,
+            n_heads,
+            d_head,
+            P,
+            P,
+            wl,
+        )
         _merge_heads!(merged, attn, n_heads, d_head)
         matmul!(cpu, sub, merged, bt.wo, wl)
         _add_storage!(hp.storage, sub.storage)  # residual
@@ -642,9 +804,11 @@ function _prefill_impl!(s::Session, tokens::AbstractVector{Int}, span::_EngineSp
 
     seqvocab = Activation(; shape=(P, s.vocab), storage=zeros_like((P, s.vocab)))
     matmul!(cpu, seqvocab, hp, tensors.lm_head, wl)
+    _require_finite_logits(seqvocab.storage)
     s.seqlen = P
     s.ready = true
     span.prefill_ns = UInt64(time_ns() - t_prefill)
+    append!(span.ids, tokens)
     span.prompt_tokens = P
     logits = permutedims(seqvocab.storage)       # (vocab, P)
     return on_cpu ? logits : Array(logits)       # host-visible (§LXXVII)
@@ -684,8 +848,11 @@ function _decode_impl!(s::Session, span::_EngineSpan)
     if next != s.eos_token_id                    # EOS: returned, nothing appended
         _session_consume!(s, next)
     end
-    span.decode_ns += UInt64(time_ns() - t_decode)
+    elapsed=UInt64(time_ns() - t_decode)
+    span.new_tokens==0 && (span.first_token_ns=elapsed)
+    span.decode_ns += elapsed
     span.new_tokens += 1
+    push!(span.ids, next)
     return next
 end
 
@@ -709,35 +876,6 @@ end
 # broken.
 
 # scores[1, u] = Σ_{hh,j} q[1,hh,j]·k[u,hh,j] / sqrt(d_head)   (query row 1)
-function _qk_scores_storage!(
-    scores::AbstractMatrix,
-    qhs::AbstractArray,
-    kxs::AbstractArray,
-    n_heads::Int,
-    d_head::Int,
-    K::Int,
-)
-    for u in 1:K, hh in 1:n_heads, j in 1:d_head
-        scores[1, u] += qhs[1, hh, j] * kxs[u, hh, j] / sqrt(d_head)
-    end
-    return scores
-end
-
-# attn[1,hh,j] = Σ_u p[1,u]·v[u,hh,j]                          (P·V row)
-function _pv_attn_storage!(
-    atts::AbstractArray,
-    pouts::AbstractMatrix,
-    vxs::AbstractArray,
-    n_heads::Int,
-    d_head::Int,
-    K::Int,
-)
-    for hh in 1:n_heads, j in 1:d_head, u in 1:K
-        atts[1, hh, j] += pouts[1, u] * vxs[u, hh, j]
-    end
-    return atts
-end
-
 # consume one token: embed, rope at its 0-based position, append K/V rows
 # through the manager, attend over gathered pages 1..K, write the h row
 function _session_consume!(s::Session, tok::Int)
@@ -794,7 +932,16 @@ function _session_consume!(s::Session, tok::Int)
         _split_heads!(qh, q, n_heads, d_head)
         _split_heads!(kh, k, n_kv_heads, d_head)
         _split_heads!(vh, v, n_kv_heads, d_head)
-        rope!(cpu, qh, kh, ws.pos_buf, wl; theta=s.theta, inv_freq=s.inv_freq)   # 0-based position
+        rope!(
+            cpu,
+            qh,
+            kh,
+            ws.pos_buf,
+            wl;
+            theta=s.theta,
+            inv_freq=s.inv_freq,
+            interleaved=s.interleaved,
+        )   # 0-based position
         # KV APPEND through the paged manager (K and V as a pair), THEN gather
         # rows 1..K IN PLACE into the context_length workspace — identical bytes
         # and loop order to the oracle's decode.
@@ -806,65 +953,20 @@ function _session_consume!(s::Session, tok::Int)
             _repeat_heads!(ws.k_rep.storage, ws.k_gather.storage, group, K)
             _repeat_heads!(ws.v_rep.storage, ws.v_gather.storage, group, K)
         end
-        # scores over the gathered cache — SAME loop order as the oracle decode
-        fill!(scores.storage, zero(eltype(scores.storage)))
-        if on_cpu
-            _qk_scores_storage!(scores.storage, qh.storage, kx, n_heads, d_head, K)
-        elseif Gesso.supports(cpu, :attn_gemm)
-            # CUDA fast path (Phase 10 C): one (1, H·d)·(H·d, K) GEMM row, no
-            # per-head Julia loop, no page-table kernel (that is the packet).
-            #
-            # CUBLAS `mul!` only dispatches for a real CuArray, and rows 1:K of a
-            # context_length buffer are a SubArray (measured: `mul!` on one
-            # falls back to scalar indexing and throws). So the GEMM runs over
-            # the WHOLE buffer and the tail is neutralized explicitly rather
-            # than left to contribute:
-            #   * the QK^T tail is zeroed below, so softmax — which still sees
-            #     only 1:K — is unaffected;
-            #   * the PV then sums over the full buffer with a provably-zero
-            #     score tail, which is bit-identical to summing 1:K (measured
-            #     max|Δ| = 0.0 against the host reference).
-            # The cost is O(context_length) device columns instead of O(K); the
-            # saving is zero per-token host allocation. Both are stated in the
-            # 10E receipt rather than traded silently.
-            Q1 = reshape(qh.storage, 1, n_heads * d_head)
-            K2 = reshape(
-                group == 1 ? ws.k_gather.storage : ws.k_rep.storage,
-                s.context_length,
-                n_heads * d_head,
-            )
-            mul!(ws.scores.storage, Q1, transpose(K2))
-            _scale_storage!(ws.scores.storage, sqrt(d_head))
-            if K < s.context_length
-                _zero_tail_storage!(ws.scores.storage, K + 1)
-            end
-        else
-            for hh in 1:n_heads
-                q1 = vec(qh.storage[1, hh, :])           # (d_head,) device copy
-                Kmat = kx[:, hh, :]                     # (K, d_head)
-                @views scores.storage[1, :] .+= (Kmat * q1) ./ sqrt(d_head)
-            end
-        end
-        softmax!(cpu, scores_out, scores, wl)   # offset mask: nothing masked
-        fill!(attn.storage, zero(eltype(attn.storage)))
-        if on_cpu
-            _pv_attn_storage!(attn.storage, scores_out.storage, vx, n_heads, d_head, K)
-        elseif Gesso.supports(cpu, :attn_gemm)
-            # PV: (1,ctx)·(ctx, H·d) → (1, H·d), reshaped back in place. The
-            # score tail is zero (above), so the extra columns contribute 0.
-            A1 = reshape(attn.storage, 1, n_heads * d_head)
-            V2 = reshape(
-                group == 1 ? ws.v_gather.storage : ws.v_rep.storage,
-                s.context_length,
-                n_heads * d_head,
-            )
-            mul!(A1, ws.scores_out.storage, V2)
-        else
-            for hh in 1:n_heads
-                V = vx[:, hh, :]                     # (K, d_head)
-                @views attn.storage[1, hh, :] .= vec(scores_out.storage * V)
-            end
-        end
+        _attention_heads!(
+            cpu,
+            attn.storage,
+            scores,
+            scores_out,
+            qh.storage,
+            kx,
+            vx,
+            n_heads,
+            d_head,
+            1,
+            K,
+            wl,
+        )
         _merge_heads!(merged, attn, n_heads, d_head)
         matmul!(cpu, sub, merged, bt.wo, wl)
         _add_storage!(hp.storage, sub.storage)  # residual
@@ -913,6 +1015,7 @@ function _generate_impl!(
     isempty(s.model.blocks) &&
         throw(gesso_error(ERR_INVALID_PLAN, "generate: model has no blocks"))
     isempty(prompt) && throw(gesso_error(ERR_INVALID_PLAN, "generate: prompt is empty"))
+    _validate_token_ids!(s, prompt)
     _session_reset!(s)
     _prefill_impl!(s, prompt, span)
     ids = collect(prompt)
@@ -935,19 +1038,18 @@ String prompt: `encode(s.tokenizer, text)`. Throws `ERR_INVALID_PLAN` when
 the session has no tokenizer (§LXXVIII).
 """
 function generate(s::Session, text::AbstractString; max_new_tokens::Int=8, on_token=nothing)
-    s.tokenizer === nothing && throw(
-        gesso_error(
-            ERR_INVALID_PLAN,
-            "generate: session has no tokenizer — pass tokenizer=… to Session " *
-            "or call generate with an integer prompt",
-        ),
-    )
-    return generate(
-        s,
-        encode(s.tokenizer, text);
-        max_new_tokens=max_new_tokens,
-        on_token=on_token,
-    )
+    return _audited(s, :generate; max_new_tokens) do span
+        s.tokenizer===nothing && throw(
+            gesso_error(
+                ERR_INVALID_PLAN,
+                "generate: session has no tokenizer; supply one or use integer prompts",
+            ),
+        )
+        token_start=time_ns()
+        ids=encode(s.tokenizer, text)
+        span.tokenize_ns=UInt64(time_ns()-token_start)
+        return _generate_impl!(s, ids, max_new_tokens, on_token, span)
+    end
 end
 
 # --- fork (§LXXX: declared identity prefix share, Magenta §9.5 step 3) --------
@@ -977,7 +1079,7 @@ inference step (§LXXIX receipts record prefill!/decode!/generate). A forked
 child that calls `generate` still RESETS — and so DROPS the share (§LXXVIII
 law unchanged). The share path is `prefill!` / `fork` / `decode!`.
 """
-function fork(s::Session; sink::ReceiptSink=default_receipt_sink())
+function _fork_owned(s::Session; sink::ReceiptSink=default_receipt_sink())
     s.ready || throw(
         gesso_error(
             ERR_INVALID_PLAN,
@@ -1007,5 +1109,23 @@ function fork(s::Session; sink::ReceiptSink=default_receipt_sink())
     _assert_disjoint_scratch!(s, child)
     return child
 end
+
+function fork(s::Session; sink::ReceiptSink=default_receipt_sink())
+    trylock(s.run_lock) ||
+        throw(gesso_error(ERR_INVALID_PLAN, "fork: Session is owned by another task"))
+    try
+        s.busy &&
+            throw(gesso_error(ERR_INVALID_PLAN, "fork: Session operation already active"))
+        s.busy=true
+        try
+            return _fork_owned(s; sink)
+        finally
+            s.busy=false
+        end
+    finally
+        unlock(s.run_lock)
+    end
+end
+@doc (@doc _fork_owned) fork
 
 export Session, decode!, fork, generate, prefill!

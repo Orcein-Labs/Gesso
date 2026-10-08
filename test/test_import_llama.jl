@@ -57,12 +57,16 @@ function _write_safetensors(path, tensors::Dict{String, AbstractArray})
         write(io, hdr_json)
         for name in entries
             arr = tensors[name]
+            # The transport is C/row-major, independently of Julia storage.
+            ordered =
+                ndims(arr) <= 1 ? vec(arr) :
+                vec(permutedims(arr, reverse(ntuple(identity, ndims(arr)))))
             code = _safetensors_dtype_code(arr)
             bytes =
-                code == "F64" ? reinterpret(UInt8, vec(arr)) :
-                code == "F32" ? reinterpret(UInt8, vec(Float32.(arr))) :
-                code == "F16" ? reinterpret(UInt8, vec(Float16.(arr))) :
-                reinterpret(UInt8, vec(arr))  # BF16: raw bits already
+                code == "F64" ? reinterpret(UInt8, ordered) :
+                code == "F32" ? reinterpret(UInt8, Float32.(ordered)) :
+                code == "F16" ? reinterpret(UInt8, Float16.(ordered)) :
+                reinterpret(UInt8, ordered)  # BF16: raw bits already
             write(io, bytes)
         end
     end
@@ -214,7 +218,7 @@ end
         catch e
             e
         end
-        @test err isa ErrorException
+        @test err isa Gesso.GessoError
         @test occursin(name, sprint(showerror, err))
     end
     bad("model_type", c -> c["model_type"] = "mistral")
@@ -241,7 +245,7 @@ end
     catch e
         e
     end
-    @test err isa ErrorException
+    @test err isa Gesso.GessoError
     @test occursin("rms_norm_eps", sprint(showerror, err))
 end
 
@@ -291,7 +295,7 @@ end
     catch e
         e
     end
-    @test err isa ErrorException
+    @test err isa Gesso.GessoError
     @test occursin("I8", sprint(showerror, err))
     @test occursin("ok", sprint(showerror, err))
 end
@@ -365,7 +369,7 @@ end
     catch e
         e
     end
-    @test err isa ErrorException
+    @test err isa Gesso.GessoError
     @test occursin("q_proj.bias", sprint(showerror, err))
 
     # missing key
@@ -377,7 +381,7 @@ end
     catch e
         e
     end
-    @test err2 isa ErrorException
+    @test err2 isa Gesso.GessoError
     @test occursin("k_proj.weight", sprint(showerror, err2))
 
     # untied head: distinct lm_head is an error
@@ -391,7 +395,7 @@ end
     catch e
         e
     end
-    @test err3 isa ErrorException
+    @test err3 isa Gesso.GessoError
     @test occursin("lm_head", sprint(showerror, err3))
     @test occursin("untied", sprint(showerror, err3))
 end
@@ -428,7 +432,7 @@ end
     catch e
         e
     end
-    @test errm isa ErrorException
+    @test errm isa Gesso.GessoError
     @test occursin("mixes", sprint(showerror, errm))
     @test occursin("0-based", sprint(showerror, errm))
     @test occursin("1-based", sprint(showerror, errm))
@@ -458,7 +462,7 @@ end
     catch e
         e
     end
-    @test errb isa ErrorException
+    @test errb isa Gesso.GessoError
     msg = sprint(showerror, errb)
     @test occursin("q_proj.bias", msg)
     @test occursin("unknown tensor", msg)
@@ -480,7 +484,7 @@ end
     catch e
         e
     end
-    @test errmix isa ErrorException
+    @test errmix isa Gesso.GessoError
     msgmix = sprint(showerror, errmix)
     @test occursin("q_proj.bias", msgmix)
     @test occursin("unknown tensor", msgmix)

@@ -1,0 +1,8 @@
+{
+  "files_checked": 188,
+  "different": [],
+  "manifest_sha256": "86fee480c43335b0dbcc2b19949b2012766b16159b3623154409e0b3a462f837",
+  "inherited_compiled_gesso_lava": false,
+  "compiler_prerequisites": "locked LLVM and GPUCompiler built locally in new upper depot",
+  "source": "/home/mattc/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/relocated-gesso"
+}

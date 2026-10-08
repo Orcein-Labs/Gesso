@@ -1,0 +1,123 @@
+WARNING: Imported binding Gesso.PrefillWorkload was undeclared at import time during import to Inference.
+WARNING: Imported binding Gesso.DecodeWorkload was undeclared at import time during import to Inference.
+WARNING: Imported binding Gesso.KVCache was undeclared at import time during import to Inference.
+┌ Info: Lava: initialized Vulkan device with RT
+│   device = "NVIDIA GeForce RTX 5060"
+│   queue_family = 0x00000000
+│   handle_size = 0x00000020
+│   max_recursion = 0x0000001f
+│   validation = false
+│   gpu_assisted = false
+│   sync_val = false
+└   debug_utils = true
+┌ Warning: Vulkan driver note (type=1, not a validation error)
+│   message = "loader_create_device_chain: Failed to find 'vkGetInstanceProcAddr' in layer \"/home/mattc/.local/share/vulkan/implicit_layer.d/../../../lib/liblsfg-vk-layer.so\".  Skipping layer."
+└ @ Lava ~/.julia/packages/Lava/V2Q5P/src/runtime/device.jl:1799
+ERROR: LoadError: Some tests did not pass: 13 passed, 8 failed, 0 errored, 0 broken.
+in expression starting at /home/mattc/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/gesso/test/regime_i_batch.jl:16
+Ordinary lava owned sequence scheduling: Test Failed at /home/mattc/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/gesso/test/regime_i_batch.jl:21
+  Expression: (results[i]).ids == expected(i, n)
+   Evaluated: [504, 2365, 6354, 16438, 27003, 690, 260] == [504, 2365, 6354, 16438, 27003, 690, 260, 23790, 2767]
+
+Stacktrace:
+ [1] top-level scope
+   @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/gesso/test/regime_i_batch.jl:17
+ [2] macro expansion
+   @ ~/.julia/juliaup/julia-1.12.6+0.x64.linux.gnu/share/julia/stdlib/v1.12/Test/src/Test.jl:1777 [inlined]
+ [3] macro expansion
+   @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/gesso/test/regime_i_batch.jl:21 [inlined]
+ [4] macro expansion
+   @ ~/.julia/juliaup/julia-1.12.6+0.x64.linux.gnu/share/julia/stdlib/v1.12/Test/src/Test.jl:680 [inlined]
+Ordinary lava owned sequence scheduling: Test Failed at /home/mattc/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/gesso/test/regime_i_batch.jl:22
+  Expression: (results[i]).status == :complete
+   Evaluated: failed == complete
+
+Stacktrace:
+ [1] top-level scope
+   @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/gesso/test/regime_i_batch.jl:17
+ [2] macro expansion
+   @ ~/.julia/juliaup/julia-1.12.6+0.x64.linux.gnu/share/julia/stdlib/v1.12/Test/src/Test.jl:1777 [inlined]
+ [3] macro expansion
+   @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/gesso/test/regime_i_batch.jl:22 [inlined]
+ [4] macro expansion
+   @ ~/.julia/juliaup/julia-1.12.6+0.x64.linux.gnu/share/julia/stdlib/v1.12/Test/src/Test.jl:680 [inlined]
+Ordinary lava owned sequence scheduling: Test Failed at /home/mattc/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/gesso/test/regime_i_batch.jl:23
+  Expression: (results[i]).error === nothing
+   Evaluated: GessoError(ERR_RUNTIME, "batch request failed", Dict{Symbol, Any}(:cause => "LavaError during memory allocation:\n  Out of GPU memory.\n  Vulkan returned ERROR_OUT_OF_DEVICE_MEMORY from DeviceMemory for 16 bytes (0 MiB).\n  Lava tracked state: 752 MiB live across 3581 buffers.\n  Memory type idx=4 → heap idx=2, property_flags=0x7\n  Driver heap budgets (VK_EXT_memory_budget):\n    heap 0 [DEVICE_LOCAL] size=8151 MiB budget=6954 MiB used=857 MiB\n    heap 1 [HOST] size=23935 MiB budget=23935 MiB used=154 MiB\n    heap 2 [DEVICE_LOCAL] size=246 MiB budget=0 MiB used=246 MiB\n    heap 3 [HOST] size=0 MiB budget=0 MiB used=0 MiB\n    heap 4 [HOST] size=0 MiB budget=0 MiB used=0 MiB\n    heap 5 [HOST] size=0 MiB budget=0 MiB used=0 MiB\n    heap 6 [HOST] size=0 MiB budget=0 MiB used=0 MiB\n    heap 7 [HOST] size=0 MiB budget=0 MiB used=0 MiB\n    heap 8 [HOST] size=0 MiB budget=0 MiB used=0 MiB\n    heap 9 [HOST] size=0 MiB budget=0 MiB used=0 MiB\n    heap 10 [HOST] size=0 MiB budget=0 MiB used=0 MiB\n    heap 11 [HOST] size=0 MiB budget=0 MiB used=0 MiB\n    heap 12 [HOST] size=0 MiB budget=0 MiB used=0 MiB\n    heap 13 [HOST] size=0 MiB budget=0 MiB used=0 MiB\n    heap 14 [HOST] size=0 MiB budget=0 MiB used=0 MiB\n    heap 15 [HOST] size=0 MiB budget=0 MiB used=0 MiB\n\n  Suggestion: Free unused LavaArrays, reduce problem size, or check for memory leaks with Lava.gpu_memory_usage().")) === nothing
+
+Stacktrace:
+ [1] top-level scope
+   @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/gesso/test/regime_i_batch.jl:17
+ [2] macro expansion
+   @ ~/.julia/juliaup/julia-1.12.6+0.x64.linux.gnu/share/julia/stdlib/v1.12/Test/src/Test.jl:1777 [inlined]
+ [3] macro expansion
+   @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/gesso/test/regime_i_batch.jl:23 [inlined]
+ [4] macro expansion
+   @ ~/.julia/juliaup/julia-1.12.6+0.x64.linux.gnu/share/julia/stdlib/v1.12/Test/src/Test.jl:680 [inlined]
+Ordinary lava owned sequence scheduling: Test Failed at /home/mattc/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/gesso/test/regime_i_batch.jl:21
+  Expression: (results[i]).ids == expected(i, n)
+   Evaluated: [28813, 542, 314, 253, 6256, 1789, 30, 198, 198, 504] == [28813, 542, 314, 253, 6256, 1789, 30, 198, 198, 504, 1789, 314, 2724, 288, 325]
+
+Stacktrace:
+ [1] top-level scope
+   @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/gesso/test/regime_i_batch.jl:17
+ [2] macro expansion
+   @ ~/.julia/juliaup/julia-1.12.6+0.x64.linux.gnu/share/julia/stdlib/v1.12/Test/src/Test.jl:1777 [inlined]
+ [3] macro expansion
+   @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/gesso/test/regime_i_batch.jl:21 [inlined]
+ [4] macro expansion
+   @ ~/.julia/juliaup/julia-1.12.6+0.x64.linux.gnu/share/julia/stdlib/v1.12/Test/src/Test.jl:680 [inlined]
+Ordinary lava owned sequence scheduling: Test Failed at /home/mattc/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/gesso/test/regime_i_batch.jl:22
+  Expression: (results[i]).status == :complete
+   Evaluated: failed == complete
+
+Stacktrace:
+ [1] top-level scope
+   @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/gesso/test/regime_i_batch.jl:17
+ [2] macro expansion
+   @ ~/.julia/juliaup/julia-1.12.6+0.x64.linux.gnu/share/julia/stdlib/v1.12/Test/src/Test.jl:1777 [inlined]
+ [3] macro expansion
+   @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/gesso/test/regime_i_batch.jl:22 [inlined]
+ [4] macro expansion
+   @ ~/.julia/juliaup/julia-1.12.6+0.x64.linux.gnu/share/julia/stdlib/v1.12/Test/src/Test.jl:680 [inlined]
+Ordinary lava owned sequence scheduling: Test Failed at /home/mattc/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/gesso/test/regime_i_batch.jl:23
+  Expression: (results[i]).error === nothing
+   Evaluated: GessoError(ERR_RUNTIME, "batch request failed", Dict{Symbol, Any}(:cause => "LavaError during memory allocation:\n  Out of GPU memory.\n  Vulkan returned ERROR_OUT_OF_DEVICE_MEMORY from DeviceMemory for 40 bytes (0 MiB).\n  Lava tracked state: 752 MiB live across 3581 buffers.\n  Memory type idx=4 → heap idx=2, property_flags=0x7\n  Driver heap budgets (VK_EXT_memory_budget):\n    heap 0 [DEVICE_LOCAL] size=8151 MiB budget=6954 MiB used=857 MiB\n    heap 1 [HOST] size=23935 MiB budget=23935 MiB used=154 MiB\n    heap 2 [DEVICE_LOCAL] size=246 MiB budget=0 MiB used=246 MiB\n    heap 3 [HOST] size=0 MiB budget=0 MiB used=0 MiB\n    heap 4 [HOST] size=0 MiB budget=0 MiB used=0 MiB\n    heap 5 [HOST] size=0 MiB budget=0 MiB used=0 MiB\n    heap 6 [HOST] size=0 MiB budget=0 MiB used=0 MiB\n    heap 7 [HOST] size=0 MiB budget=0 MiB used=0 MiB\n    heap 8 [HOST] size=0 MiB budget=0 MiB used=0 MiB\n    heap 9 [HOST] size=0 MiB budget=0 MiB used=0 MiB\n    heap 10 [HOST] size=0 MiB budget=0 MiB used=0 MiB\n    heap 11 [HOST] size=0 MiB budget=0 MiB used=0 MiB\n    heap 12 [HOST] size=0 MiB budget=0 MiB used=0 MiB\n    heap 13 [HOST] size=0 MiB budget=0 MiB used=0 MiB\n    heap 14 [HOST] size=0 MiB budget=0 MiB used=0 MiB\n    heap 15 [HOST] size=0 MiB budget=0 MiB used=0 MiB\n\n  Suggestion: Free unused LavaArrays, reduce problem size, or check for memory leaks with Lava.gpu_memory_usage().")) === nothing
+
+Stacktrace:
+ [1] top-level scope
+   @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/gesso/test/regime_i_batch.jl:17
+ [2] macro expansion
+   @ ~/.julia/juliaup/julia-1.12.6+0.x64.linux.gnu/share/julia/stdlib/v1.12/Test/src/Test.jl:1777 [inlined]
+ [3] macro expansion
+   @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/gesso/test/regime_i_batch.jl:23 [inlined]
+ [4] macro expansion
+   @ ~/.julia/juliaup/julia-1.12.6+0.x64.linux.gnu/share/julia/stdlib/v1.12/Test/src/Test.jl:680 [inlined]
+Ordinary lava owned sequence scheduling: Test Failed at /home/mattc/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/gesso/test/regime_i_batch.jl:25
+  Expression: order == [i for round = 1:8 for i = 1:3 if round <= ((2, 5, 8))[i]]
+   Evaluated: [1, 2, 3, 1, 2, 3, 2, 3] == [1, 2, 3, 1, 2, 3, 2, 3, 2, 3, 2, 3, 3, 3, 3]
+
+Stacktrace:
+ [1] top-level scope
+   @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/gesso/test/regime_i_batch.jl:17
+ [2] macro expansion
+   @ ~/.julia/juliaup/julia-1.12.6+0.x64.linux.gnu/share/julia/stdlib/v1.12/Test/src/Test.jl:1777 [inlined]
+ [3] macro expansion
+   @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/gesso/test/regime_i_batch.jl:25 [inlined]
+ [4] macro expansion
+   @ ~/.julia/juliaup/julia-1.12.6+0.x64.linux.gnu/share/julia/stdlib/v1.12/Test/src/Test.jl:680 [inlined]
+Ordinary lava owned sequence scheduling: Test Failed at /home/mattc/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/gesso/test/regime_i_batch.jl:36
+  Expression: (results[3]).ids == expected(3, 8) && (results[3]).status == :complete
+
+Stacktrace:
+ [1] top-level scope
+   @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/gesso/test/regime_i_batch.jl:17
+ [2] macro expansion
+   @ ~/.julia/juliaup/julia-1.12.6+0.x64.linux.gnu/share/julia/stdlib/v1.12/Test/src/Test.jl:1777 [inlined]
+ [3] macro expansion
+   @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/gesso/test/regime_i_batch.jl:36 [inlined]
+ [4] macro expansion
+   @ ~/.julia/juliaup/julia-1.12.6+0.x64.linux.gnu/share/julia/stdlib/v1.12/Test/src/Test.jl:680 [inlined]
+Test Summary:                           | Pass  Fail  Total     Time
+Ordinary lava owned sequence scheduling |   13     8     21  3m23.7s
+RNG of the outermost testset: Random.Xoshiro(0x356643a30ab84bdd, 0x9bd15bb542eefd53, 0xf9b3c30c474747e7, 0x693c86e7888db98d, 0xca04d654f3c9be34)

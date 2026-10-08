@@ -1,0 +1,137 @@
+┌ Info: Lava: initialized Vulkan device with RT
+│   device = "NVIDIA GeForce RTX 5060"
+│   queue_family = 0x00000000
+│   handle_size = 0x00000020
+│   max_recursion = 0x0000001f
+│   validation = false
+│   gpu_assisted = false
+│   sync_val = false
+└   debug_utils = true
+┌ Warning: Vulkan driver note (type=1, not a validation error)
+│   message = "loader_create_device_chain: Failed to find 'vkGetInstanceProcAddr' in layer \"/home/mattc/.local/share/vulkan/implicit_layer.d/../../../lib/liblsfg-vk-layer.so\".  Skipping layer."
+└ @ Lava ~/.julia/packages/Lava/V2Q5P/src/runtime/device.jl:1799
+┌ Info: Numerical rejection
+│   actual_type = GessoError
+└   actual_error = "GessoError(ERR_NUMERICAL_INSTABILITY): inference: nonfinite logits; no token may be emitted"
+┌ Info: Numerical rejection
+│   actual_type = GessoError
+└   actual_error = "GessoError(ERR_NUMERICAL_INSTABILITY): inference: nonfinite logits; no token may be emitted"
+┌ Info: Numerical rejection
+│   actual_type = GessoError
+└   actual_error = "GessoError(ERR_NUMERICAL_INSTABILITY): inference: nonfinite logits; no token may be emitted"
+┌ Info: Numerical rejection
+│   actual_type = GessoError
+└   actual_error = "GessoError(ERR_NUMERICAL_INSTABILITY): softmax!: no finite unmasked maximum"
+┌ Info: Numerical rejection
+│   actual_type = GessoError
+└   actual_error = "GessoError(ERR_NUMERICAL_INSTABILITY): rmsnorm!: nonfinite normalization denominator"
+┌ Info: Numerical rejection
+│   actual_type = GessoError
+└   actual_error = "GessoError(ERR_NUMERICAL_INSTABILITY): inference: nonfinite logits; no token may be emitted"
+┌ Info: Numerical rejection
+│   actual_type = GessoError
+└   actual_error = "GessoError(ERR_NUMERICAL_INSTABILITY): inference: nonfinite logits; no token may be emitted"
+┌ Info: Numerical rejection
+│   actual_type = GessoError
+└   actual_error = "GessoError(ERR_NUMERICAL_INSTABILITY): inference: nonfinite logits; no token may be emitted"
+┌ Info: Numerical rejection
+│   actual_type = GessoError
+└   actual_error = "GessoError(ERR_NUMERICAL_INSTABILITY): softmax!: no finite unmasked maximum"
+┌ Info: Numerical rejection
+│   actual_type = GessoError
+└   actual_error = "GessoError(ERR_NUMERICAL_INSTABILITY): rmsnorm!: nonfinite normalization denominator"
+┌ Info: Numerical rejection
+│   actual_type = GessoError
+└   actual_error = "GessoError(ERR_NUMERICAL_INSTABILITY): inference: nonfinite logits; no token may be emitted"
+┌ Info: Numerical rejection
+│   actual_type = GessoError
+└   actual_error = "GessoError(ERR_NUMERICAL_INSTABILITY): inference: nonfinite logits; no token may be emitted"
+┌ Info: Numerical rejection
+│   actual_type = GessoError
+└   actual_error = "GessoError(ERR_NUMERICAL_INSTABILITY): inference: nonfinite logits; no token may be emitted"
+┌ Info: Numerical rejection
+│   actual_type = GessoError
+└   actual_error = "GessoError(ERR_NUMERICAL_INSTABILITY): inference: nonfinite logits; no token may be emitted"
+┌ Info: Numerical rejection
+│   actual_type = GessoError
+└   actual_error = "GessoError(ERR_NUMERICAL_INSTABILITY): inference: nonfinite logits; no token may be emitted"
+┌ Info: Numerical rejection
+│   actual_type = GessoError
+└   actual_error = "GessoError(ERR_NUMERICAL_INSTABILITY): inference: nonfinite logits; no token may be emitted"
+┌ Info: Numerical rejection
+│   actual_type = GessoError
+└   actual_error = "GessoError(ERR_NUMERICAL_INSTABILITY): inference: nonfinite logits; no token may be emitted"
+┌ Info: Numerical rejection
+│   actual_type = GessoError
+└   actual_error = "GessoError(ERR_NUMERICAL_INSTABILITY): inference: nonfinite logits; no token may be emitted"
+┌ Info: Numerical rejection
+│   actual_type = GessoError
+└   actual_error = "GessoError(ERR_NUMERICAL_INSTABILITY): inference: nonfinite logits; no token may be emitted"
+┌ Info: Numerical rejection
+│   actual_type = GessoError
+└   actual_error = "GessoError(ERR_NUMERICAL_INSTABILITY): inference: nonfinite logits; no token may be emitted"
+┌ Info: Numerical rejection
+│   actual_type = GessoError
+└   actual_error = "GessoError(ERR_NUMERICAL_INSTABILITY): inference: nonfinite logits; no token may be emitted"
+Test Summary:                         | Pass  Total     Time
+Independent native lava numeric gates |   47     47  3m12.1s
+LoadError: UndefVarError: `include` not defined in `Main.var"##Gate#754"`
+Suggestion: check for spelling errors or missing imports.
+Stacktrace:
+  [1] top-level scope
+    @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/gesso/test/regime_i_numerics.jl:143
+  [2] include(mod::Module, _path::String)
+    @ Base ./Base.jl:306
+  [3] (::var"#labgate##6#labgate##7"{IOStream, String})()
+    @ Main ./none:9
+  [4] with_logstate(f::var"#labgate##6#labgate##7"{IOStream, String}, logstate::Base.CoreLogging.LogState)
+    @ Base.CoreLogging ./logging/logging.jl:542
+  [5] with_logger
+    @ ./logging/logging.jl:653 [inlined]
+  [6] #labgate##4
+    @ ./none:7 [inlined]
+  [7] (::Base.RedirectStdStream)(thunk::var"#labgate##4#labgate##5"{IOStream, String}, stream::IOStream)
+    @ Base ./stream.jl:1464
+  [8] #labgate##2
+    @ ./none:6 [inlined]
+  [9] (::Base.RedirectStdStream)(thunk::var"#labgate##2#labgate##3"{IOStream, String}, stream::IOStream)
+    @ Base ./stream.jl:1464
+ [10] #labgate##0
+    @ ./none:5 [inlined]
+ [11] open(::var"#labgate##0#labgate##1"{String}, ::String, ::Vararg{String}; kwargs::@Kwargs{})
+    @ Base ./io.jl:412
+ [12] open
+    @ ./io.jl:409 [inlined]
+ [13] labgate(tag::String, file::String, args::Vector{String})
+    @ Main ./none:4
+ [14] top-level scope
+    @ none:1
+ [15] __repl_entry_eval_expanded_with_loc(mod::Module, ast::Any, toplevel_file::Ref{Ptr{UInt8}}, toplevel_line::Ref{Int32})
+    @ REPL ~/.julia/juliaup/julia-1.12.6+0.x64.linux.gnu/share/julia/stdlib/v1.12/REPL/src/REPL.jl:301
+ [16] toplevel_eval_with_hooks(mod::Module, ast::Any, toplevel_file::Any, toplevel_line::Any)
+    @ REPL ~/.julia/juliaup/julia-1.12.6+0.x64.linux.gnu/share/julia/stdlib/v1.12/REPL/src/REPL.jl:308
+ [17] toplevel_eval_with_hooks(mod::Module, ast::Any, toplevel_file::Any, toplevel_line::Any)
+    @ REPL ~/.julia/juliaup/julia-1.12.6+0.x64.linux.gnu/share/julia/stdlib/v1.12/REPL/src/REPL.jl:312
+ [18] toplevel_eval_with_hooks
+    @ ~/.julia/juliaup/julia-1.12.6+0.x64.linux.gnu/share/julia/stdlib/v1.12/REPL/src/REPL.jl:305 [inlined]
+ [19] eval_user_input(ast::Any, backend::REPL.REPLBackend, mod::Module)
+    @ REPL ~/.julia/juliaup/julia-1.12.6+0.x64.linux.gnu/share/julia/stdlib/v1.12/REPL/src/REPL.jl:330
+ [20] repl_backend_loop(backend::REPL.REPLBackend, get_module::Function)
+    @ REPL ~/.julia/juliaup/julia-1.12.6+0.x64.linux.gnu/share/julia/stdlib/v1.12/REPL/src/REPL.jl:452
+ [21] start_repl_backend(backend::REPL.REPLBackend, consumer::Any; get_module::Function)
+    @ REPL ~/.julia/juliaup/julia-1.12.6+0.x64.linux.gnu/share/julia/stdlib/v1.12/REPL/src/REPL.jl:427
+ [22] start_repl_backend
+    @ ~/.julia/juliaup/julia-1.12.6+0.x64.linux.gnu/share/julia/stdlib/v1.12/REPL/src/REPL.jl:424 [inlined]
+ [23] run_repl(repl::REPL.AbstractREPL, consumer::Any; backend_on_current_task::Bool, backend::Any)
+    @ REPL ~/.julia/juliaup/julia-1.12.6+0.x64.linux.gnu/share/julia/stdlib/v1.12/REPL/src/REPL.jl:653
+ [24] run_repl(repl::REPL.AbstractREPL, consumer::Any)
+    @ REPL ~/.julia/juliaup/julia-1.12.6+0.x64.linux.gnu/share/julia/stdlib/v1.12/REPL/src/REPL.jl:639
+ [25] run_std_repl(REPL::Module, quiet::Bool, banner::Symbol, history_file::Bool)
+    @ Base ./client.jl:478
+ [26] run_main_repl(interactive::Bool, quiet::Bool, banner::Symbol, history_file::Bool)
+    @ Base ./client.jl:499
+ [27] repl_main
+    @ ./client.jl:586 [inlined]
+ [28] _start()
+    @ Base ./client.jl:561
+in expression starting at /home/mattc/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/gesso/test/regime_i_numerics.jl:142

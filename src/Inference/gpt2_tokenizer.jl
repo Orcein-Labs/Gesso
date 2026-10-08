@@ -89,20 +89,22 @@ Load `vocab.json` + `merges.txt` (+ optional `tokenizer_config.json` for
 merge pair whose parts are not in the vocab, and special ids outside the
 vocab — each with the offending name (§LXX).
 """
-function load_gpt2_tokenizer(dir::AbstractString)
+function _load_gpt2_tokenizer_impl(dir::AbstractString)
     isdir(dir) || error("load_gpt2_tokenizer: no such directory: $dir")
     vocab_path = joinpath(dir, "vocab.json")
     merges_path = joinpath(dir, "merges.txt")
     isfile(vocab_path) || error("load_gpt2_tokenizer: missing vocab.json in $dir")
     isfile(merges_path) || error("load_gpt2_tokenizer: missing merges.txt in $dir")
 
-    vocab_raw = JSON.parsefile(String(vocab_path))
+    vocab_raw = _strict_jsonfile(vocab_path)
     vocab = Dict{String, Int}()
     for (k, v) in vocab_raw
-        vocab[String(k)] = Int(v)
+        vocab[String(k)] = _checkpoint_int(v, "tokenizer id for $(repr(k))")
     end
     isempty(vocab) && error("load_gpt2_tokenizer: vocab.json is empty")
 
+    sort(collect(values(vocab))) == collect(0:(length(vocab)-1)) ||
+        error("load_gpt2_tokenizer: vocab IDs must be unique and contiguous from zero")
     merges = Pair{String, String}[]
     merge_rank = Dict{Pair{String, String}, Int}()
     for line in eachline(merges_path)
@@ -118,6 +120,8 @@ function load_gpt2_tokenizer(dir::AbstractString)
             error("load_gpt2_tokenizer: merge part $(repr(b)) is not in vocab.json")
         haskey(vocab, a * b) ||
             error("load_gpt2_tokenizer: merged token $(repr(a * b)) is not in vocab.json")
+        haskey(merge_rank, a => b) &&
+            error("load_gpt2_tokenizer: duplicate merge $(repr(line))")
         rank = length(merges)
         push!(merges, a => b)
         merge_rank[a=>b] = rank
@@ -128,7 +132,7 @@ function load_gpt2_tokenizer(dir::AbstractString)
     bos_id, eos_id = 0, 0
     cfg_path = joinpath(dir, "tokenizer_config.json")
     if isfile(cfg_path)
-        cfg = JSON.parsefile(String(cfg_path))
+        cfg = _strict_jsonfile(cfg_path)
         if haskey(cfg, "bos_token_id")
             bos_id = Int(cfg["bos_token_id"])
             0 <= bos_id < length(vocab) || error(
@@ -211,3 +215,8 @@ function encode(tk::GPT2BPE, text::AbstractString)
 end
 
 export GPT2BPE, load_gpt2_tokenizer, encode
+
+load_gpt2_tokenizer(dir::AbstractString) =
+    _load_boundary(() -> _load_gpt2_tokenizer_impl(dir), :load_gpt2_tokenizer)
+
+@doc (@doc _load_gpt2_tokenizer_impl) load_gpt2_tokenizer

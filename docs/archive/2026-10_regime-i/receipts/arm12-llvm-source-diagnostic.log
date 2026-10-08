@@ -1,0 +1,5 @@
+LLVM source: /home/mattc/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache/packages/LLVM/JGisQ/src/LLVM.jl
+pointerref typed entries 1
+pointerref(ptr::Core.LLVMPtr{T, A}, i::Int64, ::Val{align}) where {T, A, align} @ LLVM.Interop none:0 => Any
+pointerset typed entries 1
+pointerset(ptr::Core.LLVMPtr{T, A}, x::T, i::Int64, ::Val{align}) where {T, A, align} @ LLVM.Interop none:0 => Any

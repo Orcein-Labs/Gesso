@@ -1,0 +1,28 @@
+Precompiling packages...
+    561.9 ms  ✓ Unicode
+    577.3 ms  ✓ ExprTools
+    585.9 ms  ✓ CompilerSupportLibraries_jll
+    569.8 ms  ✓ HashArrayMappedTries
+   2023.9 ms  ✓ CEnum
+    553.0 ms  ✓ Scratch
+    818.1 ms  ✓ Preferences
+   3146.7 ms  ✓ InteractiveUtils
+   1016.9 ms  ✓ LazyArtifacts
+    519.2 ms  ✓ ScopedValues
+    529.9 ms  ✓ PrecompileTools
+    660.7 ms  ✓ JLLWrappers
+    867.0 ms  ✓ LibTracyClient_jll
+   1603.8 ms  ✓ LLVMExtra_jll
+    936.2 ms  ✓ LMDB_jll
+    911.2 ms  ✓ tree_sitter_spirv_jll
+    845.2 ms  ✓ tree_sitter_llvm_jll
+    850.9 ms  ✓ tree_sitter_gcn_jll
+    829.9 ms  ✓ tree_sitter_ptx_jll
+   1093.9 ms  ✓ Tracy
+  10424.5 ms  ✓ LLVM
+   1251.3 ms  ✓ LMDB
+   1040.7 ms  ✓ CompilerCaching
+  35145.4 ms  ✓ REPL
+   6492.1 ms  ✓ Pkg → REPLExt
+  35749.9 ms  ✓ GPUCompiler
+  26 dependencies successfully precompiled in 83 seconds. 24 already precompiled.

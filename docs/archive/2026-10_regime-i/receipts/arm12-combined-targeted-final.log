@@ -1,0 +1,100 @@
+ERROR: LoadError: Some tests did not pass: 20 passed, 1 failed, 0 errored, 0 broken.
+in expression starting at /home/mattc/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/gesso/test/test_decode_scratch.jl:62
+in expression starting at /home/mattc/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/arm12-cuda-targeted.jl:12
+Test Summary:                                        | Pass  Total  Time
+ModelIR primitives (§CIX): construction + validation |   11     11  0.5s
+Test Summary:                                    | Pass  Total  Time
+ModelIR (§CIX): toy2 round-trip from the fixture |    8      8  1.7s
+Test Summary:                          | Pass  Total  Time
+ModelIR (§CIX): identity is structural |    6      6  0.0s
+Test Summary:                              | Pass  Total  Time
+ModelIR (§CIX): nodes are immutable values |    5      5  0.0s
+Test Summary:                                              | Pass  Total   Time
+prefill oracle: shape + determinism (atol=0, same process) |    4      4  13.0s
+Test Summary:                                                      | Pass  Total  Time
+prefill oracle: causal property (position 0 cannot see position 3) |    3      3  0.1s
+Test Summary:                                                        | Pass  Total  Time
+prefill oracle: last-position argmax drives generation (item C seam) |    4      4  0.1s
+Test Summary:                                                | Pass  Total  Time
+prefill oracle: greedy path is stable under prompt prefixing |    4      4  0.2s
+Test Summary:                                                              | Pass  Total  Time
+known logits: persisted slot vs recomputed (atol=1e-10, cross-commit gate) |    5      5  0.0s
+Test Summary:                                 | Pass  Total  Time
+load_llama_config: validates the micro config |    9      9  7.0s
+Test Summary:                                           | Pass  Total  Time
+config_to_model: composition is a Model, GQA-expressive |    8      8  0.2s
+Test Summary:                                   | Pass  Total  Time
+config refusals name the offending field (§LXX) |   21     21  5.1s
+Test Summary:                                    | Pass  Total  Time
+load_safetensors: all four dtypes upcast EXACTLY |    5      5  2.0s
+Test Summary:                                                     | Pass  Total  Time
+load_safetensors: unsupported dtype and bad span error with names |    3      3  0.1s
+Test Summary:                                                    | Pass  Total  Time
+load_llama end-to-end: prefill runs, deterministic, shapes right |   14     14  5.3s
+Test Summary:                                 | Pass  Total  Time
+load_llama: sharded checkpoint via weight_map |    3      3  0.1s
+Test Summary:                                                   | Pass  Total  Time
+load_llama: unknown / missing / untied keys error WITH THE NAME |    7      7  0.2s
+Test Summary:                                                                      | Pass  Total  Time
+materialize_llama: 0-based HF layers load; 1-based fixtures still load; mix errors |   12     12  0.0s
+Test Summary:                                                                        | Pass  Total  Time
+materialize_llama: leftover real weight still errors; rotary_emb.inv_freq is ignored |    8      8  0.0s
+Test Summary:                                                            | Pass  Total  Time
+materialize_llama: absent model.norm ⇒ final_rms is nothing (toy2 shape) |    1      1  0.1s
+Test Summary:                                                     | Pass  Total  Time
+gqa micro checkpoint: interpreter GQA path matches repeat formula |    1      1  0.8s
+Test Summary:                                                  | Pass  Total  Time
+autotune: candidates registered for (:matmul!, :cuda) in order |    3      3  0.1s
+Test Summary:                                               | Pass  Total   Time
+autotune: both candidates gated at :llama_micro (atol=1e-2) |   16     16  57.3s
+Test Summary:                                        | Pass  Total  Time
+autotune: both candidates gated at :toy2 (atol=1e-2) |   16     16  0.1s
+Test Summary:                                              | Pass  Total  Time
+autotune: search! selects a legal winner for :matmul!:cuda |    6      6  2.6s
+Test Summary:                                                    | Pass  Total  Time
+autotune: a gate-failing candidate is rejected, never the winner |    3      3  2.7s
+Test Summary:                                                       | Pass  Total  Time
+autotune: all candidates gated out throws typed ERR_VERIFY_MISMATCH |    3      3  0.1s
+Test Summary:                                           | Pass  Total  Time
+quantize!/dequantize! still decline; CPU path unchanged |    3      3  0.2s
+Test Summary:                                                     | Pass  Total  Time
+op consults Autotune: cache entry on first matmul!, hit on second |    8      8  1.1s
+Test Summary:                                                     | Pass  Total  Time
+regimes: every declared (K, N) pair resolves and searches legally |   16     16  0.0s
+Test Summary:                                                      | Pass  Total  Time
+regression: host Array + CUDABackend still ERR_INVALID_PLAN (§LXX) |    3      3  0.0s
+toy2 cuda-vs-cpu max|Δlogit| (autotuned) = 0.000771309037759238
+llama_micro cuda-vs-cpu max|Δlogit| (autotuned) = 5.5006127839263286e-6
+Test Summary:                                                      | Pass  Total   Time
+end-to-end: toy2 + llama_micro ids match CPU with the consult live |   15     15  37.7s
+Test Summary:                                                  | Pass  Total   Time
+toy2 CUDA Session vs CPU Session (ids EXACT, logits atol=1e-3) |    6      6  20.5s
+Test Summary:                                                      | Pass  Total  Time
+Phase 10 B: device argmax fast path — ids exact, host gets one Int |    5      5  0.1s
+Test Summary:                                                         | Pass  Total  Time
+no-copy law: host Array tensors + CUDA backend throws at construction |    4      4  0.2s
+SmolLM2 CUDA: ≤ 1 MiB (10G CLOSED the 10F miss; needs device AND snapshot): Test Failed at /home/mattc/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/gesso/test/test_decode_scratch.jl:239
+  Expression: a ≤ 1024 * 1024
+   Evaluated: 1051328 ≤ 1048576
+
+Stacktrace:
+ [1] top-level scope
+   @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/gesso/test/test_decode_scratch.jl:63
+ [2] macro expansion
+   @ ~/.julia/juliaup/julia-1.12.6+0.x64.linux.gnu/share/julia/stdlib/v1.12/Test/src/Test.jl:1777 [inlined]
+ [3] macro expansion
+   @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/gesso/test/test_decode_scratch.jl:206 [inlined]
+ [4] macro expansion
+   @ ~/.julia/juliaup/julia-1.12.6+0.x64.linux.gnu/share/julia/stdlib/v1.12/Test/src/Test.jl:1777 [inlined]
+ [5] macro expansion
+   @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/gesso/test/test_decode_scratch.jl:239 [inlined]
+ [6] macro expansion
+   @ ~/.julia/juliaup/julia-1.12.6+0.x64.linux.gnu/share/julia/stdlib/v1.12/Test/src/Test.jl:680 [inlined]
+Test Summary:                                                                | Pass  Fail  Total   Time
+decode scratch: reuse + warmed allocations (§10E item D)                     |   20     1     21  22.7s
+  toy2 CPU: ≤ 16 KiB per warmed decode!                                      |    8            8   0.5s
+  llama_micro CPU: ≤ 16 KiB, and NOT growing with seqlen                     |    3            3   0.9s
+  SmolLM2 CPU: ≤ 256 KiB (named skip without a snapshot)                     |    1            1   5.9s
+  CUDA: workspace reused, host allocation bounded (skip without a device)    |    8            8   7.0s
+  SmolLM2 CUDA: ≤ 1 MiB (10G CLOSED the 10F miss; needs device AND snapshot) |          1      1   8.4s
+RNG of the outermost testset: Random.Xoshiro(0xc64dd2c9575adca1, 0x85691484a4ef2fd9, 0x879e5a246ef0b92d, 0xda2e8246ab01c7fe, 0xf3e662fc1de881ff)

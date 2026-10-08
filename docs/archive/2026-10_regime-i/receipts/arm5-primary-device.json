@@ -1,0 +1,1 @@
+{"schema":"gesso-primary-device-v1","backend":"lava","hardware":"NVIDIA RTX 5060 Vulkan","records":[{"prompt":"Hello","max_abs_delta":0.00018310546875},{"prompt":"The quick brown fox","max_abs_delta":0.000225067138671875},{"prompt":"Julia is a programming language.","max_abs_delta":5.245208740234375e-5}]}

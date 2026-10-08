@@ -1,0 +1,17 @@
+┌ Info: Warmed comparison
+│   backend = "cuda"
+│   prompt = "Hello"
+│   seconds = 0.283150719
+└   allocation = 1091488
+┌ Info: Warmed comparison
+│   backend = "cuda"
+│   prompt = "The quick brown fox"
+│   seconds = 0.277924301
+└   allocation = 1091568
+┌ Info: Warmed comparison
+│   backend = "cuda"
+│   prompt = "Julia is a programming language."
+│   seconds = 0.28800428
+└   allocation = 1091488
+Test Summary:                               | Pass  Total     Time
+Warmed cuda ordinary performance comparison |   27     27  1m41.7s

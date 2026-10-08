@@ -23,9 +23,25 @@
 # Residuals are interpreter-level storage addition; there is no `add!`.
 
 using LinearAlgebra: mul!
-using ..Gesso: CPUBackend
+using ..Gesso: CPUBackend, gesso_error, ERR_INVALID_PLAN, ERR_NUMERICAL_INSTABILITY
 using ..Parameters:
     Activation, EmbeddingTable, FrozenParameter, ProjectionWeight, TemporaryWorkspace
+
+function _cpu_storage!(op::Symbol, tensors...)
+    for t in tensors
+        s=t.storage
+        s===nothing && continue
+        _backend_storage_root(s) isa Array && eltype(s)===Float64 && continue
+        throw(
+            gesso_error(
+                ERR_INVALID_PLAN,
+                "$op: CPUBackend requires host Float64 storage; unsupported native arithmetic is rejected";
+                storage_type=string(typeof(s)),
+            ),
+        )
+    end
+    return nothing
+end
 
 _unmaterialized(op::Symbol, what::Symbol) = error(
     "$op: $what.storage is unset — CPU math needs materialized " *
@@ -88,6 +104,12 @@ function _cpu_rmsnorm_storage!(
             acc += abs2(xs[I, f])
         end
         r = sqrt(acc / d + eps)
+        isfinite(r) && r > 0 || throw(
+            gesso_error(
+                ERR_NUMERICAL_INSTABILITY,
+                "rmsnorm!: nonfinite normalization denominator",
+            ),
+        )
         for f in axes(xs, nd)
             dsts[I, f] = (xs[I, f] / r) * stail[f]
         end
@@ -107,6 +129,7 @@ function _cpu_rope_storage!(
     positions::AbstractVector{Int},
     tθ,
     inv_freq,
+    interleaved::Bool=true,
 )
     for t in axes(storage, 1), h in axes(storage, 2)
         m = Float64(positions[t])           # 0-based position
@@ -114,9 +137,10 @@ function _cpu_rope_storage!(
         for i in 0:(d÷2-1)
             θ = inv_freq === nothing ? m * tθ^(-2i / d) : m * inv_freq[i+1]
             c, s = cos(θ), sin(θ)
-            x1, x2 = storage[t, h, 2i+1], storage[t, h, 2i+2]
-            storage[t, h, 2i+1] = x1 * c - x2 * s
-            storage[t, h, 2i+2] = x1 * s + x2 * c
+            a, b = interleaved ? (2i + 1, 2i + 2) : (i + 1, i + 1 + d ÷ 2)
+            x1, x2 = storage[t, h, a], storage[t, h, b]
+            storage[t, h, a] = x1 * c - x2 * s
+            storage[t, h, b] = x1 * s + x2 * c
         end
     end
     return storage
@@ -152,6 +176,9 @@ function _cpu_softmax_storage!(dsts::AbstractArray, s::AbstractArray)
         # (a causal row always attends to at least the first key) and
         # NaNs out loudly rather than silently passing
         row_max = maximum(view(s, i, 1:K))
+        isfinite(row_max) || throw(
+            gesso_error(ERR_NUMERICAL_INSTABILITY, "softmax!: no finite unmasked maximum"),
+        )
         acc = 0.0
         for j in 1:K
             s[i, j] = exp(s[i, j] - row_max)
@@ -168,14 +195,19 @@ end
 # --- internals (shared by both workload cuts) -------------------------------
 
 function _cpu_embedding_lookup!(dst, table, tokens)
+    _cpu_storage!(:embedding_lookup!, dst, table)
     tstorage, tab = dst.storage, table.storage
     tstorage === nothing && _unmaterialized(:embedding_lookup!, :dst)
     tab === nothing && _unmaterialized(:embedding_lookup!, :table)
+    _validate_embedding_inputs(dst, table, tokens)
     _cpu_embedding_lookup_storage!(tstorage, tab, tokens)
     return dst
 end
 
 function _cpu_rmsnorm!(dst, x, scale; eps=1e-6)
+    _cpu_storage!(:rmsnorm!, dst, x, scale)
+    isfinite(eps) && eps > 0 ||
+        throw(gesso_error(ERR_INVALID_PLAN, "rmsnorm!: eps must be finite and positive"))
     xs = x.storage
     d = size(xs, ndims(xs))                     # last dim is the feature dim
     scale.storage === nothing && _unmaterialized(:rmsnorm!, :scale)
@@ -185,7 +217,40 @@ function _cpu_rmsnorm!(dst, x, scale; eps=1e-6)
     return dst
 end
 
-function _cpu_rope!(q, k, positions; theta=10000.0, inv_freq=nothing)
+function _validate_rope_inputs(q, k, positions, theta, inv_freq)
+    qs, ks=q.storage, k.storage
+    ndims(qs)==3 && ndims(ks)==3 || throw(
+        gesso_error(
+            ERR_INVALID_PLAN,
+            "rope!: expected (sequence, heads, features) storage",
+        ),
+    )
+    d=size(qs, 3)
+    d>0 && iseven(d) && size(ks, 3)==d && size(qs, 1)==size(ks, 1) ||
+        throw(gesso_error(ERR_INVALID_PLAN, "rope!: invalid head/sequence geometry"))
+    (_backend_storage_root(positions) isa Array || positions isa AbstractRange) &&
+    length(positions)==size(qs, 1) &&
+    all(>=(0), positions) || throw(
+        gesso_error(
+            ERR_INVALID_PLAN,
+            "rope!: positions must match sequence and be nonnegative",
+        ),
+    )
+    isfinite(theta) && theta>0 ||
+        throw(gesso_error(ERR_INVALID_PLAN, "rope!: theta must be finite and positive"))
+    if inv_freq!==nothing
+        inv_freq isa AbstractVector &&
+        (_backend_storage_root(inv_freq) isa Array || inv_freq isa AbstractRange) &&
+        length(inv_freq)==d÷2 &&
+        all(x->isfinite(x) && x>0, inv_freq) ||
+            throw(gesso_error(ERR_INVALID_PLAN, "rope!: invalid inverse frequencies"))
+    end
+    return nothing
+end
+
+function _cpu_rope!(q, k, positions; theta=10000.0, inv_freq=nothing, interleaved=true)
+    _cpu_storage!(:rope!, q, k)
+    _validate_rope_inputs(q, k, positions, theta, inv_freq)
     tθ = Float64(theta)
     size(q.storage, 3) == size(k.storage, 3) ||
         error("rope!: q d_head $(size(q.storage, 3)) ≠ k d_head $(size(k.storage, 3))")
@@ -193,23 +258,26 @@ function _cpu_rope!(q, k, positions; theta=10000.0, inv_freq=nothing)
     # heads than Q; the old shared loop silently skipped K heads (MHA never
     # noticed because the counts are equal). Q is rotated first, then K, as
     # before.
-    _cpu_rope_storage!(q.storage, positions, tθ, inv_freq)
-    _cpu_rope_storage!(k.storage, positions, tθ, inv_freq)
+    _cpu_rope_storage!(q.storage, positions, tθ, inv_freq, interleaved)
+    _cpu_rope_storage!(k.storage, positions, tθ, inv_freq, interleaved)
     return q
 end
 
 function _cpu_matmul!(dst, x, w)
+    _cpu_storage!(:matmul!, dst, x, w)
     # W is (out, in): dst = x * transpose(W)
     mul!(dst.storage, x.storage, transpose(w.storage))
     return dst
 end
 
 function _cpu_softmax!(dst, scores)
+    _cpu_storage!(:softmax!, dst, scores)
     _cpu_softmax_storage!(dst.storage, scores.storage)
     return dst
 end
 
 function _cpu_swiglu!(dst, gate, up)
+    _cpu_storage!(:swiglu!, dst, gate, up)
     _cpu_swiglu_storage!(dst.storage, gate.storage, up.storage)
     return dst
 end
@@ -250,8 +318,9 @@ for wl in (:PrefillWorkload, :DecodeWorkload)
             ::Semantics.$wl;
             theta::Real=10000.0,
             inv_freq=nothing,
+            interleaved::Bool=true,
         )
-            return _cpu_rope!(q, k, positions; theta, inv_freq)
+            return _cpu_rope!(q, k, positions; theta, inv_freq, interleaved)
         end
 
         function matmul!(

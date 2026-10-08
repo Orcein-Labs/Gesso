@@ -1,0 +1,1 @@
+{"schema":"gesso-device-memory-v1","device":"CuDevice(0)","dtype":"Float32","allocation_bytes":1567712,"ceiling_bytes":1048576,"results":[{"prompt":"Hello","max_abs_delta":8.0108642578125e-5},{"prompt":"The quick brown fox","max_abs_delta":6.80685043334961e-5},{"prompt":"Julia is a programming language.","max_abs_delta":2.9087066650390625e-5}]}

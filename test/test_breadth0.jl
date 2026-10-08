@@ -298,28 +298,7 @@ end
 # intermediate=64, vocab=32 — the same shape as the Llama micro fixture, so
 # the two are directly comparable.
 function _b0_write_safetensors(path, tensors::Dict{String, AbstractArray{Float64}})
-    header = Dict{String, Any}()
-    offset = 0
-    entries = sort(collect(keys(tensors)))
-    for name in entries
-        arr = tensors[name]
-        header[name] = Dict{String, Any}(
-            "dtype" => "F64",
-            "shape" => collect(size(arr)),
-            "data_offsets" => [offset, offset + length(arr) * 8],
-        )
-        offset += length(arr) * 8
-    end
-    hdr = JSON.json(header)
-    pad = (8 - ((8 + length(hdr)) % 8)) % 8
-    hdr *= " "^(pad > 0 ? pad : 8)
-    open(path, "w") do io
-        write(io, UInt64(length(hdr)))
-        write(io, hdr)
-        for name in entries
-            write(io, reinterpret(UInt8, vec(tensors[name])))
-        end
-    end
+    _write_safetensors(path, Dict{String, AbstractArray}(tensors))
     return nothing
 end
 
@@ -469,13 +448,13 @@ end
     @test Gesso.rope_inv_freq(Gesso.RoPEPolicy(; theta=10000.0), d) === nothing
     @test Gesso.rope_inv_freq(Gesso.RoPEPolicy(; theta=500000.0), d) === nothing
 
-    # :linear divides the base
+    # :linear divides the inverse frequencies
     lin =
         Gesso.rope_inv_freq(Gesso.RoPEPolicy(; theta=10000.0, kind=:linear, factor=8.0), d)
     @test length(lin) == d ÷ 2
-    @test lin[1] == 1.0                                   # θ^0 = 1 always
-    @test lin[2] ≈ (10000.0 / 8.0)^(-2 / d)
-    @test lin[2] ≈ lin[1] * (10000.0 / 8.0)^(-2 / d)
+    @test lin[1] == 1.0 / 8.0
+    @test lin[2] ≈ 10000.0^(-2 / d) / 8.0
+    @test lin[2] ≈ lin[1] * 10000.0^(-2 / d)
     # a scaled policy is genuinely DIFFERENT from the unscaled one
     @test lin[2] != 10000.0^(-2 / d)
 
@@ -521,7 +500,7 @@ end
     )
     inv = Gesso.tensors_rope_inv_freq(scaled, 8)
     @test inv !== nothing
-    @test inv[2] ≈ (10000.0 / 4.0)^(-2 / 8)
+    @test inv[2] ≈ 10000.0^(-2 / 8) / 4.0
 end
 
 @testset "BREADTH-0 Pass D: a scaled-rope model CHANGES the oracle result" begin

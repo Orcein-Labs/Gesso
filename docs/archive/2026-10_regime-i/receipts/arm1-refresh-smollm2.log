@@ -1,0 +1,9 @@
+WARNING: Imported binding Gesso.PrefillWorkload was undeclared at import time during import to Inference.
+WARNING: Imported binding Gesso.DecodeWorkload was undeclared at import time during import to Inference.
+WARNING: Imported binding Gesso.KVCache was undeclared at import time during import to Inference.
+loading snapshot: /mnt/d/Code Projects/Palette/.worktrees/gesso-stack-shadow/repos/Gesso/snapshots/SmolLM2-135M
+frozen: /home/mattc/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/gesso/test/fixtures/smollm2/expected_logits.toml
+  prompt     = "Hello" (tokens: 19556)
+  values     = 49152 Float64 (967.5 KiB)
+  commit     = 0a69c22
+  determinism: two prefills agreed exactly

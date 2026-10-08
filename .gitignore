@@ -15,3 +15,7 @@ snapshots/
 .vscode/
 .idea/
 .DS_Store
+
+# ChatGPT Work-mode campaign drops (depots, scratch, nested checkout)
+work(from chatgpt)/
+outputs(from chatgpt)/

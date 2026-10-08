@@ -1,0 +1,3 @@
+Precompiling packages...
+ 111244.6 ms  ✓ Pkg (serial)
+  1 dependency successfully precompiled in 111 seconds

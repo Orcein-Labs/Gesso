@@ -8,8 +8,8 @@
 #    renamed/removed export fails CI (stale row) — the inventory cannot rot
 #    in either direction.
 #
-# 2. PARKED-EMPTY FENCE. The six contract-only modules
-#    (Lowering/Representation/Planning/Runtime/Agents/CAPI) export exactly
+# 2. PARKED-EMPTY FENCE. The five contract-only modules
+#    (Lowering/Representation/Planning/Agents/CAPI) export exactly
 #    their own name and nothing else (§LXXXIII parked; growing one is a
 #    work item, not a drive-by).
 #
@@ -22,7 +22,7 @@
 
 using Test
 
-const PARKED_MODULES = (:Lowering, :Representation, :Planning, :Runtime, :Agents, :CAPI)
+const PARKED_MODULES = (:Lowering, :Representation, :Planning, :Agents, :CAPI)
 
 const INVENTORY = Dict{Symbol, Tuple{Symbol, Vector{String}}}(
     # --- logging (§XLII) ----------------------------------------------------
@@ -235,7 +235,7 @@ end
     @test occursin(":cpu", sprint(showerror, err))
 end
 
-@testset "10D item A: parked-empty fence — six contract-only modules" begin
+@testset "10D item A: parked-empty fence — five contract-only modules" begin
     # §LXXXIII stays parked: these modules export exactly their own name.
     # Growing one is a work item (permitted-files law), never a drive-by.
     for m in PARKED_MODULES

@@ -1,0 +1,50 @@
+WARNING: Imported binding Gesso.PrefillWorkload was undeclared at import time during import to Inference.
+WARNING: Imported binding Gesso.DecodeWorkload was undeclared at import time during import to Inference.
+WARNING: Imported binding Gesso.KVCache was undeclared at import time during import to Inference.
+┌ Info: Lava: initialized Vulkan device with RT
+│   device = "NVIDIA GeForce RTX 5060"
+│   queue_family = 0x00000000
+│   handle_size = 0x00000020
+│   max_recursion = 0x0000001f
+│   validation = false
+│   gpu_assisted = false
+│   sync_val = false
+└   debug_utils = true
+┌ Warning: Vulkan driver note (type=1, not a validation error)
+│   message = "loader_create_device_chain: Failed to find 'vkGetInstanceProcAddr' in layer \"/home/mattc/.local/share/vulkan/implicit_layer.d/../../../lib/liblsfg-vk-layer.so\".  Skipping layer."
+└ @ Lava ~/.julia/packages/Lava/V2Q5P/src/runtime/device.jl:1799
+┌ Info: Primary Lava independent parity
+│   prompt = "Hello"
+└   delta = 0.00018310546875
+┌ Info: Primary Lava independent parity
+│   prompt = "The quick brown fox"
+└   delta = 0.000225067138671875
+┌ Info: Primary Lava independent parity
+│   prompt = "Julia is a programming language."
+└   delta = 5.245208740234375e-5
+┌ Info: Lava: GPU allocation succeeded after GC retry
+└   bytes = 16
+┌ Info: Lava: GPU allocation succeeded after GC retry
+└   bytes = 40
+┌ Info: Lava: GPU allocation succeeded after GC retry
+└   bytes = 16
+┌ Info: Lava: GPU allocation succeeded after GC retry
+└   bytes = 16
+ERROR: LoadError: Some tests did not pass: 37 passed, 1 failed, 0 errored, 0 broken.
+in expression starting at /home/mattc/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/gesso/test/regime_i_lava.jl:9
+Regime I primary Lava real-model lifecycle: Test Failed at /home/mattc/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/gesso/test/regime_i_lava.jl:35
+  Expression: retained_after - retained_before < 1024 ^ 2
+   Evaluated: 1641896 < 1048576
+
+Stacktrace:
+ [1] macro expansion
+   @ ~/.julia/juliaup/julia-1.12.6+0.x64.linux.gnu/share/julia/stdlib/v1.12/Test/src/Test.jl:680 [inlined]
+ [2] macro expansion
+   @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/gesso/test/regime_i_lava.jl:35 [inlined]
+ [3] macro expansion
+   @ ~/.julia/juliaup/julia-1.12.6+0.x64.linux.gnu/share/julia/stdlib/v1.12/Test/src/Test.jl:1777 [inlined]
+ [4] top-level scope
+   @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/gesso/test/regime_i_lava.jl:10
+Test Summary:                              | Pass  Fail  Total     Time
+Regime I primary Lava real-model lifecycle |   37     1     38  4m04.5s
+RNG of the outermost testset: Random.Xoshiro(0xaa02002a0000bd59, 0x5d307f23bc94515b, 0x41430ee66de2aacd, 0xa2bbaca70ccde1c0, 0x7b0480a6b4cc33ab)

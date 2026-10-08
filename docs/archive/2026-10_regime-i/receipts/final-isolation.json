@@ -1,0 +1,20 @@
+[
+  {
+    "root": "/mnt/d/Code Projects/Gesso",
+    "files_checked": 156,
+    "different": [],
+    "head": "caa68e218896761c3f049c5cd702ba95a01ac17f",
+    "status": " M AGENTS.md\n M README.md\n M benchmark/results/2026-10-01.tsv\n M benchmark/results/2026-10-02.tsv\n M docs/ARCHITECTURE.md\n M docs/goals/PHASE10B_SPEED_FLOOR_CLOSE.md\n M docs/goals/PHASE10D_FOUNDATION_HARDENING.md\n M docs/goals/PHASE4_CUDA.md\n M docs/goals/PHASE6_OBSERVABILITY.md\n M docs/research/KV_MEMORY_PROGRAM.md\n M docs/research/README.md\n M docs/research/ROADMAP_NOW.md\n M docs/research/SPEED_FLOOR.md\n?? 1x\n?? GESSO_STACK_EVIDENCE_MAP.md\n?? \"Julia Compiler Optimizations for Gesso/docs/the_ancient_texts.md\"\n?? RPD_SOP.md\n?? benchmark/results/2026-10-03.tsv\n?? docs/goals/PHASE5_ENGINE.md\n?? docs/goals/PHASE7_PREFIX_SHARE.md\n?? docs/goals/PHASE8_LAVA.md\n?? docs/goals/PHASE9_AUTOTUNE.md\n?? docs/research/CYAN_TRIAL_GESSO_FALLOUT.md\n?? docs/research/EXOTIC_CAPABILITY_MASTER_LEDGER.md\n?? docs/research/KV_MEMORY_PROGRAM_part2.md\n?? docs/research/REPRESENTATION_PROGRAM.md\n",
+    "shadow_status_matches_baseline": null,
+    "patch_apply_check_exit": 0
+  },
+  {
+    "root": "/mnt/d/Code Projects/Palette/.worktrees/gesso-stack-shadow/repos/Gesso",
+    "files_checked": 156,
+    "different": [],
+    "head": "caa68e218896761c3f049c5cd702ba95a01ac17f",
+    "status": " M AGENTS.md\n M README.md\n M benchmark/results/2026-10-01.tsv\n M benchmark/results/2026-10-02.tsv\n M docs/ARCHITECTURE.md\n M docs/goals/PHASE10B_SPEED_FLOOR_CLOSE.md\n M docs/goals/PHASE10D_FOUNDATION_HARDENING.md\n M docs/goals/PHASE4_CUDA.md\n M docs/goals/PHASE6_OBSERVABILITY.md\n M docs/research/KV_MEMORY_PROGRAM.md\n M docs/research/README.md\n M docs/research/ROADMAP_NOW.md\n M docs/research/SPEED_FLOOR.md\n?? 1x\n?? GESSO_STACK_EVIDENCE_MAP.md\n?? \"Julia Compiler Optimizations for Gesso/docs/the_ancient_texts.md\"\n?? RPD_SOP.md\n?? benchmark/results/2026-10-03.tsv\n?? docs/goals/PHASE5_ENGINE.md\n?? docs/goals/PHASE7_PREFIX_SHARE.md\n?? docs/goals/PHASE8_LAVA.md\n?? docs/goals/PHASE9_AUTOTUNE.md\n?? docs/research/CYAN_TRIAL_GESSO_FALLOUT.md\n?? docs/research/EXOTIC_CAPABILITY_MASTER_LEDGER.md\n?? docs/research/KV_MEMORY_PROGRAM_part2.md\n?? docs/research/REPRESENTATION_PROGRAM.md\n",
+    "shadow_status_matches_baseline": true,
+    "patch_apply_check_exit": 0
+  }
+]

@@ -1,0 +1,16 @@
+WARNING: Imported binding Gesso.PrefillWorkload was undeclared at import time during import to Inference.
+WARNING: Imported binding Gesso.DecodeWorkload was undeclared at import time during import to Inference.
+WARNING: Imported binding Gesso.KVCache was undeclared at import time during import to Inference.
+┌ Info: HF parity
+│   prompt = "Hello"
+└   max_abs_delta = 4.8707223399446775e-5
+┌ Info: HF parity
+│   prompt = "The quick brown fox"
+└   max_abs_delta = 4.1132091650908364e-5
+┌ Info: HF parity
+│   prompt = "Julia is a programming language."
+└   max_abs_delta = 2.4394184665155194e-5
+Test Summary:                                                  | Pass  Total  Time
+Attention heads own independent probabilities (Regime I arm 1) |    4      4  1.1s
+Test Summary:                                             | Pass  Total   Time
+Independent HF/PyTorch real-model parity (Regime I arm 1) |   45     45  39.7s

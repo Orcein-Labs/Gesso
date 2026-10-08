@@ -21,11 +21,24 @@
 # correctness-first reading for this sprint, Phase 9 tunes).
 
 using LinearAlgebra: mul!
+using Gesso: ERR_NUMERICAL_INSTABILITY
 
 const KA = Lava.KernelAbstractions
 const KALava = Lava.LavaBackend   # the KA backend instance type (§LXXXI alias)
 
 _lava_sync!() = KA.synchronize(KALava())
+
+# A completed engine action leaves all primary device work synchronized.
+function Gesso.Inference._engine_boundary!(::LavaBackend)
+    _lava_sync!()
+    _lava_sync!()
+    return nothing
+end
+
+function Gesso.Inference._engine_failure(err::Lava.LavaError)
+    code=err.operation in ("memory allocation","pool block allocation") ? Gesso.ERR_ALLOCATION : Gesso.ERR_RUNTIME
+    return gesso_error(code,"primary Lava operation failed";cause=sprint(showerror,err),cause_type=string(typeof(err)),interrupted=false,backend=:lava)
+end
 
 # --- device guard (the interpreter does not copy) -----------------------------
 
@@ -37,30 +50,43 @@ _lava_sync!() = KA.synchronize(KALava())
 # buffers — generate's prefill rows).
 function _lava_device_storage!(op::Symbol, t)
     s = t.storage
-    s === nothing && throw(
-        gesso_error(
-            ERR_INVALID_PLAN,
-            "$op: storage is unset — materialize (and for Lava, to_device) " *
-            "before lowering; nothing is never silently treated as data";
-            op = op,
-        ),
-    )
-    s isa Array || return s
-    throw(
-        gesso_error(
-            ERR_INVALID_PLAN,
-            "$op: LavaBackend received host Array storage — " *
-            "call to_device(tensors) first; the interpreter does not copy " *
-            "host memory to device implicitly (§LXXXI)";
-            op = op,
-            storage_type = string(typeof(s)),
-        ),
-    )
+    Gesso.Inference._storage_root(s) isa Lava.LavaArray && eltype(s) === Float32 && return s
+    throw(gesso_error(ERR_INVALID_PLAN,
+        "$op: LavaBackend requires its own Float32 device storage; host Array, " *
+        "host views, other devices and unsupported arithmetic are rejected; call to_device explicitly";
+        op=op, storage_type=string(typeof(s))))
+end
+Gesso.Inference._check_device_storage(op::Symbol, backend::LavaBackend, t) =
+    _lava_device_storage!(op, t)
+
+# On the tested Vulkan compiler path, the floating `isfinite` predicate
+# reports NaN and Inf as finite. Classify their IEEE exponent bits instead;
+# all data stays on-device and only the UInt32 reduction result is read.
+_lava_nonfinite_flag(x::Float32) = UInt32((reinterpret(UInt32, x) & 0x7f800000) == 0x7f800000)
+_lava_nonfinite_flag(x::Float64) = UInt32((reinterpret(UInt64, x) & 0x7ff0000000000000) == 0x7ff0000000000000)
+function Gesso.Inference._all_finite(a::Lava.AnyLavaArray{T}) where {T <: Union{Float32,Float64}}
+    # Explicit ordinary device temporary avoids KA's tiny BAR allocation.
+    temp=Lava.LavaArray{UInt32}(undef,(max(2,2*cld(length(a),128)),))
+    return Lava.AK.mapreduce(_lava_nonfinite_flag,max,a,KA.get_backend(a);
+        init=UInt32(0),neutral=UInt32(0),temp,block_size=64,switch_below=0)==UInt32(0)
+end
+
+function _lava_dimreduce(f,op,a,dim,init)
+    shape=ntuple(i -> i==dim ? 1 : size(a,i),ndims(a))
+    prod(shape)>1 && return mapreduce(f,op,a;dims=dim)
+    # Preserve Lava's native scalar Float32 sum and the legacy 1D tree.
+    f===identity && op===(+) && eltype(a)===Float32 && return sum(a;dims=dim)
+    result=Lava.LavaArray{typeof(init)}(undef,shape)
+    temp=Lava.LavaArray{typeof(init)}(undef,(max(2,2*cld(length(a),128)),))
+    value=Lava.AK.mapreduce(f,op,a,KA.get_backend(a);init,neutral=init,temp,block_size=64,switch_below=0)
+    copyto!(result,1,[value],1,1)
+    return result
 end
 
 # --- op bodies -----------------------------------------------------------------
 
 function _lava_embedding_lookup!(dst, table, tokens)
+    Gesso._validate_embedding_inputs(dst,table,tokens)
     tab = table.storage
     # 0-based token ids (§LXXV) → 1-based rows on the HOST (cheap), then one
     # broadcast gather on device: rows land in dst in token order.
@@ -70,18 +96,25 @@ function _lava_embedding_lookup!(dst, table, tokens)
 end
 
 function _lava_rmsnorm!(dst, x, scale; eps = 1e-6)
+    isfinite(eps) && eps > 0 || throw(gesso_error(ERR_INVALID_PLAN,
+        "rmsnorm!: eps must be finite and positive"))
     xs = x.storage
+    native_eps=eltype(xs)(eps)
+    isfinite(native_eps) && native_eps>0 || throw(gesso_error(ERR_INVALID_PLAN,
+        "rmsnorm!: eps must be representable, finite and positive in storage dtype"))
     d = size(xs, ndims(xs))                       # last dim is the feature dim
     length(scale.storage) == d ||
         throw(gesso_error(ERR_INVALID_PLAN, "rmsnorm!: scale length $(length(scale.storage)) ≠ feature dim $d"; op = :rmsnorm!))
-    rms = sqrt.(sum(abs2, xs; dims = ndims(xs)) ./ d .+ eps)
+    rms = sqrt.(_lava_dimreduce(abs2,+,xs,ndims(xs),zero(eltype(xs))) ./ eltype(xs)(d) .+ native_eps)
+    Gesso.Inference._all_finite(rms) || throw(gesso_error(ERR_NUMERICAL_INSTABILITY,
+        "rmsnorm!: nonfinite normalization denominator"))
     # scale indexes the LAST axis: trailing 1s so it broadcasts on device too
     stail = reshape(scale.storage, (ntuple(_ -> 1, ndims(xs) - 1)..., d))
     dst.storage .= (xs ./ rms) .* stail
     return dst
 end
 
-# RoPE: pairwise rotate on the head feature dim (LLaMA-style, §LXXV math
+# RoPE: adjacent pairs by default; imported HF policy selects half-split
 # law), Q over its head axis and K over its own (GQA-safe, Phase 3 fix).
 # Broadcast cannot express the PAIR COUPLING with a single fused statement,
 # but strided views over the odd/even feature planes express it exactly:
@@ -92,22 +125,24 @@ end
 # values, so the second result is staged in a temporary before either view
 # is written. Angles are computed in F32 (the declared device math, §LXXXI;
 # the F64 CPU oracle differs by ~1e-7 relative here, far inside atol=1e-3).
-function _lava_rope!(q, k, positions; theta = 10000.0)
+function _lava_rope!(q, k, positions; theta = 10000.0, inv_freq = nothing, interleaved = true)
     size(q.storage, 3) == size(k.storage, 3) ||
         throw(gesso_error(ERR_INVALID_PLAN, "rope!: q d_head ≠ k d_head"; op = :rope!))
+    Gesso._validate_rope_inputs(q,k,positions,theta,inv_freq)
     tθ = Float64(theta)
+    seq, _, d = size(q.storage)
+    half = d ÷ 2
+    freq = Float32.(inv_freq === nothing ? tθ .^ (-(0:2:(d-2)) ./ d) : inv_freq)
+    # Match the native Float32 phase, then reduce metadata angles accurately.
+    # Only derived constants are uploaded; Q/K and their rotations stay GPU.
+    phase = reshape(Float32.(positions), seq, 1) .* reshape(freq, 1, half)
+    reduced = Float32.(rem.(Float64.(phase), 2π))
+    ang = Lava.LavaArray{Float32}(reshape(reduced, seq, 1, half))
+    c = cos.(ang)
+    s = sin.(ang)
     for x in (q.storage, k.storage)
-        seq, nheads, d = size(x)
-        half = d ÷ 2
-        pos = Lava.LavaArray{Float32}(Float32.(positions))             # (seq,)
-        ex = Lava.LavaArray{Float32}(
-            Float32.(tθ .^ (-(0:2:(d-2)) ./ d)),                       # theta^(-2i/d), i = 0…half-1
-        )
-        ang = reshape(pos, seq, 1, 1) .* reshape(ex, 1, 1, half)       # (seq, 1, half) — head-independent
-        c = cos.(ang)
-        s = sin.(ang)
-        x1 = view(x, :, :, 1:2:d)                                      # odd features  (2i+1)
-        x2 = view(x, :, :, 2:2:d)                                      # even features (2i+2)
+        x1 = view(x, :, :, interleaved ? (1:2:d) : (1:half))                                      # odd features  (2i+1)
+        x2 = view(x, :, :, interleaved ? (2:2:d) : ((half+1):d))                                      # even features (2i+2)
         n2 = x1 .* s .+ x2 .* c                                        # staged: reads ORIGINAL x1, x2
         x1 .= x1 .* c .- x2 .* s
         x2 .= n2
@@ -128,9 +163,11 @@ function _lava_softmax!(dst, scores)
     qi = reshape(Lava.LavaArray{Int64}(1:L), L, 1)
     kj = reshape(Lava.LavaArray{Int64}(1:K), 1, K)
     masked = ifelse.(kj .> (qi .+ offset), -Inf32, s)
-    rowmax = maximum(masked; dims = 2)
+    rowmax = _lava_dimreduce(identity,max,masked,2,-Inf32)
+    Gesso.Inference._all_finite(rowmax) || throw(gesso_error(ERR_NUMERICAL_INSTABILITY,
+        "softmax!: no finite unmasked maximum"))
     e = exp.(masked .- rowmax)
-    den = sum(e; dims = 2)
+    den = _lava_dimreduce(identity,+,e,2,0f0)
     dst.storage .= e ./ den
     return dst
 end
@@ -218,15 +255,14 @@ function rope!(
     ::Gesso.PrefillWorkload;
     theta::Real = 10000.0,
     inv_freq = nothing,
+    interleaved::Bool = true,
 )
-    # BREADTH-0 Pass D: a scaled positional policy has NO CUDA lowering yet.
-    # It must be REFUSED, not silently run unscaled (§LXX: no silent
+    # Imported default, linear and Llama3 frequency metadata travels with Q/K.
+    # Validate and rotate on the requested Lava storage (§LXX: no silent
     # representation change). The CPU oracle implements these policies today.
-    inv_freq === nothing ||
-        Gesso.lowering_not_implemented(:rope!, Gesso.LavaBackend())
     _lava_device_storage!(:rope!, q)
     _lava_device_storage!(:rope!, k)
-    r = _lava_rope!(q, k, positions; theta)
+    r = _lava_rope!(q, k, positions; theta, inv_freq, interleaved)
     _lava_sync!()
     return r
 end
@@ -239,15 +275,14 @@ function rope!(
     ::Gesso.DecodeWorkload;
     theta::Real = 10000.0,
     inv_freq = nothing,
+    interleaved::Bool = true,
 )
-    # BREADTH-0 Pass D: a scaled positional policy has NO CUDA lowering yet.
-    # It must be REFUSED, not silently run unscaled (§LXX: no silent
+    # Imported default, linear and Llama3 frequency metadata travels with Q/K.
+    # Validate and rotate on the requested Lava storage (§LXX: no silent
     # representation change). The CPU oracle implements these policies today.
-    inv_freq === nothing ||
-        Gesso.lowering_not_implemented(:rope!, Gesso.LavaBackend())
     _lava_device_storage!(:rope!, q)
     _lava_device_storage!(:rope!, k)
-    r = _lava_rope!(q, k, positions; theta)
+    r = _lava_rope!(q, k, positions; theta, inv_freq, interleaved)
     _lava_sync!()
     return r
 end
@@ -394,7 +429,8 @@ function _lava_to_device(tensors)
     fr = haskey(tensors, :final_rms) ? tensors.final_rms : nothing
     final_rms = fr === nothing ? nothing : _conv_t(fr)
     _lava_sync!()
-    return (; embedding, blocks, lm_head, final_rms)
+    result = (; embedding, blocks, lm_head, final_rms)
+    return haskey(tensors, :rope) ? merge(result, (; rope = tensors.rope)) : result
 end
 
 # ext-local dispatch wrapper (bound as Gesso.to_device when this extension is

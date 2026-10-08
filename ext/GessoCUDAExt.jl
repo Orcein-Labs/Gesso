@@ -44,6 +44,8 @@ import Gesso:
 # hierarchy (P-1 stays packeted). The generic `AbstractArray` bodies in core
 # keep serving CPU, Lava and the oracle unchanged.
 import Gesso.Inference:
+    _attention_scores_device!,
+    _attention_values_device!,
     _split_heads!,
     _merge_heads!,
     _repeat_heads!,

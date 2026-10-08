@@ -1,0 +1,62 @@
+┌ Info: Completed owned token
+│   request = 1
+│   mapped_buffers = 5
+└   live_bytes = 788529200
+┌ Info: Completed owned token
+│   request = 2
+│   mapped_buffers = 5
+└   live_bytes = 788529200
+┌ Info: Completed owned token
+│   request = 3
+│   mapped_buffers = 5
+└   live_bytes = 788529200
+┌ Info: Completed owned token
+│   request = 1
+│   mapped_buffers = 5
+└   live_bytes = 788529200
+┌ Info: Completed owned token
+│   request = 2
+│   mapped_buffers = 5
+└   live_bytes = 788529200
+┌ Info: Completed owned token
+│   request = 3
+│   mapped_buffers = 5
+└   live_bytes = 788529200
+┌ Info: Completed owned token
+│   request = 2
+│   mapped_buffers = 5
+└   live_bytes = 788529200
+┌ Info: Completed owned token
+│   request = 3
+│   mapped_buffers = 5
+└   live_bytes = 788529200
+┌ Info: Completed owned token
+│   request = 2
+│   mapped_buffers = 5
+└   live_bytes = 788529200
+┌ Info: Completed owned token
+│   request = 3
+│   mapped_buffers = 5
+└   live_bytes = 788529200
+┌ Info: Completed owned token
+│   request = 2
+│   mapped_buffers = 5
+└   live_bytes = 788529200
+┌ Info: Completed owned token
+│   request = 3
+│   mapped_buffers = 5
+└   live_bytes = 788529200
+┌ Info: Completed owned token
+│   request = 3
+│   mapped_buffers = 5
+└   live_bytes = 788529200
+┌ Info: Completed owned token
+│   request = 3
+│   mapped_buffers = 5
+└   live_bytes = 788529200
+┌ Info: Completed owned token
+│   request = 3
+│   mapped_buffers = 5
+└   live_bytes = 788529200
+Test Summary:                           | Pass  Total   Time
+Ordinary lava owned sequence scheduling |   21     21  27.2s

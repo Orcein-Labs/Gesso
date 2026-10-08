@@ -1,0 +1,65 @@
+┌ Info: Numerical rejection
+│   actual_type = GessoError
+└   actual_error = "GessoError(ERR_NUMERICAL_INSTABILITY): inference: nonfinite logits; no token may be emitted"
+┌ Info: Numerical rejection
+│   actual_type = GessoError
+└   actual_error = "GessoError(ERR_NUMERICAL_INSTABILITY): inference: nonfinite logits; no token may be emitted"
+┌ Info: Numerical rejection
+│   actual_type = GessoError
+└   actual_error = "GessoError(ERR_NUMERICAL_INSTABILITY): inference: nonfinite logits; no token may be emitted"
+┌ Info: Numerical rejection
+│   actual_type = GessoError
+└   actual_error = "GessoError(ERR_NUMERICAL_INSTABILITY): softmax!: no finite unmasked maximum"
+┌ Info: Numerical rejection
+│   actual_type = GessoError
+└   actual_error = "GessoError(ERR_NUMERICAL_INSTABILITY): rmsnorm!: nonfinite normalization denominator"
+┌ Info: Numerical rejection
+│   actual_type = GessoError
+└   actual_error = "GessoError(ERR_NUMERICAL_INSTABILITY): inference: nonfinite logits; no token may be emitted"
+┌ Info: Numerical rejection
+│   actual_type = GessoError
+└   actual_error = "GessoError(ERR_NUMERICAL_INSTABILITY): inference: nonfinite logits; no token may be emitted"
+┌ Info: Numerical rejection
+│   actual_type = GessoError
+└   actual_error = "GessoError(ERR_NUMERICAL_INSTABILITY): inference: nonfinite logits; no token may be emitted"
+┌ Info: Numerical rejection
+│   actual_type = GessoError
+└   actual_error = "GessoError(ERR_NUMERICAL_INSTABILITY): softmax!: no finite unmasked maximum"
+┌ Info: Numerical rejection
+│   actual_type = GessoError
+└   actual_error = "GessoError(ERR_NUMERICAL_INSTABILITY): rmsnorm!: nonfinite normalization denominator"
+┌ Info: Numerical rejection
+│   actual_type = GessoError
+└   actual_error = "GessoError(ERR_NUMERICAL_INSTABILITY): inference: nonfinite logits; no token may be emitted"
+┌ Info: Numerical rejection
+│   actual_type = GessoError
+└   actual_error = "GessoError(ERR_NUMERICAL_INSTABILITY): inference: nonfinite logits; no token may be emitted"
+┌ Info: Numerical rejection
+│   actual_type = GessoError
+└   actual_error = "GessoError(ERR_NUMERICAL_INSTABILITY): inference: nonfinite logits; no token may be emitted"
+┌ Info: Numerical rejection
+│   actual_type = GessoError
+└   actual_error = "GessoError(ERR_NUMERICAL_INSTABILITY): inference: nonfinite logits; no token may be emitted"
+┌ Info: Numerical rejection
+│   actual_type = GessoError
+└   actual_error = "GessoError(ERR_NUMERICAL_INSTABILITY): inference: nonfinite logits; no token may be emitted"
+┌ Info: Numerical rejection
+│   actual_type = GessoError
+└   actual_error = "GessoError(ERR_NUMERICAL_INSTABILITY): inference: nonfinite logits; no token may be emitted"
+┌ Info: Numerical rejection
+│   actual_type = GessoError
+└   actual_error = "GessoError(ERR_NUMERICAL_INSTABILITY): inference: nonfinite logits; no token may be emitted"
+┌ Info: Numerical rejection
+│   actual_type = GessoError
+└   actual_error = "GessoError(ERR_NUMERICAL_INSTABILITY): inference: nonfinite logits; no token may be emitted"
+┌ Info: Numerical rejection
+│   actual_type = GessoError
+└   actual_error = "GessoError(ERR_NUMERICAL_INSTABILITY): inference: nonfinite logits; no token may be emitted"
+┌ Info: Numerical rejection
+│   actual_type = GessoError
+└   actual_error = "GessoError(ERR_NUMERICAL_INSTABILITY): inference: nonfinite logits; no token may be emitted"
+┌ Info: Numerical rejection
+│   actual_type = GessoError
+└   actual_error = "GessoError(ERR_NUMERICAL_INSTABILITY): inference: nonfinite logits; no token may be emitted"
+Test Summary:                        | Pass  Total   Time
+Independent native cpu numeric gates |   47     47  27.5s

@@ -348,5 +348,25 @@ else
             :llama_micro;
             device=CUDA.name(CUDA.device()),
         ) !== nothing
+
+        # A cached name must follow a freshly replaced runner, including a
+        # function that is not one of the two concrete built-in paths.
+        ext=Base.get_extension(Gesso, :GessoCUDAExt)
+        result=A.cached_result(:matmul!, :cuda, :toy2; device=CUDA.name(CUDA.device()))
+        original=A._candidate(:matmul!, :cuda, result.winner)
+        called=Ref(false)
+        replacement=(dst, x, w)->(called[]=true; dst)
+        try
+            A.register!(
+                :matmul!,
+                :cuda,
+                A.Candidate(result.winner, replacement, (_, _, _)->true),
+            )
+            sentinel=Ref(0)
+            @test ext._autotune_dispatch!(sentinel, sentinel, sentinel, :toy2)===sentinel
+            @test called[]
+        finally
+            A.register!(:matmul!, :cuda, original)
+        end
     end
 end

@@ -1,0 +1,27 @@
+WARNING: Imported binding Gesso.PrefillWorkload was undeclared at import time during import to Inference.
+WARNING: Imported binding Gesso.DecodeWorkload was undeclared at import time during import to Inference.
+WARNING: Imported binding Gesso.KVCache was undeclared at import time during import to Inference.
+┌ Info: Context boundary parity
+│   backend = "cpu"
+│   length = 17
+│   full_delta = 0.0002715221597817674
+└   cached_delta = 0.0002715221597817674
+┌ Info: Context boundary parity
+│   backend = "cpu"
+│   length = 33
+│   full_delta = 3.150222640968536e-5
+└   cached_delta = 3.150222640968536e-5
+┌ Info: Context boundary parity
+│   backend = "cpu"
+│   length = 65
+│   full_delta = 0.00011728020525580973
+└   cached_delta = 0.00011728020525580973
+┌ Info: Context boundary parity
+│   backend = "cpu"
+│   length = 129
+│   full_delta = 0.0001875977821796937
+└   cached_delta = 0.0001875977821796937
+Test Summary:                      | Pass  Total  Time
+External HF positional frequencies |    3      3  0.7s
+Test Summary:                                         | Pass  Total   Time
+Primary cpu rotary, causal and ordinary cache context |   43     43  33.6s

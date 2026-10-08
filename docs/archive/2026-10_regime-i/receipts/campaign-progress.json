@@ -1,0 +1,442 @@
+{
+  "schema": "gesso-regime-i-progress-v1",
+  "source_shadow_head": "caa68e218896761c3f049c5cd702ba95a01ac17f",
+  "current_arm": 12,
+  "status": "complete",
+  "findings": [
+    "safetensors C-order bytes decoded as Julia column-order",
+    "imported half-split RoPE metadata dropped; adjacent pairs used",
+    "head scores summed before shared softmax"
+  ],
+  "independent_parity": {
+    "pass": 45,
+    "fail": 0,
+    "max_abs_logit_deltas": [
+      4.8707223399446775e-05,
+      4.1132091650908364e-05,
+      2.4394184665155194e-05
+    ],
+    "atol": 0.01,
+    "generated_tokens_per_prompt": 8,
+    "prompts": [
+      "Hello",
+      "The quick brown fox",
+      "Julia is a programming language."
+    ]
+  },
+  "negative_controls": {
+    "old_layout": {
+      "pass": 5,
+      "fail": 2,
+      "exit_code": 1
+    },
+    "corrupt_oracle": {
+      "pass": 43,
+      "fail": 2,
+      "exit_code": 1
+    }
+  },
+  "checkpoint_sha256": {
+    "config.json": "1d556eab73b69c7f11f64c557a2f9c6f440bd4c6b89bb2584a6b498c92603843",
+    "merges.txt": "0b54e8aa4e53d5383e2e4bc635a56b43f9647f7b13832d5d9ecd8f82dac4f510",
+    "model.safetensors": "80521b40281d6ce74e35c9282c22539e75aa0ac8578892b2a59955ef78d55da1",
+    "special_tokens_map.json": "e786b595b9a23148bf1630df78d9037a048ea671e48bfd3549a1e3c233742bb3",
+    "tokenizer.json": "9ca9acddb6525a194ec8ac7a87f24fbba7232a9a15ffa1af0c1224fcd888e47c",
+    "tokenizer_config.json": "4bb9af56a342753d39374f4016a16574cab299fe088e896f425ce3c433f61424",
+    "vocab.json": "82b84012e3add4d01d12ba14442026e49b8cbbaead1f79ecf3d919784f82dc79"
+  },
+  "oracle_environment": {
+    "torch": "2.11.0+cu128",
+    "transformers": "5.18.0",
+    "dtype": "float32",
+    "device": "cpu"
+  },
+  "runtime_sources_sha256": {
+    "src/backends.jl": "96821549ddbd02e79a0fb165ece2537543b1435b643aae79da3d99f73fcd8e2d",
+    "src/errors.jl": "5c9dd93dd0129f12defda023d41d37929b849664b490ec8e5a1369525933092a",
+    "src/Gesso.jl": "1018014006e103a6ce6f8e2c3d00c80b72f34ba18055adc949e23fb4f0739404",
+    "src/logging.jl": "2f2d2445f1c61ce608d1059ba82034fc4e052f2eeb3832482583aa66dcf348bf",
+    "src/receipts.jl": "aa2f017cc820e52aedac82b309403885b934fa3d40833e253907839497848b31",
+    "src/versions.jl": "9d27ce201c5788233093ef4492870506b7e865403efb71299252d18de9527404",
+    "src/Agents/Agents.jl": "231a2b119fc143f0ef9a2b474a6b4f53b6313d659acf9ff3edbe7134a138fc4e",
+    "src/Autotune/Autotune.jl": "4959b3d74c42189cd16e7f891406995e865543204d6bf3d1c870a5ea22a9504e",
+    "src/CAPI/CAPI.jl": "1dfef92128749ea7737c76f53dadb11ec006113a0ab32a545cac3f69f847ecbb",
+    "src/Inference/architecture_spec.jl": "e9a2dc899065227c8ce5eb1a1a7925916a5ca6ab46d5a6a47ed1284215d26ffe",
+    "src/Inference/arch_adapters.jl": "e6cc10b525573ff20059132b7832af2898d2e21d17cf4c1d7962c0f12935a841",
+    "src/Inference/gpt2_tokenizer.jl": "f468c17128380a03cb386d42392c7bd2eb1faf6396ee07f1baaee9daaf1c7790",
+    "src/Inference/import_report.jl": "1d41f04132279c3c10c2a022ce271004c1a28858f86ca14b3bf6fc721cdbe521",
+    "src/Inference/Inference.jl": "16aa5aea5273ad09f31a910cd09c8d7d81eee1d81d10fe883b9beee47c0930ee",
+    "src/Inference/kv_manager.jl": "6fd74d0924a4b467857e357817d3daa7369bf0c1f7808926b652abf34dbcb792",
+    "src/Inference/llama_import.jl": "fea82084beeb9bea270d341e7804172f301b825eb6bfb0b000b6ea49caa55a43",
+    "src/Inference/materialize_architecture.jl": "97dc0dc2549b046ecabbd591e3ef92c7cb2ceeee6eab1fa158daf03f9f4d9f26",
+    "src/Inference/semantic_params.jl": "b3e8aefab1161e54acf6307bde83179cef4857e268c734b78550068b636d7716",
+    "src/Inference/session.jl": "9702e2d213b7d5b6a750ba75c1b73bbcb4dd793d0931c7b7d6c94d0f9ba7c225",
+    "src/Inference/tokenizer_abstract.jl": "dfba27a527b1d5ca0f447911eebc86d5e221a7e795ad79f9e1e82552603a42f8",
+    "src/Inference/tokenizer_protocol.jl": "54932597cf8da80c9245393784f34d0ba7fab69fd8e727375559f11be384b122",
+    "src/Lowering/Lowering.jl": "78da5ba38cc267389e2f56e57ef7f8186ebe32695a888d393fba4111efa4f2c2",
+    "src/ModelIR/ModelIR.jl": "5d832ace89d90634686445c8998cd08bf180b94c72c9498e055fbc36858aecb2",
+    "src/Operators/cpu.jl": "5cc1bc99b9ca3135c360fa142d0c7f34fbc0247bd978211f88c4a6058fb2b383",
+    "src/Operators/Operators.jl": "83d579ce34a31be214843a9009e99fdbf81fb4149f411c6a322b1ff74db2f77d",
+    "src/Parameters/Parameters.jl": "ead283db92929863a99bfbf90e8edfc86fb92cbd32139375ea70c9c6f9725ec5",
+    "src/Planning/Planning.jl": "2b5c17a8e17d41aa36605f412c549c9a82c0103e36ec5cc48a3417943fe340f6",
+    "src/Profiling/Profiling.jl": "4caed0ecc9fedc4fa85bbf91266918ee13fac09f5005e16e7c38c37519c97bef",
+    "src/Representation/Representation.jl": "d8442d6971d5a14485a7dad42df265235dfa02a7e15a9d539484ea16a6ea0204",
+    "src/Runtime/Runtime.jl": "ce57c49f15e20eb37453baecd515b8d575e881fb2e5fa3453f0368247198fbc3",
+    "src/Semantics/Semantics.jl": "697e22184a4f0c0728bf91682e029e0d9d896eaf5e7ac9f631788a9a87381352"
+  },
+  "regime_ii": "not-started",
+  "initial_suite": {
+    "pass": 2502,
+    "broken_or_skipped": 22,
+    "note": "Started before repair; external HF reference was unset. This self-regression suite did not detect the three defects."
+  },
+  "repair_steps": [
+    {
+      "step": "arm1-parity.log",
+      "max_abs_logit_deltas": [
+        46.38396127204315,
+        32.544042642090936,
+        46.30520506297593
+      ]
+    },
+    {
+      "step": "arm1-fixed-parity.log",
+      "max_abs_logit_deltas": [
+        4.8707223399446775e-05,
+        24.708663146576757,
+        19.347050816208647
+      ]
+    },
+    {
+      "step": "arm1-layout-and-rope.log",
+      "max_abs_logit_deltas": [
+        4.8707223399446775e-05,
+        30.188848506061817,
+        18.941870101279203
+      ]
+    },
+    {
+      "step": "arm1-three-repairs.log",
+      "max_abs_logit_deltas": [
+        4.8707223399446775e-05,
+        4.1132091650908364e-05,
+        2.4394184665155194e-05
+      ]
+    }
+  ],
+  "receipt": {
+    "what_changed": "C-order checkpoint decode; positional layout propagated; independent head softmax; independent HF gate and refreshed self-goldens",
+    "why": "External HF oracle exposed three shared implementation and self-test errors",
+    "before_benchmark": "N/A correctness repair; no timing comparison",
+    "after_benchmark": "N/A; prior speed factor is invalid for corrected semantics",
+    "compile_time_impact": "Not measured separately; correctness run timings include compilation",
+    "memory_impact": "Row-order repair materializes a coordinate-preserving array after dtype conversion; existing warmed allocation gates pending full suite",
+    "hardware": "x86_64",
+    "workload": "Three prompts, eight greedy new tokens each",
+    "model": "local HuggingFaceTB/SmolLM2-135M",
+    "backend": "CPU, Gesso Float64 vs HF Float32"
+  },
+  "gates": {
+    "1": {
+      "status": "passed",
+      "cpu_suite": {
+        "pass": 2607,
+        "broken_or_skipped": 20,
+        "fail": 0
+      },
+      "receipt": "arm1-make-test-final.log"
+    },
+    "2": {
+      "status": "passed",
+      "pass": 2647,
+      "fail": 0,
+      "broken_or_skipped": 20,
+      "malformed_boundary_checks": 40,
+      "receipt": "arm2-make-test.log"
+    },
+    "3": {
+      "status": "passed",
+      "assertions": 57,
+      "variants": [
+        "j1-b1",
+        "j2-b2",
+        "j4-b1"
+      ],
+      "receipt_pattern": "arm3-*.json"
+    },
+    "4": {
+      "status": "passed",
+      "cpu_assertions": 67,
+      "lava_assertions": 40,
+      "receipt": "arm4-lava-final.json",
+      "owned_gpu_bytes": 539395328,
+      "owned_julia_growth_bytes": 7472,
+      "trimmed_device_growth_bytes": 0
+    },
+    "5": {
+      "status": "passed",
+      "assertions": 75,
+      "receipt": "arm5-primary-device.json",
+      "unavailable_device_receipt": "arm5-device-unavailable.log",
+      "primary_backend": "Lava Vulkan",
+      "hardware": "RTX 5060",
+      "amd": "not available, no certification"
+    },
+    "6": {
+      "status": "passed",
+      "cpu_numeric_assertions": 47,
+      "lava_numeric_assertions": 47,
+      "lava_poison_regression_assertions": 15,
+      "cpu_suite_pass": 2668,
+      "cpu_suite_broken_or_skipped": 21,
+      "receipt": "arm6-lava.json",
+      "negative_control": "arm6-lava-initial.log",
+      "finding": "GPU isfinite incorrectly returns true for NaN/Inf; Gesso uses on-device IEEE classification",
+      "cpu_dtype_checks": 12,
+      "dtype_receipt": "arm6-dtype-make-test.log"
+    },
+    "7": {
+      "status": "passed",
+      "cpu_assertions": 46,
+      "lava_assertions": 46,
+      "cpu_suite_pass": 2673,
+      "cpu_suite_broken_or_skipped": 21,
+      "receipt": "arm7-lava.json",
+      "real_model_lengths": [
+        17,
+        33,
+        65,
+        129
+      ],
+      "rotary_max_position": 32768,
+      "negative_control": "arm7-linear-negative.log"
+    },
+    "8": {
+      "status": "passed",
+      "cpu_assertions": 24,
+      "lava_assertions": 21,
+      "cpu_suite_pass": 2691,
+      "cpu_suite_broken_or_skipped": 21,
+      "receipt": "arm8-lava.json",
+      "numeric_revalidation": "arm8-numeric-revalidation.json",
+      "context_revalidation": "arm8-context-revalidation.json",
+      "mapped_buffers_per_completed_token": 5,
+      "negative_controls": [
+        "arm8-lava-initial.log",
+        "arm8-lava-full-gc.log",
+        "arm8-pooled-nd-negative.log"
+      ]
+    },
+    "9": {
+      "status": "passed",
+      "cpu_assertions": 29,
+      "lava_assertions": 29,
+      "cpu_suite_pass": 2738,
+      "cpu_suite_broken_or_skipped": 21,
+      "receipt": "arm9-lava.json",
+      "operation_failure": "host projection after KV write, permanent regression",
+      "recovery": "exact independent HF output on same Session"
+    },
+    "10": {
+      "status": "passed",
+      "cpu_assertions": 39,
+      "lava_assertions": 39,
+      "cpu_suite_pass": 2754,
+      "cpu_suite_broken_or_skipped": 21,
+      "receipt": "arm10-lava.json",
+      "allocation_limits": "unchanged; passed",
+      "digest_reference": "digest-reference.json"
+    },
+    "11": {
+      "status": "passed",
+      "cpu_suite_pass": 2772,
+      "cpu_device_skips": 18,
+      "lava_performance_pass": 27,
+      "cuda_performance_pass": 27,
+      "cuda_parity_pass": 9,
+      "cuda_allocation_bytes": 1025696,
+      "unchanged_cuda_ceiling_bytes": 1048576,
+      "runner_replacement_pass": 4,
+      "lava_numeric_pass": 51,
+      "lava_context_pass": 46,
+      "lava_containment_pass": 29,
+      "lava_observability_pass": 39,
+      "lava_lifecycle_pass": 40,
+      "receipts": [
+        "arm11-cpu-dispatch-final.log",
+        "arm11-final-primary.log",
+        "arm11-lava-after.json",
+        "arm11-cuda-after.log",
+        "arm11-cuda-after.json",
+        "arm11-pytorch.json",
+        "arm11-dispatch-replacement.log",
+        "final-cuda-parity.json",
+        "arm12-final-primary.log"
+      ],
+      "primary_speed_claim": "reproducible measured baseline, not a clear normalization speed gain",
+      "default_receipt_storage": "reserved before actions, bounded through overflow",
+      "cpu_expected_broken": 3,
+      "final_revalidation": "arm12-final-primary.log",
+      "cuda_normalization": "legacy Float64 intermediates, Float32 storage; rejected native attempt retained"
+    },
+    "12": {
+      "status": "passed",
+      "cpu_suite_pass": 2772,
+      "cpu_device_skips": 18,
+      "cpu_expected_broken": 3,
+      "host_suite_pass": 3113,
+      "host_device_skips": 0,
+      "host_expected_broken": 3,
+      "fresh_cpu_pass": 13,
+      "fresh_lava_pass": 13,
+      "lava_final_performance_pass": 27,
+      "lava_final_observability_pass": 39,
+      "lava_final_containment_pass": 29,
+      "lava_final_lifecycle_pass": 40,
+      "cuda_final_performance_pass": 27,
+      "cuda_final_parity_pass": 9,
+      "cuda_allocation_bytes": 1025696,
+      "cuda_allocation_ceiling_bytes": 1048576,
+      "core_dependencies_unchanged": true,
+      "installed_dependency_identities_unchanged": 180,
+      "relocated_source_files_identical": 188,
+      "format_and_diff_check": "passed",
+      "compiler_prerequisite_helper_cold_exit": 0,
+      "lava_revision": "11c7e31bdf62408d22bf379e9e59510f69d2103e",
+      "automatic_lava_precompile": "not certified; documented source execution after locked compiler prerequisite preparation passes",
+      "type_stability_limit": "three inherited @inferred checks remain expected-broken on unchanged storage::Any hierarchy",
+      "receipts": [
+        "arm12-host-full.log",
+        "arm12-cpu-final.log",
+        "arm12-fresh-cpu-final.log",
+        "arm12-final-primary.log",
+        "arm12-fresh-cpu.json",
+        "arm12-fresh-lava.json",
+        "arm12-install-evidence.json",
+        "arm12-manifest-resolve.json",
+        "arm12-relocation-identities.json",
+        "arm12-integration-repair.json",
+        "arm12-prerequisite-helper-cold.log",
+        "arm12-format-check.log",
+        "lava-source-pin.json"
+      ]
+    }
+  },
+  "host_suite": {
+    "pass": 3113,
+    "fail": 0,
+    "broken": 3,
+    "device_skips": 0,
+    "expected_broken_reason": "three inherited type-inference checks packeted on storage::Any; hierarchy unchanged",
+    "receipt": "arm12-host-full.log",
+    "exit_code": 0
+  },
+  "primary_backend": "Lava/Vulkan",
+  "cuda_role": "throughput comparison",
+  "backend_priority_corrected_by_user": true,
+  "cuda_comparison": {
+    "parity": "passed all three prompts and eight greedy tokens",
+    "allocation_bytes": 1025696,
+    "historical_ceiling_bytes": 1048576,
+    "historical_ceiling_status": "passed without raising ceiling",
+    "receipt": "final-cuda-parity.json"
+  },
+  "arm6_initial": {
+    "cpu_pass": 31,
+    "lava_pass": 25,
+    "lava_fail": 7,
+    "receipt": "arm6-lava.log",
+    "note": "Historical negative evidence, resolved by the device-side IEEE classification guard; original failed log retained."
+  },
+  "arm7_negative": {
+    "pass": 2,
+    "fail": 1,
+    "exit_code": 1,
+    "receipt": "arm7-linear-negative.log"
+  },
+  "arm8_findings": {
+    "status": "resolved",
+    "initial": {
+      "pass": 13,
+      "fail": 8,
+      "receipt": "arm8-lava-initial.log",
+      "reason": "mapped heap exhaustion despite free main device heap"
+    },
+    "gc_candidates": "minor and full collection both failed; preserved",
+    "pooled_nd_candidate": {
+      "mapped_buffers": 4,
+      "pass": 13,
+      "fail": 8,
+      "receipt": "arm8-pooled-nd-negative.log",
+      "reason": "wrong greedy IDs"
+    },
+    "current_candidate": "preserve original scalar/tree algorithm and synchronization, explicit ordinary device temporary placement",
+    "accepted": "original reduction tree with ordinary pooled temporary placement; independent numeric/context/scheduling references passed"
+  },
+  "hardware": {
+    "gpu": "NVIDIA GeForce RTX 5060",
+    "driver": "615.71.09",
+    "gpu_memory_mib": 8151,
+    "cpu": "Intel(R) Xeon(R) CPU E5-2699 v3 @ 2.30GHz",
+    "julia": "1.12.6",
+    "julia_threads": 2,
+    "blas_threads": 2,
+    "model": "SmolLM2-135M",
+    "primary_backend": "Lava/Vulkan",
+    "comparison_backend": "CUDA",
+    "independent_reference": "2.11.0+cu128"
+  },
+  "baseline_commit": "a4e7f04bec4a775b59b1ca1356aaaa9f10d0d673",
+  "historical_host_suite": {
+    "pass": 2925,
+    "fail": 1,
+    "broken_or_skipped": 3,
+    "receipt": "arm1-host-make-test.log",
+    "open_failure": "SmolLM2 CUDA warmed decode 6043584 B > 1048576 B"
+  },
+  "historical_cuda_comparison": {
+    "parity": "passed all three prompts and eight greedy tokens",
+    "allocation_bytes": 1103680,
+    "historical_ceiling_bytes": 1048576,
+    "historical_ceiling_status": "unmet, auxiliary; not primary Lava acceptance",
+    "receipt": "arm4-cuda-final.json"
+  },
+  "final_commit": "68d5d060300c773d7576b0ee7a5fbd6bfe5e2615",
+  "final_runtime_sources_sha256": {
+    "src/backends.jl": "e431d4c8040b8cea104a56287dc463e98c0dd165334a2d98100a08020a04312c",
+    "src/errors.jl": "5c9dd93dd0129f12defda023d41d37929b849664b490ec8e5a1369525933092a",
+    "src/Gesso.jl": "1018014006e103a6ce6f8e2c3d00c80b72f34ba18055adc949e23fb4f0739404",
+    "src/logging.jl": "2f2d2445f1c61ce608d1059ba82034fc4e052f2eeb3832482583aa66dcf348bf",
+    "src/receipts.jl": "e6f4aee404db1624e97c1bb8afb3f357647a5aabcdf6c8cf07927600c225a92e",
+    "src/versions.jl": "9d27ce201c5788233093ef4492870506b7e865403efb71299252d18de9527404",
+    "src/Agents/Agents.jl": "231a2b119fc143f0ef9a2b474a6b4f53b6313d659acf9ff3edbe7134a138fc4e",
+    "src/Autotune/Autotune.jl": "17e8be875d9aabc24a3f6441734a787f1f54c0f14ff7d28eb782627ee0f6bb0b",
+    "src/CAPI/CAPI.jl": "1dfef92128749ea7737c76f53dadb11ec006113a0ab32a545cac3f69f847ecbb",
+    "src/Inference/architecture_spec.jl": "a6cc0de1718f99099b9e8b4039a4c5166cbf09e6a982087b6a2a9a49e057522f",
+    "src/Inference/arch_adapters.jl": "21d3ee63f6b9789841c01547ef377dcea3d6ecf4c6e78bb56c5c8b5ff9de27f0",
+    "src/Inference/gpt2_tokenizer.jl": "6bf0bf4b2b99fbd5295a437dc04a63cd5f5ebd3602ac943591342dc9322b0e5d",
+    "src/Inference/import_report.jl": "1d41f04132279c3c10c2a022ce271004c1a28858f86ca14b3bf6fc721cdbe521",
+    "src/Inference/Inference.jl": "a6d898b327dcf8f20ba553aa101c44e3f505a424e30075d6466c1126a8395b07",
+    "src/Inference/kv_manager.jl": "6fd74d0924a4b467857e357817d3daa7369bf0c1f7808926b652abf34dbcb792",
+    "src/Inference/llama_import.jl": "61d10a0c2a49ece41a9dc0d28391f6cccb78f4416c0106378b9a6b13791eda71",
+    "src/Inference/materialize_architecture.jl": "97dc0dc2549b046ecabbd591e3ef92c7cb2ceeee6eab1fa158daf03f9f4d9f26",
+    "src/Inference/semantic_params.jl": "b3e8aefab1161e54acf6307bde83179cef4857e268c734b78550068b636d7716",
+    "src/Inference/session.jl": "d30ac96694dbbba518b1793f93cf595a48bcedad5e37422ce8d1bf530a7a1dd1",
+    "src/Inference/tokenizer_abstract.jl": "dfba27a527b1d5ca0f447911eebc86d5e221a7e795ad79f9e1e82552603a42f8",
+    "src/Inference/tokenizer_protocol.jl": "54932597cf8da80c9245393784f34d0ba7fab69fd8e727375559f11be384b122",
+    "src/Lowering/Lowering.jl": "78da5ba38cc267389e2f56e57ef7f8186ebe32695a888d393fba4111efa4f2c2",
+    "src/ModelIR/ModelIR.jl": "5d832ace89d90634686445c8998cd08bf180b94c72c9498e055fbc36858aecb2",
+    "src/Operators/cpu.jl": "f11e8447af369af9ba012910925bd27888720ac9cd8a7428b767c1c473ce4df0",
+    "src/Operators/Operators.jl": "83d579ce34a31be214843a9009e99fdbf81fb4149f411c6a322b1ff74db2f77d",
+    "src/Parameters/Parameters.jl": "ead283db92929863a99bfbf90e8edfc86fb92cbd32139375ea70c9c6f9725ec5",
+    "src/Planning/Planning.jl": "2b5c17a8e17d41aa36605f412c549c9a82c0103e36ec5cc48a3417943fe340f6",
+    "src/Profiling/Profiling.jl": "4caed0ecc9fedc4fa85bbf91266918ee13fac09f5005e16e7c38c37519c97bef",
+    "src/Representation/Representation.jl": "d8442d6971d5a14485a7dad42df265235dfa02a7e15a9d539484ea16a6ea0204",
+    "src/Runtime/Runtime.jl": "282eba85562acfd2215514af35784717d1dc8a6cdda4a681bc6207c7f355bbf6",
+    "src/Semantics/Semantics.jl": "697e22184a4f0c0728bf91682e029e0d9d896eaf5e7ac9f631788a9a87381352",
+    "ext/cuda_ops.jl": "d6e0cf9ffd366e97902cfed8f3ecf3bb83c22ca6ed864532b0c022187a37359e",
+    "ext/GessoCUDAExt.jl": "fa0794eff62749534584d127a023c1154d16a23bf6ee649babc3851d5d090250",
+    "ext/GessoLavaExt.jl": "e5c76f3ad6626c422c0ab55f81557b26633ce8b0c0234ec4478a79334385bb74",
+    "ext/lava_ops.jl": "4e01e770f368322076e4d9d93c038511fd4e5364a4fd4a78114201c6d6141fe6"
+  }
+}

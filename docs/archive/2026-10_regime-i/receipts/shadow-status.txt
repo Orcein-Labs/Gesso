@@ -1,0 +1,26 @@
+ M AGENTS.md
+ M README.md
+ M benchmark/results/2026-10-01.tsv
+ M benchmark/results/2026-10-02.tsv
+ M docs/ARCHITECTURE.md
+ M docs/goals/PHASE10B_SPEED_FLOOR_CLOSE.md
+ M docs/goals/PHASE10D_FOUNDATION_HARDENING.md
+ M docs/goals/PHASE4_CUDA.md
+ M docs/goals/PHASE6_OBSERVABILITY.md
+ M docs/research/KV_MEMORY_PROGRAM.md
+ M docs/research/README.md
+ M docs/research/ROADMAP_NOW.md
+ M docs/research/SPEED_FLOOR.md
+?? 1x
+?? GESSO_STACK_EVIDENCE_MAP.md
+?? "Julia Compiler Optimizations for Gesso/docs/the_ancient_texts.md"
+?? RPD_SOP.md
+?? benchmark/results/2026-10-03.tsv
+?? docs/goals/PHASE5_ENGINE.md
+?? docs/goals/PHASE7_PREFIX_SHARE.md
+?? docs/goals/PHASE8_LAVA.md
+?? docs/goals/PHASE9_AUTOTUNE.md
+?? docs/research/CYAN_TRIAL_GESSO_FALLOUT.md
+?? docs/research/EXOTIC_CAPABILITY_MASTER_LEDGER.md
+?? docs/research/KV_MEMORY_PROGRAM_part2.md
+?? docs/research/REPRESENTATION_PROGRAM.md

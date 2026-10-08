@@ -1,0 +1,5 @@
+WARNING: Imported binding Gesso.PrefillWorkload was undeclared at import time during import to Inference.
+WARNING: Imported binding Gesso.DecodeWorkload was undeclared at import time during import to Inference.
+WARNING: Imported binding Gesso.KVCache was undeclared at import time during import to Inference.
+Test Summary:                          | Pass  Total   Time
+Ordinary cpu owned sequence scheduling |   24     24  28.9s

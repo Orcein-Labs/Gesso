@@ -11,6 +11,9 @@ using Test
 using Gesso: reference_prefill, reference_generate
 
 @testset "Gesso" begin
+    include("test_rope_metadata.jl")
+    include("test_numeric_failures.jl")
+    include("test_device_boundaries.jl")
     include("test_foundation.jl")
     include("test_errors.jl")
     include("test_receipts.jl")
@@ -32,6 +35,8 @@ using Gesso: reference_prefill, reference_generate
 
     # CPU reference operator methods (§LXXV item A): needs the lab helpers
     include("test_cpu_ops.jl")
+    include("test_rope_layout.jl")
+    include("test_attention_heads.jl")
 
     # CAPABILITY-0a: `supports(backend, cap)` is a hand-written Set, so the
     # declaration is tied to EXECUTION here — every claimed capability must
@@ -50,6 +55,9 @@ using Gesso: reference_prefill, reference_generate
     # generation with a real KV append
     include("test_reference_prefill.jl")
     include("test_reference_generate.jl")
+    include("test_batch.jl")
+    include("test_containment.jl")
+    include("test_observability.jl")
 
     # Phase 3 (§LXXVI item A): GQA interpreter, final RMSNorm, eps/theta knobs
     # — defaults are the Phase 2 constants, so every earlier gate is unchanged
@@ -59,6 +67,8 @@ using Gesso: reference_prefill, reference_generate
     # name map — the micro checkpoint is generated in-test by a writer that
     # mirrors the reader byte-for-byte
     include("test_import_llama.jl")
+    include("test_safetensors_layout.jl")
+    include("test_loading_boundaries.jl")
 
     # BREADTH-0: the universal model doorway (Passes A/B/D/E/F/G/H). After
     # the lab helpers (deterministic rng) and after the Llama importer, since
@@ -78,6 +88,7 @@ using Gesso: reference_prefill, reference_generate
     # Phase 3 (§LXXVI item D): the REAL-model gate — one named skip unless
     # GESSO_SMOLLM2_DIR points at a local snapshot; it never downloads
     include("test_smollm2.jl")
+    include("test_hf_parity.jl")
 
     # Phase 4 (§LXXVII item A): the CUDA backend seam — manifest law, ext
     # binding, explicit no-device failure. Load-order-sensitive: BEFORE/AFTER
@@ -115,6 +126,7 @@ using Gesso: reference_prefill, reference_generate
     # Phase 8 (§LXXXI item C): Lava inference — prefill + greedy generate vs
     # the CPU oracle, ids EXACT, logits at declared atol; no-copy law.
     include("test_lava_inference.jl")
+    include("test_numeric_lava.jl")
 
     # Phase 5 (§LXXVIII item A): paged KV manager — Magenta §9.5 step 1;
     # pages are the cache, gather-on-read, typed context exhaustion

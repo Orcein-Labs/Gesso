@@ -1,0 +1,7 @@
+WARNING: Imported binding Gesso.PrefillWorkload was undeclared at import time during import to Inference.
+WARNING: Imported binding Gesso.DecodeWorkload was undeclared at import time during import to Inference.
+WARNING: Imported binding Gesso.KVCache was undeclared at import time during import to Inference.
+Test Summary:                       | Pass  Total  Time
+Nonfinite logits are typed failures |    4      4  0.0s
+Test Summary:                                 | Pass  Total  Time
+Unsupported native CPU arithmetic is explicit |   12     12  1.2s

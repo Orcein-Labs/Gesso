@@ -1,0 +1,74 @@
+Test Summary:                                        | Pass  Total  Time
+ModelIR primitives (§CIX): construction + validation |   11     11  0.5s
+Test Summary:                                    | Pass  Total  Time
+ModelIR (§CIX): toy2 round-trip from the fixture |    8      8  1.8s
+Test Summary:                          | Pass  Total  Time
+ModelIR (§CIX): identity is structural |    6      6  0.0s
+Test Summary:                              | Pass  Total  Time
+ModelIR (§CIX): nodes are immutable values |    5      5  0.0s
+Test Summary:                                              | Pass  Total   Time
+prefill oracle: shape + determinism (atol=0, same process) |    4      4  13.3s
+Test Summary:                                                      | Pass  Total  Time
+prefill oracle: causal property (position 0 cannot see position 3) |    3      3  0.1s
+Test Summary:                                                        | Pass  Total  Time
+prefill oracle: last-position argmax drives generation (item C seam) |    4      4  0.1s
+Test Summary:                                                | Pass  Total  Time
+prefill oracle: greedy path is stable under prompt prefixing |    4      4  0.3s
+Test Summary:                                                              | Pass  Total  Time
+known logits: persisted slot vs recomputed (atol=1e-10, cross-commit gate) |    5      5  0.0s
+Test Summary:                                 | Pass  Total  Time
+load_llama_config: validates the micro config |    9      9  7.1s
+Test Summary:                                           | Pass  Total  Time
+config_to_model: composition is a Model, GQA-expressive |    8      8  0.2s
+Test Summary:                                   | Pass  Total  Time
+config refusals name the offending field (§LXX) |   21     21  5.1s
+Test Summary:                                    | Pass  Total  Time
+load_safetensors: all four dtypes upcast EXACTLY |    5      5  2.2s
+Test Summary:                                                     | Pass  Total  Time
+load_safetensors: unsupported dtype and bad span error with names |    3      3  0.1s
+Test Summary:                                                    | Pass  Total  Time
+load_llama end-to-end: prefill runs, deterministic, shapes right |   14     14  5.3s
+Test Summary:                                 | Pass  Total  Time
+load_llama: sharded checkpoint via weight_map |    3      3  0.1s
+Test Summary:                                                   | Pass  Total  Time
+load_llama: unknown / missing / untied keys error WITH THE NAME |    7      7  0.2s
+Test Summary:                                                                      | Pass  Total  Time
+materialize_llama: 0-based HF layers load; 1-based fixtures still load; mix errors |   12     12  0.0s
+Test Summary:                                                                        | Pass  Total  Time
+materialize_llama: leftover real weight still errors; rotary_emb.inv_freq is ignored |    8      8  0.0s
+Test Summary:                                                            | Pass  Total  Time
+materialize_llama: absent model.norm ⇒ final_rms is nothing (toy2 shape) |    1      1  0.0s
+Test Summary:                                                     | Pass  Total  Time
+gqa micro checkpoint: interpreter GQA path matches repeat formula |    1      1  0.9s
+Test Summary:                                                  | Pass  Total  Time
+autotune: candidates registered for (:matmul!, :cuda) in order |    3      3  0.1s
+Test Summary:                                               | Pass  Total   Time
+autotune: both candidates gated at :llama_micro (atol=1e-2) |   16     16  58.6s
+Test Summary:                                        | Pass  Total  Time
+autotune: both candidates gated at :toy2 (atol=1e-2) |   16     16  0.0s
+Test Summary:                                              | Pass  Total  Time
+autotune: search! selects a legal winner for :matmul!:cuda |    6      6  2.6s
+Test Summary:                                                    | Pass  Total  Time
+autotune: a gate-failing candidate is rejected, never the winner |    3      3  2.6s
+Test Summary:                                                       | Pass  Total  Time
+autotune: all candidates gated out throws typed ERR_VERIFY_MISMATCH |    3      3  0.1s
+Test Summary:                                           | Pass  Total  Time
+quantize!/dequantize! still decline; CPU path unchanged |    3      3  0.1s
+Test Summary:                                                     | Pass  Total  Time
+op consults Autotune: cache entry on first matmul!, hit on second |    8      8  1.0s
+Test Summary:                                                     | Pass  Total  Time
+regimes: every declared (K, N) pair resolves and searches legally |   16     16  0.0s
+Test Summary:                                                      | Pass  Total  Time
+regression: host Array + CUDABackend still ERR_INVALID_PLAN (§LXX) |    3      3  0.0s
+toy2 cuda-vs-cpu max|Δlogit| (autotuned) = 0.000771309037759238
+llama_micro cuda-vs-cpu max|Δlogit| (autotuned) = 5.5006127839263286e-6
+Test Summary:                                                      | Pass  Total   Time
+end-to-end: toy2 + llama_micro ids match CPU with the consult live |   15     15  36.4s
+Test Summary:                                                  | Pass  Total   Time
+toy2 CUDA Session vs CPU Session (ids EXACT, logits atol=1e-3) |    6      6  20.3s
+Test Summary:                                                      | Pass  Total  Time
+Phase 10 B: device argmax fast path — ids exact, host gets one Int |    5      5  0.1s
+Test Summary:                                                         | Pass  Total  Time
+no-copy law: host Array tensors + CUDA backend throws at construction |    4      4  0.2s
+Test Summary:                                            | Pass  Total   Time
+decode scratch: reuse + warmed allocations (§10E item D) |   21     21  20.5s

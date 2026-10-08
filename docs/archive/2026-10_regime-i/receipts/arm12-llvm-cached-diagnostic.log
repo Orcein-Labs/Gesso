@@ -1,0 +1,28 @@
+LLVM source: /home/mattc/.julia/packages/LLVM/JGisQ/src/LLVM.jl
+pointerref typed entries 1
+CodeInfo(
+1 ─      nothing::Core.Const(nothing)
+│        nothing::Core.Const(nothing)
+│   %3 = LLVM.Interop.Base::Core.Const(Base)
+│   %4 =   dynamic Base.getproperty(%3, :llvmcall)::Core.Const(Core.Intrinsics.llvmcall)
+│   %5 =   builtin Core.tuple("; ModuleID = 'llvmcall'\nsource_filename = \"llvmcall\"\n\n; Function Attrs: alwaysinline\ndefine float @entry(ptr addrspace(3) %0, i64 %1) #0 {\nentry:\n  %2 = getelementptr inbounds float, ptr addrspace(3) %0, i64 %1\n  %3 = load float, ptr addrspace(3) %2, align 1, !tbaa !0\n  ret float %3\n}\n\nattributes #0 = { alwaysinline }\n\n!0 = !{!1, !1, i64 0, i64 0}\n!1 = !{!\"custom_tbaa_addrspace(3)\", !2, i64 0}\n!2 = !{!\"custom_tbaa\"}\n", "entry")::Core.Const(("; ModuleID = 'llvmcall'\nsource_filename = \"llvmcall\"\n\n; Function Attrs: alwaysinline\ndefine float @entry(ptr addrspace(3) %0, i64 %1) #0 {\nentry:\n  %2 = getelementptr inbounds float, ptr addrspace(3) %0, i64 %1\n  %3 = load float, ptr addrspace(3) %2, align 1, !tbaa !0\n  ret float %3\n}\n\nattributes #0 = { alwaysinline }\n\n!0 = !{!1, !1, i64 0, i64 0}\n!1 = !{!\"custom_tbaa_addrspace(3)\", !2, i64 0}\n!2 = !{!\"custom_tbaa\"}\n", "entry"))
+│   %6 = LLVM.Interop.:-::Core.Const(-)
+│   %7 =   dynamic (%6)(i, 1)::Int64
+│   %8 = intrinsic (%4)(%5, Float32, Tuple{Core.LLVMPtr{Float32, 3}, Int64}, ptr, %7)::Float32
+└──      return %8
+) => Float32
+pointerset typed entries 1
+CodeInfo(
+1 ─       nothing::Core.Const(nothing)
+│         nothing::Core.Const(nothing)
+│   %3  = LLVM.Interop.Base::Core.Const(Base)
+│   %4  =   dynamic Base.getproperty(%3, :llvmcall)::Core.Const(Core.Intrinsics.llvmcall)
+│   %5  =   builtin Core.tuple("; ModuleID = 'llvmcall'\nsource_filename = \"llvmcall\"\n\n; Function Attrs: alwaysinline\ndefine void @entry(ptr addrspace(3) %0, float %1, i64 %2) #0 {\nentry:\n  %3 = getelementptr inbounds float, ptr addrspace(3) %0, i64 %2\n  store float %1, ptr addrspace(3) %3, align 1, !tbaa !0\n  ret void\n}\n\nattributes #0 = { alwaysinline }\n\n!0 = !{!1, !1, i64 0, i64 0}\n!1 = !{!\"custom_tbaa_addrspace(3)\", !2, i64 0}\n!2 = !{!\"custom_tbaa\"}\n", "entry")::Core.Const(("; ModuleID = 'llvmcall'\nsource_filename = \"llvmcall\"\n\n; Function Attrs: alwaysinline\ndefine void @entry(ptr addrspace(3) %0, float %1, i64 %2) #0 {\nentry:\n  %3 = getelementptr inbounds float, ptr addrspace(3) %0, i64 %2\n  store float %1, ptr addrspace(3) %3, align 1, !tbaa !0\n  ret void\n}\n\nattributes #0 = { alwaysinline }\n\n!0 = !{!1, !1, i64 0, i64 0}\n!1 = !{!\"custom_tbaa_addrspace(3)\", !2, i64 0}\n!2 = !{!\"custom_tbaa\"}\n", "entry"))
+│   %6  = LLVM.Interop.convert::Core.Const(convert)
+│   %7  = $(Expr(:static_parameter, 1))::Core.Const(Float32)
+│   %8  =   dynamic (%6)(%7, x)::Float32
+│   %9  = LLVM.Interop.:-::Core.Const(-)
+│   %10 =   dynamic (%9)(i, 1)::Int64
+│   %11 = intrinsic (%4)(%5, Nothing, Tuple{Core.LLVMPtr{Float32, 3}, Float32, Int64}, ptr, %8, %10)::Core.Const(nothing)
+└──       return %11
+) => Nothing

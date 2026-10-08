@@ -1,0 +1,1 @@
+The first CPU suite launcher was deliberately terminated during GPU import/compilation, before warmed measurements. No validation child remained. The CPU suite is rerun after the sequential GPU measurements; this interrupted log is not an implementation failure or a completion gate.

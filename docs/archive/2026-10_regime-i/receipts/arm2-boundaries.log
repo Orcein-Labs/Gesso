@@ -1,0 +1,31 @@
+WARNING: Imported binding Gesso.PrefillWorkload was undeclared at import time during import to Inference.
+WARNING: Imported binding Gesso.DecodeWorkload was undeclared at import time during import to Inference.
+WARNING: Imported binding Gesso.KVCache was undeclared at import time during import to Inference.
+Test Summary:                                 | Pass  Total  Time
+load_llama_config: validates the micro config |    9      9  6.6s
+Test Summary:                                           | Pass  Total  Time
+config_to_model: composition is a Model, GQA-expressive |    8      8  0.2s
+Test Summary:                                   | Pass  Total  Time
+config refusals name the offending field (§LXX) |   21     21  5.1s
+Test Summary:                                    | Pass  Total  Time
+load_safetensors: all four dtypes upcast EXACTLY |    5      5  2.2s
+Test Summary:                                                     | Pass  Total  Time
+load_safetensors: unsupported dtype and bad span error with names |    3      3  0.1s
+Test Summary:                                                    | Pass  Total  Time
+load_llama end-to-end: prefill runs, deterministic, shapes right |   14     14  7.0s
+Test Summary:                                 | Pass  Total  Time
+load_llama: sharded checkpoint via weight_map |    3      3  0.1s
+Test Summary:                                                   | Pass  Total  Time
+load_llama: unknown / missing / untied keys error WITH THE NAME |    7      7  0.2s
+Test Summary:                                                                      | Pass  Total  Time
+materialize_llama: 0-based HF layers load; 1-based fixtures still load; mix errors |   12     12  0.1s
+Test Summary:                                                                        | Pass  Total  Time
+materialize_llama: leftover real weight still errors; rotary_emb.inv_freq is ignored |    8      8  0.0s
+Test Summary:                                                            | Pass  Total  Time
+materialize_llama: absent model.norm ⇒ final_rms is nothing (toy2 shape) |    1      1  0.0s
+Test Summary:                                                     | Pass  Total  Time
+gqa micro checkpoint: interpreter GQA path matches repeat formula |    1      1  0.8s
+Test Summary:                                           | Pass  Total  Time
+Safetensors C-order coordinates (Regime I arm 1 repair) |    7      7  1.8s
+Test Summary:                         | Pass  Total  Time
+Regime I strict checkpoint boundaries |   40     40  3.4s

@@ -1,0 +1,23 @@
+WARNING: Imported binding Gesso.PrefillWorkload was undeclared at import time during import to Inference.
+WARNING: Imported binding Gesso.DecodeWorkload was undeclared at import time during import to Inference.
+WARNING: Imported binding Gesso.KVCache was undeclared at import time during import to Inference.
+┌ Info: Warmed CUDA decode allocation
+└   bytes = 2613152
+ERROR: LoadError: Some tests did not pass: 8 passed, 1 failed, 0 errored, 0 broken.
+in expression starting at /home/mattc/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/gesso/test/regime_i_cuda.jl:9
+Regime I CUDA real-model parity and memory: Test Failed at /home/mattc/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/gesso/test/regime_i_cuda.jl:25
+  Expression: bytes <= 1024 ^ 2
+   Evaluated: 2613152 <= 1048576
+
+Stacktrace:
+ [1] macro expansion
+   @ ~/.julia/juliaup/julia-1.12.6+0.x64.linux.gnu/share/julia/stdlib/v1.12/Test/src/Test.jl:680 [inlined]
+ [2] macro expansion
+   @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/gesso/test/regime_i_cuda.jl:25 [inlined]
+ [3] macro expansion
+   @ ~/.julia/juliaup/julia-1.12.6+0.x64.linux.gnu/share/julia/stdlib/v1.12/Test/src/Test.jl:1777 [inlined]
+ [4] top-level scope
+   @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/gesso/test/regime_i_cuda.jl:10
+Test Summary:                              | Pass  Fail  Total     Time
+Regime I CUDA real-model parity and memory |    8     1      9  1m48.1s
+RNG of the outermost testset: Random.Xoshiro(0x11fe8bada693a8d8, 0x112d3afe78cc7c02, 0xe6ee3c9b8d754851, 0x54a043bf73ae9c05, 0x188f45eefe09ca96)

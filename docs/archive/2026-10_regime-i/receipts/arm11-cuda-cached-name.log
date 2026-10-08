@@ -1,0 +1,20 @@
+WARNING: Imported binding Gesso.PrefillWorkload was undeclared at import time during import to Inference.
+WARNING: Imported binding Gesso.DecodeWorkload was undeclared at import time during import to Inference.
+WARNING: Imported binding Gesso.KVCache was undeclared at import time during import to Inference.
+┌ Info: Warmed comparison
+│   backend = "cuda"
+│   prompt = "Hello"
+│   seconds = 0.267547701
+└   allocation = 1074608
+┌ Info: Warmed comparison
+│   backend = "cuda"
+│   prompt = "The quick brown fox"
+│   seconds = 0.287085274
+└   allocation = 1074688
+┌ Info: Warmed comparison
+│   backend = "cuda"
+│   prompt = "Julia is a programming language."
+│   seconds = 0.275353523
+└   allocation = 1074608
+Test Summary:                               | Pass  Total     Time
+Warmed cuda ordinary performance comparison |   27     27  1m41.7s

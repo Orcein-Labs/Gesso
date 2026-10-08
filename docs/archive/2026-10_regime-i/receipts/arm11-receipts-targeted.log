@@ -1,0 +1,16 @@
+WARNING: Imported binding Gesso.PrefillWorkload was undeclared at import time during import to Inference.
+WARNING: Imported binding Gesso.DecodeWorkload was undeclared at import time during import to Inference.
+WARNING: Imported binding Gesso.KVCache was undeclared at import time during import to Inference.
+[warn] 2026-10-07 19:08:54 receipt_sink_overflow capacity=3
+[warn] 2026-10-07 19:08:56 receipt_sink_overflow capacity=256
+[warn] 2026-10-07 19:08:57 receipt_sink_overflow capacity=4
+Test Summary:                                     | Pass  Total  Time
+receipts (§XLII): construction + schema stability |   20     20  0.2s
+Test Summary:                             | Pass  Total  Time
+receipts (§XLII): bounded ring saturation |    5      5  0.5s
+Test Summary:                                 | Pass  Total  Time
+receipts (§XLII): no-throw delivery guarantee |    5      5  1.3s
+Test Summary:                 | Pass  Total  Time
+receipts (§XLII): concurrency |    4      4  0.8s
+Test Summary:                                        | Pass  Total  Time
+Bounded receipt storage stays stable across overflow |    3      3  0.2s

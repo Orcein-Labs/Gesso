@@ -1,0 +1,67 @@
+{
+  "schema": "gesso-final-integration-repair-v1",
+  "initial_host_suite": {
+    "pass": 3108,
+    "fail": 5,
+    "broken": 3,
+    "receipt": "arm12-host-integration-five-failures.log"
+  },
+  "rejected_cuda_native_normalization": {
+    "maximum_toy_delta": 0.00134464,
+    "unchanged_tolerance": 0.001,
+    "receipt": "arm12-cuda-normalization-targeted.log"
+  },
+  "accepted_cuda_normalization": "legacy Float64 normalization intermediates, Float32 storage; primary Lava remains native Float32",
+  "cpu_receipt_profile": "arm12-combined-cpu-profile.log",
+  "cuda_allocation_profile": {
+    "bytes": 1051552,
+    "ceiling": 1048576,
+    "receipt": "arm12-cuda-combined-allocation-profile.log"
+  },
+  "accepted_repairs": [
+    "emit once within the concrete receipt finish boundary rather than returning boxed immutable Receipt across two boundaries",
+    "array-only CUDA storage validation boundary with unchanged storage/dtype/view rules",
+    "array-only CUDA rotary launch boundary; same kernels, arithmetic, transfers and launches",
+    "pass the existing receipt sink separately into the finish barrier to eliminate its final 192-byte immutable Receipt box"
+  ],
+  "targeted_combined_checks": {
+    "decode_scratch_pass": 21,
+    "toy_delta": 0.000771309037759238,
+    "tolerance": 0.001,
+    "allocation_ceilings_unchanged": true,
+    "receipt": "arm12-combined-targeted-rotary-barrier.log",
+    "exit_code": 0
+  },
+  "full_cpu_final": {
+    "pass": 2772,
+    "fail": 0,
+    "broken": 21,
+    "receipt": "arm12-cpu-final.log",
+    "exit_code": 0
+  },
+  "fresh_cpu_final": {
+    "pass": 13,
+    "receipt": "arm12-fresh-cpu-final.log",
+    "exit_code": 0
+  },
+  "final_host_suite": {
+    "pass": 3113,
+    "fail": 0,
+    "broken": 3,
+    "device_skips": 0,
+    "receipt": "arm12-host-full.log",
+    "exit_code": 0
+  },
+  "source_sha256": {
+    "src/Inference/session.jl": "d30ac96694dbbba518b1793f93cf595a48bcedad5e37422ce8d1bf530a7a1dd1",
+    "ext/cuda_ops.jl": "d6e0cf9ffd366e97902cfed8f3ecf3bb83c22ca6ed864532b0c022187a37359e"
+  },
+  "second_host_suite": {
+    "pass": 3112,
+    "fail": 1,
+    "broken": 3,
+    "receipt": "arm12-host-integration-one-failure.log",
+    "cpu_decode_bytes": 16416,
+    "cpu_ceiling_bytes": 16384
+  }
+}

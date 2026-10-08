@@ -1,0 +1,747 @@
+WARNING: Imported binding Gesso.PrefillWorkload was undeclared at import time during import to Inference.
+WARNING: Imported binding Gesso.DecodeWorkload was undeclared at import time during import to Inference.
+WARNING: Imported binding Gesso.KVCache was undeclared at import time during import to Inference.
+Regime I real-model memory lifecycle: Error During Test at /home/mattc/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/gesso/test/regime_i_probe.jl:50
+  Test threw exception
+  Expression: Gesso.page_count(s.mgr) == pages
+  UndefVarError: `page_count` not defined in `Gesso`
+  Suggestion: check for spelling errors or missing imports.
+  Stacktrace:
+   [1] getproperty(x::Module, f::Symbol)
+     @ Base ./Base_compiler.jl:47
+   [2] top-level scope
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/gesso/test/regime_i_probe.jl:41
+   [3] macro expansion
+     @ ~/.julia/juliaup/julia-1.12.6+0.x64.linux.gnu/share/julia/stdlib/v1.12/Test/src/Test.jl:1777 [inlined]
+   [4] macro expansion
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/gesso/test/regime_i_probe.jl:50 [inlined]
+   [5] macro expansion
+     @ ~/.julia/juliaup/julia-1.12.6+0.x64.linux.gnu/share/julia/stdlib/v1.12/Test/src/Test.jl:677 [inlined]
+Regime I real-model memory lifecycle: Error During Test at /home/mattc/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/gesso/test/regime_i_probe.jl:51
+  Test threw exception
+  Expression: Gesso.kv_bytes(s.mgr) == pages * s.page_size * s.n_kv_heads * s.d_head * sizeof(Float64)
+  UndefVarError: `kv_bytes` not defined in `Gesso`
+  Suggestion: check for spelling errors or missing imports.
+  Stacktrace:
+   [1] getproperty(x::Module, f::Symbol)
+     @ Base ./Base_compiler.jl:47
+   [2] top-level scope
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/gesso/test/regime_i_probe.jl:41
+   [3] macro expansion
+     @ ~/.julia/juliaup/julia-1.12.6+0.x64.linux.gnu/share/julia/stdlib/v1.12/Test/src/Test.jl:1777 [inlined]
+   [4] macro expansion
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/gesso/test/regime_i_probe.jl:51 [inlined]
+   [5] macro expansion
+     @ ~/.julia/juliaup/julia-1.12.6+0.x64.linux.gnu/share/julia/stdlib/v1.12/Test/src/Test.jl:677 [inlined]
+Regime I real-model memory lifecycle: Error During Test at /home/mattc/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/gesso/test/regime_i_probe.jl:52
+  Test threw exception
+  Expression: all((Gesso.filled_len(s.mgr, l, k) == s.seqlen for l = 1:length(model.blocks), k = (:k, :v)))
+  UndefVarError: `filled_len` not defined in `Gesso`
+  Suggestion: check for spelling errors or missing imports.
+  Stacktrace:
+    [1] getproperty
+      @ ./Base_compiler.jl:47 [inlined]
+    [2] (::var"#3#4"{Session})(::Tuple{Int64, Symbol})
+      @ Main ./none:-1
+    [3] iterate
+      @ ./generator.jl:48 [inlined]
+    [4] _all
+      @ ./anyall.jl:196 [inlined]
+    [5] all
+      @ ./anyall.jl:188 [inlined]
+    [6] all(itr::Base.Generator{Base.Iterators.ProductIterator{Tuple{UnitRange{Int64}, Tuple{Symbol, Symbol}}}, var"#3#4"{Session}})
+      @ Base ./anyall.jl:80
+    [7] top-level scope
+      @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/gesso/test/regime_i_probe.jl:41
+    [8] macro expansion
+      @ ~/.julia/juliaup/julia-1.12.6+0.x64.linux.gnu/share/julia/stdlib/v1.12/Test/src/Test.jl:1777 [inlined]
+    [9] macro expansion
+      @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/gesso/test/regime_i_probe.jl:52 [inlined]
+   [10] macro expansion
+      @ ~/.julia/juliaup/julia-1.12.6+0.x64.linux.gnu/share/julia/stdlib/v1.12/Test/src/Test.jl:677 [inlined]
+   [11] macro expansion
+      @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/gesso/test/regime_i_probe.jl:52 [inlined]
+Regime I real-model memory lifecycle: Error During Test at /home/mattc/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/gesso/test/regime_i_probe.jl:50
+  Test threw exception
+  Expression: Gesso.page_count(s.mgr) == pages
+  UndefVarError: `page_count` not defined in `Gesso`
+  Suggestion: check for spelling errors or missing imports.
+  Stacktrace:
+   [1] getproperty(x::Module, f::Symbol)
+     @ Base ./Base_compiler.jl:47
+   [2] top-level scope
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/gesso/test/regime_i_probe.jl:41
+   [3] macro expansion
+     @ ~/.julia/juliaup/julia-1.12.6+0.x64.linux.gnu/share/julia/stdlib/v1.12/Test/src/Test.jl:1777 [inlined]
+   [4] macro expansion
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/gesso/test/regime_i_probe.jl:50 [inlined]
+   [5] macro expansion
+     @ ~/.julia/juliaup/julia-1.12.6+0.x64.linux.gnu/share/julia/stdlib/v1.12/Test/src/Test.jl:677 [inlined]
+Regime I real-model memory lifecycle: Error During Test at /home/mattc/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/gesso/test/regime_i_probe.jl:51
+  Test threw exception
+  Expression: Gesso.kv_bytes(s.mgr) == pages * s.page_size * s.n_kv_heads * s.d_head * sizeof(Float64)
+  UndefVarError: `kv_bytes` not defined in `Gesso`
+  Suggestion: check for spelling errors or missing imports.
+  Stacktrace:
+   [1] getproperty(x::Module, f::Symbol)
+     @ Base ./Base_compiler.jl:47
+   [2] top-level scope
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/gesso/test/regime_i_probe.jl:41
+   [3] macro expansion
+     @ ~/.julia/juliaup/julia-1.12.6+0.x64.linux.gnu/share/julia/stdlib/v1.12/Test/src/Test.jl:1777 [inlined]
+   [4] macro expansion
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/gesso/test/regime_i_probe.jl:51 [inlined]
+   [5] macro expansion
+     @ ~/.julia/juliaup/julia-1.12.6+0.x64.linux.gnu/share/julia/stdlib/v1.12/Test/src/Test.jl:677 [inlined]
+Regime I real-model memory lifecycle: Error During Test at /home/mattc/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/gesso/test/regime_i_probe.jl:52
+  Test threw exception
+  Expression: all((Gesso.filled_len(s.mgr, l, k) == s.seqlen for l = 1:length(model.blocks), k = (:k, :v)))
+  UndefVarError: `filled_len` not defined in `Gesso`
+  Suggestion: check for spelling errors or missing imports.
+  Stacktrace:
+    [1] getproperty
+      @ ./Base_compiler.jl:47 [inlined]
+    [2] (::var"#3#4"{Session})(::Tuple{Int64, Symbol})
+      @ Main ./none:-1
+    [3] iterate
+      @ ./generator.jl:48 [inlined]
+    [4] _all
+      @ ./anyall.jl:196 [inlined]
+    [5] all
+      @ ./anyall.jl:188 [inlined]
+    [6] all(itr::Base.Generator{Base.Iterators.ProductIterator{Tuple{UnitRange{Int64}, Tuple{Symbol, Symbol}}}, var"#3#4"{Session}})
+      @ Base ./anyall.jl:80
+    [7] top-level scope
+      @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/gesso/test/regime_i_probe.jl:41
+    [8] macro expansion
+      @ ~/.julia/juliaup/julia-1.12.6+0.x64.linux.gnu/share/julia/stdlib/v1.12/Test/src/Test.jl:1777 [inlined]
+    [9] macro expansion
+      @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/gesso/test/regime_i_probe.jl:52 [inlined]
+   [10] macro expansion
+      @ ~/.julia/juliaup/julia-1.12.6+0.x64.linux.gnu/share/julia/stdlib/v1.12/Test/src/Test.jl:677 [inlined]
+   [11] macro expansion
+      @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/gesso/test/regime_i_probe.jl:52 [inlined]
+Regime I real-model memory lifecycle: Error During Test at /home/mattc/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/gesso/test/regime_i_probe.jl:50
+  Test threw exception
+  Expression: Gesso.page_count(s.mgr) == pages
+  UndefVarError: `page_count` not defined in `Gesso`
+  Suggestion: check for spelling errors or missing imports.
+  Stacktrace:
+   [1] getproperty(x::Module, f::Symbol)
+     @ Base ./Base_compiler.jl:47
+   [2] top-level scope
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/gesso/test/regime_i_probe.jl:41
+   [3] macro expansion
+     @ ~/.julia/juliaup/julia-1.12.6+0.x64.linux.gnu/share/julia/stdlib/v1.12/Test/src/Test.jl:1777 [inlined]
+   [4] macro expansion
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/gesso/test/regime_i_probe.jl:50 [inlined]
+   [5] macro expansion
+     @ ~/.julia/juliaup/julia-1.12.6+0.x64.linux.gnu/share/julia/stdlib/v1.12/Test/src/Test.jl:677 [inlined]
+Regime I real-model memory lifecycle: Error During Test at /home/mattc/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/gesso/test/regime_i_probe.jl:51
+  Test threw exception
+  Expression: Gesso.kv_bytes(s.mgr) == pages * s.page_size * s.n_kv_heads * s.d_head * sizeof(Float64)
+  UndefVarError: `kv_bytes` not defined in `Gesso`
+  Suggestion: check for spelling errors or missing imports.
+  Stacktrace:
+   [1] getproperty(x::Module, f::Symbol)
+     @ Base ./Base_compiler.jl:47
+   [2] top-level scope
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/gesso/test/regime_i_probe.jl:41
+   [3] macro expansion
+     @ ~/.julia/juliaup/julia-1.12.6+0.x64.linux.gnu/share/julia/stdlib/v1.12/Test/src/Test.jl:1777 [inlined]
+   [4] macro expansion
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/gesso/test/regime_i_probe.jl:51 [inlined]
+   [5] macro expansion
+     @ ~/.julia/juliaup/julia-1.12.6+0.x64.linux.gnu/share/julia/stdlib/v1.12/Test/src/Test.jl:677 [inlined]
+Regime I real-model memory lifecycle: Error During Test at /home/mattc/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/gesso/test/regime_i_probe.jl:52
+  Test threw exception
+  Expression: all((Gesso.filled_len(s.mgr, l, k) == s.seqlen for l = 1:length(model.blocks), k = (:k, :v)))
+  UndefVarError: `filled_len` not defined in `Gesso`
+  Suggestion: check for spelling errors or missing imports.
+  Stacktrace:
+    [1] getproperty
+      @ ./Base_compiler.jl:47 [inlined]
+    [2] (::var"#3#4"{Session})(::Tuple{Int64, Symbol})
+      @ Main ./none:-1
+    [3] iterate
+      @ ./generator.jl:48 [inlined]
+    [4] _all
+      @ ./anyall.jl:196 [inlined]
+    [5] all
+      @ ./anyall.jl:188 [inlined]
+    [6] all(itr::Base.Generator{Base.Iterators.ProductIterator{Tuple{UnitRange{Int64}, Tuple{Symbol, Symbol}}}, var"#3#4"{Session}})
+      @ Base ./anyall.jl:80
+    [7] top-level scope
+      @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/gesso/test/regime_i_probe.jl:41
+    [8] macro expansion
+      @ ~/.julia/juliaup/julia-1.12.6+0.x64.linux.gnu/share/julia/stdlib/v1.12/Test/src/Test.jl:1777 [inlined]
+    [9] macro expansion
+      @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/gesso/test/regime_i_probe.jl:52 [inlined]
+   [10] macro expansion
+      @ ~/.julia/juliaup/julia-1.12.6+0.x64.linux.gnu/share/julia/stdlib/v1.12/Test/src/Test.jl:677 [inlined]
+   [11] macro expansion
+      @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/gesso/test/regime_i_probe.jl:52 [inlined]
+Regime I real-model memory lifecycle: Error During Test at /home/mattc/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/gesso/test/regime_i_probe.jl:50
+  Test threw exception
+  Expression: Gesso.page_count(s.mgr) == pages
+  UndefVarError: `page_count` not defined in `Gesso`
+  Suggestion: check for spelling errors or missing imports.
+  Stacktrace:
+   [1] getproperty(x::Module, f::Symbol)
+     @ Base ./Base_compiler.jl:47
+   [2] top-level scope
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/gesso/test/regime_i_probe.jl:41
+   [3] macro expansion
+     @ ~/.julia/juliaup/julia-1.12.6+0.x64.linux.gnu/share/julia/stdlib/v1.12/Test/src/Test.jl:1777 [inlined]
+   [4] macro expansion
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/gesso/test/regime_i_probe.jl:50 [inlined]
+   [5] macro expansion
+     @ ~/.julia/juliaup/julia-1.12.6+0.x64.linux.gnu/share/julia/stdlib/v1.12/Test/src/Test.jl:677 [inlined]
+Regime I real-model memory lifecycle: Error During Test at /home/mattc/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/gesso/test/regime_i_probe.jl:51
+  Test threw exception
+  Expression: Gesso.kv_bytes(s.mgr) == pages * s.page_size * s.n_kv_heads * s.d_head * sizeof(Float64)
+  UndefVarError: `kv_bytes` not defined in `Gesso`
+  Suggestion: check for spelling errors or missing imports.
+  Stacktrace:
+   [1] getproperty(x::Module, f::Symbol)
+     @ Base ./Base_compiler.jl:47
+   [2] top-level scope
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/gesso/test/regime_i_probe.jl:41
+   [3] macro expansion
+     @ ~/.julia/juliaup/julia-1.12.6+0.x64.linux.gnu/share/julia/stdlib/v1.12/Test/src/Test.jl:1777 [inlined]
+   [4] macro expansion
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/gesso/test/regime_i_probe.jl:51 [inlined]
+   [5] macro expansion
+     @ ~/.julia/juliaup/julia-1.12.6+0.x64.linux.gnu/share/julia/stdlib/v1.12/Test/src/Test.jl:677 [inlined]
+Regime I real-model memory lifecycle: Error During Test at /home/mattc/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/gesso/test/regime_i_probe.jl:52
+  Test threw exception
+  Expression: all((Gesso.filled_len(s.mgr, l, k) == s.seqlen for l = 1:length(model.blocks), k = (:k, :v)))
+  UndefVarError: `filled_len` not defined in `Gesso`
+  Suggestion: check for spelling errors or missing imports.
+  Stacktrace:
+    [1] getproperty
+      @ ./Base_compiler.jl:47 [inlined]
+    [2] (::var"#3#4"{Session})(::Tuple{Int64, Symbol})
+      @ Main ./none:-1
+    [3] iterate
+      @ ./generator.jl:48 [inlined]
+    [4] _all
+      @ ./anyall.jl:196 [inlined]
+    [5] all
+      @ ./anyall.jl:188 [inlined]
+    [6] all(itr::Base.Generator{Base.Iterators.ProductIterator{Tuple{UnitRange{Int64}, Tuple{Symbol, Symbol}}}, var"#3#4"{Session}})
+      @ Base ./anyall.jl:80
+    [7] top-level scope
+      @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/gesso/test/regime_i_probe.jl:41
+    [8] macro expansion
+      @ ~/.julia/juliaup/julia-1.12.6+0.x64.linux.gnu/share/julia/stdlib/v1.12/Test/src/Test.jl:1777 [inlined]
+    [9] macro expansion
+      @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/gesso/test/regime_i_probe.jl:52 [inlined]
+   [10] macro expansion
+      @ ~/.julia/juliaup/julia-1.12.6+0.x64.linux.gnu/share/julia/stdlib/v1.12/Test/src/Test.jl:677 [inlined]
+   [11] macro expansion
+      @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/gesso/test/regime_i_probe.jl:52 [inlined]
+Regime I real-model memory lifecycle: Error During Test at /home/mattc/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/gesso/test/regime_i_probe.jl:50
+  Test threw exception
+  Expression: Gesso.page_count(s.mgr) == pages
+  UndefVarError: `page_count` not defined in `Gesso`
+  Suggestion: check for spelling errors or missing imports.
+  Stacktrace:
+   [1] getproperty(x::Module, f::Symbol)
+     @ Base ./Base_compiler.jl:47
+   [2] top-level scope
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/gesso/test/regime_i_probe.jl:41
+   [3] macro expansion
+     @ ~/.julia/juliaup/julia-1.12.6+0.x64.linux.gnu/share/julia/stdlib/v1.12/Test/src/Test.jl:1777 [inlined]
+   [4] macro expansion
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/gesso/test/regime_i_probe.jl:50 [inlined]
+   [5] macro expansion
+     @ ~/.julia/juliaup/julia-1.12.6+0.x64.linux.gnu/share/julia/stdlib/v1.12/Test/src/Test.jl:677 [inlined]
+Regime I real-model memory lifecycle: Error During Test at /home/mattc/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/gesso/test/regime_i_probe.jl:51
+  Test threw exception
+  Expression: Gesso.kv_bytes(s.mgr) == pages * s.page_size * s.n_kv_heads * s.d_head * sizeof(Float64)
+  UndefVarError: `kv_bytes` not defined in `Gesso`
+  Suggestion: check for spelling errors or missing imports.
+  Stacktrace:
+   [1] getproperty(x::Module, f::Symbol)
+     @ Base ./Base_compiler.jl:47
+   [2] top-level scope
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/gesso/test/regime_i_probe.jl:41
+   [3] macro expansion
+     @ ~/.julia/juliaup/julia-1.12.6+0.x64.linux.gnu/share/julia/stdlib/v1.12/Test/src/Test.jl:1777 [inlined]
+   [4] macro expansion
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/gesso/test/regime_i_probe.jl:51 [inlined]
+   [5] macro expansion
+     @ ~/.julia/juliaup/julia-1.12.6+0.x64.linux.gnu/share/julia/stdlib/v1.12/Test/src/Test.jl:677 [inlined]
+Regime I real-model memory lifecycle: Error During Test at /home/mattc/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/gesso/test/regime_i_probe.jl:52
+  Test threw exception
+  Expression: all((Gesso.filled_len(s.mgr, l, k) == s.seqlen for l = 1:length(model.blocks), k = (:k, :v)))
+  UndefVarError: `filled_len` not defined in `Gesso`
+  Suggestion: check for spelling errors or missing imports.
+  Stacktrace:
+    [1] getproperty
+      @ ./Base_compiler.jl:47 [inlined]
+    [2] (::var"#3#4"{Session})(::Tuple{Int64, Symbol})
+      @ Main ./none:-1
+    [3] iterate
+      @ ./generator.jl:48 [inlined]
+    [4] _all
+      @ ./anyall.jl:196 [inlined]
+    [5] all
+      @ ./anyall.jl:188 [inlined]
+    [6] all(itr::Base.Generator{Base.Iterators.ProductIterator{Tuple{UnitRange{Int64}, Tuple{Symbol, Symbol}}}, var"#3#4"{Session}})
+      @ Base ./anyall.jl:80
+    [7] top-level scope
+      @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/gesso/test/regime_i_probe.jl:41
+    [8] macro expansion
+      @ ~/.julia/juliaup/julia-1.12.6+0.x64.linux.gnu/share/julia/stdlib/v1.12/Test/src/Test.jl:1777 [inlined]
+    [9] macro expansion
+      @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/gesso/test/regime_i_probe.jl:52 [inlined]
+   [10] macro expansion
+      @ ~/.julia/juliaup/julia-1.12.6+0.x64.linux.gnu/share/julia/stdlib/v1.12/Test/src/Test.jl:677 [inlined]
+   [11] macro expansion
+      @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/gesso/test/regime_i_probe.jl:52 [inlined]
+Regime I real-model memory lifecycle: Error During Test at /home/mattc/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/gesso/test/regime_i_probe.jl:50
+  Test threw exception
+  Expression: Gesso.page_count(s.mgr) == pages
+  UndefVarError: `page_count` not defined in `Gesso`
+  Suggestion: check for spelling errors or missing imports.
+  Stacktrace:
+   [1] getproperty(x::Module, f::Symbol)
+     @ Base ./Base_compiler.jl:47
+   [2] top-level scope
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/gesso/test/regime_i_probe.jl:41
+   [3] macro expansion
+     @ ~/.julia/juliaup/julia-1.12.6+0.x64.linux.gnu/share/julia/stdlib/v1.12/Test/src/Test.jl:1777 [inlined]
+   [4] macro expansion
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/gesso/test/regime_i_probe.jl:50 [inlined]
+   [5] macro expansion
+     @ ~/.julia/juliaup/julia-1.12.6+0.x64.linux.gnu/share/julia/stdlib/v1.12/Test/src/Test.jl:677 [inlined]
+Regime I real-model memory lifecycle: Error During Test at /home/mattc/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/gesso/test/regime_i_probe.jl:51
+  Test threw exception
+  Expression: Gesso.kv_bytes(s.mgr) == pages * s.page_size * s.n_kv_heads * s.d_head * sizeof(Float64)
+  UndefVarError: `kv_bytes` not defined in `Gesso`
+  Suggestion: check for spelling errors or missing imports.
+  Stacktrace:
+   [1] getproperty(x::Module, f::Symbol)
+     @ Base ./Base_compiler.jl:47
+   [2] top-level scope
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/gesso/test/regime_i_probe.jl:41
+   [3] macro expansion
+     @ ~/.julia/juliaup/julia-1.12.6+0.x64.linux.gnu/share/julia/stdlib/v1.12/Test/src/Test.jl:1777 [inlined]
+   [4] macro expansion
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/gesso/test/regime_i_probe.jl:51 [inlined]
+   [5] macro expansion
+     @ ~/.julia/juliaup/julia-1.12.6+0.x64.linux.gnu/share/julia/stdlib/v1.12/Test/src/Test.jl:677 [inlined]
+Regime I real-model memory lifecycle: Error During Test at /home/mattc/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/gesso/test/regime_i_probe.jl:52
+  Test threw exception
+  Expression: all((Gesso.filled_len(s.mgr, l, k) == s.seqlen for l = 1:length(model.blocks), k = (:k, :v)))
+  UndefVarError: `filled_len` not defined in `Gesso`
+  Suggestion: check for spelling errors or missing imports.
+  Stacktrace:
+    [1] getproperty
+      @ ./Base_compiler.jl:47 [inlined]
+    [2] (::var"#3#4"{Session})(::Tuple{Int64, Symbol})
+      @ Main ./none:-1
+    [3] iterate
+      @ ./generator.jl:48 [inlined]
+    [4] _all
+      @ ./anyall.jl:196 [inlined]
+    [5] all
+      @ ./anyall.jl:188 [inlined]
+    [6] all(itr::Base.Generator{Base.Iterators.ProductIterator{Tuple{UnitRange{Int64}, Tuple{Symbol, Symbol}}}, var"#3#4"{Session}})
+      @ Base ./anyall.jl:80
+    [7] top-level scope
+      @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/gesso/test/regime_i_probe.jl:41
+    [8] macro expansion
+      @ ~/.julia/juliaup/julia-1.12.6+0.x64.linux.gnu/share/julia/stdlib/v1.12/Test/src/Test.jl:1777 [inlined]
+    [9] macro expansion
+      @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/gesso/test/regime_i_probe.jl:52 [inlined]
+   [10] macro expansion
+      @ ~/.julia/juliaup/julia-1.12.6+0.x64.linux.gnu/share/julia/stdlib/v1.12/Test/src/Test.jl:677 [inlined]
+   [11] macro expansion
+      @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/gesso/test/regime_i_probe.jl:52 [inlined]
+Regime I real-model memory lifecycle: Error During Test at /home/mattc/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/gesso/test/regime_i_probe.jl:50
+  Test threw exception
+  Expression: Gesso.page_count(s.mgr) == pages
+  UndefVarError: `page_count` not defined in `Gesso`
+  Suggestion: check for spelling errors or missing imports.
+  Stacktrace:
+   [1] getproperty(x::Module, f::Symbol)
+     @ Base ./Base_compiler.jl:47
+   [2] top-level scope
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/gesso/test/regime_i_probe.jl:41
+   [3] macro expansion
+     @ ~/.julia/juliaup/julia-1.12.6+0.x64.linux.gnu/share/julia/stdlib/v1.12/Test/src/Test.jl:1777 [inlined]
+   [4] macro expansion
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/gesso/test/regime_i_probe.jl:50 [inlined]
+   [5] macro expansion
+     @ ~/.julia/juliaup/julia-1.12.6+0.x64.linux.gnu/share/julia/stdlib/v1.12/Test/src/Test.jl:677 [inlined]
+Regime I real-model memory lifecycle: Error During Test at /home/mattc/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/gesso/test/regime_i_probe.jl:51
+  Test threw exception
+  Expression: Gesso.kv_bytes(s.mgr) == pages * s.page_size * s.n_kv_heads * s.d_head * sizeof(Float64)
+  UndefVarError: `kv_bytes` not defined in `Gesso`
+  Suggestion: check for spelling errors or missing imports.
+  Stacktrace:
+   [1] getproperty(x::Module, f::Symbol)
+     @ Base ./Base_compiler.jl:47
+   [2] top-level scope
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/gesso/test/regime_i_probe.jl:41
+   [3] macro expansion
+     @ ~/.julia/juliaup/julia-1.12.6+0.x64.linux.gnu/share/julia/stdlib/v1.12/Test/src/Test.jl:1777 [inlined]
+   [4] macro expansion
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/gesso/test/regime_i_probe.jl:51 [inlined]
+   [5] macro expansion
+     @ ~/.julia/juliaup/julia-1.12.6+0.x64.linux.gnu/share/julia/stdlib/v1.12/Test/src/Test.jl:677 [inlined]
+Regime I real-model memory lifecycle: Error During Test at /home/mattc/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/gesso/test/regime_i_probe.jl:52
+  Test threw exception
+  Expression: all((Gesso.filled_len(s.mgr, l, k) == s.seqlen for l = 1:length(model.blocks), k = (:k, :v)))
+  UndefVarError: `filled_len` not defined in `Gesso`
+  Suggestion: check for spelling errors or missing imports.
+  Stacktrace:
+    [1] getproperty
+      @ ./Base_compiler.jl:47 [inlined]
+    [2] (::var"#3#4"{Session})(::Tuple{Int64, Symbol})
+      @ Main ./none:-1
+    [3] iterate
+      @ ./generator.jl:48 [inlined]
+    [4] _all
+      @ ./anyall.jl:196 [inlined]
+    [5] all
+      @ ./anyall.jl:188 [inlined]
+    [6] all(itr::Base.Generator{Base.Iterators.ProductIterator{Tuple{UnitRange{Int64}, Tuple{Symbol, Symbol}}}, var"#3#4"{Session}})
+      @ Base ./anyall.jl:80
+    [7] top-level scope
+      @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/gesso/test/regime_i_probe.jl:41
+    [8] macro expansion
+      @ ~/.julia/juliaup/julia-1.12.6+0.x64.linux.gnu/share/julia/stdlib/v1.12/Test/src/Test.jl:1777 [inlined]
+    [9] macro expansion
+      @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/gesso/test/regime_i_probe.jl:52 [inlined]
+   [10] macro expansion
+      @ ~/.julia/juliaup/julia-1.12.6+0.x64.linux.gnu/share/julia/stdlib/v1.12/Test/src/Test.jl:677 [inlined]
+   [11] macro expansion
+      @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/gesso/test/regime_i_probe.jl:52 [inlined]
+Regime I real-model memory lifecycle: Error During Test at /home/mattc/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/gesso/test/regime_i_probe.jl:50
+  Test threw exception
+  Expression: Gesso.page_count(s.mgr) == pages
+  UndefVarError: `page_count` not defined in `Gesso`
+  Suggestion: check for spelling errors or missing imports.
+  Stacktrace:
+   [1] getproperty(x::Module, f::Symbol)
+     @ Base ./Base_compiler.jl:47
+   [2] top-level scope
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/gesso/test/regime_i_probe.jl:41
+   [3] macro expansion
+     @ ~/.julia/juliaup/julia-1.12.6+0.x64.linux.gnu/share/julia/stdlib/v1.12/Test/src/Test.jl:1777 [inlined]
+   [4] macro expansion
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/gesso/test/regime_i_probe.jl:50 [inlined]
+   [5] macro expansion
+     @ ~/.julia/juliaup/julia-1.12.6+0.x64.linux.gnu/share/julia/stdlib/v1.12/Test/src/Test.jl:677 [inlined]
+Regime I real-model memory lifecycle: Error During Test at /home/mattc/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/gesso/test/regime_i_probe.jl:51
+  Test threw exception
+  Expression: Gesso.kv_bytes(s.mgr) == pages * s.page_size * s.n_kv_heads * s.d_head * sizeof(Float64)
+  UndefVarError: `kv_bytes` not defined in `Gesso`
+  Suggestion: check for spelling errors or missing imports.
+  Stacktrace:
+   [1] getproperty(x::Module, f::Symbol)
+     @ Base ./Base_compiler.jl:47
+   [2] top-level scope
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/gesso/test/regime_i_probe.jl:41
+   [3] macro expansion
+     @ ~/.julia/juliaup/julia-1.12.6+0.x64.linux.gnu/share/julia/stdlib/v1.12/Test/src/Test.jl:1777 [inlined]
+   [4] macro expansion
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/gesso/test/regime_i_probe.jl:51 [inlined]
+   [5] macro expansion
+     @ ~/.julia/juliaup/julia-1.12.6+0.x64.linux.gnu/share/julia/stdlib/v1.12/Test/src/Test.jl:677 [inlined]
+Regime I real-model memory lifecycle: Error During Test at /home/mattc/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/gesso/test/regime_i_probe.jl:52
+  Test threw exception
+  Expression: all((Gesso.filled_len(s.mgr, l, k) == s.seqlen for l = 1:length(model.blocks), k = (:k, :v)))
+  UndefVarError: `filled_len` not defined in `Gesso`
+  Suggestion: check for spelling errors or missing imports.
+  Stacktrace:
+    [1] getproperty
+      @ ./Base_compiler.jl:47 [inlined]
+    [2] (::var"#3#4"{Session})(::Tuple{Int64, Symbol})
+      @ Main ./none:-1
+    [3] iterate
+      @ ./generator.jl:48 [inlined]
+    [4] _all
+      @ ./anyall.jl:196 [inlined]
+    [5] all
+      @ ./anyall.jl:188 [inlined]
+    [6] all(itr::Base.Generator{Base.Iterators.ProductIterator{Tuple{UnitRange{Int64}, Tuple{Symbol, Symbol}}}, var"#3#4"{Session}})
+      @ Base ./anyall.jl:80
+    [7] top-level scope
+      @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/gesso/test/regime_i_probe.jl:41
+    [8] macro expansion
+      @ ~/.julia/juliaup/julia-1.12.6+0.x64.linux.gnu/share/julia/stdlib/v1.12/Test/src/Test.jl:1777 [inlined]
+    [9] macro expansion
+      @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/gesso/test/regime_i_probe.jl:52 [inlined]
+   [10] macro expansion
+      @ ~/.julia/juliaup/julia-1.12.6+0.x64.linux.gnu/share/julia/stdlib/v1.12/Test/src/Test.jl:677 [inlined]
+   [11] macro expansion
+      @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/gesso/test/regime_i_probe.jl:52 [inlined]
+Regime I real-model memory lifecycle: Error During Test at /home/mattc/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/gesso/test/regime_i_probe.jl:50
+  Test threw exception
+  Expression: Gesso.page_count(s.mgr) == pages
+  UndefVarError: `page_count` not defined in `Gesso`
+  Suggestion: check for spelling errors or missing imports.
+  Stacktrace:
+   [1] getproperty(x::Module, f::Symbol)
+     @ Base ./Base_compiler.jl:47
+   [2] top-level scope
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/gesso/test/regime_i_probe.jl:41
+   [3] macro expansion
+     @ ~/.julia/juliaup/julia-1.12.6+0.x64.linux.gnu/share/julia/stdlib/v1.12/Test/src/Test.jl:1777 [inlined]
+   [4] macro expansion
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/gesso/test/regime_i_probe.jl:50 [inlined]
+   [5] macro expansion
+     @ ~/.julia/juliaup/julia-1.12.6+0.x64.linux.gnu/share/julia/stdlib/v1.12/Test/src/Test.jl:677 [inlined]
+Regime I real-model memory lifecycle: Error During Test at /home/mattc/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/gesso/test/regime_i_probe.jl:51
+  Test threw exception
+  Expression: Gesso.kv_bytes(s.mgr) == pages * s.page_size * s.n_kv_heads * s.d_head * sizeof(Float64)
+  UndefVarError: `kv_bytes` not defined in `Gesso`
+  Suggestion: check for spelling errors or missing imports.
+  Stacktrace:
+   [1] getproperty(x::Module, f::Symbol)
+     @ Base ./Base_compiler.jl:47
+   [2] top-level scope
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/gesso/test/regime_i_probe.jl:41
+   [3] macro expansion
+     @ ~/.julia/juliaup/julia-1.12.6+0.x64.linux.gnu/share/julia/stdlib/v1.12/Test/src/Test.jl:1777 [inlined]
+   [4] macro expansion
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/gesso/test/regime_i_probe.jl:51 [inlined]
+   [5] macro expansion
+     @ ~/.julia/juliaup/julia-1.12.6+0.x64.linux.gnu/share/julia/stdlib/v1.12/Test/src/Test.jl:677 [inlined]
+Regime I real-model memory lifecycle: Error During Test at /home/mattc/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/gesso/test/regime_i_probe.jl:52
+  Test threw exception
+  Expression: all((Gesso.filled_len(s.mgr, l, k) == s.seqlen for l = 1:length(model.blocks), k = (:k, :v)))
+  UndefVarError: `filled_len` not defined in `Gesso`
+  Suggestion: check for spelling errors or missing imports.
+  Stacktrace:
+    [1] getproperty
+      @ ./Base_compiler.jl:47 [inlined]
+    [2] (::var"#3#4"{Session})(::Tuple{Int64, Symbol})
+      @ Main ./none:-1
+    [3] iterate
+      @ ./generator.jl:48 [inlined]
+    [4] _all
+      @ ./anyall.jl:196 [inlined]
+    [5] all
+      @ ./anyall.jl:188 [inlined]
+    [6] all(itr::Base.Generator{Base.Iterators.ProductIterator{Tuple{UnitRange{Int64}, Tuple{Symbol, Symbol}}}, var"#3#4"{Session}})
+      @ Base ./anyall.jl:80
+    [7] top-level scope
+      @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/gesso/test/regime_i_probe.jl:41
+    [8] macro expansion
+      @ ~/.julia/juliaup/julia-1.12.6+0.x64.linux.gnu/share/julia/stdlib/v1.12/Test/src/Test.jl:1777 [inlined]
+    [9] macro expansion
+      @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/gesso/test/regime_i_probe.jl:52 [inlined]
+   [10] macro expansion
+      @ ~/.julia/juliaup/julia-1.12.6+0.x64.linux.gnu/share/julia/stdlib/v1.12/Test/src/Test.jl:677 [inlined]
+   [11] macro expansion
+ERROR: LoadError: Some tests did not pass: 29 passed, 0 failed, 37 errored, 0 broken.
+in expression starting at /home/mattc/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/gesso/test/regime_i_probe.jl:14
+      @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/gesso/test/regime_i_probe.jl:52 [inlined]
+Regime I real-model memory lifecycle: Error During Test at /home/mattc/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/gesso/test/regime_i_probe.jl:50
+  Test threw exception
+  Expression: Gesso.page_count(s.mgr) == pages
+  UndefVarError: `page_count` not defined in `Gesso`
+  Suggestion: check for spelling errors or missing imports.
+  Stacktrace:
+   [1] getproperty(x::Module, f::Symbol)
+     @ Base ./Base_compiler.jl:47
+   [2] top-level scope
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/gesso/test/regime_i_probe.jl:41
+   [3] macro expansion
+     @ ~/.julia/juliaup/julia-1.12.6+0.x64.linux.gnu/share/julia/stdlib/v1.12/Test/src/Test.jl:1777 [inlined]
+   [4] macro expansion
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/gesso/test/regime_i_probe.jl:50 [inlined]
+   [5] macro expansion
+     @ ~/.julia/juliaup/julia-1.12.6+0.x64.linux.gnu/share/julia/stdlib/v1.12/Test/src/Test.jl:677 [inlined]
+Regime I real-model memory lifecycle: Error During Test at /home/mattc/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/gesso/test/regime_i_probe.jl:51
+  Test threw exception
+  Expression: Gesso.kv_bytes(s.mgr) == pages * s.page_size * s.n_kv_heads * s.d_head * sizeof(Float64)
+  UndefVarError: `kv_bytes` not defined in `Gesso`
+  Suggestion: check for spelling errors or missing imports.
+  Stacktrace:
+   [1] getproperty(x::Module, f::Symbol)
+     @ Base ./Base_compiler.jl:47
+   [2] top-level scope
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/gesso/test/regime_i_probe.jl:41
+   [3] macro expansion
+     @ ~/.julia/juliaup/julia-1.12.6+0.x64.linux.gnu/share/julia/stdlib/v1.12/Test/src/Test.jl:1777 [inlined]
+   [4] macro expansion
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/gesso/test/regime_i_probe.jl:51 [inlined]
+   [5] macro expansion
+     @ ~/.julia/juliaup/julia-1.12.6+0.x64.linux.gnu/share/julia/stdlib/v1.12/Test/src/Test.jl:677 [inlined]
+Regime I real-model memory lifecycle: Error During Test at /home/mattc/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/gesso/test/regime_i_probe.jl:52
+  Test threw exception
+  Expression: all((Gesso.filled_len(s.mgr, l, k) == s.seqlen for l = 1:length(model.blocks), k = (:k, :v)))
+  UndefVarError: `filled_len` not defined in `Gesso`
+  Suggestion: check for spelling errors or missing imports.
+  Stacktrace:
+    [1] getproperty
+      @ ./Base_compiler.jl:47 [inlined]
+    [2] (::var"#3#4"{Session})(::Tuple{Int64, Symbol})
+      @ Main ./none:-1
+    [3] iterate
+      @ ./generator.jl:48 [inlined]
+    [4] _all
+      @ ./anyall.jl:196 [inlined]
+    [5] all
+      @ ./anyall.jl:188 [inlined]
+    [6] all(itr::Base.Generator{Base.Iterators.ProductIterator{Tuple{UnitRange{Int64}, Tuple{Symbol, Symbol}}}, var"#3#4"{Session}})
+      @ Base ./anyall.jl:80
+    [7] top-level scope
+      @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/gesso/test/regime_i_probe.jl:41
+    [8] macro expansion
+      @ ~/.julia/juliaup/julia-1.12.6+0.x64.linux.gnu/share/julia/stdlib/v1.12/Test/src/Test.jl:1777 [inlined]
+    [9] macro expansion
+      @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/gesso/test/regime_i_probe.jl:52 [inlined]
+   [10] macro expansion
+      @ ~/.julia/juliaup/julia-1.12.6+0.x64.linux.gnu/share/julia/stdlib/v1.12/Test/src/Test.jl:677 [inlined]
+   [11] macro expansion
+      @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/gesso/test/regime_i_probe.jl:52 [inlined]
+Regime I real-model memory lifecycle: Error During Test at /home/mattc/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/gesso/test/regime_i_probe.jl:50
+  Test threw exception
+  Expression: Gesso.page_count(s.mgr) == pages
+  UndefVarError: `page_count` not defined in `Gesso`
+  Suggestion: check for spelling errors or missing imports.
+  Stacktrace:
+   [1] getproperty(x::Module, f::Symbol)
+     @ Base ./Base_compiler.jl:47
+   [2] top-level scope
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/gesso/test/regime_i_probe.jl:41
+   [3] macro expansion
+     @ ~/.julia/juliaup/julia-1.12.6+0.x64.linux.gnu/share/julia/stdlib/v1.12/Test/src/Test.jl:1777 [inlined]
+   [4] macro expansion
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/gesso/test/regime_i_probe.jl:50 [inlined]
+   [5] macro expansion
+     @ ~/.julia/juliaup/julia-1.12.6+0.x64.linux.gnu/share/julia/stdlib/v1.12/Test/src/Test.jl:677 [inlined]
+Regime I real-model memory lifecycle: Error During Test at /home/mattc/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/gesso/test/regime_i_probe.jl:51
+  Test threw exception
+  Expression: Gesso.kv_bytes(s.mgr) == pages * s.page_size * s.n_kv_heads * s.d_head * sizeof(Float64)
+  UndefVarError: `kv_bytes` not defined in `Gesso`
+  Suggestion: check for spelling errors or missing imports.
+  Stacktrace:
+   [1] getproperty(x::Module, f::Symbol)
+     @ Base ./Base_compiler.jl:47
+   [2] top-level scope
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/gesso/test/regime_i_probe.jl:41
+   [3] macro expansion
+     @ ~/.julia/juliaup/julia-1.12.6+0.x64.linux.gnu/share/julia/stdlib/v1.12/Test/src/Test.jl:1777 [inlined]
+   [4] macro expansion
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/gesso/test/regime_i_probe.jl:51 [inlined]
+   [5] macro expansion
+     @ ~/.julia/juliaup/julia-1.12.6+0.x64.linux.gnu/share/julia/stdlib/v1.12/Test/src/Test.jl:677 [inlined]
+Regime I real-model memory lifecycle: Error During Test at /home/mattc/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/gesso/test/regime_i_probe.jl:52
+  Test threw exception
+  Expression: all((Gesso.filled_len(s.mgr, l, k) == s.seqlen for l = 1:length(model.blocks), k = (:k, :v)))
+  UndefVarError: `filled_len` not defined in `Gesso`
+  Suggestion: check for spelling errors or missing imports.
+  Stacktrace:
+    [1] getproperty
+      @ ./Base_compiler.jl:47 [inlined]
+    [2] (::var"#3#4"{Session})(::Tuple{Int64, Symbol})
+      @ Main ./none:-1
+    [3] iterate
+      @ ./generator.jl:48 [inlined]
+    [4] _all
+      @ ./anyall.jl:196 [inlined]
+    [5] all
+      @ ./anyall.jl:188 [inlined]
+    [6] all(itr::Base.Generator{Base.Iterators.ProductIterator{Tuple{UnitRange{Int64}, Tuple{Symbol, Symbol}}}, var"#3#4"{Session}})
+      @ Base ./anyall.jl:80
+    [7] top-level scope
+      @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/gesso/test/regime_i_probe.jl:41
+    [8] macro expansion
+      @ ~/.julia/juliaup/julia-1.12.6+0.x64.linux.gnu/share/julia/stdlib/v1.12/Test/src/Test.jl:1777 [inlined]
+    [9] macro expansion
+      @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/gesso/test/regime_i_probe.jl:52 [inlined]
+   [10] macro expansion
+      @ ~/.julia/juliaup/julia-1.12.6+0.x64.linux.gnu/share/julia/stdlib/v1.12/Test/src/Test.jl:677 [inlined]
+   [11] macro expansion
+      @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/gesso/test/regime_i_probe.jl:52 [inlined]
+Regime I real-model memory lifecycle: Error During Test at /home/mattc/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/gesso/test/regime_i_probe.jl:50
+  Test threw exception
+  Expression: Gesso.page_count(s.mgr) == pages
+  UndefVarError: `page_count` not defined in `Gesso`
+  Suggestion: check for spelling errors or missing imports.
+  Stacktrace:
+   [1] getproperty(x::Module, f::Symbol)
+     @ Base ./Base_compiler.jl:47
+   [2] top-level scope
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/gesso/test/regime_i_probe.jl:41
+   [3] macro expansion
+     @ ~/.julia/juliaup/julia-1.12.6+0.x64.linux.gnu/share/julia/stdlib/v1.12/Test/src/Test.jl:1777 [inlined]
+   [4] macro expansion
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/gesso/test/regime_i_probe.jl:50 [inlined]
+   [5] macro expansion
+     @ ~/.julia/juliaup/julia-1.12.6+0.x64.linux.gnu/share/julia/stdlib/v1.12/Test/src/Test.jl:677 [inlined]
+Regime I real-model memory lifecycle: Error During Test at /home/mattc/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/gesso/test/regime_i_probe.jl:51
+  Test threw exception
+  Expression: Gesso.kv_bytes(s.mgr) == pages * s.page_size * s.n_kv_heads * s.d_head * sizeof(Float64)
+  UndefVarError: `kv_bytes` not defined in `Gesso`
+  Suggestion: check for spelling errors or missing imports.
+  Stacktrace:
+   [1] getproperty(x::Module, f::Symbol)
+     @ Base ./Base_compiler.jl:47
+   [2] top-level scope
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/gesso/test/regime_i_probe.jl:41
+   [3] macro expansion
+     @ ~/.julia/juliaup/julia-1.12.6+0.x64.linux.gnu/share/julia/stdlib/v1.12/Test/src/Test.jl:1777 [inlined]
+   [4] macro expansion
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/gesso/test/regime_i_probe.jl:51 [inlined]
+   [5] macro expansion
+     @ ~/.julia/juliaup/julia-1.12.6+0.x64.linux.gnu/share/julia/stdlib/v1.12/Test/src/Test.jl:677 [inlined]
+Regime I real-model memory lifecycle: Error During Test at /home/mattc/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/gesso/test/regime_i_probe.jl:52
+  Test threw exception
+  Expression: all((Gesso.filled_len(s.mgr, l, k) == s.seqlen for l = 1:length(model.blocks), k = (:k, :v)))
+  UndefVarError: `filled_len` not defined in `Gesso`
+  Suggestion: check for spelling errors or missing imports.
+  Stacktrace:
+    [1] getproperty
+      @ ./Base_compiler.jl:47 [inlined]
+    [2] (::var"#3#4"{Session})(::Tuple{Int64, Symbol})
+      @ Main ./none:-1
+    [3] iterate
+      @ ./generator.jl:48 [inlined]
+    [4] _all
+      @ ./anyall.jl:196 [inlined]
+    [5] all
+      @ ./anyall.jl:188 [inlined]
+    [6] all(itr::Base.Generator{Base.Iterators.ProductIterator{Tuple{UnitRange{Int64}, Tuple{Symbol, Symbol}}}, var"#3#4"{Session}})
+      @ Base ./anyall.jl:80
+    [7] top-level scope
+      @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/gesso/test/regime_i_probe.jl:41
+    [8] macro expansion
+      @ ~/.julia/juliaup/julia-1.12.6+0.x64.linux.gnu/share/julia/stdlib/v1.12/Test/src/Test.jl:1777 [inlined]
+    [9] macro expansion
+      @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/gesso/test/regime_i_probe.jl:52 [inlined]
+   [10] macro expansion
+      @ ~/.julia/juliaup/julia-1.12.6+0.x64.linux.gnu/share/julia/stdlib/v1.12/Test/src/Test.jl:677 [inlined]
+   [11] macro expansion
+      @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/gesso/test/regime_i_probe.jl:52 [inlined]
+Regime I real-model memory lifecycle: Error During Test at /home/mattc/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/gesso/test/regime_i_probe.jl:40
+  Got exception outside of a @test
+  UndefVarError: `page_count` not defined in `Gesso`
+  Suggestion: check for spelling errors or missing imports.
+  Stacktrace:
+   [1] getproperty(x::Module, f::Symbol)
+     @ Base ./Base_compiler.jl:47
+   [2] top-level scope
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/gesso/test/regime_i_probe.jl:41
+   [3] macro expansion
+     @ ~/.julia/juliaup/julia-1.12.6+0.x64.linux.gnu/share/julia/stdlib/v1.12/Test/src/Test.jl:1777 [inlined]
+   [4] macro expansion
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/gesso/test/regime_i_probe.jl:63 [inlined]
+   [5] include(mod::Module, _path::String)
+     @ Base ./Base.jl:306
+   [6] exec_options(opts::Base.JLOptions)
+     @ Base ./client.jl:317
+   [7] _start()
+     @ Base ./client.jl:550
+Test Summary:                        | Pass  Error  Total     Time
+Regime I real-model memory lifecycle |   29     37     66  1m01.3s
+RNG of the outermost testset: Random.Xoshiro(0x5dae232876769465, 0xb36b7e3d1b284d47, 0x0d322c431aa0e117, 0x75cd63a46759221a, 0xf28934ae2083d063)

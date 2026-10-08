@@ -31,7 +31,7 @@ universal RoPE factory. Only three policies are expressible, and all three
 are real, observed conventions:
 
     :none      inv_freq[i] = theta^(-2i/d)               (Llama / Qwen / Gemma default)
-    :linear    the same with theta' = theta / factor      (linear RoPE scaling)
+    :linear    the same inverse frequencies divided by factor      (linear RoPE scaling)
     :llama3    wavelength-split scaling with low/high frequency factors and an
                original context length                     (Llama-3 style)
 
@@ -40,7 +40,7 @@ dimension sets the number of rotated features explicitly. `interleaved` is
 the layout policy (GPT-NeoX half-split vs GPT-J interleaved pairs).
 
 The DEFAULT constructor reproduces the pre-BREADTH-0 behavior exactly:
-`RoPEPolicy(10000.0)` is the unscaled policy that `rope!(…; theta=10000.0)`
+`RoPEPolicy(; theta=10000.0)` is the unscaled policy that `rope!(…; theta=10000.0)`
 computed, so the Llama path is bit-identical after this lands (regression law
 §XIII).
 """
@@ -60,19 +60,25 @@ struct RoPEPolicy
         factor::Real=1.0,
         original_max_position_embeddings::Integer=0,
         low_freq_factor::Real=1.0,
-        high_freq_factor::Real=1.0,
+        high_freq_factor::Real=4.0,
         rotary_dim::Integer=0,
         interleaved::Bool=false,
     )
         kind in (:none, :linear, :llama3) || error(
             "RoPEPolicy: unsupported scaling kind $(repr(kind)) — this build expresses :none, :linear, :llama3 (§LXX: no silent substitution)",
         )
-        factor > 0 || error("RoPEPolicy: factor must be positive (got $factor)")
-        low_freq_factor > 0 ||
-            high_freq_factor > 0 ||
-            error("RoPEPolicy: frequency factors must be positive")
+        isfinite(theta) && theta > 0 ||
+            error("RoPEPolicy: theta must be finite and positive")
+        isfinite(factor) && factor > 0 ||
+            error("RoPEPolicy: factor must be positive (got $factor)")
+        isfinite(low_freq_factor) &&
+        isfinite(high_freq_factor) &&
+        low_freq_factor > 0 &&
+        high_freq_factor > 0 || error("RoPEPolicy: frequency factors must be positive")
         rotary_dim >= 0 || error("RoPEPolicy: rotary_dim must be >= 0 (0 = full head dim)")
         if kind === :llama3
+            high_freq_factor > low_freq_factor ||
+                error("RoPEPolicy: high_freq_factor must exceed low_freq_factor")
             original_max_position_embeddings > 0 || error(
                 "RoPEPolicy: :llama3 scaling requires original_max_position_embeddings > 0",
             )
@@ -174,6 +180,9 @@ function ArchitectureSpec(;
     n_heads % n_kv_heads == 0 || error(
         "ArchitectureSpec: n_heads $n_heads is not divisible by n_kv_heads $n_kv_heads",
     )
+    sliding_window === nothing ||
+        sliding_window > 0 ||
+        error("ArchitectureSpec: sliding_window must be positive")
     head_dim = div(hidden_size, n_heads)
     return ArchitectureSpec(
         family,
@@ -288,7 +297,7 @@ has always evaluated, so every `:none` model — Llama included — stays
 bit-identical (regression law §XIII). Only a genuinely scaled policy produces
 a vector.
 
-    :linear   theta' = theta / factor
+    :linear   inv_freq = base_inv_freq / factor
     :llama3   wavelength split against `original_max_position_embeddings`,
               with `low_freq_factor` / `high_freq_factor` easing the boundary
               bands (the published Llama-3 convention)
@@ -298,7 +307,10 @@ rotary dimension or an interleaved layout is a real convention this build
 does not implement, and saying so is the whole point of the capability
 lattice (§II).
 """
-function rope_inv_freq(policy::RoPEPolicy, d_head::Integer)
+function rope_inv_freq(policy::RoPEPolicy, d_head::Integer; theta=policy.theta)
+    theta isa Real && isfinite(theta) && theta>0 || throw(
+        gesso_error(ERR_INVALID_PLAN, "rope_inv_freq: theta must be finite and positive"),
+    )
     policy.interleaved &&
         throw(LoweringNotImplemented(:rope_interleaved, Symbol("rope_", policy.kind)))
     policy.rotary_dim != 0 &&
@@ -307,10 +319,9 @@ function rope_inv_freq(policy::RoPEPolicy, d_head::Integer)
     d_head % 2 == 0 ||
         error("rope_inv_freq: d_head $d_head must be even for rotary embedding")
     n = d_head ÷ 2
-    base = [policy.theta^(-2i / d_head) for i in 0:(n-1)]
+    base = [theta^(-2i / d_head) for i in 0:(n-1)]
 
-    policy.kind === :linear &&
-        return [((policy.theta / policy.factor)^(-2i / d_head)) for i in 0:(n-1)]
+    policy.kind === :linear && return base ./ policy.factor
 
     # :llama3 — wavelength split. High-frequency components keep their
     # frequency; low-frequency components are divided by `factor`; the band
@@ -345,10 +356,26 @@ model and yields `nothing` — the bit-identical default path.
 This is the Pass E seam in the positional dimension: the policy is a property
 of the IMPORTED MODEL (meaning), not of the operator call site.
 """
-function tensors_rope_inv_freq(tensors, d_head::Integer)
+function tensors_rope_inv_freq(tensors, d_head::Integer; theta=nothing)
     policy = (tensors isa NamedTuple && haskey(tensors, :rope)) ? tensors.rope : nothing
     policy === nothing && return nothing
-    return rope_inv_freq(policy, d_head)
+    return rope_inv_freq(policy, d_head; theta=theta===nothing ? policy.theta : theta)
 end
 
+# Imported HF policies describe half-split layout. Legacy fixtures without
+# policy metadata keep the original adjacent-pair operator convention.
+_tensors_rope_interleaved(tensors) =
+    haskey(tensors, :rope) && tensors.rope !== nothing ? tensors.rope.interleaved : true
+
 export rope_inv_freq, tensors_rope_inv_freq
+
+# A supplied override is authoritative; otherwise use the imported policy.
+function _resolved_rope_theta(tensors, theta)
+    if theta===nothing
+        policy=haskey(tensors, :rope) ? tensors.rope : nothing
+        theta=policy===nothing ? 10000.0 : policy.theta
+    end
+    theta isa Real && isfinite(theta) && theta>0 ||
+        throw(gesso_error(ERR_INVALID_PLAN, "RoPE theta must be finite and positive"))
+    return Float64(theta)
+end

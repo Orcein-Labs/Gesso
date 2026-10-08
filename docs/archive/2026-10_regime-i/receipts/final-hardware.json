@@ -1,0 +1,13 @@
+{
+  "gpu": "NVIDIA GeForce RTX 5060",
+  "driver": "615.71.09",
+  "gpu_memory_mib": 8151,
+  "cpu": "Intel(R) Xeon(R) CPU E5-2699 v3 @ 2.30GHz",
+  "julia": "1.12.6",
+  "julia_threads": 2,
+  "blas_threads": 2,
+  "model": "SmolLM2-135M",
+  "primary_backend": "Lava/Vulkan",
+  "comparison_backend": "CUDA",
+  "independent_reference": "2.11.0+cu128"
+}

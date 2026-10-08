@@ -1,0 +1,38 @@
+WARNING: Imported binding Gesso.PrefillWorkload was undeclared at import time during import to Inference.
+WARNING: Imported binding Gesso.DecodeWorkload was undeclared at import time during import to Inference.
+WARNING: Imported binding Gesso.KVCache was undeclared at import time during import to Inference.
+ERROR: LoadError: Some tests did not pass: 5 passed, 1 failed, 0 errored, 0 broken.
+in expression starting at /home/mattc/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/gesso/test/test_cpu_ops.jl:202
+in expression starting at /home/mattc/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/gesso/test/regime_i_device.jl:5
+Test Summary:                 | Pass  Total  Time
+cpu embedding_lookup! (§LXXV) |    1      1  0.6s
+Test Summary:        | Pass  Total  Time
+cpu rmsnorm! (§LXXV) |    5      5  0.9s
+Test Summary:                            | Pass  Total  Time
+cpu rope! (§LXXV): LLaMA pairwise rotate |    3      3  0.2s
+Test Summary:                       | Pass  Total  Time
+cpu matmul! (§LXXV): W is (out, in) |    1      1  0.2s
+Test Summary:                                    | Pass  Total  Time
+cpu softmax! (§LXXV): causal mask before softmax |    8      8  3.4s
+Test Summary:                                               | Pass  Total  Time
+cpu softmax! (§LXXV): decode row attends to the whole cache |    1      1  0.0s
+Test Summary:       | Pass  Total  Time
+cpu swiglu! (§LXXV) |    1      1  0.3s
+Test Summary:                                                                 | Pass  Total  Time
+cpu: decode workload shares prefill math (goal: identical elementwise/matmul) |    3      3  0.6s
+cpu: stub invariants survive (§LXX, §LXXV): Test Failed at /home/mattc/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/gesso/test/test_cpu_ops.jl:236
+  Expression: length(methods(Gesso.rmsnorm!)) == 5
+   Evaluated: 9 == 5
+
+Stacktrace:
+ [1] top-level scope
+   @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/gesso/test/test_cpu_ops.jl:203
+ [2] macro expansion
+   @ ~/.julia/juliaup/julia-1.12.6+0.x64.linux.gnu/share/julia/stdlib/v1.12/Test/src/Test.jl:1777 [inlined]
+ [3] macro expansion
+   @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/gesso/test/test_cpu_ops.jl:236 [inlined]
+ [4] macro expansion
+   @ ~/.julia/juliaup/julia-1.12.6+0.x64.linux.gnu/share/julia/stdlib/v1.12/Test/src/Test.jl:680 [inlined]
+Test Summary:                              | Pass  Fail  Total  Time
+cpu: stub invariants survive (§LXX, §LXXV) |    5     1      6  1.9s
+RNG of the outermost testset: Random.Xoshiro(0xb54a48c1e8402802, 0x0a524557b859c474, 0x35509c34a2e437c0, 0x702e6fe84e83deae, 0xf019352a655da2e0)

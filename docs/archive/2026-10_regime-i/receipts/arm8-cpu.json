@@ -1,0 +1,1 @@
+{"schema":"gesso-ordinary-batch-v1","backend":"cpu","budgets":[2,5,8],"cancellation":"before-prefill and after two tokens","failed_request":"isolated","shared_session":"rejected","gpu_scheduling":"single host owner round-robin","cpu_concurrency":"independent tasks tested"}

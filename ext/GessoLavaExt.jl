@@ -118,7 +118,7 @@ execution_tier(::Type{LavaBackend}) = 1
 # :quantize / :dequantize stay false (Representation-phase concern), and
 # unknown capabilities stay false — probing is always safe (§XX).
 # BREADTH-1: the semantic vocabulary (see backends.jl). Like CUDA, Lava's
-# `rope!` refuses a scaled policy at the operation, so only `:rope_none`.
+# `rope!` uses the explicit frequency table for ordinary linear/Llama3 policies.
 const LAVA_SUPPORTED_CAPS = Set([
     :rmsnorm,
     :attention,
@@ -127,6 +127,8 @@ const LAVA_SUPPORTED_CAPS = Set([
     :embedding_lookup,
     :swiglu_ffn,
     :rope_none,
+    :rope_linear,
+    :rope_llama3,
 ])
 
 supports(::LavaBackend, cap::Symbol) = cap in LAVA_SUPPORTED_CAPS

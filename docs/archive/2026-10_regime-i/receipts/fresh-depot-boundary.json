@@ -1,0 +1,14 @@
+{
+  "source": "/home/mattc/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/relocated-gesso",
+  "upper": "/home/mattc/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/fresh-depot",
+  "lower": "/home/mattc/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/readonly-source-cache",
+  "lower_entries": [
+    "packages",
+    "artifacts",
+    "registries",
+    "clones"
+  ],
+  "compiled_cache_inherited": false,
+  "network_clean_room": false,
+  "manifest_sha256": "86fee480c43335b0dbcc2b19949b2012766b16159b3623154409e0b3a462f837"
+}

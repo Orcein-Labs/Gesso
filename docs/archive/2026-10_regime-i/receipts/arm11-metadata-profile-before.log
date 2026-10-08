@@ -1,0 +1,3 @@
+winner alloc=80
+candidate alloc=32
+80 Gesso.Autotune.TuneResult #select#13 at Autotune.jl:310 [inlined]

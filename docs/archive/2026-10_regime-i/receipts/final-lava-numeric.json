@@ -1,0 +1,1 @@
+{"schema":"gesso-numerical-gate-v1","backend":"lava","dtype":"Float32","atol":0.001,"rtol":2.0e-5,"oracle_torch":"2.11.0+cu128","operators":4,"workloads":2,"real_model_prompts":3}

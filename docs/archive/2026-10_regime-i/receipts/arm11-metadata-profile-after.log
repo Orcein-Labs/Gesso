@@ -1,0 +1,6 @@
+WARNING: Imported binding Gesso.PrefillWorkload was undeclared at import time during import to Inference.
+WARNING: Imported binding Gesso.DecodeWorkload was undeclared at import time during import to Inference.
+WARNING: Imported binding Gesso.KVCache was undeclared at import time during import to Inference.
+winner alloc=80
+candidate alloc=32
+80 Gesso.Autotune.TuneResult #select#13 at Autotune.jl:310 [inlined]

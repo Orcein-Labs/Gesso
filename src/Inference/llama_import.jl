@@ -1,3 +1,19 @@
+# Public loading failures retain useful source detail within Gesso's taxonomy.
+function _load_boundary(f, name)
+    try
+        return f()
+    catch err
+        err isa Gesso.GessoException && rethrow()
+        throw(
+            gesso_error(
+                err isa OutOfMemoryError ? Gesso.ERR_ALLOCATION : ERR_INVALID_PLAN,
+                "$name: invalid checkpoint input";
+                cause=sprint(showerror, err),
+                cause_type=string(typeof(err)),
+            ),
+        )
+    end
+end
 # Llama-family import (§LXXVI item B; §VIII: checkpoint format is transport).
 #
 # What lives here:
@@ -21,6 +37,30 @@
 
 using JSON
 using Mmap
+
+# Reject duplicate keys at every nesting level using JSON's existing parser.
+# A private dictionary changes insertion policy, not JSON syntax/decoding.
+struct _UniqueJSONDict <: AbstractDict{String, Any}
+    data::Dict{String, Any}
+end
+_UniqueJSONDict() = _UniqueJSONDict(Dict{String, Any}())
+Base.length(d::_UniqueJSONDict) = length(d.data)
+Base.iterate(d::_UniqueJSONDict, args...) = iterate(d.data, args...)
+Base.getindex(d::_UniqueJSONDict, k) = d.data[k]
+Base.haskey(d::_UniqueJSONDict, k) = haskey(d.data, k)
+Base.get(d::_UniqueJSONDict, k, default) = get(d.data, k, default)
+function Base.setindex!(d::_UniqueJSONDict, v, k)
+    haskey(d, k) && error("checkpoint JSON: duplicate key $(repr(k))")
+    return d.data[k] = v
+end
+_strict_json(text) = JSON.parse(text; dicttype=_UniqueJSONDict)
+_strict_jsonfile(path) = _strict_json(read(path, String))
+
+function _checkpoint_int(value, label; minimum=0)
+    value isa Integer && !(value isa Bool) && minimum <= value <= typemax(Int) ||
+        error("checkpoint: $label must be an integer in $minimum..$(typemax(Int))")
+    return Int(value)
+end
 
 # --- config ------------------------------------------------------------------
 
@@ -47,8 +87,8 @@ const _REQUIRED_CONFIG_KEYS = (
 Read and VALIDATE a Llama `config.json`. Every refusal names the offending
 field (§LXX). Returns a flat NamedTuple of the numbers this sprint uses.
 """
-function load_llama_config(path::AbstractString)
-    raw = JSON.parsefile(String(path))
+function _load_llama_config_impl(path::AbstractString)
+    raw = _strict_jsonfile(path)
     missing_keys = [k for k in _REQUIRED_CONFIG_KEYS if !haskey(raw, k)]
     isempty(missing_keys) || error(
         "load_llama_config: config.json is missing required key(s): $(join(missing_keys, ", "))",
@@ -63,26 +103,26 @@ function load_llama_config(path::AbstractString)
     raw["rope_scaling"] === nothing || error(
         "load_llama_config: rope_scaling must be null this sprint (got $(repr(raw["rope_scaling"])))",
     )
-    raw["rope_interleaved"] == false || error(
+    raw["rope_interleaved"] === false || error(
         "load_llama_config: rope_interleaved must be false — interleaved RoPE is out of scope (§LXXVI)",
     )
-    raw["attention_bias"] == false || error(
+    raw["attention_bias"] === false || error(
         "load_llama_config: attention_bias must be false — attention bias is out of scope (§LXXVI)",
     )
     # HuggingFace LlamaConfig defaults mlp_bias to false and SmolLM2-135M's
     # released config.json (transformers 4.40.1) omits the key. Missing ⇒
     # false. Present and true ⇒ refuse. Not a silent representation change.
     mlp_bias = get(raw, "mlp_bias", false)
-    mlp_bias == false || error(
+    mlp_bias === false || error(
         "load_llama_config: mlp_bias must be false — MLP bias is out of scope (§LXXVI)",
     )
-    raw["tie_word_embeddings"] == true || error(
+    raw["tie_word_embeddings"] === true || error(
         "load_llama_config: tie_word_embeddings must be true — untied heads are out of scope (§LXXVI)",
     )
 
-    hidden = Int(raw["hidden_size"])
-    n_heads = Int(raw["num_attention_heads"])
-    n_kv = Int(raw["num_key_value_heads"])
+    hidden = _checkpoint_int(raw["hidden_size"], "hidden_size"; minimum=1)
+    n_heads = _checkpoint_int(raw["num_attention_heads"], "num_attention_heads"; minimum=1)
+    n_kv = _checkpoint_int(raw["num_key_value_heads"], "num_key_value_heads"; minimum=1)
     hidden > 0 || error("load_llama_config: hidden_size must be positive")
     n_heads > 0 || error("load_llama_config: num_attention_heads must be positive")
     n_kv > 0 || error("load_llama_config: num_key_value_heads must be positive")
@@ -93,14 +133,27 @@ function load_llama_config(path::AbstractString)
         "load_llama_config: num_attention_heads $n_heads is not divisible by num_key_value_heads $n_kv",
     )
 
+    for key in ("rms_norm_eps", "rope_theta")
+        value = raw[key]
+        value isa Real && !(value isa Bool) && isfinite(value) && value > 0 ||
+            error("load_llama_config: $key must be finite and positive")
+    end
     return (
         model_type=String(raw["model_type"]),
         hidden_size=hidden,
-        num_hidden_layers=Int(raw["num_hidden_layers"]),
+        num_hidden_layers=_checkpoint_int(
+            raw["num_hidden_layers"],
+            "num_hidden_layers";
+            minimum=1,
+        ),
         num_attention_heads=n_heads,
         num_key_value_heads=n_kv,
-        intermediate_size=Int(raw["intermediate_size"]),
-        vocab_size=Int(raw["vocab_size"]),
+        intermediate_size=_checkpoint_int(
+            raw["intermediate_size"],
+            "intermediate_size";
+            minimum=1,
+        ),
+        vocab_size=_checkpoint_int(raw["vocab_size"], "vocab_size"; minimum=1),
         rms_norm_eps=Float64(raw["rms_norm_eps"]),
         rope_theta=Float64(raw["rope_theta"]),
         tie_word_embeddings=true,
@@ -215,61 +268,86 @@ end
 Read a safetensors file: `uint64 header_len`, JSON header, raw bytes. Every
 tensor is upcast to `Float64` exactly (BF16/F16/F32/F64 legal sources —
 anything else errors with the dtype name). Offsets are relative to the start
-of the raw region. Duplicate header entries cannot survive JSON.parse (later
-key wins), so the count audit below is the real duplicate guard.
+of the raw region. Duplicate keys, overlapping/gapped ranges, invalid dimensions
+and unindexed trailing bytes are rejected before any tensor allocation.
 """
-function load_safetensors(path::AbstractString)
+function _load_safetensors_impl(path::AbstractString)
     isfile(path) || error("load_safetensors: no such file: $path")
-    io = open(path, "r")
-    try
-        hdr_len = read(io, UInt64)
-        hdr_len > (1 << 30) &&
-            error("load_safetensors: header length $hdr_len is implausible (> 1 GiB)")
-        header = JSON.parse(String(read(io, hdr_len)))
-
-        data_start = 8 + Int(hdr_len)
-        # Mmap maps from the stream's CURRENT POSITION — i.e. the region IS
-        # the raw data area, so header offsets index it directly (0-based).
-        # The file-backed mapping stays valid for the life of the array; it
-        # is released when the array is garbage-collected.
-        mmap_region = Mmap.mmap(io; grow=false, shared=false)
-        begin
-            file_size = filesize(path)
-            tensors = Dict{String, Array{Float64}}()
-            for (name, meta) in header
-                name == "__metadata__" && continue
-                haskey(meta, "dtype") &&
-                haskey(meta, "shape") &&
-                haskey(meta, "data_offsets") ||
-                    error("load_safetensors: entry $name lacks dtype/shape/data_offsets")
-                dt = String(meta["dtype"])
-                haskey(_SAFETENSORS_DTYPES, dt) || error(
-                    "load_safetensors: tensor $name has unsupported dtype $dt (legal: BF16, F16, F32, F64)",
-                )
-                esize = _SAFETENSORS_DTYPES[dt]
-                shape = Tuple(Int(d) for d in meta["shape"])
-                b0, b1 = Int(meta["data_offsets"][1]), Int(meta["data_offsets"][2])
-                n = prod(shape)
-                n * esize == b1 - b0 || error(
-                    "load_safetensors: tensor $name byte span $(b1 - b0) ≠ prod(shape) × sizeof($dt) = $(n * esize)",
-                )
-                b0 >= 0 && data_start + b1 <= file_size || error(
-                    "load_safetensors: tensor $name data range [$b0, $b1) exceeds file size $file_size",
-                )
-
-                arr = Array{Float64}(undef, shape)
-                tag = Symbol(dt)
-                for (i, rel) in enumerate(b0:esize:(b1-1))
-                    arr[i] = _upcast(Val{tag}(), mmap_region, rel + 1)
-                end
-                haskey(tensors, name) && error("load_safetensors: duplicate tensor $name")
-                tensors[name] = arr
+    open(path, "r") do io
+        file_size = filesize(io)
+        file_size >= 8 || error("load_safetensors: truncated length prefix")
+        hdr_len = ltoh(read(io, UInt64))
+        2 <= hdr_len <= min(100_000_000, file_size - 8) ||
+            error("load_safetensors: invalid/truncated header length $hdr_len")
+        header_text = String(read(io, Int(hdr_len)))
+        startswith(header_text, "{") ||
+            error("load_safetensors: header must start with '{'")
+        header = _strict_json(header_text)
+        header isa AbstractDict || error("load_safetensors: header must be an object")
+        data_size = file_size - 8 - Int(hdr_len)
+        entries = []
+        for (name, meta) in header
+            if name == "__metadata__"
+                meta isa AbstractDict && all(v isa AbstractString for v in values(meta)) ||
+                    error("load_safetensors: __metadata__ must map strings to strings")
+                continue
             end
-            return tensors
+            meta isa AbstractDict &&
+            all(haskey(meta, k) for k in ("dtype", "shape", "data_offsets")) ||
+                error("load_safetensors: entry $name lacks dtype/shape/data_offsets")
+            dt = meta["dtype"]
+            dt isa AbstractString && haskey(_SAFETENSORS_DTYPES, dt) ||
+                error("load_safetensors: tensor $name has unsupported dtype $(repr(dt))")
+            dims = meta["shape"]
+            dims isa AbstractVector ||
+                error("load_safetensors: tensor $name shape must be an array")
+            shape = Tuple(_checkpoint_int(d, "$name shape") for d in dims)
+            offsets = meta["data_offsets"]
+            offsets isa AbstractVector && length(offsets) == 2 ||
+                error("load_safetensors: tensor $name data_offsets must have two integers")
+            b0, b1 = (_checkpoint_int(b, "$name offset") for b in offsets)
+            0 <= b0 <= b1 <= data_size ||
+                error("load_safetensors: tensor $name invalid data range [$b0, $b1)")
+            # Checked arithmetic prevents a malicious shape wrapping into a small span.
+            n =
+                isempty(shape) ? 1 :
+                (0 in shape ? 0 : foldl(Base.Checked.checked_mul, shape; init=1))
+            esize = _SAFETENSORS_DTYPES[dt]
+            Base.Checked.checked_mul(n, esize) == b1 - b0 || error(
+                "load_safetensors: tensor $name byte span disagrees with shape and dtype",
+            )
+            push!(entries, (; name, shape, b0, b1, esize, dt))
         end
-    finally
-        close(io)
+        sort!(entries; by=e -> (e.b0, e.b1))
+        cursor = 0
+        for e in entries
+            e.b0 == cursor || error(
+                "load_safetensors: overlapping or unindexed bytes at tensor $(e.name)",
+            )
+            cursor = e.b1
+        end
+        cursor == data_size || error("load_safetensors: unindexed trailing payload bytes")
+        region = data_size == 0 ? UInt8[] : Mmap.mmap(io; grow=false, shared=false)
+        tensors = Dict{String, Array{Float64}}()
+        for e in entries
+            tensors[e.name] =
+                _safetensors_array(region, e.b0, e.shape, e.esize, Val(Symbol(e.dt)))
+        end
+        return tensors
     end
+end
+
+# Safetensors is C/row-major, Julia arrays are column-major. Decode the
+# contiguous byte stream with reversed dimensions, then reverse the axes
+# to preserve tensor coordinates. A function barrier specializes the dtype
+# once, rather than dynamically dispatching for every checkpoint element.
+function _safetensors_array(bytes, b0, shape, esize, tag::Val)
+    raw = Array{Float64}(undef, reverse(shape))
+    for i in eachindex(raw)
+        raw[i] = _upcast(tag, bytes, b0 + (i - 1) * esize + 1)
+    end
+    length(shape) <= 1 && return raw
+    return permutedims(raw, reverse(ntuple(identity, length(shape))))
 end
 
 # --- name map + materialization ------------------------------------------------
@@ -323,6 +401,7 @@ function materialize_llama(model, tensors_by_name::Dict{String, Array{Float64}},
         blocks=bound.blocks,
         lm_head=bound.lm_head,
         final_rms=bound.final_rms,
+        rope=bound.rope,
     )
 end
 
@@ -336,7 +415,7 @@ Sharded checkpoints via `model.safetensors.index.json` `weight_map` are
 followed; a single `model.safetensors` is the ordinary case. Tokenizer
 files are NOT this function's concern (item C).
 """
-function load_llama(dir::AbstractString)
+function _load_llama_impl(dir::AbstractString)
     isdir(dir) || error("load_llama: no such directory: $dir")
     cfg = load_llama_config(joinpath(dir, "config.json"))
     model = config_to_model(cfg)
@@ -344,7 +423,7 @@ function load_llama(dir::AbstractString)
     index_path = joinpath(dir, "model.safetensors.index.json")
     tensors_by_name = Dict{String, Array{Float64}}()
     if isfile(index_path)
-        index = JSON.parsefile(String(index_path))
+        index = _strict_jsonfile(index_path)
         weight_map = get(index, "weight_map", nothing)
         weight_map isa AbstractDict ||
             error("load_llama: model.safetensors.index.json lacks a weight_map object")
@@ -353,6 +432,12 @@ function load_llama(dir::AbstractString)
         for (name, shard) in weight_map
             name in expected &&
                 error("load_llama: tensor $name appears twice in weight_map")
+            shard isa AbstractString &&
+            !isempty(shard) &&
+            !isabspath(shard) &&
+            normpath(shard) == basename(shard) &&
+            shard ∉ (".", "..") ||
+                error("load_llama: shard must be a local filename (got $(repr(shard)))")
             push!(expected, String(name))
             push!(shard_paths, String(shard))
         end
@@ -361,6 +446,9 @@ function load_llama(dir::AbstractString)
             for (name, arr) in shard_tensors
                 name in expected || error(
                     "load_llama: shard $shard contains tensor $name not listed in weight_map",
+                )
+                weight_map[name] == shard || error(
+                    "load_llama: tensor $name belongs to $(weight_map[name]), not $shard",
                 )
                 haskey(tensors_by_name, name) &&
                     error("load_llama: tensor $name loaded twice (shard $shard)")
@@ -380,3 +468,15 @@ function load_llama(dir::AbstractString)
 end
 
 export load_llama_config, config_to_model, load_safetensors, materialize_llama, load_llama
+
+load_llama_config(path::AbstractString) =
+    _load_boundary(() -> _load_llama_config_impl(path), :load_llama_config)
+
+load_safetensors(path::AbstractString) =
+    _load_boundary(() -> _load_safetensors_impl(path), :load_safetensors)
+
+load_llama(dir::AbstractString) = _load_boundary(() -> _load_llama_impl(dir), :load_llama)
+
+@doc (@doc _load_llama_config_impl) load_llama_config
+@doc (@doc _load_safetensors_impl) load_safetensors
+@doc (@doc _load_llama_impl) load_llama

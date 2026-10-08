@@ -1,0 +1,94 @@
+WARNING: Imported binding Gesso.PrefillWorkload was undeclared at import time during import to Inference.
+WARNING: Imported binding Gesso.DecodeWorkload was undeclared at import time during import to Inference.
+WARNING: Imported binding Gesso.KVCache was undeclared at import time during import to Inference.
+┌ Info: Lava: initialized Vulkan device with RT
+│   device = "NVIDIA GeForce RTX 5060"
+│   queue_family = 0x00000000
+│   handle_size = 0x00000020
+│   max_recursion = 0x0000001f
+│   validation = false
+│   gpu_assisted = false
+│   sync_val = false
+└   debug_utils = true
+┌ Warning: Vulkan driver note (type=1, not a validation error)
+│   message = "loader_create_device_chain: Failed to find 'vkGetInstanceProcAddr' in layer \"/home/mattc/.local/share/vulkan/implicit_layer.d/../../../lib/liblsfg-vk-layer.so\".  Skipping layer."
+└ @ Lava ~/.julia/packages/Lava/V2Q5P/src/runtime/device.jl:1799
+┌ Info: Context boundary parity
+│   backend = "lava"
+│   length = 17
+│   full_delta = 0.0027599334716796875
+└   cached_delta = 0.00289154052734375
+┌ Info: Context boundary parity
+│   backend = "lava"
+│   length = 33
+│   full_delta = 6.437301635742188e-5
+└   cached_delta = 7.295608520507812e-5
+┌ Info: Context boundary parity
+│   backend = "lava"
+│   length = 65
+│   full_delta = 5.626678466796875e-5
+└   cached_delta = 0.0001049041748046875
+┌ Info: Context boundary parity
+│   backend = "lava"
+│   length = 129
+│   full_delta = 5.626678466796875e-5
+└   cached_delta = 0.00017595291137695312
+ERROR: LoadError: Some tests did not pass: 39 passed, 4 failed, 0 errored, 0 broken.
+in expression starting at /home/mattc/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/gesso/test/regime_i_context.jl:24
+Test Summary:                      | Pass  Total  Time
+External HF positional frequencies |    3      3  0.7s
+Primary lava rotary, causal and ordinary cache context: Test Failed at /home/mattc/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/gesso/test/regime_i_context.jl:32
+  Expression: isapprox(Float64.(Array(q.storage)), expected; atol = 0.001, rtol = 1.0e-5)
+   Evaluated: isapprox([0.02500000037252903; -0.15191000699996948; … ; 0.8760992884635925; -0.5491251349449158;;; 0.05000000074505806; 0.2299332320690155; … ; -0.9517497420310974; -1.0562987327575684;;; 0.07500000298023224; 0.27381280064582825; … ; -0.057619087398052216; -0.9236145615577698;;; 0.10000000149011612; 0.2999289035797119; … ; -0.7151567339897156; 1.2484591007232666;;; 0.125; 0.36492919921875; … ; -0.3856164216995239; 1.1111756563186646;;; 0.15000000596046448; 0.36349785327911377; … ; 0.2813754975795746; 0.7136055827140808;;; 0.17499999701976776; 0.37586772441864014; … ; 1.0261236429214478; -0.9290779829025269;;; 0.20000000298023224; 0.4000532925128937; … ; 0.7864800691604614; 0.5013477206230164], [0.02500000037252903; -0.15191003680229187; … ; 0.8762267231941223; -0.5505934357643127;;; 0.05000000074505806; 0.2299332469701767; … ; -0.9517556428909302; -1.056357979774475;;; 0.07500000298023224; 0.27381277084350586; … ; -0.0576232373714447; -0.9235997796058655;;; 0.10000000149011612; 0.2999288737773895; … ; -0.7151564955711365; 1.2484592199325562;;; 0.125; 0.36492919921875; … ; -0.3853268623352051; 1.110448956489563;;; 0.15000000596046448; 0.36349785327911377; … ; 0.2813557982444763; 0.7135179042816162;;; 0.17499999701976776; 0.3758677542209625; … ; 1.0261235237121582; -0.9290928840637207;;; 0.20000000298023224; 0.40005335211753845; … ; 0.7864802479743958; 0.5013477802276611]; atol = 0.001, rtol = 1.0e-5)
+
+Stacktrace:
+ [1] macro expansion
+   @ ~/.julia/juliaup/julia-1.12.6+0.x64.linux.gnu/share/julia/stdlib/v1.12/Test/src/Test.jl:680 [inlined]
+ [2] macro expansion
+   @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/gesso/test/regime_i_context.jl:32 [inlined]
+ [3] macro expansion
+   @ ~/.julia/juliaup/julia-1.12.6+0.x64.linux.gnu/share/julia/stdlib/v1.12/Test/src/Test.jl:1777 [inlined]
+ [4] top-level scope
+   @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/gesso/test/regime_i_context.jl:25
+Primary lava rotary, causal and ordinary cache context: Test Failed at /home/mattc/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/gesso/test/regime_i_context.jl:32
+  Expression: isapprox(Float64.(Array(q.storage)), expected; atol = 0.001, rtol = 1.0e-5)
+   Evaluated: isapprox([0.02500000037252903; -0.15191000699996948; … ; 0.8760992884635925; -0.5491251349449158;;; 0.05000000074505806; 0.2299332320690155; … ; -0.9517497420310974; -1.0562987327575684;;; 0.07500000298023224; 0.27381280064582825; … ; -0.057619087398052216; -0.9236145615577698;;; 0.10000000149011612; 0.2999289035797119; … ; -0.7151567339897156; 1.2484591007232666;;; 0.125; 0.36492919921875; … ; -0.3856164216995239; 1.1111756563186646;;; 0.15000000596046448; 0.36349785327911377; … ; 0.2813754975795746; 0.7136055827140808;;; 0.17499999701976776; 0.37586772441864014; … ; 1.0261236429214478; -0.9290779829025269;;; 0.20000000298023224; 0.4000532925128937; … ; 0.7864800691604614; 0.5013477206230164], [0.02500000037252903; -0.15191003680229187; … ; 0.8762267231941223; -0.5505934357643127;;; 0.05000000074505806; 0.2299332469701767; … ; -0.9517556428909302; -1.056357979774475;;; 0.07500000298023224; 0.27381277084350586; … ; -0.0576232373714447; -0.9235997796058655;;; 0.10000000149011612; 0.2999288737773895; … ; -0.7151564955711365; 1.2484592199325562;;; 0.125; 0.36492919921875; … ; -0.3853268623352051; 1.110448956489563;;; 0.15000000596046448; 0.36349785327911377; … ; 0.2813557982444763; 0.7135179042816162;;; 0.17499999701976776; 0.3758677542209625; … ; 1.0261235237121582; -0.9290928840637207;;; 0.20000000298023224; 0.40005335211753845; … ; 0.7864802479743958; 0.5013477802276611]; atol = 0.001, rtol = 1.0e-5)
+
+Stacktrace:
+ [1] macro expansion
+   @ ~/.julia/juliaup/julia-1.12.6+0.x64.linux.gnu/share/julia/stdlib/v1.12/Test/src/Test.jl:680 [inlined]
+ [2] macro expansion
+   @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/gesso/test/regime_i_context.jl:32 [inlined]
+ [3] macro expansion
+   @ ~/.julia/juliaup/julia-1.12.6+0.x64.linux.gnu/share/julia/stdlib/v1.12/Test/src/Test.jl:1777 [inlined]
+ [4] top-level scope
+   @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/gesso/test/regime_i_context.jl:25
+Primary lava rotary, causal and ordinary cache context: Test Failed at /home/mattc/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/gesso/test/regime_i_context.jl:32
+  Expression: isapprox(Float64.(Array(q.storage)), expected; atol = 0.001, rtol = 1.0e-5)
+   Evaluated: isapprox([0.02500000037252903; -0.15191000699996948; … ; 0.8760992884635925; -0.5491251349449158;;; 0.05000000074505806; 0.2299332320690155; … ; -0.9517497420310974; -1.0562987327575684;;; 0.07500000298023224; 0.27381280064582825; … ; -0.057619087398052216; -0.9236145615577698;;; 0.10000000149011612; 0.2999911308288574; … ; 0.5435535311698914; 0.00596243143081665;;; 0.125; 0.36492919921875; … ; -0.3856164216995239; 1.1111756563186646;;; 0.15000000596046448; 0.36349785327911377; … ; 0.2813754975795746; 0.7136055827140808;;; 0.17499999701976776; 0.37586772441864014; … ; 1.0261236429214478; -0.9290779829025269;;; 0.20000000298023224; 0.40000662207603455; … ; 0.9135367274284363; 1.3453490734100342], [0.02500000037252903; -0.15191003680229187; … ; 0.8762267231941223; -0.5505934357643127;;; 0.05000000074505806; 0.2299332469701767; … ; -0.9517556428909302; -1.056357979774475;;; 0.07500000298023224; 0.27381277084350586; … ; -0.0576232373714447; -0.9235997796058655;;; 0.10000000149011612; 0.2999911308288574; … ; 0.5435535311698914; 0.005962371826171875;;; 0.125; 0.36492919921875; … ; -0.3853268623352051; 1.110448956489563;;; 0.15000000596046448; 0.36349785327911377; … ; 0.2813557982444763; 0.7135179042816162;;; 0.17499999701976776; 0.3758677542209625; … ; 1.0261235237121582; -0.9290928840637207;;; 0.20000000298023224; 0.4000066816806793; … ; 0.9135369062423706; 1.3453491926193237]; atol = 0.001, rtol = 1.0e-5)
+
+Stacktrace:
+ [1] macro expansion
+   @ ~/.julia/juliaup/julia-1.12.6+0.x64.linux.gnu/share/julia/stdlib/v1.12/Test/src/Test.jl:680 [inlined]
+ [2] macro expansion
+   @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/gesso/test/regime_i_context.jl:32 [inlined]
+ [3] macro expansion
+   @ ~/.julia/juliaup/julia-1.12.6+0.x64.linux.gnu/share/julia/stdlib/v1.12/Test/src/Test.jl:1777 [inlined]
+ [4] top-level scope
+   @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/gesso/test/regime_i_context.jl:25
+Primary lava rotary, causal and ordinary cache context: Test Failed at /home/mattc/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/gesso/test/regime_i_context.jl:32
+  Expression: isapprox(Float64.(Array(q.storage)), expected; atol = 0.001, rtol = 1.0e-5)
+   Evaluated: isapprox([0.02500000037252903; -0.15191000699996948; … ; 0.8760992884635925; -0.5491251349449158;;; 0.05000000074505806; 0.2299332320690155; … ; -0.9517497420310974; -1.0562987327575684;;; 0.07500000298023224; 0.27381280064582825; … ; -0.057619087398052216; -0.9236145615577698;;; 0.10000000149011612; 0.2999911308288574; … ; 0.5435535311698914; 0.00596243143081665;;; 0.125; 0.36492919921875; … ; -0.3856164216995239; 1.1111756563186646;;; 0.15000000596046448; 0.36349785327911377; … ; 0.2813754975795746; 0.7136055827140808;;; 0.17499999701976776; 0.37586772441864014; … ; 1.0261236429214478; -0.9290779829025269;;; 0.20000000298023224; 0.40000662207603455; … ; 0.9135367274284363; 1.3453490734100342], [0.02500000037252903; -0.15191003680229187; … ; 0.8762267231941223; -0.5505934357643127;;; 0.05000000074505806; 0.2299332469701767; … ; -0.9517556428909302; -1.056357979774475;;; 0.07500000298023224; 0.27381277084350586; … ; -0.0576232373714447; -0.9235997796058655;;; 0.10000000149011612; 0.2999911308288574; … ; 0.5435535311698914; 0.005962371826171875;;; 0.125; 0.36492919921875; … ; -0.3853268623352051; 1.110448956489563;;; 0.15000000596046448; 0.36349785327911377; … ; 0.2813557982444763; 0.7135179042816162;;; 0.17499999701976776; 0.3758677542209625; … ; 1.0261235237121582; -0.9290928840637207;;; 0.20000000298023224; 0.4000066816806793; … ; 0.9135369062423706; 1.3453491926193237]; atol = 0.001, rtol = 1.0e-5)
+
+Stacktrace:
+ [1] macro expansion
+   @ ~/.julia/juliaup/julia-1.12.6+0.x64.linux.gnu/share/julia/stdlib/v1.12/Test/src/Test.jl:680 [inlined]
+ [2] macro expansion
+   @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/gesso/test/regime_i_context.jl:32 [inlined]
+ [3] macro expansion
+   @ ~/.julia/juliaup/julia-1.12.6+0.x64.linux.gnu/share/julia/stdlib/v1.12/Test/src/Test.jl:1777 [inlined]
+ [4] top-level scope
+   @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/gesso/test/regime_i_context.jl:25
+Test Summary:                                          | Pass  Fail  Total     Time
+Primary lava rotary, causal and ordinary cache context |   39     4     43  3m39.1s
+RNG of the outermost testset: Random.Xoshiro(0x9f3ba907345a6884, 0x7fccdcd6b7a81005, 0x817841a5ef268106, 0x5a7eef2ebd8df22c, 0x1f74121035f4bce5)

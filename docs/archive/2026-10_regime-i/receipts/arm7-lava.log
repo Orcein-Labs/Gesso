@@ -1,0 +1,39 @@
+WARNING: Imported binding Gesso.PrefillWorkload was undeclared at import time during import to Inference.
+WARNING: Imported binding Gesso.DecodeWorkload was undeclared at import time during import to Inference.
+WARNING: Imported binding Gesso.KVCache was undeclared at import time during import to Inference.
+┌ Info: Lava: initialized Vulkan device with RT
+│   device = "NVIDIA GeForce RTX 5060"
+│   queue_family = 0x00000000
+│   handle_size = 0x00000020
+│   max_recursion = 0x0000001f
+│   validation = false
+│   gpu_assisted = false
+│   sync_val = false
+└   debug_utils = true
+┌ Warning: Vulkan driver note (type=1, not a validation error)
+│   message = "loader_create_device_chain: Failed to find 'vkGetInstanceProcAddr' in layer \"/home/mattc/.local/share/vulkan/implicit_layer.d/../../../lib/liblsfg-vk-layer.so\".  Skipping layer."
+└ @ Lava ~/.julia/packages/Lava/V2Q5P/src/runtime/device.jl:1799
+┌ Info: Context boundary parity
+│   backend = "lava"
+│   length = 17
+│   full_delta = 0.001644134521484375
+└   cached_delta = 0.0018062591552734375
+┌ Info: Context boundary parity
+│   backend = "lava"
+│   length = 33
+│   full_delta = 7.009506225585938e-5
+└   cached_delta = 6.008148193359375e-5
+┌ Info: Context boundary parity
+│   backend = "lava"
+│   length = 65
+│   full_delta = 0.0003590583801269531
+└   cached_delta = 0.0001468658447265625
+┌ Info: Context boundary parity
+│   backend = "lava"
+│   length = 129
+│   full_delta = 0.00032901763916015625
+└   cached_delta = 0.0003085136413574219
+Test Summary:                      | Pass  Total  Time
+External HF positional frequencies |    3      3  0.6s
+Test Summary:                                          | Pass  Total     Time
+Primary lava rotary, causal and ordinary cache context |   43     43  3m35.8s

@@ -147,3 +147,15 @@ end
     flat = sort(vcat(ids...))
     @test allunique(flat)
 end
+
+@testset "Bounded receipt storage stays stable across overflow" begin
+    sink=Gesso.InMemorySink(4)
+    before=pointer(sink.buf)
+    records=[Gesso.new_receipt(; task=:overflow_probe) for _ in 1:20]
+    for r in records
+        Gesso.emit!(sink, r)
+    end
+    @test [r.id for r in sink.buf]==[r.id for r in records[(end-3):end]]
+    @test sink.dropped==16
+    @test pointer(sink.buf)==before
+end

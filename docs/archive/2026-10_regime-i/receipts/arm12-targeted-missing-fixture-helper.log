@@ -1,0 +1,83 @@
+ERROR: LoadError: Some tests did not pass: 0 passed, 0 failed, 1 errored, 0 broken.
+in expression starting at /home/mattc/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/gesso/test/test_autotune_cuda.jl:42
+in expression starting at /home/mattc/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/arm12-cuda-targeted.jl:10
+Test Summary:                                        | Pass  Total  Time
+ModelIR primitives (§CIX): construction + validation |   11     11  0.5s
+Test Summary:                                    | Pass  Total  Time
+ModelIR (§CIX): toy2 round-trip from the fixture |    8      8  1.8s
+Test Summary:                          | Pass  Total  Time
+ModelIR (§CIX): identity is structural |    6      6  0.0s
+Test Summary:                              | Pass  Total  Time
+ModelIR (§CIX): nodes are immutable values |    5      5  0.0s
+Test Summary:                                              | Pass  Total   Time
+prefill oracle: shape + determinism (atol=0, same process) |    4      4  13.4s
+Test Summary:                                                      | Pass  Total  Time
+prefill oracle: causal property (position 0 cannot see position 3) |    3      3  0.1s
+Test Summary:                                                        | Pass  Total  Time
+prefill oracle: last-position argmax drives generation (item C seam) |    4      4  0.1s
+Test Summary:                                                | Pass  Total  Time
+prefill oracle: greedy path is stable under prompt prefixing |    4      4  0.2s
+Test Summary:                                                              | Pass  Total  Time
+known logits: persisted slot vs recomputed (atol=1e-10, cross-commit gate) |    5      5  0.0s
+Test Summary:                                 | Pass  Total  Time
+load_llama_config: validates the micro config |    9      9  7.2s
+Test Summary:                                           | Pass  Total  Time
+config_to_model: composition is a Model, GQA-expressive |    8      8  0.2s
+Test Summary:                                   | Pass  Total  Time
+config refusals name the offending field (§LXX) |   21     21  5.3s
+Test Summary:                                    | Pass  Total  Time
+load_safetensors: all four dtypes upcast EXACTLY |    5      5  2.1s
+Test Summary:                                                     | Pass  Total  Time
+load_safetensors: unsupported dtype and bad span error with names |    3      3  0.1s
+Test Summary:                                                    | Pass  Total  Time
+load_llama end-to-end: prefill runs, deterministic, shapes right |   14     14  5.6s
+Test Summary:                                 | Pass  Total  Time
+load_llama: sharded checkpoint via weight_map |    3      3  0.1s
+Test Summary:                                                   | Pass  Total  Time
+load_llama: unknown / missing / untied keys error WITH THE NAME |    7      7  0.2s
+Test Summary:                                                                      | Pass  Total  Time
+materialize_llama: 0-based HF layers load; 1-based fixtures still load; mix errors |   12     12  0.0s
+Test Summary:                                                                        | Pass  Total  Time
+materialize_llama: leftover real weight still errors; rotary_emb.inv_freq is ignored |    8      8  0.0s
+Test Summary:                                                            | Pass  Total  Time
+materialize_llama: absent model.norm ⇒ final_rms is nothing (toy2 shape) |    1      1  0.0s
+Test Summary:                                                     | Pass  Total  Time
+gqa micro checkpoint: interpreter GQA path matches repeat formula |    1      1  0.8s
+toy2 cuda-vs-cpu max|Δlogit| = 0.000771309037759238
+Test Summary:                               | Pass  Total     Time
+toy2 CUDA prefill vs CPU oracle (atol=1e-3) |    2      2  1m17.6s
+Test Summary:                                  | Pass  Total   Time
+toy2 CUDA greedy generate: token ids match CPU |    1      1  20.5s
+Test Summary:                                               | Pass  Total  Time
+toy2 CPUBackend default is still bit-identical (regression) |    1      1  0.0s
+llama_micro cuda-vs-cpu max|Δlogit| = 5.5006127839263286e-6
+Test Summary:                                               | Pass  Total  Time
+llama_micro CUDA prefill vs CPU (atol=1e-3), GQA end-to-end |    3      3  1.9s
+Test Summary:                                             | Pass  Total  Time
+CUDA backend + host Array storage throws ERR_INVALID_PLAN |    7      7  2.4s
+Test Summary:                                                  | Pass  Total  Time
+autotune: candidates registered for (:matmul!, :cuda) in order |    3      3  0.0s
+autotune: both candidates gated at :llama_micro (atol=1e-2): Error During Test at /home/mattc/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/gesso/test/test_autotune_cuda.jl:59
+  Got exception outside of a @test
+  UndefVarError: `mat` not defined in `Main`
+  Suggestion: check for spelling errors or missing imports.
+  Stacktrace:
+   [1] top-level scope
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/gesso/test/test_autotune_cuda.jl:60
+   [2] macro expansion
+     @ ~/.julia/juliaup/julia-1.12.6+0.x64.linux.gnu/share/julia/stdlib/v1.12/Test/src/Test.jl:1777 [inlined]
+   [3] macro expansion
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/gesso/test/test_autotune_cuda.jl:65 [inlined]
+   [4] include(mapexpr::Function, mod::Module, _path::String)
+     @ Base ./Base.jl:307
+   [5] top-level scope
+     @ ~/Documents/Codex/2026-10-07/referenced-chatgpt-conversation-this-is-an/work/arm12-cuda-targeted.jl:10
+   [6] include(mod::Module, _path::String)
+     @ Base ./Base.jl:306
+   [7] exec_options(opts::Base.JLOptions)
+     @ Base ./client.jl:317
+   [8] _start()
+     @ Base ./client.jl:550
+Test Summary:                                               | Error  Total  Time
+autotune: both candidates gated at :llama_micro (atol=1e-2) |     1      1  2.3s
+RNG of the outermost testset: Random.Xoshiro(0xe5a5746d61127dd1, 0x77661f88e8d55421, 0x67e07bcb774edf0a, 0x0b5435d27f3dfe7f, 0xa287b6c2eacecadf)

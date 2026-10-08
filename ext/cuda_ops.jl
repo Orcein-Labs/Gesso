@@ -24,35 +24,22 @@ using Gesso: ERR_VERIFY_MISMATCH   # the all-fail / stale-winner code (§LXX, §
 # GPU ops CPU memory is ERR_INVALID_PLAN — the caller skipped to_device
 # (§LXXVII: "the interpreter does not copy"; §LXX: loud, typed failure)
 function _cuda_device_storage!(op::Symbol, t)
-    s = t.storage
-    s === nothing && throw(
-        gesso_error(
-            ERR_INVALID_PLAN,
-            "$op: storage is unset — materialize (and for CUDA, to_device) " *
-            "before lowering; nothing is never silently treated as data";
-            op = op,
-        ),
-    )
-    # the guard exists to catch a skipped to_device: HOST memory is an
-    # Array. Device-side views (SubArray over CuArray) are legal — the
-    # interpreter legitimately slices device buffers (generate's prefill
-    # rows). Only the host/device BOUNDARY matters (§LXXVII).
-    s isa Array || return s
-    throw(
-        gesso_error(
-            ERR_INVALID_PLAN,
-            "$op: CUDABackend received host Array storage — " *
-            "call to_device(tensors) first; the interpreter does not copy " *
-            "host memory to device implicitly (§LXXVII)";
-            op = op,
-            storage_type = string(typeof(s)),
-        ),
-    )
+    return _cuda_checked_storage(op,t.storage)
 end
+function _cuda_checked_storage(op::Symbol, s)
+    Gesso.Inference._storage_root(s) isa CUDA.CuArray && eltype(s) === Float32 && return s
+    throw(gesso_error(ERR_INVALID_PLAN,
+        "$op: CUDABackend requires its own Float32 device storage; host Array, " *
+        "host views, other devices and unsupported arithmetic are rejected; call to_device explicitly";
+        op=op, storage_type=string(typeof(s))))
+end
+Gesso.Inference._check_device_storage(op::Symbol, backend::CUDABackend, t) =
+    _cuda_device_storage!(op, t)
 
 # --- op bodies -----------------------------------------------------------------
 
 function _cuda_embedding_lookup!(dst, table, tokens)
+    Gesso._validate_embedding_inputs(dst,table,tokens)
     tab = table.storage
     for (t, tok) in enumerate(tokens)
         d = size(dst.storage, 2)                  # 0-based token ids (§LXXV)
@@ -74,33 +61,51 @@ function _cuda_embed_kernel!(dst2, tab, t::Int, tok0::Int)
     return
 end
 
-function _cuda_rmsnorm!(dst, x, scale; eps = 1e-6)
-    xs = x.storage
+function _cuda_rmsnorm!(dst, x, scale; eps=1e-6)
+    _cuda_rmsnorm_storage!(dst.storage, x.storage, scale.storage, eps)
+    return dst
+end
+
+function _cuda_rmsnorm_storage!(dsts::AbstractArray, xs::AbstractArray, scales::AbstractArray, eps)
+    native_eps=eltype(xs)(eps)
+    isfinite(native_eps) && native_eps>0 || throw(gesso_error(ERR_INVALID_PLAN,
+        "rmsnorm!: eps must be representable, finite and positive in storage dtype"))
     nd = ndims(xs)
     d = size(xs, nd)                              # last dim is the feature dim
-    length(scale.storage) == d ||
-        throw(gesso_error(ERR_INVALID_PLAN, "rmsnorm!: scale length $(length(scale.storage)) ≠ feature dim $d"; op = :rmsnorm!))
-    # The REDUCTION stays GPUArrays' `sum` (one device temporary, unchanged)
-    # and the APPLY becomes a kernel. Before 10F this line built a
-    # Float64-promoted chain — `sum`, `./d .+eps`, `sqrt.`, `xs ./ rms`,
-    # `.* stail` — and the last two were Float64 temporaries the size of the
-    # whole activation. The kernel evaluates the SAME expression, in the SAME
-    # precision, over the SAME operands, so the stored Float32 is
-    # bit-identical (§LXXVII declares parity at atol, and this does not even
-    # spend that).
+    length(scales) == d ||
+        throw(gesso_error(ERR_INVALID_PLAN, "rmsnorm!: scale length $(length(scales)) ≠ feature dim $d"; op = :rmsnorm!))
+    if nd == 2 && size(xs, 1) == 1
+        @cuda threads=1 blocks=1 _cuda_rmsnorm_row_kernel!(dsts, xs, scales, eps, d)
+        return dsts
+    end
+    # Retain the legacy mixed-precision normalization to meet its fixed
+    # small-fixture accuracy budget. Comparison receipts name this explicitly.
     rms = sqrt.(sum(abs2, xs; dims = nd) ./ d .+ eps)
     if nd == 2
-        rows = size(dst.storage, 1)
-        d == 0 && return dst
+        rows = size(dsts, 1)
+        d == 0 && return dsts
         nthreads = min(256, d)
         @cuda threads = (nthreads,) blocks = (rows,) _cuda_rmsnorm_apply_kernel!(
-            dst.storage, xs, rms, scale.storage, rows, d)
-        return dst
+            dsts, xs, rms, scales, rows, d)
+        return dsts
     end
     # generic rank: the previous chain, unchanged (nothing in Gesso is 3-D)
-    stail = reshape(scale.storage, (ntuple(_ -> 1, nd - 1)..., d))
-    dst.storage .= (xs ./ rms) .* stail
-    return dst
+    stail = reshape(scales, (ntuple(_ -> 1, nd - 1)..., d))
+    dsts .= (xs ./ rms) .* stail
+    return dsts
+end
+
+# Ordinary single-row decode normalization without reduction temporaries.
+function _cuda_rmsnorm_row_kernel!(dst, xs, scales, eps, d)
+    acc = Float32(0)
+    for j in 1:d
+        acc += abs2(xs[1, j])
+    end
+    rms = sqrt(Float64(acc) / d + eps)
+    for j in 1:d
+        dst[1, j] = (xs[1, j] / rms) * scales[j]
+    end
+    return
 end
 
 # ONE BLOCK PER ROW, one thread per feature. `sum(abs2, xs; dims=ndims(xs))`
@@ -128,10 +133,10 @@ function _cuda_rmsnorm_apply_kernel!(dst2, xs2, rms, scale1, rows::Int, d::Int)
     return
 end
 
-# RoPE: pairwise rotate on the head feature dim (LLaMA-style, §LXXV math
+# RoPE: adjacent pairs by default; imported HF policy selects half-split
 # law), Q over its head axis and K over its own (GQA-safe, Phase 3 fix).
 # One @cuda kernel — broadcast cannot express the pair coupling.
-function _cuda_rope_kernel!(x, positions, theta)
+function _cuda_rope_kernel!(x, positions, theta, interleaved::Bool)
     t = (blockIdx().x - 1) * blockDim().x + threadIdx().x    # sequence index
     h = blockIdx().y                                          # head index
     seq, nheads, d = size(x)
@@ -140,27 +145,34 @@ function _cuda_rope_kernel!(x, positions, theta)
     for i in 0:(d÷2-1)
         θv = m * theta^(-2i / d)
         c, s = cos(θv), sin(θv)
-        x1 = x[t, h, 2i+1]
-        x2 = x[t, h, 2i+2]
-        x[t, h, 2i+1] = x1 * c - x2 * s
-        x[t, h, 2i+2] = x1 * s + x2 * c
+        a, b = interleaved ? (2i + 1, 2i + 2) : (i + 1, i + 1 + d ÷ 2)
+        x1 = x[t, h, a]
+        x2 = x[t, h, b]
+        x[t, h, a] = x1 * c - x2 * s
+        x[t, h, b] = x1 * s + x2 * c
     end
     return
 end
 
-function _cuda_rope!(q, k, positions; theta = 10000.0)
-    size(q.storage, 3) == size(k.storage, 3) ||
+function _cuda_rope!(q, k, positions; theta = 10000.0, interleaved = true)
+    _cuda_rope_storage!(q.storage, k.storage, positions, theta, interleaved)
+    return q
+end
+
+# Keep launch arguments concrete across semantic tensors' erased storage fields.
+function _cuda_rope_storage!(qs::AbstractArray, ks::AbstractArray, positions, theta, interleaved)
+    size(qs, 3) == size(ks, 3) ||
         throw(gesso_error(ERR_INVALID_PLAN, "rope!: q d_head ≠ k d_head"; op = :rope!))
     tθ = Float64(theta)
     pos_d = CuArray{Int}(positions)               # kernels never auto-transfer
-    for x in (q.storage, k.storage)
+    for x in (qs, ks)
         seq, nheads, d = size(x)
         nthreads = min(256, seq)
         nblocks = cld(seq, nthreads)
         # 2-D grid: x = sequence tiles, y = head (K rotates its OWN heads)
-        @cuda threads = (nthreads,) blocks = (nblocks, nheads) _cuda_rope_kernel!(x, pos_d, tθ)
+        @cuda threads = (nthreads,) blocks = (nblocks, nheads) _cuda_rope_kernel!(x, pos_d, tθ, interleaved)
     end
-    return q
+    return nothing
 end
 
 # Causal softmax over (L, K) score rows, rows aligned to the LAST K keys
@@ -196,10 +208,14 @@ function _cuda_softmax_kernel!(s, d)
     return
 end
 
-function _cuda_softmax!(dst, scores)
-    L, K = size(scores.storage)
+function _cuda_softmax_storage!(scores::AbstractArray, dst::AbstractArray)
+    L, K = size(scores)
     L == 0 && return dst
-    @cuda threads = 1 blocks = L _cuda_softmax_kernel!(scores.storage, dst.storage)
+    @cuda threads = 1 blocks = L _cuda_softmax_kernel!(scores, dst)
+    return dst
+end
+function _cuda_softmax!(dst, scores)
+    _cuda_softmax_storage!(scores.storage, dst.storage)
     return dst
 end
 
@@ -219,8 +235,13 @@ function _cuda_swiglu!(dst, gate, up)
     return dst
 end
 
+function _cuda_matmul_storage!(dst::AbstractArray, x::AbstractArray, w::AbstractArray)
+    CUDA.CUBLAS.gemm!('N', 'T', one(eltype(dst)), x, w, zero(eltype(dst)), dst)
+    return dst
+end
+
 function _cuda_matmul!(dst, x, w)
-    mul!(dst.storage, x.storage, transpose(w.storage))   # CUBLAS
+    _cuda_matmul_storage!(dst.storage, x.storage, w.storage)
     return dst
 end
 
@@ -284,6 +305,7 @@ function rope!(
     ::Gesso.PrefillWorkload;
     theta::Real = 10000.0,
     inv_freq = nothing,
+    interleaved::Bool = true,
 )
     # BREADTH-0 Pass D: a scaled positional policy has NO CUDA lowering yet.
     # It must be REFUSED, not silently run unscaled (§LXX: no silent
@@ -292,7 +314,7 @@ function rope!(
         Gesso.lowering_not_implemented(:rope!, Gesso.CUDABackend())
     _cuda_device_storage!(:rope!, q)
     _cuda_device_storage!(:rope!, k)
-    return _cuda_rope!(q, k, positions; theta)
+    return _cuda_rope!(q, k, positions; theta, interleaved)
 end
 
 function rope!(
@@ -303,6 +325,7 @@ function rope!(
     ::Gesso.DecodeWorkload;
     theta::Real = 10000.0,
     inv_freq = nothing,
+    interleaved::Bool = true,
 )
     # BREADTH-0 Pass D: a scaled positional policy has NO CUDA lowering yet.
     # It must be REFUSED, not silently run unscaled (§LXX: no silent
@@ -311,7 +334,7 @@ function rope!(
         Gesso.lowering_not_implemented(:rope!, Gesso.CUDABackend())
     _cuda_device_storage!(:rope!, q)
     _cuda_device_storage!(:rope!, k)
-    return _cuda_rope!(q, k, positions; theta)
+    return _cuda_rope!(q, k, positions; theta, interleaved)
 end
 
 # --- the §LXXXII exit: the op consults Autotune --------------------------------
@@ -525,28 +548,27 @@ end
 # (§LXX: no silent keep of a stale plan).
 function _autotune_dispatch!(dst, x, w, regime)
     A = Gesso.Autotune
-    result = A.select(
-        :matmul!,
-        :cuda,
-        regime,
-        _autotune_device_id(),
-        dst,
-        x,
-        w,
-    )
-    cands = A.candidates(:matmul!, :cuda)
-    i = findfirst(c -> c.name === result.winner, cands)
-    i === nothing && throw(
+    device=_autotune_device_id()
+    winner=A._cached_winner(:matmul!,:cuda,regime,device)
+    if winner===nothing
+        winner=A.select(:matmul!,:cuda,regime,device,dst,x,w).winner
+    end
+    runner = A._candidate_runner(:matmul!, :cuda, winner)
+    runner === nothing && throw(
         gesso_error(
             ERR_VERIFY_MISMATCH,
-            "matmul!: autotune winner :$(result.winner) has no registered " *
+            "matmul!: autotune winner :$(winner) has no registered " *
             "candidate — registry and cache disagree (§LXX: no silent keep)",
             op = :matmul!,
             regime = regime,
-            winner = string(result.winner),
+            winner = string(winner),
         ),
     )
-    return cands[i].run!(dst, x, w)
+    # Exact function identity preserves replacement-by-name while allowing the
+    # existing implementations to receive unboxed semantic arguments.
+    runner === _cuda_matmul! && return _cuda_matmul!(dst, x, w)
+    runner === _cuda_generic_matmul! && return _cuda_generic_matmul!(dst, x, w)
+    return runner(dst, x, w)
 end
 
 function matmul!(
@@ -702,7 +724,7 @@ function _autotune_register!()
         :cuda,
         A.Candidate(
             :cublas_mul,
-            (dst, x, w) -> _cuda_matmul!(dst, x, w),
+            _cuda_matmul!,
             (dst, x, w) -> _cuda_matmul_gate(_cuda_matmul!, dst, x, w),
         ),
     )
@@ -711,7 +733,7 @@ function _autotune_register!()
         :cuda,
         A.Candidate(
             :generic_mul,
-            (dst, x, w) -> _cuda_generic_matmul!(dst, x, w),
+            _cuda_generic_matmul!,
             (dst, x, w) -> _cuda_matmul_gate(_cuda_generic_matmul!, dst, x, w),
         ),
     )
@@ -742,7 +764,8 @@ function _to_device_cuda(tensors)
     lm_head = tensors.lm_head === tensors.embedding ? embedding : _conv_t(tensors.lm_head)
     fr = haskey(tensors, :final_rms) ? tensors.final_rms : nothing
     final_rms = fr === nothing ? nothing : _conv_t(fr)
-    return (; embedding, blocks, lm_head, final_rms)
+    result = (; embedding, blocks, lm_head, final_rms)
+    return haskey(tensors, :rope) ? merge(result, (; rope = tensors.rope)) : result
 end
 
 # ext-local dispatch wrapper (bound as Gesso.to_device when this extension is
@@ -752,4 +775,25 @@ end
 # must go through the NAME in the eval target's scope)
 function to_device(::CUDABackend, tensors)
     return _to_device_cuda(tensors)
+end
+
+# Ordinary strided per-head GEMM into existing score/attention scratch.
+# No copied head slices or product arrays survive between tokens.
+function _attention_scores_device!(::CUDABackend, sc, q::AbstractArray, k::AbstractArray, hh, d_head, K)
+    qh = view(q, :, hh, :)
+    kh = view(k, 1:K, hh, :)
+    if size(q, 1) == 1
+        CUDA.CUBLAS.gemv!('N', eltype(sc)(1 / sqrt(d_head)), kh, view(q, 1, hh, :), zero(eltype(sc)), view(sc, 1, :))
+    else
+        CUDA.CUBLAS.gemm!('N', 'T', eltype(sc)(1 / sqrt(d_head)), qh, kh, zero(eltype(sc)), sc)
+    end
+    return sc
+end
+function _attention_values_device!(::CUDABackend, attn::AbstractArray, probs, v::AbstractArray, hh, K)
+    if size(attn, 1) == 1
+        CUDA.CUBLAS.gemv!('T', one(eltype(attn)), view(v, 1:K, hh, :), view(probs, 1, :), zero(eltype(attn)), view(attn, 1, hh, :))
+    else
+        CUDA.CUBLAS.gemm!('N', 'N', one(eltype(attn)), probs, view(v, 1:K, hh, :), zero(eltype(attn)), view(attn, :, hh, :))
+    end
+    return attn
 end

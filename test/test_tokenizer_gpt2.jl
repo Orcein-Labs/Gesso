@@ -80,7 +80,7 @@ end
     catch e
         e
     end
-    @test err isa ErrorException
+    @test err isa Gesso.GessoError
     @test occursin("empty", sprint(showerror, err))
 
     # merge part not in vocab
@@ -96,7 +96,7 @@ end
     catch e
         e
     end
-    @test err2 isa ErrorException
+    @test err2 isa Gesso.GessoError
     @test occursin("z", sprint(showerror, err2))
 
     # unknown special-token id in the config
@@ -111,6 +111,6 @@ end
     catch e
         e
     end
-    @test err3 isa ErrorException
+    @test err3 isa Gesso.GessoError
     @test occursin("bos_token_id", sprint(showerror, err3))
 end

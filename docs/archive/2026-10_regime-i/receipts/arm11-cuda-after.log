@@ -1,0 +1,30 @@
+┌ Info: Warmed comparison
+│   backend = "cuda"
+│   prompt = "Hello"
+│   seconds = 0.267274021
+└   allocation = 1025616
+┌ Info: Warmed comparison
+│   backend = "cuda"
+│   prompt = "The quick brown fox"
+│   seconds = 0.277680791
+└   allocation = 1025696
+┌ Info: Warmed comparison
+│   backend = "cuda"
+│   prompt = "Julia is a programming language."
+│   seconds = 0.277800461
+└   allocation = 1025616
+┌ Info: CUDA independent parity
+│   prompt = "Hello"
+└   delta = 0.00010967254638671875
+┌ Info: CUDA independent parity
+│   prompt = "The quick brown fox"
+└   delta = 6.80685043334961e-5
+┌ Info: CUDA independent parity
+│   prompt = "Julia is a programming language."
+└   delta = 2.9087066650390625e-5
+┌ Info: Warmed CUDA decode allocation
+└   bytes = 1025696
+Test Summary:                               | Pass  Total     Time
+Warmed cuda ordinary performance comparison |   27     27  1m44.9s
+Test Summary:                              | Pass  Total  Time
+Regime I CUDA real-model parity and memory |    9      9  2.4s

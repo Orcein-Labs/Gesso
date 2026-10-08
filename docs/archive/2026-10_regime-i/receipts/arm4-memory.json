@@ -1,0 +1,1 @@
+{"schema":"gesso-memory-lifecycle-v1","arm":4,"records":[{"live_before":1100192720,"live_after":1100671728,"retained_before":1078839272,"retained_after":1078850872,"pages":180,"kv_bytes":1105920}]}

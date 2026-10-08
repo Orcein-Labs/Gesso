@@ -1,0 +1,599 @@
+diff --git a/AGENTS.md b/AGENTS.md
+index 0f5bde2..15750c4 100644
+--- a/AGENTS.md
++++ b/AGENTS.md
+@@ -1,5 +1,8 @@
+ # AGENTS.md — Gesso Agent Charter
+ 
++## SPECIAL NOTE FOR CODEX!!
++## IF THE TASK IS SIMPLE, IT IS PREFERRED TO DEPLOY A CHEAP LUNA 6 MAX OR MULTIPLE OF THEM TO QUICKLY FINISH BATCH WORK
++
+ **Every agent working in this repository operates under this charter.**
+ It transcribes laws from `docs/Gesso_Stack.md` (canon, sections referenced
+ as §NNN). Reading the charter is not a substitute for reading the canon —
+@@ -109,7 +112,8 @@ run in this repo produced.
+ src/           package core (see docs/ARCHITECTURE.md for the module map)
+ test/          test harness — per-area files included from runtests.jl
+ benchmark/     benchmark harness — results land in benchmark/results/
+-docs/          Gesso_Stack.md is CANON; docs/research/ is research program
++RPD_SOP.md     R&D SOP for team leads (identical copies in Palette and Cyan)
++docs/          Gesso_Stack.md is CANON; docs/research/README.md is the research index
+ libs/          DO NOT TOUCH (local dev checkouts)
+ scripts/       dev commands (test/bench/format/freeze)
+ ```
+diff --git a/README.md b/README.md
+index 273dc44..ba38c0c 100644
+--- a/README.md
++++ b/README.md
+@@ -136,7 +136,7 @@ Current phases (docs/Gesso_Stack.md §LXXIII ff.):
+ | 7 | First semantic optimization | **A/B/C/D LANDED 2026-09-30** — CoW + declared identity prefix share (`fork`), `Profiling.unique_kv_bytes` byte win (§LXXX) |
+ | 8 | Lava/Vulkan backend | **A/B/C/D LANDED 2026-09-30** — GessoLavaExt seam + six ops + interpreter/Session/fork on `LavaArray{Float32}` (§LXXXI); portable seam, not tuned; device-less runs skip by name |
+ | 9 | Autotune | **A/B/C/D LANDED 2026-10-01** — the §XXVI loop: two gated CUDA `matmul!` candidates, winner cached per (device, backend, op, regime), op consults and dispatches to it (§LXXXII); selection, not speed; device-less runs skip by name |
+-| 10 | Speed floor (proof-ladder rungs 1–2) | **A/B/C/D LANDED 2026-10-01** — device greedy (one Int D2H per token) + device GEMM attention over gathered scratch (§LXXXIII gates G1–G3 harness); G2 factor **0.692×** measured (`2026-10-02.tsv`); 10C landed (HF 0-based importer, frozen golden, SmolLM2 fork bytes N = 1_474_560); 10D landed 2026-10-02 (export inventory + parked-empty fence, vanished-golden fail-closed, `@inferred` byte counters); §LXXXIII representation planner stays PARKED |
++| 10 | Speed floor (proof-ladder rungs 1–2) | **A/B/C/D/E/F LANDED 2026-10-01..03** — device greedy (one Int D2H per token) + device GEMM attention over gathered scratch (§LXXXIII gates G1–G3 harness); 10C landed (HF 0-based importer, frozen golden, SmolLM2 fork bytes N = 1_474_560); 10D landed 2026-10-02 (export inventory + parked-empty fence, vanished-golden fail-closed, `@inferred` byte counters); 10E landed 2026-10-02 (Session-owned decode workspace + in-place gather/GQA repeat; warmed `decode!` host alloc ≤16 KiB on toy2/llama_micro CPU, 100,480 B on SmolLM2 CPU); 10F landed 2026-10-03 (`PHASE10F_CUDA_DECODE_ALLOC.md` — CUDA decode broadcast wrappers removed by device-storage specialization of the core copy helpers; warmed CUDA `decode!` 5,094,736 B → 1,269,616 B on SmolLM2, and toy2/micro CUDA are back under item D's original 256 KiB gate); 10G landed 2026-10-03 (`PHASE10G_AUTOTUNE_RECEIPT.md` — a cache hit is not a decision, so `Autotune.select` returns the cached `TuneResult` and emits no receipt; the miss receipt still names the winner and the receipt schema did not bump; warmed CUDA `decode!` 1,269,616 B → 942,128 B on SmolLM2, under the DECLARED 1 MiB gate, which was not raised to make it pass; `Autotune.jl` per-token cost 320,509 B → 37,136 B); 10H landed 2026-10-03 (`PHASE10H_TYPE_STABILITY.md` — closed 10D packet P-1: §CIX amended so the ARRAY TYPE holding a tensor is a trait-equivalent carried as ONE type parameter `S` on the §XI families and the Session engine buffers; shape/seqlen/batch stay fields; the three `@inferred` gates are green and the `@test_broken` trio is gone — type-stable dispatch also CUT warmed SmolLM2 CUDA `decode!` 942,128 B → 814,544 B); G2 factor **1.452×** measured (`2026-10-03.tsv`; was 0.737× at 10E, 0.692× at 10B — Gesso warmed 487 ms → 240 ms, eager warmed 359 ms → 348 ms; dtypes differ, F32 vs bfloat16, and no cross-dtype speed claim is made; 10G and 10H changed no kernel, so G2 was not republished); §LXXXIII representation planner stays PARKED |
+ 
+ Training is **not** part of Gesso — by explicit, permanent decision
+ ([docs/Gesso_Stack.md §LVIII](docs/Gesso_Stack.md)). If you want to contribute
+diff --git a/benchmark/results/2026-10-01.tsv b/benchmark/results/2026-10-01.tsv
+index 02bc610..83d23b5 100644
+--- a/benchmark/results/2026-10-01.tsv
++++ b/benchmark/results/2026-10-01.tsv
+@@ -92,3 +92,37 @@ schema	date_utc	julia_version	host	arch	nthreads	commit	dirty	benchmark	samples
+ 0.2.0	2026-10-01 T11:27:30Z	1.12.6	cachyos-x8664	x86_64	1	04117d9	true	kv_bytes_two_isolated_prefill_cpu	1	0	0	0	0	4096	§LXXX item C: post-warmup BYTE row (not timing) — unique_kv_bytes over two INDEPENDENT llama_micro prefill sessions = 2× one session's kv_bytes (declaration, not discovery: no fork, no sharing)
+ 0.2.0	2026-10-01 T11:27:30Z	1.12.6	cachyos-x8664	x86_64	1	04117d9	true	kv_bytes_prefill_fork_cpu	1	0	0	0	0	2048	§LXXX item C: post-warmup BYTE row (not timing) — unique_kv_bytes(parent, child) after prefill!+fork, pre-decode: the declared alias costs ONE session's kv_bytes; saving vs the isolated-pair row is the difference of the two rows
+ 0.2.0	2026-10-01 T11:27:30Z	1.12.6	cachyos-x8664	x86_64	1	04117d9	true	smollm2_g2_factor_eager_over_gesso	1	0	0	0	0	0	§LXXXIII gate G2 FACTOR: NOT MEASURED on this run — the G2 block did not execute (needs CUDA + GESSO_SMOLLM2_DIR local snapshot + external python3 with torch/transformers; never downloads, §LXXVI). The harness (benchmark/compare_eager.py) exists either way; the gate number the board cares about is SmolLM2, and llama_micro is NOT that number
++0.2.0	2026-10-01 T23:11:30Z	1.12.6	cachyos-x8664	x86_64	1	e01845d	true	llama_micro_gesso_cuda_first_token	1	33026100	33026100	33026100	0	0	§LXXXIII gates G3 (Phase 10B item C), FIRST-TOKEN clock: llama_micro CUDA Session.generate 3 greedy steps on a fresh Session, one-shot compile INSIDE the number; fast paths :attn_gemm (device GEMM over gathered scratch) + :argmax (one Int D2H per token); ids == CPU Session (asserted before this row); FIXTURE measurement, not the board factor
++0.2.0	2026-10-01 T23:11:30Z	1.12.6	cachyos-x8664	x86_64	1	e01845d	true	backend_tag_construction	10000	1.535	1.8474044000000003	1.407	0	0	§XX: tag construction must stay free
++0.2.0	2026-10-01 T23:11:30Z	1.12.6	cachyos-x8664	x86_64	1	e01845d	true	capability_probe	10000	7.15	8.0420744	6.149	0	0	§XX: capability probing is always safe, never throws
++0.2.0	2026-10-01 T23:11:30Z	1.12.6	cachyos-x8664	x86_64	1	e01845d	true	llama_micro_gesso_cuda_warmed	542	8.6143815e6	9.232726367158672e6	7.313354e6	11989	708608	§LXXXIII gates G3 (Phase 10B item C), WARMED clock: llama_micro CUDA Session.generate 3 greedy steps post-warmup; fast paths :attn_gemm + :argmax; ids == CPU Session (asserted before any row); FIXTURE measurement, not the board factor
++0.2.0	2026-10-01 T23:11:30Z	1.12.6	cachyos-x8664	x86_64	1	e01845d	true	llama_micro_session_generate_cpu	3240	1.4890615e6	1.5421053450617285e6	1.176765e6	16184	372840	§LXXVIII item D: CPU Session generate over the paged KV manager (page_size=4), tokens [0,1,2] + 3 greedy steps
++0.2.0	2026-10-01 T23:11:30Z	1.12.6	cachyos-x8664	x86_64	1	e01845d	true	lowering_not_implemented_throw	10000	1.814	1.9365458999999998	1.534	0	0	§LXX: explicit failure must be affordable
++0.2.0	2026-10-01 T23:11:30Z	1.12.6	cachyos-x8664	x86_64	1	e01845d	true	micro_llama_cuda_prefill_012	443	9.894036e6	1.1291210200902935e7	8.394837e6	13263	748672	§LXXVII item D: CUDA F32 prefill + host readback, tokens [0,1,2], llama_micro shape
++0.2.0	2026-10-01 T23:11:30Z	1.12.6	cachyos-x8664	x86_64	1	e01845d	true	micro_llama_cuda_prefill_012_autotuned	403	1.0596123e7	1.2405538096774194e7	8.356047e6	13263	748672	§LXXXII item C: post-warmup — CUDA F32 prefill through the Autotune-consulted matmul!; autotune winner for :llama_micro = :cublas_mul (selection receipt, no speed claim)
++0.2.0	2026-10-01 T23:11:30Z	1.12.6	cachyos-x8664	x86_64	1	e01845d	true	micro_llama_lava_prefill_012	324	1.35059245e7	1.5466210805555556e7	1.1133491e7	25464	1668128	§LXXXI item C: Vulkan F32 prefill + host readback, tokens [0,1,2], llama_micro shape — portable seam, no speed claim vs CUDA (tune is Phase 9)
++0.2.0	2026-10-01 T23:11:30Z	1.12.6	cachyos-x8664	x86_64	1	e01845d	true	receipt_emit_inmemory	10000	319.20682302771854	513.7656565031983	230.93390191897655	7	848	§XLII: audited actions pay for receipts; keep it negligible
++0.2.0	2026-10-01 T23:11:30Z	1.12.6	cachyos-x8664	x86_64	1	e01845d	true	session_generate_3tok_cuda	541	9.241589e6	9.24721417375231e6	8.012262e6	11988	708544	§LXXIX item C: post-warmup — CUDA Session generate, 3 greedy steps over device pages
++0.2.0	2026-10-01 T23:11:30Z	1.12.6	cachyos-x8664	x86_64	1	e01845d	true	session_generate_8tok_cpu	2862	1.6371345e6	1.7459166313766597e6	1.244996e6	16184	372840	§LXXIX item C: post-warmup — CPU Session generate, 8 greedy steps over the paged KV manager
++0.2.0	2026-10-01 T23:11:30Z	1.12.6	cachyos-x8664	x86_64	1	e01845d	true	session_ttft_1tok_cpu	2984	1.5987355e6	1.6746605117292225e6	1.229522e6	16135	370520	§LXXIX item C: post-warmup — CPU Session prefill + 1 greedy step (time-to-first-token)
++0.2.0	2026-10-01 T23:11:30Z	1.12.6	cachyos-x8664	x86_64	1	e01845d	true	structured_log_event	10000	1302.5	1876.0496857142857	918.1428571428571	31	1264	§XLII: logging must never be the reason to skip logging
++0.2.0	2026-10-01 T23:11:30Z	1.12.6	cachyos-x8664	x86_64	1	e01845d	true	kv_bytes_two_isolated_prefill_cpu	1	0	0	0	0	4096	§LXXX item C: post-warmup BYTE row (not timing) — unique_kv_bytes over two INDEPENDENT llama_micro prefill sessions = 2× one session's kv_bytes (declaration, not discovery: no fork, no sharing)
++0.2.0	2026-10-01 T23:11:30Z	1.12.6	cachyos-x8664	x86_64	1	e01845d	true	kv_bytes_prefill_fork_cpu	1	0	0	0	0	2048	§LXXX item C: post-warmup BYTE row (not timing) — unique_kv_bytes(parent, child) after prefill!+fork, pre-decode: the declared alias costs ONE session's kv_bytes; saving vs the isolated-pair row is the difference of the two rows
++0.2.0	2026-10-01 T23:11:30Z	1.12.6	cachyos-x8664	x86_64	1	e01845d	true	smollm2_g2_factor_eager_over_gesso	1	0	0	0	0	0	§LXXXIII gate G2 FACTOR: NOT MEASURED on this run — the G2 block did not execute (needs CUDA + GESSO_SMOLLM2_DIR local snapshot + external python3 with torch/transformers; never downloads, §LXXVI). The harness (benchmark/compare_eager.py) exists either way; the gate number the board cares about is SmolLM2, and llama_micro is NOT that number
++0.2.0	2026-10-01 T23:19:43Z	1.12.6	cachyos-x8664	x86_64	1	e01845d	true	llama_micro_gesso_cuda_first_token	1	34931404	34931404	34931404	0	0	§LXXXIII gates G3 (Phase 10B item C), FIRST-TOKEN clock: llama_micro CUDA Session.generate 3 greedy steps on a fresh Session, one-shot compile INSIDE the number; fast paths :attn_gemm (device GEMM over gathered scratch) + :argmax (one Int D2H per token); ids == CPU Session (asserted before this row); FIXTURE measurement, not the board factor
++0.2.0	2026-10-01 T23:19:43Z	1.12.6	cachyos-x8664	x86_64	1	e01845d	true	backend_tag_construction	10000	1.586	1.7318124000000004	1.408	0	0	§XX: tag construction must stay free
++0.2.0	2026-10-01 T23:19:43Z	1.12.6	cachyos-x8664	x86_64	1	e01845d	true	capability_probe	10000	7.331	8.1998435	6.147	0	0	§XX: capability probing is always safe, never throws
++0.2.0	2026-10-01 T23:19:43Z	1.12.6	cachyos-x8664	x86_64	1	e01845d	true	llama_micro_gesso_cuda_warmed	573	8.161131e6	8.729832331588132e6	6.91974e6	11989	708608	§LXXXIII gates G3 (Phase 10B item C), WARMED clock: llama_micro CUDA Session.generate 3 greedy steps post-warmup; fast paths :attn_gemm + :argmax; ids == CPU Session (asserted before any row); FIXTURE measurement, not the board factor
++0.2.0	2026-10-01 T23:19:43Z	1.12.6	cachyos-x8664	x86_64	1	e01845d	true	llama_micro_session_generate_cpu	3286	1.4687385e6	1.5206161010346927e6	1.158857e6	16184	372840	§LXXVIII item D: CPU Session generate over the paged KV manager (page_size=4), tokens [0,1,2] + 3 greedy steps
++0.2.0	2026-10-01 T23:19:43Z	1.12.6	cachyos-x8664	x86_64	1	e01845d	true	lowering_not_implemented_throw	10000	1.589	1.8108104000000003	1.407	0	0	§LXX: explicit failure must be affordable
++0.2.0	2026-10-01 T23:19:43Z	1.12.6	cachyos-x8664	x86_64	1	e01845d	true	micro_llama_cuda_prefill_012	455	9.621995e6	1.1000580505494505e7	8.122145e6	13263	748672	§LXXVII item D: CUDA F32 prefill + host readback, tokens [0,1,2], llama_micro shape
++0.2.0	2026-10-01 T23:19:43Z	1.12.6	cachyos-x8664	x86_64	1	e01845d	true	micro_llama_cuda_prefill_012_autotuned	459	9.622265e6	1.090299042701525e7	8.146561e6	13263	748672	§LXXXII item C: post-warmup — CUDA F32 prefill through the Autotune-consulted matmul!; autotune winner for :llama_micro = :cublas_mul (selection receipt, no speed claim)
++0.2.0	2026-10-01 T23:19:43Z	1.12.6	cachyos-x8664	x86_64	1	e01845d	true	micro_llama_lava_prefill_012	294	1.47314015e7	1.702619513265306e7	1.1007645e7	25464	1668128	§LXXXI item C: Vulkan F32 prefill + host readback, tokens [0,1,2], llama_micro shape — portable seam, no speed claim vs CUDA (tune is Phase 9)
++0.2.0	2026-10-01 T23:19:43Z	1.12.6	cachyos-x8664	x86_64	1	e01845d	true	receipt_emit_inmemory	10000	305.6337325349301	491.4201614770459	220.63672654690617	7	848	§XLII: audited actions pay for receipts; keep it negligible
++0.2.0	2026-10-01 T23:19:43Z	1.12.6	cachyos-x8664	x86_64	1	e01845d	true	session_generate_3tok_cuda	509	9.841142e6	9.831243451866405e6	8.470005e6	11988	708544	§LXXIX item C: post-warmup — CUDA Session generate, 3 greedy steps over device pages
++0.2.0	2026-10-01 T23:19:43Z	1.12.6	cachyos-x8664	x86_64	1	e01845d	true	session_generate_8tok_cpu	2695	1.737302e6	1.8543162489795918e6	1.254084e6	16184	372840	§LXXIX item C: post-warmup — CPU Session generate, 8 greedy steps over the paged KV manager
++0.2.0	2026-10-01 T23:19:43Z	1.12.6	cachyos-x8664	x86_64	1	e01845d	true	session_ttft_1tok_cpu	2845	1.658013e6	1.7669090446397187e6	1.241282e6	16135	370520	§LXXIX item C: post-warmup — CPU Session prefill + 1 greedy step (time-to-first-token)
++0.2.0	2026-10-01 T23:19:43Z	1.12.6	cachyos-x8664	x86_64	1	e01845d	true	structured_log_event	10000	1441.0	2115.3517678571434	919.6428571428571	31	1264	§XLII: logging must never be the reason to skip logging
++0.2.0	2026-10-01 T23:19:43Z	1.12.6	cachyos-x8664	x86_64	1	e01845d	true	kv_bytes_two_isolated_prefill_cpu	1	0	0	0	0	4096	§LXXX item C: post-warmup BYTE row (not timing) — unique_kv_bytes over two INDEPENDENT llama_micro prefill sessions = 2× one session's kv_bytes (declaration, not discovery: no fork, no sharing)
++0.2.0	2026-10-01 T23:19:43Z	1.12.6	cachyos-x8664	x86_64	1	e01845d	true	kv_bytes_prefill_fork_cpu	1	0	0	0	0	2048	§LXXX item C: post-warmup BYTE row (not timing) — unique_kv_bytes(parent, child) after prefill!+fork, pre-decode: the declared alias costs ONE session's kv_bytes; saving vs the isolated-pair row is the difference of the two rows
++0.2.0	2026-10-01 T23:19:43Z	1.12.6	cachyos-x8664	x86_64	1	e01845d	true	smollm2_g2_factor_eager_over_gesso	1	0	0	0	0	0	§LXXXIII gate G2 FACTOR: NOT MEASURED on this run — the G2 block did not execute (needs CUDA + GESSO_SMOLLM2_DIR local snapshot + external python3 with torch/transformers; never downloads, §LXXVI). The harness (benchmark/compare_eager.py) exists either way; the gate number the board cares about is SmolLM2, and llama_micro is NOT that number
+diff --git a/benchmark/results/2026-10-02.tsv b/benchmark/results/2026-10-02.tsv
+index 86e9006..6d3f2bf 100644
+--- a/benchmark/results/2026-10-02.tsv
++++ b/benchmark/results/2026-10-02.tsv
+@@ -20,3 +20,24 @@ schema	date_utc	julia_version	host	arch	nthreads	commit	dirty	benchmark	samples
+ 0.2.0	2026-10-02 T00:28:11Z	1.12.6	cachyos-x8664	x86_64	1	e01845d	true	kv_bytes_two_isolated_prefill_cpu	1	0	0	0	0	4096	§LXXX item C: post-warmup BYTE row (not timing) — unique_kv_bytes over two INDEPENDENT llama_micro prefill sessions = 2× one session's kv_bytes (declaration, not discovery: no fork, no sharing)
+ 0.2.0	2026-10-02 T00:28:11Z	1.12.6	cachyos-x8664	x86_64	1	e01845d	true	kv_bytes_prefill_fork_cpu	1	0	0	0	0	2048	§LXXX item C: post-warmup BYTE row (not timing) — unique_kv_bytes(parent, child) after prefill!+fork, pre-decode: the declared alias costs ONE session's kv_bytes; saving vs the isolated-pair row is the difference of the two rows
+ 0.2.0	2026-10-02 T00:28:11Z	1.12.6	cachyos-x8664	x86_64	1	e01845d	true	smollm2_g2_factor_eager_over_gesso	1	0	0	0	0	0	§LXXXIII gate G2 FACTOR (declaration, not a timing): eager_warmed_seconds / gesso_warmed_median_seconds = 0.692 × from THIS run's rows (smollm2_eager_pytorch_warmed = 0.436015 s, smollm2_gesso_cuda_warmed = 0.630123 s); gesso dtype F32, eager dtype bfloat16 — both stamps travel with the numbers, no cross-dtype claim; greedy, batch 1, NO torch.compile, NO vLLM (later additional rows)
++0.2.0	2026-10-02 T21:59:15Z	1.12.6	cachyos-x8664	x86_64	1	97772b2	true	llama_micro_gesso_cuda_first_token	1	39825669	39825669	39825669	0	0	§LXXXIII gates G3 (Phase 10B item C), FIRST-TOKEN clock: llama_micro CUDA Session.generate 3 greedy steps on a fresh Session, one-shot compile INSIDE the number; fast paths :attn_gemm (device GEMM over gathered scratch) + :argmax (one Int D2H per token); ids == CPU Session (asserted before this row); FIXTURE measurement, not the board factor
++0.2.0	2026-10-02 T21:59:15Z	1.12.6	cachyos-x8664	x86_64	1	97772b2	true	smollm2_eager_pytorch_first_token	1	7181124124	7181124124	7181124124	0	0	§LXXXIII gate G2, FIRST-TOKEN clock: eager PyTorch single-shot generate, kernel compile INSIDE the number (LlamaForCausalLM.generate, do_sample=False, batch 1, NO torch.compile); one wall-clock run measured by benchmark/compare_eager.py; allocs/bytes not applicable across the process boundary
++0.2.0	2026-10-02 T21:59:15Z	1.12.6	cachyos-x8664	x86_64	1	97772b2	true	smollm2_eager_pytorch_warmed	5	359149228	359149228	359149228	0	0	§LXXXIII gate G2, WARMED clock: eager PyTorch generate, median of the script's in-process samples AFTER its own untimed warmup (§XXXIII); measured by benchmark/compare_eager.py, recorded here verbatim; compute dtype bfloat16 (from_pretrained defaults) vs Gesso F32 — both stamps travel with the numbers, no cross-dtype claim
++0.2.0	2026-10-02 T21:59:15Z	1.12.6	cachyos-x8664	x86_64	1	97772b2	true	smollm2_gesso_cuda_first_token	1	1162394385	1162394385	1162394385	0	0	§LXXXIII gate G2, FIRST-TOKEN clock: SmolLM2-135M CUDA Session generate on a fresh Session (greedy, batch 1), one-shot compile INSIDE the number; ids == CPU oracle (asserted before this row was recorded); compute dtype F32
++0.2.0	2026-10-02 T21:59:15Z	1.12.6	cachyos-x8664	x86_64	1	97772b2	true	backend_tag_construction	10000	1.534	1.6903563999999998	1.407	0	0	§XX: tag construction must stay free
++0.2.0	2026-10-02 T21:59:15Z	1.12.6	cachyos-x8664	x86_64	1	97772b2	true	capability_probe	10000	6.718500000000001	7.1904726000000005	6.149	0	0	§XX: capability probing is always safe, never throws
++0.2.0	2026-10-02 T21:59:15Z	1.12.6	cachyos-x8664	x86_64	1	97772b2	true	llama_micro_gesso_cuda_warmed	614	8.131136e6	8.151521929967427e6	7.263216e6	10137	652640	§LXXXIII gates G3 (Phase 10B item C), WARMED clock: llama_micro CUDA Session.generate 3 greedy steps post-warmup; fast paths :attn_gemm + :argmax; ids == CPU Session (asserted before any row); FIXTURE measurement, not the board factor
++0.2.0	2026-10-02 T21:59:15Z	1.12.6	cachyos-x8664	x86_64	1	97772b2	true	llama_micro_session_generate_cpu	6751	691690.0	739539.8335061473	561255.0	8081	202536	§LXXVIII item D: CPU Session generate over the paged KV manager (page_size=4), tokens [0,1,2] + 3 greedy steps
++0.2.0	2026-10-02 T21:59:15Z	1.12.6	cachyos-x8664	x86_64	1	97772b2	true	lowering_not_implemented_throw	10000	1.496	1.5740561999999998	1.407	0	0	§LXX: explicit failure must be affordable
++0.2.0	2026-10-02 T21:59:15Z	1.12.6	cachyos-x8664	x86_64	1	97772b2	true	micro_llama_cuda_prefill_012	465	1.0708493e7	1.0751956679569893e7	9.425723e6	12695	730752	§LXXVII item D: CUDA F32 prefill + host readback, tokens [0,1,2], llama_micro shape
++0.2.0	2026-10-02 T21:59:15Z	1.12.6	cachyos-x8664	x86_64	1	97772b2	true	micro_llama_cuda_prefill_012_autotuned	480	1.0431874e7	1.0431913189583333e7	9.39195e6	12695	730752	§LXXXII item C: post-warmup — CUDA F32 prefill through the Autotune-consulted matmul!; autotune winner for :llama_micro = :cublas_mul (selection receipt, no speed claim)
++0.2.0	2026-10-02 T21:59:15Z	1.12.6	cachyos-x8664	x86_64	1	97772b2	true	micro_llama_lava_prefill_012	361	1.3738814e7	1.3854685088642659e7	1.1803366e7	24896	1660432	§LXXXI item C: Vulkan F32 prefill + host readback, tokens [0,1,2], llama_micro shape — portable seam, no speed claim vs CUDA (tune is Phase 9)
++0.2.0	2026-10-02 T21:59:15Z	1.12.6	cachyos-x8664	x86_64	1	97772b2	true	receipt_emit_inmemory	10000	496.4870259481038	648.598334530938	239.41716566866268	7	848	§XLII: audited actions pay for receipts; keep it negligible
++0.2.0	2026-10-02 T21:59:15Z	1.12.6	cachyos-x8664	x86_64	1	97772b2	true	session_generate_3tok_cuda	591	8.478703e6	8.470224468697123e6	7.547996e6	10136	652576	§LXXIX item C: post-warmup — CUDA Session generate, 3 greedy steps over device pages
++0.2.0	2026-10-02 T21:59:15Z	1.12.6	cachyos-x8664	x86_64	1	97772b2	true	session_generate_8tok_cpu	6116	743246.5	816366.9347612819	586341.0	8081	202536	§LXXIX item C: post-warmup — CPU Session generate, 8 greedy steps over the paged KV manager
++0.2.0	2026-10-02 T21:59:15Z	1.12.6	cachyos-x8664	x86_64	1	97772b2	true	session_ttft_1tok_cpu	6546	722466.0	762599.0134433241	580857.0	8062	201784	§LXXIX item C: post-warmup — CPU Session prefill + 1 greedy step (time-to-first-token)
++0.2.0	2026-10-02 T21:59:15Z	1.12.6	cachyos-x8664	x86_64	1	97772b2	true	smollm2_gesso_cuda_warmed	11	4.87257191e8	4.9262070427272725e8	4.78044325e8	680472	46538184	§LXXXIII gate G2, WARMED clock: SmolLM2-135M CUDA Session generate post-warmup (greedy, batch 1); ids == CPU oracle (asserted before any row exists); compute dtype F32; eager warmed compute dtype bfloat16 — same checkpoint, prompt "Hello", max_new_tokens 8 on both sides
++0.2.0	2026-10-02 T21:59:15Z	1.12.6	cachyos-x8664	x86_64	1	97772b2	true	structured_log_event	10000	1414.516129032258	1516.7071096774193	1115.8709677419354	31	1264	§XLII: logging must never be the reason to skip logging
++0.2.0	2026-10-02 T21:59:15Z	1.12.6	cachyos-x8664	x86_64	1	97772b2	true	kv_bytes_two_isolated_prefill_cpu	1	0	0	0	0	4096	§LXXX item C: post-warmup BYTE row (not timing) — unique_kv_bytes over two INDEPENDENT llama_micro prefill sessions = 2× one session's kv_bytes (declaration, not discovery: no fork, no sharing)
++0.2.0	2026-10-02 T21:59:15Z	1.12.6	cachyos-x8664	x86_64	1	97772b2	true	kv_bytes_prefill_fork_cpu	1	0	0	0	0	2048	§LXXX item C: post-warmup BYTE row (not timing) — unique_kv_bytes(parent, child) after prefill!+fork, pre-decode: the declared alias costs ONE session's kv_bytes; saving vs the isolated-pair row is the difference of the two rows
++0.2.0	2026-10-02 T21:59:15Z	1.12.6	cachyos-x8664	x86_64	1	97772b2	true	smollm2_g2_factor_eager_over_gesso	1	0	0	0	0	0	§LXXXIII gate G2 FACTOR (declaration, not a timing): eager_warmed_seconds / gesso_warmed_median_seconds = 0.737 × from THIS run's rows (smollm2_eager_pytorch_warmed = 0.359149 s, smollm2_gesso_cuda_warmed = 0.487257 s); gesso dtype F32, eager dtype bfloat16 — both stamps travel with the numbers, no cross-dtype claim; greedy, batch 1, NO torch.compile, NO vLLM (later additional rows)
+diff --git a/docs/ARCHITECTURE.md b/docs/ARCHITECTURE.md
+index 1ca9c9d..6971d23 100644
+--- a/docs/ARCHITECTURE.md
++++ b/docs/ARCHITECTURE.md
+@@ -25,14 +25,14 @@ policy (internal: NIRA); **Lava** = Vulkan substrate.
+ | `receipts` | `src/receipts.jl` | §XLII audit records + sink interface (thread-safe sink, §CIX identity) | hardening ✓ |
+ | `Semantics` | `src/Semantics/` | §I, §XI, §XIII, **§CIX** — meaning vocabulary; workload dispatch types (`PrefillWorkload`/`DecodeWorkload`) | 1 — item A ✓ |
+ | `ModelIR` | `src/ModelIR/` | §VII, §VIII, **§CIX** — immutable semantic composition graph (Embedding/RMSNorm/RoPE/Attention/SwiGLU/Block/Model; structural identity via Tuple composition) | 1 — item B ✓ |
+-| `Parameters` | `src/Parameters/` | §XI, **§CIX** — §XI family types + `frozen` trait + metadata fields; §LVIII forbids Gradient/OptimizerState | 1/3 — item A ✓ |
++| `Parameters` | `src/Parameters/` | §XI, **§CIX** — §XI family types + `frozen` trait + metadata fields; §LVIII forbids Gradient/OptimizerState. **10H (§CIX amendment): the eleven families carry ONE storage type parameter `S`** (`ProjectionWeight{S}` … `AdapterDelta{S}`), inferred from `storage`, with `S = Nothing` for unset. Shape/seqlen/batch remain fields; no second axis (§XIII); `frozen` stays a trait. | 1/3 — item A ✓; 10H ✓ |
+ | `Operators` | `src/Operators/` | §XII, **§CIX** — operators are functions (owned by `backends.jl`); dispatch methods on `SemanticTensor × workload`; `cpu.jl` = CPU reference math (§LXXV, Float64; `rmsnorm!`/`rope!` carry `eps`/`theta` keyword defaults per §LXXVI; `quantize!`/`dequantize!` still decline) | 1 — item C ✓; 2 — item A ✓; 3 — item A ✓ |
+ | `Lowering` | `src/Lowering/` | §XXII–XXIII backend routing; mixed-backend is ordinary | 4 + 8 (seam proven by the GessoCUDAExt and GessoLavaExt extensions — CUDA.jl and Lava/Vulkan backends as weakdep extensions, §LXXVII/§LXXXI; routing lands later) |
+ | `Inference` | `src/Inference/` | §XXIX engine, §XXX prefill/decode split, KV manager hooks; Phase 2 slice: `reference_prefill` + `reference_generate` CPU oracle (§LXXV); Phase 3: GQA (repeat-for-contraction, cache at `n_kv_heads`), optional `final_rms`, threaded `eps`/`theta` (item A); Llama import — `load_llama` path (`llama_import.jl`: config validation, safetensors reader with exact f64 upcast, closed name map; HF 0-based **and** fixture 1-based layer origins detected from `q_proj.weight`, mixes refused, `*.rotary_emb.inv_freq` the only ignored leftover — fail-closed otherwise (10C); JSON is the ONE sanctioned third-party dep + Mmap, §LXXVI) (item B); GPT-2 byte-level BPE tokenizer (`gpt2_tokenizer.jl`: published algorithm, loud refusals) (item C); SmolLM2 real-model gate (`GESSO_SMOLLM2_DIR` skip-or-green, no downloads) (item D); Phase 4: backend-generic interpreter — `backend=` keyword (default CPU, bit-identical), explicit no-copy law (host Array under a non-CPU backend is `ERR_INVALID_PLAN`), device buffers via `similar`, CPU scalar loops pinned vs device broadcast/CUBLAS forms (§LXXVII); Phase 5: paged KV manager (`kv_manager.jl` — Magenta §9.5 step 1: pages are the cache, gather-on-read, per-page provenance `layer/kind/start_pos/filled`, typed `ERR_RESOURCE_LIMIT` at context exhaustion) + the Session engine (`session.jl` — `prefill!`/`decode!`/`generate`, greedy `_greedy_id`, required `eos_token_id`, streaming `on_token` callback, string prompts via the tokenizer; ids equal the oracle, CPU logits atol=0); Phase 10: device fast paths behind declared capability probes (`Gesso.supports(backend, :argmax / :attn_gemm)`) — CUDA decode! runs argmax ON the device (host receives ONE Int per token, the (vocab,) logits row never crosses back; GPUArrays argmax is first-index-tie deterministic) and the attention contraction (QKᵀ + PV) is one flat device GEMM over the SAME gathered scratch per site (reshape(CuArray) views; pages + gather unchanged, no page-table kernel); Lava keeps its own contraction and the full-row host argmax (§LXXXIII gates G1–G3, PHASE10_SPEED_FLOOR.md) | 2 — items B, C ✓; 3 — items A, B, C ✓, D skip-or-green; 4 — items A–C ✓, D skip-or-green; 5 — items A, B, C, D ✓; 10 — items B, C ✓ |
+ | `Runtime` | `src/Runtime/` | §XXXII scheduler, §XXXIII+ agent mechanism; mechanism-only (§XLIII) | 5+/12 |
+ | `Profiling` | `src/Profiling/` | §XLIX metrics, §L performance failure taxonomy; Phase 6: `engine_report`/`print_report` (stable machine-readable attribution from engine receipts), `kv_footprint`/`page_footprint` (derived from the page table via `Inference.kv_bytes`); Phase 7: `unique_kv_bytes` (live storage counted once per distinct page array across managers — the declared-share win metric); no CUDA in this module | 6 — items A, B ✓; 7 — item C ✓ |
+ | `Planning` | `src/Planning/` | §XVII execution synthesis, §XIX memory planning, §LXI policies | still empty (Phase 7 was prefix share; Phase 8 was the Lava extension) |
+-| `Autotune` | `src/Autotune/` | §XXVI; KV program §7 — the realization-search LOOP: `Candidate`/`TuneResult`, `register!` (registration order), `search!` (correctness gate before timing; compile+warmup untimed, §XXXIII), `select` (cache hit replays the same result), `invalidate!`/`invalidate_all!`, one `:autotune_select` receipt per search/hit; imports neither CUDA nor Lava (§VII) — extensions register candidates in `__init__` (Phase 9: `:cublas_mul` + `:generic_mul` for CUDA `matmul!`, gated at the CUDA op atol; the op consults and dispatches to the cached winner, §LXXXII) | 9 — items A, B, C, D ✓ |
++| `Autotune` | `src/Autotune/` | §XXVI; KV program §7 — the realization-search LOOP: `Candidate`/`TuneResult`, `register!` (registration order), `search!` (correctness gate before timing; compile+warmup untimed, §XXXIII), `select` (cache hit replays the cached result with `cache_hit = true` and EMITS NOTHING — a hit is not a decision, `TuneResult.cache_hit` is the consult-site signal; Phase 10G), `invalidate!`/`invalidate_all!`, one `:autotune_select` receipt per SEARCH (schema unchanged); imports neither CUDA nor Lava (§VII) — extensions register candidates in `__init__` (Phase 9: `:cublas_mul` + `:generic_mul` for CUDA `matmul!`, gated at the CUDA op atol; the op consults and dispatches to the cached winner, §LXXXII) | 9 — items A, B, C, D ✓; 10G ✓ |
+ | `benchmark/compare_eager.py` | `benchmark/` | §LXXXIII gate G2 — eager-PyTorch reference timings (first-token / warmed) for the named-model factor: external python3 binary, local weights only (`local_files_only=True`, never downloads), no torch.compile, JSON or key-value output; `--probe` is the REAL torch gate (dry `import torch` + `import transformers`, exit 3 when missing — `--help` is not a probe, Phase 10B); invoked by the G2 block in `benchmark/runbenchmarks.jl` when snapshot + CUDA + torch exist, named skip otherwise — torch is NEVER a Project.toml dep (§VII) | 10 — item D ✓; 10B — item A ✓ |
+ | `Representation` | `src/Representation/` | §XIV materialization, §XV quantization-as-lowering; research seed: `docs/research/REPRESENTATION_PROGRAM.md` | 10 |
+ | `Agents` | `src/Agents/` | §XXXIII–XLII agent primitives; JSON is wire format, not ontology | 12 |
+@@ -50,7 +50,7 @@ policy (internal: NIRA); **Lava** = Vulkan substrate.
+ | `docs/research/CYAN_TRIAL_GESSO_FALLOUT.md` | Cyan trial metal detector. Promotion filter. Not a work item. |
+ | `docs/research/CYAN_ELASTIC_ORCHESTRATION.md` | Seam pointer: Cyan MAO freeze. Not a Gesso /goal. `src/Agents.jl` stays empty. |
+ | `docs/research/ROADMAP_NOW.md` | Living phase map. Not a Buffy goal. |
+-| `docs/research/SPEED_FLOOR.md` | Board constraint: named-model decode factor before §LXXXIII. 10C + 10D LANDED (`PHASE10D_FOUNDATION_HARDENING.md`, 2026-10-02): HF importer, frozen `gesso-cpu` golden, named-model fork bytes (CPU N = 1_474_560), export inventory, `@inferred` byte counters. |
++10F LANDED (`PHASE10F_CUDA_DECODE_ALLOC.md`, 2026-10-03): the CUDA decode broadcast wrappers are gone (device kernels behind `CuArray` specializations of the SAME core copy helpers), §2 row 3 updated again. 10G LANDED (`PHASE10G_AUTOTUNE_RECEIPT.md`, 2026-10-03): miss-only Autotune receipts (a cache hit is not a decision) — SmolLM2 CUDA warmed `decode!` 1,269,616 B → 942,128 B, under item D's 1 MiB gate. 10H LANDED (`PHASE10H_TYPE_STABILITY.md`, 2026-10-03): §CIX amended so storage is ONE type parameter; three `@inferred` gates green; §2a.2 type-stable decode landed. |
+ | `docs/research/EXOTIC_CAPABILITY_MASTER_LEDGER.md` | Capability mine (meta-primitives, meta-tools). Parked. Not a /goal. |
+ | `docs/Gesso_musings.md` | The dangerous notebook. Parking lot — promote deliberately, never wholesale. |
+ | `docs/DECISION_PACKETS.md` | Architecture escalations (decision-packet format). Packets 1–2 resolved into §CIX; remaining packets follow the same rule: resolved INTO canon, never in code. |
+@@ -63,7 +63,7 @@ policy (internal: NIRA); **Lava** = Vulkan substrate.
+ |---|---|
+ | `AGENTS.md` | **Binding agent charter** (transcribes §LXXI/§LXXII/§LXX). |
+ | `.github/ISSUE_TEMPLATE/work-item.md` | §LXXI work-item format. |
+-| `docs/goals/` | Sprint goals. Phases 1–9 and living 10/10B/10C/10D landed (10D 2026-10-02: `PHASE10D_FOUNDATION_HARDENING.md` — inventory, fail-closed hunt, `@inferred` byte counters, 1 RPDO win). G2 factor 0.692×. Canon §LXXXIII parked. |
++| `docs/goals/` | Sprint goals. Phases 1–9 and living 10/10B/10C/10D/10E/10F/10G/10H landed (10F 2026-10-03: `PHASE10F_CUDA_DECODE_ALLOC.md` — CUDA decode broadcast-wrapper removal via device-storage specialization, restored 256 KiB CUDA alloc gates; 10G 2026-10-03: `PHASE10G_AUTOTUNE_RECEIPT.md` — resolved 10F's escalation packet, miss-only Autotune receipts, SmolLM2 CUDA 1 MiB gate green; 10H 2026-10-03: `PHASE10H_TYPE_STABILITY.md` — closed 10D packet P-1, one storage type parameter, the three `@inferred` gates green). G2 factor 1.452×. Canon §LXXXIII parked. |
+ | `.github/PULL_REQUEST_TEMPLATE.md` | §LXXII receipt-as-PR. |
+ | `scripts/` + `Makefile` | `make test / bench / format / format-check / freeze`. |
+ | `benchmark/results/*.tsv` | Regression corpus (accrues from every bench run). |
+diff --git a/docs/goals/PHASE10B_SPEED_FLOOR_CLOSE.md b/docs/goals/PHASE10B_SPEED_FLOOR_CLOSE.md
+index 30b5ef8..b133f7a 100644
+--- a/docs/goals/PHASE10B_SPEED_FLOOR_CLOSE.md
++++ b/docs/goals/PHASE10B_SPEED_FLOOR_CLOSE.md
+@@ -86,6 +86,30 @@ SmolLM2-135M-when-present (skipped here); backends: CUDA (fast paths
+ :attn_gemm + :argmax), CPU (oracle + ids gate), Lava (unchanged, negatives
+ pinned).
+ 
++## Foreman close (encoding owner, 2026-10-01)
++
++Accept. Gauntlet green. Critic hole was real (`--help` vs `--probe`); Builder
++fixed it, plus junk-dir snapshot gate. Parallel workstream untouched.
++
++Same-fixture CUDA `Session.generate` [0,1,2]+3 greedy, post-warmup,
++schema 0.2.0 (not a PyTorch comparison):
++
++| when | row | median |
++|------|-----|--------|
++| Phase 8 (`fcc8cd3`, pre-GEMM) | `session_generate_3tok_cuda` | 17.9 ms |
++| Phase 10 (`fd4ed23`, `:attn_gemm`) | `session_generate_3tok_cuda` | 9.48 ms |
++| 10B (`llama_micro_gesso_cuda_warmed`) | dedicated two-clock row | 9.87 ms |
++| 10B first-token | compile inside | 42.1 ms |
++
++Warmed generate on this micro is ~1.9× the Phase 8 row. First-token is
++~4.3× warmed (compile). CPU generate on the same fixture is ~1.6 ms —
++launch tax still dominates llama_micro; do not put CUDA-vs-CPU on a
++slide. The board factor is still SmolLM2 vs eager PyTorch, still
++**NOT MEASURED**.
++
++Next is **ops**, not a Buffy recipe: `GESSO_SMOLLM2_DIR=<snapshot> make bench`.
++§LXXXIII stays parked. Packet (page-table kernel) waits on that factor.
++
+ **Known limits / unresolved.** G1 and the G2 factor remain ops-owned:
+ snapshot + torch on one box converts the three SmolLM2 skips to required
+ green and the factor row to a number (both sides' dtype stamps travel in
+diff --git a/docs/goals/PHASE10D_FOUNDATION_HARDENING.md b/docs/goals/PHASE10D_FOUNDATION_HARDENING.md
+index c800cb0..ee1936c 100644
+--- a/docs/goals/PHASE10D_FOUNDATION_HARDENING.md
++++ b/docs/goals/PHASE10D_FOUNDATION_HARDENING.md
+@@ -546,6 +546,10 @@ fusion-narration comments: none → all KEEP, nothing to fix. `@inferred`
+   path. Flipping the two `@test_broken` in test_type_stability.jl is the
+   exit condition. Not done here — the spec forbids inventing the
+   hierarchy in this sprint.
++  **RESOLVED by 10H (2026-10-03, `PHASE10H_TYPE_STABILITY.md`).** §CIX
++  was amended in exactly one clause: the ARRAY TYPE holding a tensor is
++  a trait-equivalent and may be a SINGLE type parameter `S`. All three
++  `@inferred` gates are green; the P-1 `@test_broken` trio is gone.
+ - **P-2 (decode! alloc profile)**: per-token Activations + gather-on-read
+   copies (SmolLM2 CPU 15.9 MB/token) are the §LXXVIII contract shape;
+   removing them needs Session scratch state — evidence handed to the
+diff --git a/docs/goals/PHASE4_CUDA.md b/docs/goals/PHASE4_CUDA.md
+index 87ddc81..6a751d7 100644
+--- a/docs/goals/PHASE4_CUDA.md
++++ b/docs/goals/PHASE4_CUDA.md
+@@ -10,7 +10,7 @@
+ **Status:** LANDED (Buffy, 2026-09-29). Items A/B/C committed
+ (9224a8c, e1cb74a, 5355a38); item D skip-or-green — RTX 5060 present, no
+ local SmolLM2 snapshot (gate compares device logits to the frozen CPU
+-golden at atol=1e-2 when both exist). Next: Phase 5.
++golden at atol=1e-2 when both exist). Next: `docs/goals/PHASE5_ENGINE.md`.
+ 
+ ---
+ 
+diff --git a/docs/goals/PHASE6_OBSERVABILITY.md b/docs/goals/PHASE6_OBSERVABILITY.md
+index f5f89ae..b2c95b3 100644
+--- a/docs/goals/PHASE6_OBSERVABILITY.md
++++ b/docs/goals/PHASE6_OBSERVABILITY.md
+@@ -11,9 +11,15 @@
+ **Depends on:** Phase 5a complete (`docs/goals/PHASE5_ENGINE.md`)
+ **Packets:** 1 and 2 stay closed.
+ 
+-**Status:** OPEN. Next after this lands: Phase 7 (one semantic win;
+-default pick is CoW / identity prefix share — a later closed recipe).
+-5b (scheduler / batching) is still not this sprint.
++**Status:** LANDED (Buffy, 2026-09-30). Items A–D committed
++(`4766699` Session receipts, `9807eaa` Profiling, `4bb81ad`
++TTFT/decode benches, `d9a7d0d` maps + §LXXIX, `74bfdbe`
++format/freezer). 1020 pass + 3 named skips; both runners green.
++Ids still equal the oracle; toy2 CUDA fingerprint print unchanged
++(`0.000376…` vs oracle, within atol). `kv_bytes` reconstructs from
++the page table. Attribution, not speed. Next:
++`docs/goals/PHASE7_PREFIX_SHARE.md`. Scheduler / continuous
++batching remains 5b.
+ 
+ ---
+ 
+@@ -295,13 +301,13 @@ decode vs KV bytes. We did not make it fast.
+ 
+ ## Exit checklist
+ 
+-- [ ] A, B, C landed
+-- [ ] D maps truthful
+-- [ ] `make test` green on CPU-only
+-- [ ] `make format` run
+-- [ ] `generate` still matches oracle ids
+-- [ ] toy2 fingerprint unchanged
+-- [ ] every generate leaves a receipt with prefill/decode/KV
+-- [ ] no ExecutionResult, no scheduler, no speed claims
+-- [ ] README does not advertise tok/s as a product number
+-- [ ] receipt
++- [x] A, B, C landed
++- [x] D maps truthful (§LXXIX status in Gesso_Stack.md)
++- [x] `make test` green on CPU-only (Buffy receipt: 1020 pass + 3 named skips)
++- [x] `make format` run (`74bfdbe`)
++- [x] `generate` still matches oracle ids
++- [x] toy2 fingerprint unchanged
++- [x] every generate leaves a receipt with prefill/decode/KV
++- [x] no ExecutionResult, no scheduler, no speed claims
++- [x] README does not advertise tok/s as a product number
++- [x] receipt (Buffy §LXXII, 2026-09-30; Grok accepted from the tree + screenshot)
+diff --git a/docs/research/KV_MEMORY_PROGRAM.md b/docs/research/KV_MEMORY_PROGRAM.md
+index 6a90719..bcad0aa 100644
+--- a/docs/research/KV_MEMORY_PROGRAM.md
++++ b/docs/research/KV_MEMORY_PROGRAM.md
+@@ -7,9 +7,9 @@
+                     (external paper: BLOCKED until first composition
+                      experiment produces numbers — Gesso_Stack.md §XLII,
+                      North Star §42: no paper before there is data)
+-    Derived from:       Gesso_musings.md (repo root — the dangerous
+-                        notebook — do not sanitize; promote from it,
+-                        never wholesale)
++    Index:              docs/research/README.md
++    Derived from:       Gesso_musings.md (the dangerous notebook —
++                        do not sanitize; promote from it, never wholesale)
+     Canon:              docs/Gesso_Stack.md remains canon; this document
+                         extends §XXXI, §X, §LIX and feeds Phases 5/9/10.
+ 
+diff --git a/docs/research/README.md b/docs/research/README.md
+index 645bf40..a355189 100644
+--- a/docs/research/README.md
++++ b/docs/research/README.md
+@@ -32,7 +32,37 @@ snapshot; G2 factor is 0.692× (`2026-10-02.tsv`). 10C landed
+ (CPU N = 1_474_560; fork == one session, isolated == 2N). 10D landed
+ 2026-10-02 (`PHASE10D_FOUNDATION_HARDENING.md`): export inventory +
+ parked-empty fence, fail-closed hunt, `@inferred` byte counters.
+-Canon §LXXXIII parked.
++10E landed 2026-10-02 (`PHASE10E_FUSED_DECODE.md`): Session-owned
++decode workspace, in-place `gather_kv!`, in-place GQA repeat; warmed
++`decode!` host allocation is O(1) in seqlen (SmolLM2 CPU 15,864,048 →
++100,480 B); G2 factor republished at 0.737×.
++10F landed 2026-10-03 (`PHASE10F_CUDA_DECODE_ALLOC.md`): the CUDA
++decode path's per-head broadcast wrappers are gone — device kernels
++behind `CuArray` specializations of the SAME core copy helpers, so
++`Inference.jl` now charges **0 B** to a warmed SmolLM2 CUDA `decode!`.
++Warmed CUDA `decode!` 5,094,736 → 1,269,616 B (4.0×); toy2/micro CUDA
++are back under item D's original 256 KiB gate (97,312 / 100,736 B);
++G2 factor republished at 1.452× (Gesso warmed 487 → 240 ms). The
++SmolLM2 CUDA 1 MiB ceiling was still missed by 221 KB — escalated as a
++packet inside the goal, gate left at the DECLARED 1 MiB as a tracked
++`@test_broken` rather than raised again.
++10G landed 2026-10-03 (`PHASE10G_AUTOTUNE_RECEIPT.md`): the packet is
++closed and the gate is GREEN. A cache hit is not a decision (§LXXII
++records a change; the miss receipt already named the winner), so
++`Autotune.select` returns the cached `TuneResult` and emits no receipt.
++Warmed SmolLM2 CUDA `decode!` 1,269,616 → 942,128 B (1.35×, 106,448 B
++under 1 MiB); `Autotune.jl` per-token cost 320,509 → 37,136 B. Miss
++receipts are untouched — the receipt schema did not bump. Canon
++§LXXXIII parked.
++10H landed 2026-10-03 (`PHASE10H_TYPE_STABILITY.md`): 10D packet P-1
++closed. §CIX amended by exactly one clause — the ARRAY TYPE that
++physically holds a tensor is a trait-equivalent and may be a single
++type parameter `S` on the §XI family structs; shape, seqlen, batch
++and allocation identity stay fields, and no second axis was added.
++`@inferred reference_prefill` and `@inferred decode!` are GREEN on
++toy2 and llama_micro, so the `@test_broken` trio is gone and the
++snapshot-set Broken count is 0. Type-stable dispatch also cut warmed
++SmolLM2 CUDA `decode!` 942,128 B → 814,544 B.
+ Tackle each problem in this folder individually when its phase owns it.
+ 
+ ---
+@@ -47,6 +77,8 @@ Tackle each problem in this folder individually when its phase owns it.
+ | [CYAN_TRIAL_GESSO_FALLOUT.md](CYAN_TRIAL_GESSO_FALLOUT.md) | promotion filter from the first Cyan/Palette engineer trial | generality × composability × ecosystem leverage, or it stays above Gesso | Phase 6+ spikes; not Phase 5 |
+ | [CYAN_ELASTIC_ORCHESTRATION.md](CYAN_ELASTIC_ORCHESTRATION.md) | Gesso seam for Cyan MAO (WorkTree / leases / branch ids) | Cyan owns orchestration; Gesso consumes ids later | pointer only; freeze lives in Cyan Harness docs; not a /goal |
+ | [ROADMAP_NOW.md](ROADMAP_NOW.md) | living reading of Phases 5–22 after 0–4 + the Cyan trial | 5a engine now; speed floor next; 5b and Phase 10 after G1∧G2∧G3 | map only — not a /goal |
++| [BREADTH-0_FINDINGS.md](BREADTH-0_FINDINGS.md) | BREADTH-0 landed: model breadth is an adapter exercise, not an engine rewrite | ArchitectureSpec + family adapters + canonical parameter identity + tokenizer protocol + capability lattice; a second family (Phi-3, fused QKV) runs on the CPU oracle | findings and receipt for the BREADTH-0 batch; open limitations listed there |
++| [CAPABILITY-0a_FINDINGS.md](CAPABILITY-0a_FINDINGS.md) | CAPABILITY-0a landed: the capability declaration is tied to execution | five-arm biconditional over `supports`; both directions mutation-verified; a from-scratch `:attention` fixture | findings and receipt; `supports` is still a hand-written Set — deriving it from dispatch is CAPABILITY-0b |
+ | [SPEED_FLOOR.md](SPEED_FLOOR.md) | board constraint: somewhat-close decode before exotic compilers | named model + eager-PyTorch factor + fork-preserving fused step; compiler attribution before a Julia fork | gate on §LXXXIII; 10C recipe landed (`PHASE10C_NAMED_MODEL_HYGIENE.md`): golden frozen, named-model fork bytes pinned |
+ | [EXOTIC_CAPABILITY_MASTER_LEDGER.md](EXOTIC_CAPABILITY_MASTER_LEDGER.md) | capability mine: meta-primitives, Gesso/Palette/Cyan primitives, six meta-tools | strings to undiscovered capabilities; evidence labels; not a roadmap override | parked; deep-dives after speed floor |
+ 
+@@ -74,7 +106,7 @@ program until someone writes one **and** a phase owns it.
+ | One semantic win (pick one) | §LXXX | **7 landed 2026-09-30** (`PHASE7_PREFIX_SHARE.md`) |
+ | Lava / Vulkan | §LXXXI | **8 landed 2026-09-30** (`PHASE8_LAVA.md`) |
+ | Autotune | §LXXXII | **9 landed 2026-10-01** (`PHASE9_AUTOTUNE.md`) |
+-| Speed floor rungs 1–2 (device greedy + GEMM, G2 harness) | §LXXXII/§LXXXIII | **10/10B/10C/10D landed**; G2 factor 0.692×. §LXXXIII representation planner stays PARKED |
++| Speed floor rungs 1–2 (device greedy + GEMM, G2 harness) | §LXXXII/§LXXXIII | **10/10B/10C/10D/10E/10F/10G/10H landed**; G2 factor 1.452× (was 0.737× at 10E, 0.692× at 10B). §LXXXIII representation planner stays PARKED |
+ | Representation planner | §LXXXIII | after G1∧G2∧G3 — seed is REPRESENTATION_PROGRAM.md |
+ | Memory planner | §LXXXIV | Phase 11 |
+ | Agent runtime / Palette / Cyan / C ABI | §LXXXV–LXXXIX | Phases 12–16 |
+diff --git a/docs/research/ROADMAP_NOW.md b/docs/research/ROADMAP_NOW.md
+index 3de35e0..f2e633c 100644
+--- a/docs/research/ROADMAP_NOW.md
++++ b/docs/research/ROADMAP_NOW.md
+@@ -30,8 +30,30 @@ eager 0.436 s / Gesso CUDA 0.630 s; Gesso F32 vs eager bfloat16).
+ 10C landed 2026-10-02 (`PHASE10C_NAMED_MODEL_HYGIENE.md`). 10D
+ landed 2026-10-02 (`PHASE10D_FOUNDATION_HARDENING.md`): export
+ inventory + parked-empty fence, fail-closed vanished-golden gate,
+-`@inferred` byte counters, 1 RPDO win. Fusion is the pass after
+-10D. Canon §LXXXIII stays parked.
++`@inferred` byte counters, 1 RPDO win. 10E landed 2026-10-02
++(`PHASE10E_FUSED_DECODE.md`): Session-owned decode workspace, in-place
++`gather_kv!`, in-place GQA repeat; warmed `decode!` host allocation
++89,120 → 10,736 B (toy2 CPU), 139,984 → 8,528 B (llama_micro CPU),
++15,864,048 → 100,480 B (SmolLM2 CPU). G2 factor republished at
++**0.737×** (2026-10-02.tsv; Gesso CUDA warmed 0.630 → 0.487 s, eager
++0.436 → 0.359 s — the ratio moved against us while both sides got
++faster). 10F landed 2026-10-03 (`PHASE10F_CUDA_DECODE_ALLOC.md`): the
++CUDA decode broadcast wrappers are gone — device kernels behind
++`CuArray` specializations of the SAME core copy helpers, so
++`Inference.jl` charges 0 B to a warmed SmolLM2 CUDA `decode!`.
++Warmed CUDA `decode!` 5,094,736 → 1,269,616 B (4.0x); toy2/micro CUDA
++back under item D's original 256 KiB gate (97,312 / 100,736 B); G2
++republished at **1.452×** (2026-10-03.tsv; Gesso CUDA warmed 0.487 →
++0.240 s, eager 0.359 → 0.348 s). SmolLM2 CUDA missed the 1 MiB ceiling
++by 221 KB and was carried as a `@test_broken` with an escalation packet
++in the goal file — the ceiling was NOT raised. 10G landed 2026-10-03
++(`PHASE10G_AUTOTUNE_RECEIPT.md`): a cache hit is not a decision, so
++`Autotune.select` returns the cached `TuneResult` and emits NO receipt
++(the miss receipt already named the winner). Warmed SmolLM2 CUDA
++`decode!` 1,269,616 → 942,128 B (1.35x, 106,448 B UNDER 1 MiB);
++`Autotune.jl` per-token cost 320,509 → 37,136 B. The 1 MiB gate is
++green and the ceiling was NOT raised to make it so. Canon §LXXXIII
++stays parked.
+ 
+ Canon still lists Phases 0–22 in `docs/Gesso_Stack.md` §LXXIII–§XCV.
+ This file says what that list *means* after Phases 0–4 and the first
+@@ -114,11 +136,32 @@ G1–G3   speed floor                   LANDED 2026-10-01  PHASE10_SPEED_FLOOR.m
+                                       G3 llama_micro 2048 vs 4096 held;
+                                       named-model share measured (10C:
+                                       SmolLM2 CPU N = 1_474_560).
+-                                      Fusion later.
++                                      Fusion: PHASE10E LANDED.
+ 10C     named-model hygiene           LANDED 2026-10-02  PHASE10C_NAMED_MODEL_HYGIENE.md
+ 10D     foundation hardening          LANDED 2026-10-02  PHASE10D_FOUNDATION_HARDENING.md
+                                       (inventory, fail-closed hunt,
+-                                      @inferred, ≤5 RPDO wins; fusion later)
++                                      @inferred, ≤5 RPDO wins)
++10E     fused decode                  LANDED 2026-10-02  PHASE10E_FUSED_DECODE.md
++                                      Session scratch + in-place gather
++                                      + in-place GQA repeat (10D packet
++                                      P-2); warmed decode! alloc ≤16 KiB
++                                      toy2/micro CPU; G2 factor 0.737×
++10F     CUDA decode alloc             LANDED 2026-10-03  PHASE10F_CUDA_DECODE_ALLOC.md
++                                      broadcast wrappers + cuda_ops cut;
++                                      CUDA decode! 5,094,736 →
++                                      1,269,616 B; G2 factor 1.452×;
++                                      SmolLM2 1 MiB ceiling packeted
++10G     Autotune receipt              LANDED 2026-10-03  PHASE10G_AUTOTUNE_RECEIPT.md
++                                      miss-only emission: a hit is
++                                      not a decision; SmolLM2 CUDA
++                                      decode! 1,269,616 → 942,128 B;
++                                      the 1 MiB gate is GREEN
++10H     type stability (P-1)          LANDED 2026-10-03  PHASE10H_TYPE_STABILITY.md
++                                      one storage type parameter `S`
++                                      on the §XI families; the three
++                                      @inferred gates GREEN; Broken 3 → 0;
++                                      SmolLM2 CUDA decode! 942,128 →
++                                      814,544 B (type-stable dispatch)
+ 10–11   weight compiler + memory      AFTER G1∧G2∧G3 + encoding-owner open
+ 12–13   shared model runtime          AFTER Cyan MAO v0 reducer exists;
+                                       consume branch/lease ids
+@@ -144,9 +187,12 @@ pages. Full gate, hot-path inventory, and RPD/RPDO split:
+ `docs/research/SPEED_FLOOR.md`.
+ 
+ Do not open canon Phase 10 (representation) until G1∧G2∧G3 and
+-the encoding owner writes that recipe. 10D is landed. Next: fused
+-decode (factor next to 0.692×) or Llama-family import glue, one
+-architecture at a time — each a new closed file.
++the encoding owner writes that recipe. 10F, 10G and 10H are landed
++(`PHASE10H_TYPE_STABILITY.md` closed 10D packet P-1 — one storage
++type parameter `S`, the three `@inferred` gates GREEN, snapshot-set
++Broken count 0), so no Gesso recipe is currently open. Llama-family
++import glue remains one architecture at a time, each a new closed
++file. Launch floor and Autotune `candidates()` copy stay named KEEP.
+ 
+ The speed floor has two clocks: application (fusion, D2H, gather)
+ and Julia compiler (TTFX, invalidation, GPUCompiler, Lava SPIR-V).
+diff --git a/docs/research/SPEED_FLOOR.md b/docs/research/SPEED_FLOOR.md
+index 928849a..7f12dc7 100644
+--- a/docs/research/SPEED_FLOOR.md
++++ b/docs/research/SPEED_FLOOR.md
+@@ -114,9 +114,9 @@ Read from `src/` on 2026-10-01. No tok/s claim is made here.
+ 
+ | # | Mechanism | Where | Why it costs |
+ |---|-----------|--------|--------------|
+-| 1 | Attention **gathers** paged KV into contiguous scratch every step | `kv_manager.jl` `gather_kv!`; `session.jl` | Pages are the cache; the manager is not a kernel. FlashAttention-class fusion is glue we have not written. |
++| 1 | Attention **gathers** paged KV into contiguous scratch every step | `kv_manager.jl` `gather_kv!`; `session.jl` | Pages are the cache; the manager is not a kernel. FlashAttention-class fusion is glue we have not written. **10E:** the gather is now IN PLACE into a Session-owned context-length workspace (`gather_kv!` writes `dest[1:len]`, tail untouched) — the per-step *allocation* is gone, the gather itself remains. **10F:** on CUDA the gather's row copies are one kernel each instead of a `@views .=` broadcast wrapper per row (`_copy_rows_at!`), which is what took `kv_manager.jl` from 380,160 B to 3,840 B per warmed SmolLM2 `decode!`. |
+ | 2 | Prefill still D2H of the logits row; decode greedy is device-side | `session.jl` | CUDA `:argmax` — host gets one Int on **decode**. `prefill!` still returns `Array(logits)`. Lava: full-row host argmax. |
+-| 3 | Unfused op soup + gather then GEMM | `cpu.jl` / `cuda_ops.jl` / `lava_ops.jl` / `session.jl` | Layer ops still separate launches. CUDA attention is now device `mul!` over **gathered** scratch (`:attn_gemm`). Gather every step remains. Phase 9 Autotune still only selects among two **matmuls**. |
++| 3 | Unfused op soup + gather then GEMM | `cpu.jl` / `cuda_ops.jl` / `lava_ops.jl` / `session.jl` | Layer ops still separate launches. CUDA attention is now device `mul!` over **gathered** scratch (`:attn_gemm`). Gather every step remains. Phase 9 Autotune still only selects among two **matmuls**. **10E:** decode no longer rebuilds per-token Activations / gathered arrays / GQA repeats — one Session-owned workspace serves every layer, and the CPU op bodies reach storage through typed helpers, so warmed `decode!` allocation is O(1) in seqlen. Ops are still separate calls. **10F:** on CUDA the per-head split/merge/GQA-repeat copies and the rmsnorm reduction+apply are now elementwise/reduction kernels, dispatched as `CuArray` specializations of the same core helpers (no new type, `Inference.jl` charges 0 B to a warmed `decode!`); what remains is the launch floor — ~9,300 `@cuda`/CUBLAS launches per token at ~528–1,088 B each — so warmed SmolLM2 CUDA `decode!` host allocation is 1,269,616 B. **10G:** of that, 320,509 B was not engine work at all — §LXXII Autotune receipt construction re-emitted on every cache HIT (633 consults per token, one decision copied 633 times). A cache hit is not a decision: `select` now returns the cached `TuneResult` and emits nothing, and the miss receipt still names the winner (no schema bump). Warmed SmolLM2 CUDA `decode!` is 942,128 B, 106,448 B UNDER item D's 1 MiB — the ceiling was not raised to get there. What is left is the launch floor plus a 37,136 B consult residual. |
+ | 4 | Batch = 1, `generate` RESETS | `session.jl` | No continuous batching, no prefix-reuse across `generate` calls. `fork` is the share constructor; `generate` drops it. |
+ | 5 | Host-side interpreter loop | `Inference.jl` | Julia orchestrates layers in a serial for-loop. Fine for correctness. Death for decode tok/s until the inner step is one (or few) device graphs. |
+ | 6 | Lava path is GPUArrays broadcast + `mul!` | `lava_ops.jl` | Portable seam (Phase 8). Untuned. CUDA is the speed horse; Lava stays the portable proof. |
+@@ -150,12 +150,136 @@ must not rediscover information the semantic core already had
+ exists *inside* Gesso's meaning pipeline, not as a generic
+ "make Julia faster" side quest.
+ 
++### 2a.0 WHERE DECODE TIME ACTUALLY GOES (measured 2026-10-03)
++
++**This is NOT ladder rung 1.** Rung 1 below (the compile/execute
++attribution table) is still OPEN and is still the precondition for
++a Julia fork. This subsection answers a different, narrower
++question — *on the steady-state clock, is decode limited by
++arithmetic, by memory traffic, or by neither?* — because the G2
++factor (1.452x, SmolLM2-135M) was measured on exactly one model
++size and nothing said whether it generalises.
++
++**What was measured.** Gesso CUDA decode over a ladder of
++Llama-shaped checkpoints from 1M to 843M parameters, plus real
++SmolLM2-135M. Checkpoints are synthetic but REAL safetensors +
++`config.json` written by the protocol `test_import_llama.jl`
++already uses, so the closed Llama importer takes them with no
++special casing. Weights are RANDOM: this subsection measures
++**time and host allocation only**. Output quality is the test
++suite's job, and no claim is made here about what these
++checkpoints generate.
++
++```
++model      h    L      V    params  ms/token  tok/s   GB/s  alloc/tok
++tiny     128    4   2048      1.0M    4.122  242.6    1.0  119,984 B
++small    256    8   4096      7.3M    5.658  176.8    5.2  222,640 B
++base     512   12   8192     41.9M    8.804  113.6   19.1  331,216 B
++mid      768   16  16384    125.8M   11.050   90.5   45.5  436,560 B
++large   1024   20  32768    285.2M   15.227   65.7   74.9  542,672 B
++xl      1536   28  32768    843.1M   23.085   43.3  146.1  758,640 B
++SmolLM2  576   30  49152    147.8M   21.303   46.9   27.7  811,312 B
++```
++
++Fitting `ms = c0 + a*L + b*L*h^2` over all seven rows:
++
++```
++ms/token = 0.797  +  0.6528 * L  +  6.03e-08 * L * h^2
++            fixed     PER-LAYER        compute
++```
++
++| term | value | at SmolLM2 (h=576, L=30) |
++|---|---|---|
++| per-session fixed | 0.797 ms | 0.8 ms |
++| **per-layer launch floor** | **0.653 ms** | **19.58 ms** |
++| compute | 6.03e-08·L·h² ms | 0.60 ms |
++
++**THE HEADLINE: at SmolLM2 scale, 97.0% of decode time is per-layer
++launch latency.** 19.6 ms of a 21.3 ms token. Actual arithmetic is
++0.6 ms. The overhead floor is *linear in layer count* and almost
++independent of width, so it dominates everything a demo would run:
++
++```
++h=576  L=30: overhead 19.58 ms | compute  0.60 ms | 97.0% overhead
++h=1024 L=30: overhead 19.58 ms | compute  1.90 ms | 91.2%
++h=1536 L=30: overhead 19.58 ms | compute  4.27 ms | 82.1%
++h=2048 L=30: overhead 19.58 ms | compute  7.58 ms | 72.1%
++h=3072 L=30: overhead 19.58 ms | compute 17.06 ms | 53.4%
++h=4096 L=30: overhead 19.58 ms | compute 30.33 ms | 39.2%
++crossover (overhead == compute) at h ~= 3291, L=30
++```
++
++**And it is not memory-bound either.** Achievable device
++bandwidth on this box, measured (triad, 6 s sustained ramp, clocks
++verified at SM 2782 / MEM 13801 MHz before the timed window):
++**371 GB/s**. Not the ~1.8 TB/s vendor spec — the achieved figure,
++which is the only one this repo is entitled to cite. Against it:
++
++```
++model      GB/s   % of 371 GB/s achieved
++base      19.1        5.1%
++mid       45.5       12.3%
++large     74.9       20.2%
++xl       146.1       39.4%
++SmolLM2   27.7        7.5%
++```
++
++SmolLM2 decode moves 27.7 GB/s of a 371 GB/s stream. **The GPU is
++idle ~92% of the decode.** (The triad is a simple streaming kernel;
++decode's access pattern is worse, so the honest reading is that the
++real ceiling is at or below 371 GB/s and the percentage is an
++optimistic bound.)
++
++**METHOD, and the bug it caught.** First attempt at this table was
++WRONG and was thrown away. 30 measured tokens per model, taken right
++after warmup, with multi-second gaps between models (safetensors
++write, H2D). On this box the GPU sits at `pstate P8` / 405 MHz
++memory clock when briefly loaded and needs seconds of CONTINUOUS
++work to promote to boost — the first bandwidth attempt read 60 GB/s
++and 186 GB/s for triad and copy, at 10.9 W of a 145 W limit. The
++numbers in this subsection use a sustained 2 s ramp before EACH
++timing, 100 measured tokens so clocks settle inside the window,
++and CLOCKS PRINTED PER ROW as evidence. Compile and the Autotune
++searches are outside every timed window (§XXXIII rule 1). This is
++recorded because the same trap will catch the next person who runs a
++G2 row on this hardware.
++
++**What this does and does not license.**
++
++* LICENSES: "Gesso at SmolLM2 scale is 97% launch-latency-bound and
++  runs at 7.5% of this GPU's achieved memory bandwidth." That is a
++  measured statement with a stated method.
++* DOES NOT LICENSE: any eager-PyTorch comparison. **torch is not
++  installed on the demo box**, so the 1.452x factor could NOT be
++  re-measured at any size here. The only Llama-shaped model present
++  is SmolLM2-135M; the other cached snapshot is `model_type:
++  "needle"` and is not loadable.
++* CONSEQUENCE FOR THE 1.452x CLAIM — corrected.* It was tempting to
++  predict the factor decays with model size. This data says the
++  opposite of the intuitive story: we stay launch-bound far longer
++  than expected (crossover at h~=3291, past any demo-sized model),
++  so the factor is an OVERHEAD factor and plausibly HOLDS or
++  IMPROVES against eager, whose per-layer dispatch is worse. That is
++  a **hypothesis, not a measurement** — PyTorch is not on this box
++  and the claim is not made. What IS measured is that 46.9 tok/s at
++  135M sits ~an order of magnitude below where a fused
++  llama.cpp-class runtime would be, and the reason is entirely
++  per-layer overhead (0.653 ms), not anything semantic.
++
++**NEXT MEASUREMENT, if the demo needs the factor curve:** install
++torch and obtain one real Llama-shaped checkpoint above 1B params
++(the harness `benchmark/compare_eager.py` runs as-is). Until then
++the factor is a single point on one model and should be quoted as
++exactly that.
++
+ ### Exhaust this ladder, in order
+ 
+ 1. **Attribute.** Split every G2 run into source load, package
+    load, inference, specialization, LLVM, native emit, GPUCompiler,
+    (Lava: SPIR-V + pipeline), GPU execute, D2H. A performance claim
+-   without this decomposition is not actionable. The ancient texts
++   without this decomposition is not actionable. **STILL OPEN** —
++   §2a.0 above measures the steady-state decode regime only and is
++   not a substitute for this table. The ancient texts
+    §3 are the instrument list. No Julia **compiler fork** begins
+    until this table exists for SmolLM2 decode on the demo box.
+ 2. **Win without modifying Julia** (ancient texts §4). Type
+@@ -165,6 +289,22 @@ exists *inside* Gesso's meaning pipeline, not as a generic
+    restart is recovery not the hot path. Lava already does not
+    precompile on 1.12 — that is a compiler-layer finding we
+    already paid for.
++   **10H LANDED the first rung: type stability on the decode
++   step.** §CIX was amended so the array type holding a tensor is
++   ONE trait-equivalent type parameter `S` on the §XI families and
++   the Session engine buffers. `@inferred reference_prefill` and
++   `@inferred decode!` are GREEN on toy2 and llama_micro (10D's
++   packeted `@test_broken` trio is gone). The measured side effect
++   is an allocation win, because type-stable dispatch stops boxing
++   dynamic-dispatch targets: warmed SmolLM2 CUDA `decode!`
++   942,128 B → **814,544 B** (`Profile.Allocs`: cuda_ops.jl
++   601,552 → 550,616 B, session.jl 214,652 → 156,188 B). §2a.0
++   (measured) now says WHY that win was available and what is
++   left: at SmolLM2 scale decode is **97.0% per-layer launch
++   latency** at 0.653 ms/layer, and 7.5% of this GPU's achieved
++   371 GB/s. The remaining rungs — bounded specialization,
++   invalidation control, persistent worker — are open, and §2a.0
++   says the launch floor is what they and fusion have to beat.
+ 3. **GPUCompiler / Lava emitter** as the portable-fast surface
+    (ancient texts §11–13): Julia IR before GPUCompiler sees the
+    kernel, then fusion, then SPIR-V quality. CUDA remains the

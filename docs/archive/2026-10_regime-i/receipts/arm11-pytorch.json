@@ -1,0 +1,49 @@
+{
+  "schema": "gesso-independent-performance-v1",
+  "backend": "PyTorch CUDA eager",
+  "torch": "2.11.0+cu128",
+  "transformers": "5.18.0",
+  "dtype": "float32",
+  "tf32": false,
+  "initialization_seconds": 75.23628432000987,
+  "load_seconds": 3.213722120039165,
+  "records": [
+    {
+      "prompt": "Hello",
+      "first_use_seconds": 10.410492045979481,
+      "samples_seconds": [
+        0.36035201099002734,
+        0.37076486996375024,
+        0.37548908800818026
+      ],
+      "median_seconds": 0.37076486996375024,
+      "end_to_end_new_tokens_per_second": 21.57701726375037
+    },
+    {
+      "prompt": "The quick brown fox",
+      "first_use_seconds": 2.7395261750207283,
+      "samples_seconds": [
+        0.3653801900218241,
+        0.37125185801414773,
+        0.36116455803858116
+      ],
+      "median_seconds": 0.3653801900218241,
+      "end_to_end_new_tokens_per_second": 21.89500202384306
+    },
+    {
+      "prompt": "Julia is a programming language.",
+      "first_use_seconds": 0.3534342519706115,
+      "samples_seconds": [
+        0.360188192978967,
+        0.3542829629732296,
+        0.3593474100343883
+      ],
+      "median_seconds": 0.3593474100343883,
+      "end_to_end_new_tokens_per_second": 22.262578709651553
+    }
+  ],
+  "device": "NVIDIA GeForce RTX 5060",
+  "device_total_memory": 8172666880,
+  "peak_allocated_bytes": 555947008,
+  "compile_excluded": true
+}
