@@ -293,3 +293,87 @@ function _qgemv_expert!(
 end
 
 _is_quant_expert_bank(s) = s isa GgufQuantSlice || s isa GpuQuantSlice
+
+# Row-chunked host GEMV. Each chunk is the same kernel on a view of the rows
+# [j0, j1]: q is shifted by whole rows and y by the same rows, so every output
+# element is computed by exactly one task with the single-threaded summation
+# order. Results are bit-identical for any chunk count.
+const _QGEMV_MIN_ROWS = 8
+
+function _qrow_bytes(ggml_type::Int32, ne0::Int)
+    ggml_type == GGML_TYPE_F32 && return ne0 * 4
+    return div(ne0, QK_K) * _iq_block_bytes(ggml_type)
+end
+
+function _qgemv_bytes_threaded!(
+    y::AbstractVector{Float32},
+    x::AbstractVector{Float32},
+    q,
+    ggml_type::Int32,
+    ne0::Int,
+    ne1::Int,
+    alpha::Float32,
+    beta::Float32;
+    nchunks::Int=min(Threads.nthreads(), max(1, cld(ne1, _QGEMV_MIN_ROWS))),
+)
+    length(y) == ne1 || error("qgemv: y length $(length(y)) ≠ ne1 $ne1")
+    length(x) == ne0 || error("qgemv: x length $(length(x)) ≠ ne0 $ne0")
+    nc = clamp(nchunks, 1, ne1)
+    rb = _qrow_bytes(ggml_type, ne0)
+    nq = length(q)
+    Threads.@threads for c in 1:nc
+        j0 = div((c - 1) * ne1, nc) + 1
+        j1 = div(c * ne1, nc)
+        qc = view(q, ((j0 - 1) * rb + 1):nq)
+        _qgemv_bytes!(view(y, j0:j1), x, qc, ggml_type, ne0, j1 - j0 + 1, alpha, beta)
+    end
+    return y
+end
+
+"""
+    _moe_host_experts!(yrow, xf, order, weights, n_used, gate_s, up_s, down_s, gacc, uacc, hact, ybuf)
+
+Top-k SwiGLU for one token on the host, reading the mmap'd expert bytes
+directly. `order[1:n_used]` are the selected expert ids and `weights[k]` the
+already-normalized routing weight of `order[k]`. Experts are accumulated in
+k order, so the result does not depend on the thread count.
+"""
+function _moe_host_experts!(
+    yrow::AbstractVector{Float32},
+    xf::AbstractVector{Float32},
+    order,
+    weights,
+    n_used::Int,
+    gate_s::GgufQuantSlice,
+    up_s::GgufQuantSlice,
+    down_s::GgufQuantSlice,
+    gacc::AbstractVector{Float32},
+    uacc::AbstractVector{Float32},
+    hact::AbstractVector{Float32},
+    ybuf::AbstractVector{Float32},
+)
+    fill!(yrow, 0.0f0)
+    for k in 1:n_used
+        e = order[k]
+        w = weights[k]
+        _qgemv_bytes_threaded!(
+            gacc, xf, _quant_expert_bytes(gate_s, e), gate_s.ggml_type,
+            gate_s.ne0, gate_s.ne1, 1.0f0, 0.0f0,
+        )
+        _qgemv_bytes_threaded!(
+            uacc, xf, _quant_expert_bytes(up_s, e), up_s.ggml_type,
+            up_s.ne0, up_s.ne1, 1.0f0, 0.0f0,
+        )
+        @inbounds for j in eachindex(hact)
+            hact[j] = _cpu_silu(gacc[j]) * uacc[j]
+        end
+        _qgemv_bytes_threaded!(
+            ybuf, hact, _quant_expert_bytes(down_s, e), down_s.ggml_type,
+            down_s.ne0, down_s.ne1, w, 0.0f0,
+        )
+        @inbounds for i in eachindex(yrow)
+            yrow[i] += ybuf[i]
+        end
+    end
+    return yrow
+end

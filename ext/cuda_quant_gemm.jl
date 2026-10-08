@@ -267,7 +267,7 @@ function _cuda_launch_qgemv!(
     beta::Float32,
 )
     offv = _cuda_q_offsets(1)
-    offv[1] = Int32(expert_off)
+    copyto!(offv, 1, Int32[Int32(expert_off)], 1, 1)
     return _cuda_launch_qgemv!(
         reshape(y, ne1, 1),
         reshape(x, ne0, 1),

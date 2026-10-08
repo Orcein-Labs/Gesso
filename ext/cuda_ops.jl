@@ -1264,11 +1264,26 @@ function _moe_topk_swiglu!(
     xt = CUDA.zeros(Float32, h)
     order = Vector{Int}(undef, n_exp)
     quant = Gesso.Inference._is_quant_expert_bank(gate)
+    # Banks that are mmap'd on the host (GgufQuantSlice in all three slabs)
+    # run on the CPU; only the activation goes D2H and the output goes H2D.
+    host_all = gate isa Gesso.Inference.GgufQuantSlice &&
+               up isa Gesso.Inference.GgufQuantSlice &&
+               down isa Gesso.Inference.GgufQuantSlice
     Wg = Wu = Wd = nothing
     Gbat = Ubat = Hbat = Dbat = ws = nothing
     experts = Vector{Int}(undef, n_used)
     wbuf = Vector{Float32}(undef, n_used)
-    if quant
+    xh = yh = nothing
+    gh = uh = hh = dh = nothing
+    if host_all
+        xh = Vector{Float32}(undef, h)
+        yh = Vector{Float32}(undef, h)
+        gh = Vector{Float32}(undef, ff)
+        uh = Vector{Float32}(undef, ff)
+        hh = Vector{Float32}(undef, ff)
+        dh = Vector{Float32}(undef, h)
+        ordk = Vector{Int}(undef, n_used)
+    elseif quant
         Gbat = CUDA.zeros(Float32, ff, n_used)
         Ubat = CUDA.zeros(Float32, ff, n_used)
         Hbat = CUDA.zeros(Float32, ff, n_used)
@@ -1306,7 +1321,17 @@ function _moe_topk_swiglu!(
         invw = one(Float32) / wsum
         copyto!(xt, view(x, t, :))
         fill!(yrow, zero(Float32))
-        if quant
+        if host_all
+            @inbounds for k in 1:n_used
+                ordk[k] = order[k]
+                wbuf[k] = row[order[k]] * invw
+            end
+            copyto!(xh, xt)
+            Gesso.Inference._moe_host_experts!(
+                yh, xh, ordk, wbuf, n_used, gate, up, down, gh, uh, hh, dh,
+            )
+            copyto!(yrow, yh)
+        elseif quant
             @inbounds for k in 1:n_used
                 experts[k] = order[k]
                 wbuf[k] = row[order[k]] * invw
