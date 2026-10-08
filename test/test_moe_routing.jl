@@ -2,6 +2,7 @@
 # qwen3_5_moe doorway.
 
 using Test
+using Random
 using Gesso
 
 @testset "HostOffload is a host-resident weight wrapper" begin
@@ -185,4 +186,39 @@ end
     @test length(ids) == 4
     @test ids[1] == 1
     @test all(0 .<= ids .< vocab)
+end
+
+@testset "host qgemv: row-chunked threads are bit-identical to serial" begin
+    Inf_ = Gesso.Inference
+    rng = Random.Xoshiro(20261008)
+    ne0, ne1 = 512, 37
+    x = randn(rng, Float32, ne0)
+    cases = (
+        (Inf_.GGML_TYPE_IQ2_XS, 74),
+        (Inf_.GGML_TYPE_IQ3_XXS, 98),
+        (Inf_.GGML_TYPE_IQ4_XS, 136),
+    )
+    for (ty, bsz) in cases
+        q = rand(rng, UInt8, ne1 * (ne0 ÷ 256) * bsz)
+        y1 = zeros(Float32, ne1)
+        Inf_._qgemv_bytes!(y1, x, q, ty, ne0, ne1, 0.5f0, 0.0f0)
+        for nc in (1, 2, 3, 5, 8, 37, 64)
+            y2 = zeros(Float32, ne1)
+            Inf_._qgemv_bytes_threaded!(y2, x, q, ty, ne0, ne1, 0.5f0, 0.0f0; nchunks=nc)
+            @test reinterpret(UInt32, y2) == reinterpret(UInt32, y1)
+        end
+        y3 = zeros(Float32, ne1)
+        Inf_._qgemv_bytes_threaded!(y3, x, q, ty, ne0, ne1, 0.5f0, 0.0f0)
+        @test reinterpret(UInt32, y3) == reinterpret(UInt32, y1)
+    end
+    qf = reinterpret(UInt8, randn(rng, Float32, ne0 * ne1))
+    y1 = zeros(Float32, ne1)
+    Inf_._qgemv_bytes!(y1, x, qf, Inf_.GGML_TYPE_F32, ne0, ne1, 1.0f0, 0.0f0)
+    for nc in (1, 4, 37)
+        y2 = zeros(Float32, ne1)
+        Inf_._qgemv_bytes_threaded!(
+            y2, x, qf, Inf_.GGML_TYPE_F32, ne0, ne1, 1.0f0, 0.0f0; nchunks=nc,
+        )
+        @test reinterpret(UInt32, y2) == reinterpret(UInt32, y1)
+    end
 end

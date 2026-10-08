@@ -205,7 +205,7 @@ else
         gguf = get(
             ENV,
             "GESSO_ORNITH35_GGUF",
-            joinpath(@__DIR__, "..", "..", "Unsloth-Ornith-1.5-35B-A3B-UD-Q2_K_XL.gguf"),
+            "",
         )
         if isfile(gguf)
             hdr = Gesso.gguf_header(gguf)
