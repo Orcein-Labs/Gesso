@@ -76,7 +76,7 @@ an arm.
 |---|---|
 | `AGENTS.md` | **Binding agent charter** (transcribes §LXXI/§LXXII/§LXX). |
 | `.github/ISSUE_TEMPLATE/work-item.md` | §LXXI work-item format. |
-| `docs/goals/` | Sprint goals. Phases 1–9 and living 10/10B/10C/10D/10E/10F/10G/10H landed (10F 2026-10-03: `PHASE10F_CUDA_DECODE_ALLOC.md` — CUDA decode broadcast-wrapper removal via device-storage specialization, restored 256 KiB CUDA alloc gates; 10G 2026-10-03: `PHASE10G_AUTOTUNE_RECEIPT.md` — resolved 10F's escalation packet, miss-only Autotune receipts, SmolLM2 CUDA 1 MiB gate green; 10H 2026-10-03: `PHASE10H_TYPE_STABILITY.md` — closed 10D packet P-1, one storage type parameter, the three `@inferred` gates green). G2 factor 1.452×. Canon §LXXXIII parked. |
+| `docs/goals/` | Sprint goals. Phases 1–9 and living 10/10B/10C/10D/10E/10F/10G/10H landed (10F 2026-10-03: `PHASE10F_CUDA_DECODE_ALLOC.md` — CUDA decode broadcast-wrapper removal via device-storage specialization, restored 256 KiB CUDA alloc gates; 10G 2026-10-03: `PHASE10G_AUTOTUNE_RECEIPT.md` — resolved 10F's escalation packet, miss-only Autotune receipts, SmolLM2 CUDA 1 MiB gate green; 10H 2026-10-03: `PHASE10H_TYPE_STABILITY.md` — closed 10D packet P-1, one storage type parameter, the three `@inferred` gates green). G2 factor 1.452×. Canon §LXXXIII parked. Regime I closed 2026-10-07. Regime II roadmap: `docs/goals/REGIME_II.md` (Lava→CUDA parity; attribution first). |
 | `.github/PULL_REQUEST_TEMPLATE.md` | §LXXII receipt-as-PR. |
 | `scripts/` + `Makefile` | `make test / bench / format / format-check / freeze`. |
 | `benchmark/results/*.tsv` | Regression corpus (accrues from every bench run). |
