@@ -5,20 +5,13 @@
 using Test
 using Gesso
 
-const _ORNITH35_GGUF = get(
-    ENV,
-    "GESSO_ORNITH35_GGUF",
-    joinpath(@__DIR__, "..", "..", "Unsloth-Ornith-1.5-35B-A3B-UD-Q2_K_XL.gguf"),
-)
-const _GGML_BIN = get(
-    ENV,
-    "GESSO_GGML_DIR",
-    joinpath(@__DIR__, "..", "..", "llama-cpp-upstream", "build", "bin"),
-)
+# Both come from the environment only; unset means skip.
+const _ORNITH35_GGUF = get(ENV, "GESSO_ORNITH35_GGUF", "")
+const _GGML_BIN = get(ENV, "GESSO_GGML_DIR", "")
 
 @testset "gguf_architecture_spec: Ornith-1.5-35B-A3B" begin
     if !isfile(_ORNITH35_GGUF)
-        @test_skip "Ornith 35B GGUF not at $_ORNITH35_GGUF"
+        @test_skip "set GESSO_ORNITH35_GGUF to the Ornith 35B GGUF"
         return
     end
     spec = Gesso.gguf_architecture_spec(_ORNITH35_GGUF)
@@ -73,11 +66,11 @@ end
 
 @testset "gguf ggml to_float + lazy expert" begin
     if !isfile(_ORNITH35_GGUF)
-        @test_skip "Ornith 35B GGUF not at $_ORNITH35_GGUF"
+        @test_skip "set GESSO_ORNITH35_GGUF to the Ornith 35B GGUF"
         return
     end
     if !isfile(joinpath(_GGML_BIN, "libggml-base.so"))
-        @test_skip "libggml-base.so not at $_GGML_BIN"
+        @test_skip "set GESSO_GGML_DIR to a directory with libggml-base.so"
         return
     end
     hdr = Gesso.gguf_header(_ORNITH35_GGUF)

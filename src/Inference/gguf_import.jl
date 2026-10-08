@@ -86,9 +86,12 @@ const _GGML_LIBS = Ref{Tuple{Ptr{Cvoid}, Ptr{Cvoid}}}((C_NULL, C_NULL))
 const _GGML_GET_TRAITS = Ref{Ptr{Cvoid}}(C_NULL)
 
 function _ggml_dir()
-    env = get(ENV, "GESSO_GGML_DIR", "")
-    !isempty(env) && return env
-    return joinpath(@__DIR__, "..", "..", "..", "llama-cpp-upstream", "build", "bin")
+    dir = get(ENV, "GESSO_GGML_DIR", "")
+    isempty(dir) && error(
+        "gguf_import: GESSO_GGML_DIR is not set — point it at a directory " *
+        "containing libggml-base.so (e.g. a llama.cpp build/bin)",
+    )
+    return dir
 end
 
 function _ensure_ggml!()
@@ -96,9 +99,7 @@ function _ensure_ggml!()
     dir = _ggml_dir()
     base = joinpath(dir, "libggml-base.so")
     cpu = joinpath(dir, "libggml-cpu.so")
-    isfile(base) || error(
-        "gguf_import: missing $base — set GESSO_GGML_DIR to llama-cpp-upstream/build/bin",
-    )
+    isfile(base) || error("gguf_import: GESSO_GGML_DIR has no libggml-base.so: $base")
     # cpu's DT_NEEDED is libggml-base.so.0; load base globally first.
     hbase = Libdl.dlopen(base, Libdl.RTLD_LAZY | Libdl.RTLD_GLOBAL)
     hcpu = C_NULL
