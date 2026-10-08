@@ -44,6 +44,35 @@ else
         @test gpu.embedding.storage isa CUDA.CuArray{Float32}
     end
 
+    @testset "cuda F16 projection weights: placement and matmul" begin
+        # placement: a >=1M-element projection is F16 on device by default,
+        # F32 under GESSO_GPU_WEIGHT_DTYPE=f32, and the host copy stays F32
+        big = Gesso.ProjectionWeight(; shape=(1024, 1024), storage=ones(Float32, 1024, 1024))
+        ts = (; embedding=big, blocks=[(; w=big)], lm_head=big)
+        withenv("GESSO_GPU_WEIGHT_DTYPE" => "f16") do
+            gpu = Gesso.to_device(cuda, ts)
+            @test gpu.lm_head.storage isa CUDA.CuArray{Float16}
+            @test big.storage isa Array{Float32}
+        end
+        withenv("GESSO_GPU_WEIGHT_DTYPE" => "f32") do
+            gpu = Gesso.to_device(cuda, ts)
+            @test gpu.lm_head.storage isa CUDA.CuArray{Float32}
+        end
+
+        # matmul: F16 device weight vs a host reference computed from the same
+        # F16-rounded weight, F32 accumulate; only summation order differs
+        m, k, n = 37, 45, 3
+        W0 = reshape(Float32.(cos.(1:m*k)) ./ 4, m, k)
+        x0 = reshape(Float32.(sin.(1:n*k)), n, k)
+        W16 = Float64.(Float16.(W0))
+        ref = Float64.(x0) * transpose(W16)
+        wF = Gesso.ProjectionWeight(; shape=(m, k), storage=Float16.(CUDA.CuArray{Float32}(W0)))
+        dst = mat(Gesso.Activation, CUDA.zeros(Float32, n, m))
+        x = mat(Gesso.Activation, CuArray{Float32}(x0))
+        Gesso.matmul!(cuda, dst, x, wF, Gesso.DecodeWorkload())
+        @test approx_eq(Float64.(Array(dst.storage)), ref; atol=1e-4)
+    end
+
     @testset "cuda rope!: inv_freq + rotary_dim match CPU" begin
         q0 = reshape(Float64[i for i in 1:32], (2, 2, 8))
         k0 = reshape(Float64[i for i in 33:64], (2, 2, 8))
@@ -180,10 +209,10 @@ else
     end
 
     @testset "Qwen3.5-0.8B CUDA Hello ID-gate" begin
-        dir = joinpath(@__DIR__, "..", "snapshots", "Qwen3.5-0.8B")
+        dir = get(ENV, "GESSO_QWEN35_08B_DIR", "")
         cfg = joinpath(dir, "config.json")
-        if !isfile(cfg)
-            @info "skip 0.8B CUDA snapshot: $dir missing"
+        if isempty(dir) || !isfile(cfg)
+            @info "skip 0.8B CUDA ID-gate: set GESSO_QWEN35_08B_DIR to a Qwen3.5-0.8B snapshot"
             return
         end
         spec = Gesso.architecture_spec(cfg)

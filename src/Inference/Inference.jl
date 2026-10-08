@@ -707,7 +707,8 @@ end
 # HostOffload embedding table. When every weight is offloaded, the backend
 # extension supplies the device zeros factory.
 function _first_array_storage(tensors)
-    hit(s) = s isa AbstractArray ? s : nothing
+    # F16 device weights are never the activation prototype: activations stay F32.
+    hit(s) = s isa AbstractArray && eltype(s) !== Float16 ? s : nothing
     s = hit(tensors.embedding.storage)
     s !== nothing && return s
     if tensors.lm_head !== tensors.embedding
