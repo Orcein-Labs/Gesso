@@ -170,5 +170,5 @@ julia --project=benchmark benchmark/runbenchmarks.jl
 
 ## License
 
-Gesso is open source under the [MIT License](LICENSE).
+Gesso is open source under the [Apache License 2.0](LICENSE).
 
