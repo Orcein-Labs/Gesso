@@ -56,9 +56,16 @@ using ..Gesso:
     rope!,
     matmul!,
     softmax!,
-    swiglu!
+    swiglu!,
+    _cpu_gated_delta_rule!,
+    _cpu_causal_conv1d_silu!,
+    _cpu_sigmoid_mul!,
+    _cpu_silu,
+    _cpu_sigmoid,
+    _cpu_softplus,
+    _cpu_moe_topk_swiglu!
 using ..Semantics: PrefillWorkload, DecodeWorkload
-using ..Parameters: KVCache
+using ..Parameters: KVCache, SemanticTensor, ExpertWeight
 
 # Phase 3 (§LXXVI item B): the importer composes ModelIR primitives — same
 # vocabulary, a new composition (§VIII: no LlamaModel type)
@@ -96,6 +103,50 @@ Pass `backend=CUDABackend()` (Phase 4, §LXXVII) to run on an NVIDIA GPU —
 copies host memory, and host Array storage under a non-CPU backend is
 `ERR_INVALID_PLAN`.
 """
+
+_block_mixer(bt) = haskey(bt, :mixer) ? bt.mixer : :full_attention
+
+const _T_GDN_NS = Ref(Int64(0))
+const _T_ATTN_NS = Ref(Int64(0))
+const _T_FFN_NS = Ref(Int64(0))
+
+function _gdn_states(tensors, zeros_like)
+    n = length(tensors.blocks)
+    conv = Vector{Any}(undef, n)
+    rec = Vector{Any}(undef, n)
+    spec = haskey(tensors, :spec) ? tensors.spec : nothing
+    mx = spec === nothing ? nothing : spec.mixer
+    for bi in 1:n
+        if mx !== nothing && _block_mixer(tensors.blocks[bi]) === :linear_attention
+            key_dim = mx.num_key_heads * mx.key_head_dim
+            value_dim = mx.num_value_heads * mx.value_head_dim
+            conv_dim = 2 * key_dim + value_dim
+            conv[bi] = zeros_like((conv_dim, mx.conv_kernel_dim - 1))
+            rec[bi] = zeros_like((mx.num_value_heads, mx.key_head_dim, mx.value_head_dim))
+        else
+            conv[bi] = nothing
+            rec[bi] = nothing
+        end
+    end
+    return conv, rec
+end
+
+function _tensor_head_dim(model, tensors)
+    if tensors isa NamedTuple && haskey(tensors, :spec) && tensors.spec !== nothing
+        return tensors.spec.head_dim
+    end
+    n_heads = model.blocks[1].attention.n_heads
+    dim = model.embedding.dim
+    dim % n_heads == 0 ||
+        error("dim $dim is not divisible by n_heads $n_heads")
+    return div(dim, n_heads)
+end
+
+function _tensor_rotary_dim(tensors)
+    policy = tensors isa NamedTuple && haskey(tensors, :rope) ? tensors.rope : nothing
+    return policy === nothing ? 0 : Int(policy.rotary_dim)
+end
+
 function reference_prefill(
     model,
     tensors,
@@ -113,9 +164,8 @@ function reference_prefill(
     dim = model.embedding.dim
     n_heads = model.blocks[1].attention.n_heads
     n_kv_heads = model.blocks[1].attention.n_kv_heads
-    d_head = div(dim, n_heads)
-    dim == n_heads * d_head ||
-        error("reference_prefill: dim $dim is not divisible by n_heads $n_heads")
+    d_head = _tensor_head_dim(model, tensors)
+    qdim = n_heads * d_head
     group = div(n_heads, n_kv_heads)
     n_heads == n_kv_heads * group ||
         error("reference_prefill: n_kv_heads $n_kv_heads does not divide n_heads $n_heads")
@@ -131,13 +181,9 @@ function reference_prefill(
     # `nothing` for every unscaled model ⇒ the oracle evaluates its original
     # expression ⇒ Llama is bit-identical (regression law §XIII).
     inv_freq = tensors_rope_inv_freq(tensors, d_head; theta)
+    rotary_dim = _tensor_rotary_dim(tensors)
     on_cpu = backend_name(cpu) === :cpu
-    T = typeof(tensors.embedding.storage)      # buffers live where the data lives
-    zeros_like =
-        (dims::Tuple{Vararg{Int}}) -> fill!(
-            similar(tensors.embedding.storage, T <: Array ? Float64 : eltype(T), dims),
-            zero(eltype(T)),
-        )
+    zeros_like = _zeros_like_factory(cpu, tensors)
 
     # hidden states: (seq, dim)
     h = Activation(; shape=(seq, dim), storage=zeros_like((seq, dim)))
@@ -145,7 +191,8 @@ function reference_prefill(
 
     # scratch — allocated once per forward, written in place
     normed = Activation(; shape=(seq, dim), storage=zeros_like((seq, dim)))
-    q = Activation(; shape=(seq, dim), storage=zeros_like((seq, dim)))
+    q = Activation(; shape=(seq, qdim), storage=zeros_like((seq, qdim)))
+    gate_attn = Activation(; shape=(seq, qdim), storage=zeros_like((seq, qdim)))
     kdim = n_kv_heads * d_head
     k = Activation(; shape=(seq, kdim), storage=zeros_like((seq, kdim)))
     v = Activation(; shape=(seq, kdim), storage=zeros_like((seq, kdim)))
@@ -165,7 +212,7 @@ function reference_prefill(
         shape=(seq, n_heads, d_head),
         storage=zeros_like((seq, n_heads, d_head)),
     )
-    merged = Activation(; shape=(seq, dim), storage=zeros_like((seq, dim)))
+    merged = Activation(; shape=(seq, qdim), storage=zeros_like((seq, qdim)))
     sub = Activation(; shape=(seq, dim), storage=zeros_like((seq, dim)))
     normed2 = Activation(; shape=(seq, dim), storage=zeros_like((seq, dim)))
     gate = Activation(;
@@ -188,6 +235,20 @@ function reference_prefill(
         bt = tensors.blocks[bi]
 
         # --- attention sublayer (pre-norm) -----------------------------------
+        if _block_mixer(bt) === :linear_attention
+            _hybrid_linear_block!(
+                cpu,
+                h,
+                normed,
+                sub,
+                bt,
+                tensors.spec,
+                wl,
+                eps,
+                zeros_like,
+            )
+            h.storage .+= sub.storage
+        else
         rmsnorm!(cpu, normed, h, bt.attn_rms, wl; eps)
         matmul!(cpu, q, normed, bt.wq, wl)
         matmul!(cpu, k, normed, bt.wk, wl)
@@ -198,6 +259,10 @@ function reference_prefill(
         _split_heads!(qh, q, n_heads, d_head)
         _split_heads!(kh, k, n_kv_heads, d_head)
         _split_heads!(vh, v, n_kv_heads, d_head)
+        if haskey(bt, :wq_norm)
+            rmsnorm!(cpu, qh, qh, bt.wq_norm, wl; eps)
+            rmsnorm!(cpu, kh, kh, bt.wk_norm, wl; eps)
+        end
 
         rope!(
             cpu,
@@ -208,6 +273,7 @@ function reference_prefill(
             theta,
             inv_freq,
             interleaved=_tensors_rope_interleaved(tensors),
+            rotary_dim,
         )
 
         # repeat KV heads for the contraction only (identity when MHA)
@@ -230,15 +296,17 @@ function reference_prefill(
         )
 
         _merge_heads!(merged, attn, n_heads, d_head)
+        if haskey(bt, :wattn_gate)
+            matmul!(cpu, gate_attn, normed, bt.wattn_gate, wl)
+            _sigmoid_mul!(cpu, merged.storage, merged.storage, gate_attn.storage)
+        end
         matmul!(cpu, sub, merged, bt.wo, wl)
         h.storage .+= sub.storage               # residual (interpreter add)
+        end
 
         # --- ffn sublayer (pre-norm) -----------------------------------------
         rmsnorm!(cpu, normed2, h, bt.ffn_rms, wl; eps)
-        matmul!(cpu, gate, normed2, bt.wgate, wl)
-        matmul!(cpu, up, normed2, bt.wup, wl)
-        swiglu!(cpu, act, gate, up, wl)
-        matmul!(cpu, down, act, bt.wdown, wl)
+        _ffn_block!(cpu, down, gate, up, act, normed2, bt, wl, zeros_like)
         h.storage .+= down.storage              # residual
     end
 
@@ -262,6 +330,228 @@ function reference_prefill(
     )
     matmul!(cpu, seqvocab, hhead, lm_head, wl)
     return permutedims(seqvocab.storage)        # (vocab, seq)
+end
+
+# Hybrid extras as Inference-internal dispatch (Phase 10F pattern). Default
+# bodies are the CPU oracle; CUDA/Lava extensions add more-specific methods
+# on their backend tag. These are not public `op!` stubs — planners still
+# see :linear_attention via `supports`, and the engine composes.
+function _gated_delta_rule!(
+    backend,
+    out,
+    q,
+    k,
+    v,
+    g,
+    beta,
+    state;
+    l2norm::Bool=true,
+    v_head_tiled::Bool=false,
+)
+    return _cpu_gated_delta_rule!(out, q, k, v, g, beta, state; l2norm, v_head_tiled)
+end
+
+function _causal_conv1d_silu!(backend, dst, x, weight, conv_state)
+    return _cpu_causal_conv1d_silu!(dst, x, weight, conv_state)
+end
+
+function _sigmoid_mul!(backend, dst, src, gate)
+    return _cpu_sigmoid_mul!(dst, src, gate)
+end
+
+function _silu_mul!(backend, dst, src, gate)
+    @inbounds for i in eachindex(dst, src, gate)
+        dst[i] = src[i] * _cpu_silu(gate[i])
+    end
+    return dst
+end
+
+function _gdn_gate_params!(backend, g, beta, a, b, A_log, dt_bias)
+    seq, nv = size(beta)
+    @inbounds for t in 1:seq, hh in 1:nv
+        beta[t, hh] = _cpu_sigmoid(b[t, hh])
+        g[t, hh] = -exp(A_log[hh]) * _cpu_softplus(a[t, hh] + dt_bias[hh])
+    end
+    return g, beta
+end
+
+function _hybrid_linear_block!(
+    cpu,
+    h::Activation,
+    normed::Activation,
+    sub::Activation,
+    bt,
+    spec,
+    wl,
+    eps,
+    zeros_like;
+    conv_state=nothing,
+    rec_state=nothing,
+)
+    mx = spec.mixer
+    seq = size(h.storage, 1)
+    key_dim = mx.num_key_heads * mx.key_head_dim
+    value_dim = mx.num_value_heads * mx.value_head_dim
+    conv_dim = 2 * key_dim + value_dim
+    nk, nv = mx.num_key_heads, mx.num_value_heads
+    dk, dv = mx.key_head_dim, mx.value_head_dim
+    ksz = mx.conv_kernel_dim
+
+    rmsnorm!(cpu, normed, h, bt.attn_rms, wl; eps)
+    mixed = Activation(; shape=(seq, conv_dim), storage=zeros_like((seq, conv_dim)))
+    z = Activation(; shape=(seq, value_dim), storage=zeros_like((seq, value_dim)))
+    a = Activation(; shape=(seq, nv), storage=zeros_like((seq, nv)))
+    b = Activation(; shape=(seq, nv), storage=zeros_like((seq, nv)))
+    matmul!(cpu, mixed, normed, bt.wgdn_qkv, wl)
+    matmul!(cpu, z, normed, bt.wgdn_z, wl)
+    matmul!(cpu, a, normed, bt.wgdn_a, wl)
+    matmul!(cpu, b, normed, bt.wgdn_b, wl)
+
+    conv_out = zeros_like((seq, conv_dim))
+    if conv_state === nothing
+        conv_state = zeros_like((conv_dim, ksz - 1))
+    end
+    _causal_conv1d_silu!(cpu, conv_out, mixed.storage, bt.wgdn_conv.storage, conv_state)
+
+    q = zeros_like((seq, nk, dk))
+    k = zeros_like((seq, nk, dk))
+    v = zeros_like((seq, nv, dv))
+    _split_heads!(q, view(conv_out, :, 1:key_dim), nk, dk)
+    _split_heads!(k, view(conv_out, :, (key_dim+1):(2*key_dim)), nk, dk)
+    _split_heads!(v, view(conv_out, :, (2*key_dim+1):conv_dim), nv, dv)
+
+    g = zeros_like((seq, nv))
+    beta = zeros_like((seq, nv))
+    A_log = bt.wgdn_A_log.storage
+    dt_bias = bt.wgdn_dt_bias.storage
+    _gdn_gate_params!(cpu, g, beta, a.storage, b.storage, A_log, dt_bias)
+
+    core = zeros_like((seq, nv, dv))
+    if rec_state === nothing
+        rec_state = zeros_like((nv, dk, dv))
+    end
+    _gated_delta_rule!(
+        cpu, core, q, k, v, g, beta, rec_state;
+        v_head_tiled=mx.v_head_tiled,
+    )
+
+    z_h = zeros_like((seq, nv, dv))
+    _split_heads!(z_h, z.storage, nv, dv)
+    nrm = zeros_like((seq, dv))
+    xh = zeros_like((seq, dv))
+    scale = bt.wgdn_norm
+    for hh in 1:nv
+        @views xh[:, :] .= core[:, hh, :]
+        xh_act = Activation(; shape=(seq, dv), storage=xh)
+        nrm_act = Activation(; shape=(seq, dv), storage=nrm)
+        rmsnorm!(cpu, nrm_act, xh_act, scale, wl; eps)
+        @views xh[:, :] .= z_h[:, hh, :]
+        _silu_mul!(cpu, nrm, nrm, xh)
+        @views core[:, hh, :] .= nrm
+    end
+    merged = zeros_like((seq, value_dim))
+    _merge_heads!(merged, core, nv, dv)
+    merged_act = Activation(; shape=(seq, value_dim), storage=merged)
+    matmul!(cpu, sub, merged_act, bt.wgdn_o, wl)
+    return sub
+end
+
+function _ffn_block!(cpu, down, gate, up, act, normed2, bt, wl, zeros_like)
+    if haskey(bt, :wrouter)
+        return _moe_ffn!(cpu, down, normed2, bt, wl, zeros_like)
+    end
+    matmul!(cpu, gate, normed2, bt.wgate, wl)
+    matmul!(cpu, up, normed2, bt.wup, wl)
+    swiglu!(cpu, act, gate, up, wl)
+    matmul!(cpu, down, act, bt.wdown, wl)
+    return down
+end
+
+function _moe_ffn!(cpu, down, normed2, bt, wl, zeros_like)
+    x = normed2.storage
+    y = down.storage
+    n_used = haskey(bt, :n_expert_used) ? Int(bt.n_expert_used) : size(bt.wrouter.storage, 1)
+    _moe_topk_swiglu!(
+        cpu,
+        y,
+        x,
+        bt.wrouter.storage,
+        bt.wexp_gate.storage,
+        bt.wexp_up.storage,
+        bt.wexp_down.storage,
+        n_used,
+    )
+    if haskey(bt, :wshared_gate)
+        seq, h = size(x)
+        ff = size(bt.wshared_gate.storage, 1)
+        sg = Activation(; shape=(seq, ff), storage=zeros_like((seq, ff)))
+        su = Activation(; shape=(seq, ff), storage=zeros_like((seq, ff)))
+        sa = Activation(; shape=(seq, ff), storage=zeros_like((seq, ff)))
+        sd = Activation(; shape=(seq, h), storage=zeros_like((seq, h)))
+        matmul!(cpu, sg, normed2, bt.wshared_gate, wl)
+        matmul!(cpu, su, normed2, bt.wshared_up, wl)
+        swiglu!(cpu, sa, sg, su, wl)
+        matmul!(cpu, sd, sa, bt.wshared_down, wl)
+        if haskey(bt, :wshared_gate_inp)
+            _shared_gate_add!(cpu, y, x, sd.storage, bt.wshared_gate_inp.storage)
+        else
+            y .+= sd.storage
+        end
+    end
+    return down
+end
+
+# HostOffload unwraps in gguf_import.jl; this generic keeps dense Array /
+# CuArray / LavaArray banks pass-through for any MoE config.
+_offload_host_array(s) = s
+
+function _moe_topk_swiglu!(backend, y, x, router, gate, up, down, n_used)
+    if gate isa GgufQuantSlice || gate isa GpuQuantSlice
+        return _cpu_moe_topk_swiglu_gguf!(y, x, router, gate, up, down, n_used)
+    end
+    return _cpu_moe_topk_swiglu!(
+        y,
+        x,
+        _offload_host_array(router),
+        _offload_host_array(gate),
+        _offload_host_array(up),
+        _offload_host_array(down),
+        n_used,
+    )
+end
+
+function _shared_gate_add!(backend, y, x, sd, gvec)
+    g = _offload_host_array(gvec)
+    seq, h = size(x)
+    @inbounds for t in 1:seq
+        acc = zero(eltype(x))
+        for i in 1:h
+            acc += x[t, i] * g[i]
+        end
+        s = _cpu_sigmoid(acc)
+        for i in 1:h
+            y[t, i] += s * sd[t, i]
+        end
+    end
+    return y
+end
+
+"""
+Copy expert `e` (1-based) from a 3-D bank into contiguous `(out, in)` `W`.
+Geometry comes from the bank: `(n_experts, out, in)` for any MoE config.
+The CUDA method dequants a `GgufQuantSlice` on the host and H2Ds, or
+gathers a device bank.
+"""
+function _fetch_expert!(backend, W::AbstractMatrix, bank, e::Int)
+    if bank isa GgufQuantSlice
+        raw = Vector{Float32}(undef, bank.ne0 * bank.ne1)
+        return _gguf_dequant_expert_into!(W, raw, bank, e)
+    end
+    src = _offload_host_array(bank)
+    @inbounds for b in axes(W, 2), a in axes(W, 1)
+        W[a, b] = src[e, a, b]
+    end
+    return W
 end
 
 # Each query head owns its softmax distribution. The 2D score workspace
@@ -399,16 +689,73 @@ _merge_heads!(dst::Activation, src::Activation, n_heads, d_head) =
 
 # --- backend / storage discipline (§LXXVII) -----------------------------------
 
+"""
+    _gpu_budget_bytes() -> Int64
+
+Device-resident weight budget for `to_device`. `GESSO_GPU_BUDGET_MIB`
+(default 6144) is the 8 GB 5060 with headroom for activations, KV, and
+the active-expert scratch. Float32 weights fill the budget first;
+remaining bytes upload `GgufQuantSlice` expert slabs as `GpuQuantSlice`.
+"""
+function _gpu_budget_bytes()
+    raw = get(ENV, "GESSO_GPU_BUDGET_MIB", "6144")
+    mib = something(tryparse(Int, raw), 6144)
+    return Int64(max(0, mib)) * Int64(1024 * 1024)
+end
+
+# Activations follow a live Array (CuArray / LavaArray / host Array), not a
+# HostOffload embedding table. When every weight is offloaded, the backend
+# extension supplies the device zeros factory.
+function _first_array_storage(tensors)
+    hit(s) = s isa AbstractArray ? s : nothing
+    s = hit(tensors.embedding.storage)
+    s !== nothing && return s
+    if tensors.lm_head !== tensors.embedding
+        s = hit(tensors.lm_head.storage)
+        s !== nothing && return s
+    end
+    for b in tensors.blocks
+        for v in values(b)
+            hasproperty(v, :storage) || continue
+            s = hit(v.storage)
+            s !== nothing && return s
+        end
+    end
+    fr = haskey(tensors, :final_rms) ? tensors.final_rms : nothing
+    fr === nothing && return nothing
+    return hit(fr.storage)
+end
+
+function _zeros_like_factory(backend, tensors)
+    s = _first_array_storage(tensors)
+    if s !== nothing
+        T = eltype(s)
+        return (dims::Tuple{Vararg{Int}}) -> fill!(similar(s, T, dims), zero(T))
+    end
+    return _fallback_zeros_factory(backend)
+end
+
+_fallback_zeros_factory(::CPUBackend) = (dims::Tuple{Vararg{Int}}) -> zeros(Float32, dims)
+function _fallback_zeros_factory(backend)
+    error(
+        "$(backend_name(backend)): to_device left no device array to seed activations",
+    )
+end
+
 # the interpreter never copies: a non-CPU backend REQUIRES device storage
 # (to_device is the explicit transfer). Host Array storage under CUDA is
-# ERR_INVALID_PLAN, not a silent transfer (§LXX).
+# ERR_INVALID_PLAN, not a silent transfer (§LXX). HostOffload and
+# GgufQuantSlice are the explicit offload markers and are legal on device
+# backends — a forgotten raw Array still fails.
 function _infer_device_storage!(where::Symbol, backend::AbstractGessoBackend, tensors)
     _check_device_storage(where, backend, tensors.embedding)
     tensors.lm_head === tensors.embedding ||
         _check_device_storage(where, backend, tensors.lm_head)
     for bt in tensors.blocks
         for name in propertynames(bt)
-            _check_device_storage(where, backend, getproperty(bt, name))
+            t = getproperty(bt, name)
+            t isa SemanticTensor || continue
+            _check_device_storage(where, backend, t)
         end
     end
     fr = haskey(tensors, :final_rms) ? tensors.final_rms : nothing
@@ -419,6 +766,9 @@ end
 # Inspect wrappers without copying: CPU views and another device are not
 # interchangeable with the explicitly requested backend.
 _storage_root(s) = _backend_storage_root(s)
+
+_is_host_float_storage(s) =
+    _storage_root(s) isa Array && eltype(s) <: AbstractFloat
 
 function _check_device_storage(where::Symbol, backend, t)
     throw(
@@ -431,11 +781,11 @@ function _check_device_storage(where::Symbol, backend, t)
     )
 end
 function _check_device_storage(where::Symbol, backend::CPUBackend, t)
-    _storage_root(t.storage) isa Array && eltype(t.storage) === Float64 && return nothing
+    _is_host_float_storage(t.storage) && return nothing
     throw(
         gesso_error(
             ERR_INVALID_PLAN,
-            "$where: CPUBackend requires materialized host Array Float64 storage";
+            "$where: CPUBackend requires materialized host Array float storage";
             backend=:cpu,
             storage_type=string(typeof(t.storage)),
         ),
@@ -575,9 +925,10 @@ function reference_generate(
     dim = model.embedding.dim
     n_heads = model.blocks[1].attention.n_heads
     n_kv_heads = model.blocks[1].attention.n_kv_heads
-    d_head = div(dim, n_heads)
-    dim == n_heads * d_head ||
-        error("reference_generate: dim $dim is not divisible by n_heads $n_heads")
+    d_head = _tensor_head_dim(model, tensors)
+    rotary_dim = _tensor_rotary_dim(tensors)
+    n_heads * d_head > 0 ||
+        error("reference_generate: n_heads $n_heads × d_head $d_head is empty")
     group = div(n_heads, n_kv_heads)
     n_heads == n_kv_heads * group ||
         error("reference_generate: n_kv_heads $n_kv_heads does not divide n_heads $n_heads")
@@ -585,12 +936,7 @@ function reference_generate(
     cap = max(max_new_tokens, 0)
     vocab = size(tensors.embedding.storage, 1)
     on_cpu = backend_name(cpu) === :cpu
-    T = typeof(tensors.embedding.storage)
-    zeros_like =
-        (dims::Tuple{Vararg{Int}}) -> fill!(
-            similar(tensors.embedding.storage, T <: Array ? Float64 : eltype(T), dims),
-            zero(eltype(T)),
-        )
+    zeros_like = _zeros_like_factory(cpu, tensors)
 
     # per-layer KV caches: preallocated (P + cap) rows, filled progressively
     # (the cache is runtime state, not a weight — no fixture-walk entries)
@@ -613,7 +959,9 @@ function reference_generate(
     h = Activation(; shape=(P + cap, dim), storage=zeros_like((P + cap, dim)))
     normed = Activation(; shape=(P, dim), storage=zeros_like((P, dim)))
     kdim = n_kv_heads * d_head
-    q = Activation(; shape=(P, dim), storage=zeros_like((P, dim)))
+    qdim = n_heads * d_head
+    q = Activation(; shape=(P, qdim), storage=zeros_like((P, qdim)))
+    gate_attn = Activation(; shape=(P, qdim), storage=zeros_like((P, qdim)))
     k = Activation(; shape=(P, kdim), storage=zeros_like((P, kdim)))
     v = Activation(; shape=(P, kdim), storage=zeros_like((P, kdim)))
     qh = Activation(; shape=(P, n_heads, d_head), storage=zeros_like((P, n_heads, d_head)))
@@ -627,7 +975,7 @@ function reference_generate(
     )
     attn =
         Activation(; shape=(P, n_heads, d_head), storage=zeros_like((P, n_heads, d_head)))
-    merged = Activation(; shape=(P, dim), storage=zeros_like((P, dim)))
+    merged = Activation(; shape=(P, qdim), storage=zeros_like((P, qdim)))
     sub = Activation(; shape=(P, dim), storage=zeros_like((P, dim)))
     normed2 = Activation(; shape=(P, dim), storage=zeros_like((P, dim)))
     hidden_ffn = model.blocks[1].ffn.hidden
@@ -637,10 +985,12 @@ function reference_generate(
     down = Activation(; shape=(P, dim), storage=zeros_like((P, dim)))
     scores = TemporaryWorkspace(; shape=(P, P), storage=zeros_like((P, P)))
     scores_out = TemporaryWorkspace(; shape=(P, P), storage=zeros_like((P, P)))
+    gdn_conv, gdn_rec = _gdn_states(tensors, zeros_like)
 
     positions = collect(0:(P-1))
     # BREADTH-0 Pass D — see reference_prefill. `nothing` = unscaled model.
     inv_freq = tensors_rope_inv_freq(tensors, d_head; theta)
+    t_prefill = time_ns()
     # the prefill phase works on rows 1..P of h through a VIEW (Activation
     # storage is untyped by design; scratch stays exactly (P, …)-shaped so
     # softmax never sees padded zero columns — they would poison the
@@ -649,6 +999,22 @@ function reference_generate(
     embedding_lookup!(cpu, hp, tensors.embedding, prompt, wp)
     for (bi, blk) in enumerate(model.blocks)
         bt = tensors.blocks[bi]
+        if _block_mixer(bt) === :linear_attention
+            _hybrid_linear_block!(
+                cpu,
+                hp,
+                normed,
+                sub,
+                bt,
+                tensors.spec,
+                wp,
+                eps,
+                zeros_like;
+                conv_state=gdn_conv[bi],
+                rec_state=gdn_rec[bi],
+            )
+            hp.storage .+= sub.storage
+        else
         rmsnorm!(cpu, normed, hp, bt.attn_rms, wp; eps)
         matmul!(cpu, q, normed, bt.wq, wp)
         matmul!(cpu, k, normed, bt.wk, wp)
@@ -656,6 +1022,10 @@ function reference_generate(
         _split_heads!(qh, q, n_heads, d_head)
         _split_heads!(kh, k, n_kv_heads, d_head)
         _split_heads!(vh, v, n_kv_heads, d_head)
+        if haskey(bt, :wq_norm)
+            rmsnorm!(cpu, qh, qh, bt.wq_norm, wp; eps)
+            rmsnorm!(cpu, kh, kh, bt.wk_norm, wp; eps)
+        end
         rope!(
             cpu,
             qh,
@@ -665,6 +1035,7 @@ function reference_generate(
             theta,
             inv_freq,
             interleaved=_tensors_rope_interleaved(tensors),
+            rotary_dim,
         )
         # KV APPEND: the prefill's post-rope K/V become cache rows 1..P,
         # stored at n_kv_heads (GQA caches the small side, §LXXVI)
@@ -689,27 +1060,41 @@ function reference_generate(
         )
 
         _merge_heads!(merged, attn, n_heads, d_head)
+        if haskey(bt, :wattn_gate)
+            matmul!(cpu, gate_attn, normed, bt.wattn_gate, wp)
+            _sigmoid_mul!(cpu, merged.storage, merged.storage, gate_attn.storage)
+        end
         matmul!(cpu, sub, merged, bt.wo, wp)
         hp.storage .+= sub.storage
+        end
         rmsnorm!(cpu, normed2, hp, bt.ffn_rms, wp; eps)
-        matmul!(cpu, gate, normed2, bt.wgate, wp)
-        matmul!(cpu, up, normed2, bt.wup, wp)
-        swiglu!(cpu, act, gate, up, wp)
-        matmul!(cpu, down, act, bt.wdown, wp)
+        _ffn_block!(cpu, down, gate, up, act, normed2, bt, wp, zeros_like)
         hp.storage .+= down.storage
     end
 
     ids = collect(prompt)
     steps = 0
+    timing = get(ENV, "GESSO_TIMING", "") == "1"
+    if timing
+        println("gesso_timing prefill_ms=$(round((time_ns() - t_prefill) / 1e6; digits=1))")
+        flush(stdout)
+    end
     while steps < cap
         # greedy argmax at the current last position (row P + steps); the
         # argmax may run over device storage — only the scalar id crosses
         # back to the host
+        t_head = time_ns()
         logits_row = _last_logits(model, tensors, h, cpu, wd, vocab, P + steps; eps)
         next = _greedy_id(logits_row)            # 0-based id
+        head_ms = (time_ns() - t_head) / 1e6
         push!(ids, next)
         steps += 1
+        if timing
+            println("gesso_timing token=$(steps) id=$(next) head_ms=$(round(head_ms; digits=1))")
+            flush(stdout)
+        end
         (next == TOY_EOS || steps >= cap) && break
+        t_dec = time_ns()
         _decode_step!(
             model,
             tensors,
@@ -728,7 +1113,16 @@ function reference_generate(
             eps,
             theta,
             inv_freq,
+            rotary_dim,
+            gdn_conv,
+            gdn_rec,
         )
+        if timing
+            println(
+                "gesso_timing token=$(steps) decode_ms=$(round((time_ns() - t_dec) / 1e6; digits=1)) gdn_ms=$(round(_T_GDN_NS[] / 1e6; digits=1)) attn_ms=$(round(_T_ATTN_NS[] / 1e6; digits=1)) ffn_ms=$(round(_T_FFN_NS[] / 1e6; digits=1))",
+            )
+            flush(stdout)
+        end
     end
 
     info isa Ref{Any} && (info[] = (kv_len=P + steps, steps=steps))
@@ -746,7 +1140,7 @@ function _last_logits(model, tensors, h, cpu, wl, vocab, row::Int; eps::Real=1e-
         normed = Activation(;
             shape=(1, dim),
             storage=fill!(
-                similar(h.storage, T <: Array ? Float64 : eltype(T), (1, dim)),
+                similar(h.storage, eltype(T), (1, dim)),
                 zero(eltype(h.storage)),
             ),
         )
@@ -756,7 +1150,7 @@ function _last_logits(model, tensors, h, cpu, wl, vocab, row::Int; eps::Real=1e-
     out = Activation(;
         shape=(1, vocab),
         storage=fill!(
-            similar(h.storage, T <: Array ? Float64 : eltype(T), (1, vocab)),
+            similar(h.storage, eltype(T), (1, vocab)),
             zero(eltype(h.storage)),
         ),
     )
@@ -786,19 +1180,19 @@ function _decode_step!(
     eps,
     theta,
     inv_freq,
+    rotary_dim=0,
+    gdn_conv=nothing,
+    gdn_rec=nothing,
 )
     dim = model.embedding.dim
     kdim = n_kv_heads * d_head
-    T = typeof(tensors.embedding.storage)
-    zeros_like =
-        (dims::Tuple{Vararg{Int}}) -> fill!(
-            similar(tensors.embedding.storage, T <: Array ? Float64 : eltype(T), dims),
-            zero(eltype(T)),
-        )
+    qdim = n_heads * d_head
+    zeros_like = _zeros_like_factory(cpu, tensors)
     hp = Activation(; shape=(1, dim), storage=zeros_like((1, dim)))
     embedding_lookup!(cpu, hp, tensors.embedding, [tok], wl)
     normed = Activation(; shape=(1, dim), storage=zeros_like((1, dim)))
-    q = Activation(; shape=(1, dim), storage=zeros_like((1, dim)))
+    q = Activation(; shape=(1, qdim), storage=zeros_like((1, qdim)))
+    gate_attn = Activation(; shape=(1, qdim), storage=zeros_like((1, qdim)))
     k = Activation(; shape=(1, kdim), storage=zeros_like((1, kdim)))
     v = Activation(; shape=(1, kdim), storage=zeros_like((1, kdim)))
     qh = Activation(; shape=(1, n_heads, d_head), storage=zeros_like((1, n_heads, d_head)))
@@ -812,7 +1206,7 @@ function _decode_step!(
     )
     attn =
         Activation(; shape=(1, n_heads, d_head), storage=zeros_like((1, n_heads, d_head)))
-    merged = Activation(; shape=(1, dim), storage=zeros_like((1, dim)))
+    merged = Activation(; shape=(1, qdim), storage=zeros_like((1, qdim)))
     sub = Activation(; shape=(1, dim), storage=zeros_like((1, dim)))
     normed2 = Activation(; shape=(1, dim), storage=zeros_like((1, dim)))
     hidden_ffn = model.blocks[1].ffn.hidden
@@ -823,9 +1217,31 @@ function _decode_step!(
     K = pos0                                    # cache rows now: P + steps
     scores = TemporaryWorkspace(; shape=(1, K), storage=zeros_like((1, K)))
     scores_out = TemporaryWorkspace(; shape=(1, K), storage=zeros_like((1, K)))
+    _T_GDN_NS[] = 0
+    _T_ATTN_NS[] = 0
+    _T_FFN_NS[] = 0
 
     for (bi, blk) in enumerate(model.blocks)
         bt = tensors.blocks[bi]
+        if _block_mixer(bt) === :linear_attention
+            t0 = time_ns()
+            _hybrid_linear_block!(
+                cpu,
+                hp,
+                normed,
+                sub,
+                bt,
+                tensors.spec,
+                wl,
+                eps,
+                zeros_like;
+                conv_state=gdn_conv === nothing ? nothing : gdn_conv[bi],
+                rec_state=gdn_rec === nothing ? nothing : gdn_rec[bi],
+            )
+            hp.storage .+= sub.storage
+            _T_GDN_NS[] += time_ns() - t0
+        else
+        t0 = time_ns()
         rmsnorm!(cpu, normed, hp, bt.attn_rms, wl; eps)
         matmul!(cpu, q, normed, bt.wq, wl)
         matmul!(cpu, k, normed, bt.wk, wl)
@@ -833,6 +1249,10 @@ function _decode_step!(
         _split_heads!(qh, q, n_heads, d_head)
         _split_heads!(kh, k, n_kv_heads, d_head)
         _split_heads!(vh, v, n_kv_heads, d_head)
+        if haskey(bt, :wq_norm)
+            rmsnorm!(cpu, qh, qh, bt.wq_norm, wl; eps)
+            rmsnorm!(cpu, kh, kh, bt.wk_norm, wl; eps)
+        end
         rope!(
             cpu,
             qh,
@@ -842,6 +1262,7 @@ function _decode_step!(
             theta,
             inv_freq,
             interleaved=_tensors_rope_interleaved(tensors),
+            rotary_dim,
         )  # 0-based position
         # KV APPEND: exactly one row per layer per step, at n_kv_heads
         kc[bi].storage[pos0, :, :] .= kh.storage[1, :, :]
@@ -867,14 +1288,19 @@ function _decode_step!(
         )
 
         _merge_heads!(merged, attn, n_heads, d_head)
+        if haskey(bt, :wattn_gate)
+            matmul!(cpu, gate_attn, normed, bt.wattn_gate, wl)
+            _sigmoid_mul!(cpu, merged.storage, merged.storage, gate_attn.storage)
+        end
         matmul!(cpu, sub, merged, bt.wo, wl)
         hp.storage .+= sub.storage              # residual
+        _T_ATTN_NS[] += time_ns() - t0
+        end
+        t1 = time_ns()
         rmsnorm!(cpu, normed2, hp, bt.ffn_rms, wl; eps)
-        matmul!(cpu, gate, normed2, bt.wgate, wl)
-        matmul!(cpu, up, normed2, bt.wup, wl)
-        swiglu!(cpu, act, gate, up, wl)
-        matmul!(cpu, down, act, bt.wdown, wl)
+        _ffn_block!(cpu, down, gate, up, act, normed2, bt, wl, zeros_like)
         hp.storage .+= down.storage             # residual
+        _T_FFN_NS[] += time_ns() - t1
     end
     # write the new hidden state into its row slot — storage CONTENT, not a
     # field reassignment (Activation is immutable, §CIX)
@@ -916,6 +1342,8 @@ include("architecture_spec.jl")      # Pass A/F: canonical description + capabil
 include("semantic_params.jl")        # Pass B/E: canonical parameter identity
 include("arch_adapters.jl")          # Pass A/B: the family boundary
 include("materialize_architecture.jl") # Pass B/E: the generic binder
+include("gguf_import.jl")          # qwen35moe GGUF mmap + lazy experts
+include("gguf_quants.jl")          # IQ2_XS / IQ3_XXS / IQ4_XS fused expert GEMV
 include("tokenizer_protocol.jl")   # Pass C: the tokenizer PROTOCOL
 include("import_report.jl")      # Passes I/J: report + generated matrix
 

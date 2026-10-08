@@ -37,6 +37,17 @@ using .GessoTestHelpers: approx_eq, deterministic_rng
         intermediate_size=64,
     )
     @test spec.head_dim == 8                       # derived, explicit
+    published = Gesso.ArchitectureSpec(;
+        family=:qwen3_5,
+        hidden_size=1024,
+        num_layers=1,
+        n_heads=8,
+        n_kv_heads=2,
+        vocab_size=32,
+        intermediate_size=64,
+        head_dim=256,
+    )
+    @test published.head_dim == 256                 # Qwen3.5 independent head_dim
     @test spec.family === :llama
     @test spec.norm_kind === :rms
     @test spec.activation_kind === :swiglu
@@ -216,6 +227,110 @@ const _B0_CONFIGS = Dict{String, Dict{String, Any}}(
     @test_throws ErrorException Gesso.adapter_for("no-such-family")
 end
 
+# Published Qwen3.5 / Ornith-1.5 nested text_config. The doorway must parse
+# meaning and stop at named missing ops — not at the family name.
+const _Q35_TEXT = Dict{String, Any}(
+    "hidden_size" => 1024,
+    "num_hidden_layers" => 8,
+    "num_attention_heads" => 8,
+    "num_key_value_heads" => 2,
+    "intermediate_size" => 3584,
+    "vocab_size" => 248320,
+    "hidden_act" => "silu",
+    "head_dim" => 256,
+    "attn_output_gate" => true,
+    "full_attention_interval" => 4,
+    "linear_conv_kernel_dim" => 4,
+    "linear_key_head_dim" => 128,
+    "linear_num_key_heads" => 16,
+    "linear_num_value_heads" => 16,
+    "linear_value_head_dim" => 128,
+    "layer_types" => [
+        "linear_attention",
+        "linear_attention",
+        "linear_attention",
+        "full_attention",
+        "linear_attention",
+        "linear_attention",
+        "linear_attention",
+        "full_attention",
+    ],
+    "tie_word_embeddings" => true,
+    "rope_parameters" => Dict{String, Any}(
+        "mrope_interleaved" => true,
+        "mrope_section" => [11, 11, 10],
+        "partial_rotary_factor" => 0.25,
+        "rope_theta" => 10000000.0,
+        "rope_type" => "default",
+    ),
+)
+
+@testset "Qwen3.5 / Ornith doorway: nested text_config, named-op refusal" begin
+    nested = Dict{String, Any}("model_type" => "qwen3_5", "text_config" => _Q35_TEXT)
+    dir = mktempdir()
+    path = joinpath(dir, "qwen3_5.json")
+    open(path, "w") do io
+        JSON.print(io, nested)
+    end
+    spec = Gesso.architecture_spec(path)
+    @test spec.family === :qwen3_5
+    @test spec.hidden_size == 1024
+    @test spec.n_heads == 8
+    @test spec.n_kv_heads == 2
+    @test spec.head_dim == 256          # published, not 1024÷8=128
+    @test spec.num_layers == 8
+    @test spec.tie_word_embeddings
+    @test spec.rope.theta == 10000000.0
+    @test spec.rope.kind === :none
+    @test spec.rope.rotary_dim == 64    # 0.25 × 256
+    @test spec.rope.interleaved == false  # rotate_half, not GPT-J pairs
+    @test spec.rope.mrope_section == [11, 11, 10]
+    @test spec.mixer !== nothing
+    @test Gesso.layer_mixer(spec, 0) === :linear_attention
+    @test Gesso.layer_mixer(spec, 3) === :full_attention
+    caps = Gesso.capabilities(spec)
+    @test caps.qk_norm
+    @test caps.linear_attention
+    @test caps.attn_output_gate
+    @test caps.mrope
+    reqs = Gesso.required_semantics(spec)
+    @test :linear_attention in reqs
+    @test :attn_output_gate in reqs
+    @test :mrope in reqs
+    @test :qk_norm in reqs
+    @test :rms_unit_offset in spec.features
+    @test :rope_partial_dim in reqs
+    @test :rope_interleaved ∉ reqs
+    @test :swiglu_ffn in reqs
+    @test Gesso.supports(Gesso.CPUBackend(), :linear_attention)
+    @test Gesso.supports(Gesso.CPUBackend(), :qk_norm)
+    report = Gesso.import_report(spec)
+    @test occursin("linear_attention", report)
+    @test occursin("qk_norm", report)
+    @test occursin("Failure boundary: none", report)
+    @test !occursin("qwen3_5 unsupported", report)
+
+    # Ornith-1.5-9B sizes: hidden == n_heads × head_dim, same family
+    ornith_text = merge(
+        _Q35_TEXT,
+        Dict{String, Any}(
+            "hidden_size" => 4096,
+            "num_attention_heads" => 16,
+            "num_key_value_heads" => 4,
+            "intermediate_size" => 12288,
+            "tie_word_embeddings" => false,
+        ),
+    )
+    ornith = Gesso.parse_config(
+        Gesso.Qwen35Adapter(),
+        Dict{String, Any}("model_type" => "qwen3_5", "text_config" => ornith_text),
+    )
+    @test ornith.hidden_size == 4096
+    @test ornith.head_dim == 256
+    @test ornith.n_heads * ornith.head_dim == ornith.hidden_size
+    @test :linear_attention in Gesso.required_semantics(ornith)
+end
+
 @testset "BREADTH-0 Pass F: capability lattice, not a model whitelist" begin
     llm = Gesso.parse_config(Gesso.LlamaAdapter(), _B0_CONFIGS["llama"])
     reqs = Gesso.required_semantics(llm)
@@ -289,6 +404,30 @@ end
     @test length(k2) == length(k) == 16
     @test length(v2) == length(v) == 16
     @test isempty(intersect(q2, k2)) && isempty(intersect(k2, v2))
+end
+
+@testset "Qwen3.5 fused Q|gate is per-head interleaved" begin
+    # 2 heads, head_dim=4 → packing [H0_Q, H0_gate, H1_Q, H1_gate]
+    (q, gate) = Gesso.fused_qg_rows(2, 4)
+    @test q == [1, 2, 3, 4, 9, 10, 11, 12]
+    @test gate == [5, 6, 7, 8, 13, 14, 15, 16]
+    @test isempty(intersect(q, gate))
+    @test sort([q; gate]) == collect(1:16)
+    # concatenated all-Q then all-gate would be 1:8 / 9:16 — that is wrong
+    @test q != collect(1:8)
+    @test gate != collect(9:16)
+
+    spec = Gesso.parse_config(
+        Gesso.Qwen35Adapter(),
+        Dict{String, Any}("model_type" => "qwen3_5", "text_config" => _Q35_TEXT),
+    )
+    m = Gesso.param_map(Gesso.Qwen35Adapter(), spec)
+    qref = only(filter(r -> Gesso.canonical_name(r.id) == "layer[0].attention.q", m.layer_refs))
+    gref = only(filter(r -> Gesso.canonical_name(r.id) == "layer[0].attention.gate", m.layer_refs))
+    @test qref.external == gref.external == "self_attn.q_proj.weight"
+    want = Gesso.fused_qg_rows(spec.n_heads, spec.head_dim)
+    @test qref.rows == want.q
+    @test gref.rows == want.gate
 end
 
 # --- Pass H: a second family through EXECUTION ---------------------------------
@@ -430,6 +569,8 @@ end
     @test "gemma" in fams
     @test "mistral" in fams
     @test "phi3" in fams
+    @test "qwen3_5" in fams
+    @test "qwen3_5_moe" in fams
     # every registered family has an adapter object that resolves back to it
     for f in fams
         a = Gesso.adapter_for(f)
@@ -475,15 +616,14 @@ end
     @test issorted(l3; rev=true)                          # frequency decreases with i
     @test all(>(0), l3)
 
-    # unsupported policy DIMENSIONS fail closed at the dimension (§II)
-    @test_throws Gesso.LoweringNotImplemented Gesso.rope_inv_freq(
-        Gesso.RoPEPolicy(; theta=10000.0, interleaved=true),
-        d,
-    )
-    @test_throws Gesso.LoweringNotImplemented Gesso.rope_inv_freq(
-        Gesso.RoPEPolicy(; theta=10000.0, rotary_dim=4),
-        d,
-    )
+    # interleaved is a rope! layout flag; frequencies stay the unscaled default
+    @test Gesso.rope_inv_freq(Gesso.RoPEPolicy(; theta=10000.0, interleaved=true), d) ===
+          nothing
+    # partial rotary computes frequencies over rotary_dim, not d_head
+    partial = Gesso.rope_inv_freq(Gesso.RoPEPolicy(; theta=10000.0, rotary_dim=4), d)
+    @test length(partial) == 2
+    @test partial[1] == 1.0
+    @test partial[2] ≈ 10000.0^(-2 / 4)
 end
 
 @testset "BREADTH-0 Pass D: the policy travels with the model, not the call site" begin
@@ -572,26 +712,23 @@ end
     # and it is NOT the unscaled frequency vector
     @test s.inv_freq != Gesso.rope_inv_freq(Gesso.RoPEPolicy(), 32 ÷ 4)
 
-    # Fail-closed is preserved where it belongs: at the policy DIMENSIONS this
-    # build does not implement, refused at the operation (§LXX, lattice §II).
+    # Partial rotary and GPT-J pair layout now lower on CPU. Construction
+    # reads the policy; generate executes it.
     for rope in (
         Gesso.RoPEPolicy(; theta=10000.0, kind=:linear, factor=8.0, interleaved=true),
         Gesso.RoPEPolicy(; theta=10000.0, kind=:linear, factor=8.0, rotary_dim=4),
     )
-        err = try
-            Gesso.Session(
-                model,
-                merge(tensors, (; rope));
-                context_length=8,
-                eos_token_id=2,
-                theta=10000.0,
-            )
-            nothing
-        catch e
-            e
-        end
-        @test err isa Gesso.LoweringNotImplemented
-        @test occursin("rope", sprint(showerror, err))
+        s = Gesso.Session(
+            model,
+            merge(tensors, (; rope));
+            context_length=8,
+            eos_token_id=2,
+            theta=10000.0,
+        )
+        @test s.inv_freq !== nothing
+        ids = Gesso.generate(s, [0, 1]; max_new_tokens=2)
+        @test length(ids) == 4
+        @test all(0 .<= ids .< 32)
     end
 end
 
@@ -613,12 +750,13 @@ end
     @test occursin("Tied embeddings: yes", rep)
     @test occursin("Failure boundary: none", rep)
 
-    # Qwen2 needs :qk_norm AND scaled rope — BOTH are named as capabilities
+    # Qwen2 names :qk_norm and scaled rope; both now lower on CPU
     qwen = Gesso.architecture_spec(joinpath(dir, "qwen2.json"))
     qrep = Gesso.import_report(qwen)
     @test occursin("qk_norm", qrep)
     @test occursin("rope_linear", qrep)
-    @test occursin("NOT IMPLEMENTED", qrep)
+    @test occursin("Failure boundary: none", qrep)
+    @test !occursin("NOT IMPLEMENTED", qrep)
 
     # Gemma needs :dense_ffn — the report says so instead of "gemma unsupported"
     gem = Gesso.architecture_spec(joinpath(dir, "gemma.json"))

@@ -33,8 +33,23 @@ function _cuda_checked_storage(op::Symbol, s)
         "host views, other devices and unsupported arithmetic are rejected; call to_device explicitly";
         op=op, storage_type=string(typeof(s))))
 end
-Gesso.Inference._check_device_storage(op::Symbol, backend::CUDABackend, t) =
+function Gesso.Inference._check_device_storage(op::Symbol, backend::CUDABackend, t)
+    s = t.storage
+    (s isa Gesso.Inference.HostOffload ||
+     s isa Gesso.Inference.GgufQuantSlice ||
+     s isa Gesso.Inference.GpuQuantSlice) &&
+        return nothing
     _cuda_device_storage!(op, t)
+    return nothing
+end
+
+# Small HostOffload weights H2D for an op. Embedding / lm_head / expert
+# slabs have dedicated host paths and must not go through this helper.
+function _cuda_materialize_small(s)
+    s isa CuArray && return s
+    s isa Gesso.Inference.HostOffload && return CuArray{Float32}(s.data)
+    return s
+end
 
 # --- op bodies -----------------------------------------------------------------
 
@@ -62,7 +77,8 @@ function _cuda_embed_kernel!(dst2, tab, t::Int, tok0::Int)
 end
 
 function _cuda_rmsnorm!(dst, x, scale; eps=1e-6)
-    _cuda_rmsnorm_storage!(dst.storage, x.storage, scale.storage, eps)
+    ss = _cuda_materialize_small(scale.storage)
+    _cuda_rmsnorm_storage!(dst.storage, x.storage, ss, eps)
     return dst
 end
 
@@ -136,16 +152,17 @@ end
 # RoPE: adjacent pairs by default; imported HF policy selects half-split
 # law), Q over its head axis and K over its own (GQA-safe, Phase 3 fix).
 # One @cuda kernel — broadcast cannot express the pair coupling.
-function _cuda_rope_kernel!(x, positions, theta, interleaved::Bool)
+function _cuda_rope_kernel!(x, positions, theta, interleaved::Bool, rd::Int, use_inv::Bool, inv_freq)
     t = (blockIdx().x - 1) * blockDim().x + threadIdx().x    # sequence index
     h = blockIdx().y                                          # head index
     seq, nheads, d = size(x)
     t <= seq || return
     m = Float32(positions[t])
-    for i in 0:(d÷2-1)
-        θv = m * theta^(-2i / d)
+    n = rd ÷ 2
+    for i in 0:(n - 1)
+        θv = use_inv ? m * inv_freq[i + 1] : m * theta^(-2i / rd)
         c, s = cos(θv), sin(θv)
-        a, b = interleaved ? (2i + 1, 2i + 2) : (i + 1, i + 1 + d ÷ 2)
+        a, b = interleaved ? (2i + 1, 2i + 2) : (i + 1, i + 1 + n)
         x1 = x[t, h, a]
         x2 = x[t, h, b]
         x[t, h, a] = x1 * c - x2 * s
@@ -154,23 +171,44 @@ function _cuda_rope_kernel!(x, positions, theta, interleaved::Bool)
     return
 end
 
-function _cuda_rope!(q, k, positions; theta = 10000.0, interleaved = true)
-    _cuda_rope_storage!(q.storage, k.storage, positions, theta, interleaved)
+function _cuda_rope!(
+    q,
+    k,
+    positions;
+    theta = 10000.0,
+    interleaved = true,
+    rotary_dim = 0,
+    inv_freq = nothing,
+)
+    _cuda_rope_storage!(q.storage, k.storage, positions, theta, interleaved, rotary_dim, inv_freq)
     return q
 end
 
 # Keep launch arguments concrete across semantic tensors' erased storage fields.
-function _cuda_rope_storage!(qs::AbstractArray, ks::AbstractArray, positions, theta, interleaved)
+function _cuda_rope_storage!(
+    qs::AbstractArray,
+    ks::AbstractArray,
+    positions,
+    theta,
+    interleaved,
+    rotary_dim,
+    inv_freq,
+)
     size(qs, 3) == size(ks, 3) ||
         throw(gesso_error(ERR_INVALID_PLAN, "rope!: q d_head ≠ k d_head"; op = :rope!))
     tθ = Float64(theta)
+    d = size(qs, 3)
+    rd = rotary_dim == 0 ? Int(d) : Int(rotary_dim)
     pos_d = CuArray{Int}(positions)               # kernels never auto-transfer
+    use_inv = inv_freq !== nothing
+    freq_d = use_inv ? CuArray{Float32}(Float32.(inv_freq)) : CUDA.zeros(Float32, 1)
     for x in (qs, ks)
-        seq, nheads, d = size(x)
+        seq, nheads, _ = size(x)
         nthreads = min(256, seq)
         nblocks = cld(seq, nthreads)
         # 2-D grid: x = sequence tiles, y = head (K rotates its OWN heads)
-        @cuda threads = (nthreads,) blocks = (nblocks, nheads) _cuda_rope_kernel!(x, pos_d, tθ, interleaved)
+        @cuda threads = (nthreads,) blocks = (nblocks, nheads) _cuda_rope_kernel!(
+            x, pos_d, tθ, interleaved, rd, use_inv, freq_d)
     end
     return nothing
 end
@@ -255,6 +293,8 @@ function embedding_lookup!(
     ::Gesso.PrefillWorkload,
 )
     _cuda_device_storage!(:embedding_lookup!, dst)
+    table.storage isa Gesso.Inference.HostOffload &&
+        return _cuda_host_offload_embed!(dst, table, tokens)
     _cuda_device_storage!(:embedding_lookup!, table)
     return _cuda_embedding_lookup!(dst, table, tokens)
 end
@@ -267,10 +307,24 @@ function embedding_lookup!(
     ::Gesso.DecodeWorkload,
 )
     _cuda_device_storage!(:embedding_lookup!, dst)
+    table.storage isa Gesso.Inference.HostOffload &&
+        return _cuda_host_offload_embed!(dst, table, tokens)
     _cuda_device_storage!(:embedding_lookup!, table)
     return _cuda_embedding_lookup!(dst, table, tokens)
 end
 
+function _cuda_host_offload_embed!(dst, table, tokens)
+    Gesso._validate_embedding_inputs(dst, table, tokens)
+    tab = table.storage.data
+    d = size(tab, 2)
+    host = Matrix{Float32}(undef, length(tokens), d)
+    @inbounds for (t, tok) in enumerate(tokens), j in 1:d
+        host[t, j] = Float32(tab[tok + 1, j])
+    end
+    copyto!(dst.storage, host)
+    return dst
+end
+
 function rmsnorm!(
     ::CUDABackend,
     dst::Activation,
@@ -306,15 +360,15 @@ function rope!(
     theta::Real = 10000.0,
     inv_freq = nothing,
     interleaved::Bool = true,
+    rotary_dim::Integer = 0,
 )
-    # BREADTH-0 Pass D: a scaled positional policy has NO CUDA lowering yet.
-    # It must be REFUSED, not silently run unscaled (§LXX: no silent
-    # representation change). The CPU oracle implements these policies today.
-    inv_freq === nothing ||
-        Gesso.lowering_not_implemented(:rope!, Gesso.CUDABackend())
+    # Partial rotary and an explicit inv_freq table (linear / Llama3 / Qwen3.5
+    # mRoPE-as-1D-text) rotate on device. Frequencies stay host metadata and
+    # are uploaded; Q/K stay on the device (§LXX: no silent unscaled run).
     _cuda_device_storage!(:rope!, q)
     _cuda_device_storage!(:rope!, k)
-    return _cuda_rope!(q, k, positions; theta, interleaved)
+    Gesso._validate_rope_inputs(q, k, positions, theta, inv_freq, rotary_dim)
+    return _cuda_rope!(q, k, positions; theta, interleaved, rotary_dim, inv_freq)
 end
 
 function rope!(
@@ -326,15 +380,12 @@ function rope!(
     theta::Real = 10000.0,
     inv_freq = nothing,
     interleaved::Bool = true,
+    rotary_dim::Integer = 0,
 )
-    # BREADTH-0 Pass D: a scaled positional policy has NO CUDA lowering yet.
-    # It must be REFUSED, not silently run unscaled (§LXX: no silent
-    # representation change). The CPU oracle implements these policies today.
-    inv_freq === nothing ||
-        Gesso.lowering_not_implemented(:rope!, Gesso.CUDABackend())
     _cuda_device_storage!(:rope!, q)
     _cuda_device_storage!(:rope!, k)
-    return _cuda_rope!(q, k, positions; theta, interleaved)
+    Gesso._validate_rope_inputs(q, k, positions, theta, inv_freq, rotary_dim)
+    return _cuda_rope!(q, k, positions; theta, interleaved, rotary_dim, inv_freq)
 end
 
 # --- the §LXXXII exit: the op consults Autotune --------------------------------
@@ -391,7 +442,7 @@ function _cuda_split_kernel!(dst3, src2, d_head::Int)
     return
 end
 
-function _split_heads!(dst::CuArray, src::CuArray, n_heads, d_head)
+function _split_heads!(dst::CuArray, src::AbstractArray, n_heads, d_head)
     rows = size(dst, 1)
     rows == 0 && return dst
     nthreads = min(256, rows)
@@ -580,6 +631,8 @@ function matmul!(
 )
     _cuda_device_storage!(:matmul!, dst)
     _cuda_device_storage!(:matmul!, x)
+    w.storage isa Gesso.Inference.HostOffload &&
+        return _cuda_host_offload_matmul!(dst, x, w)
     return _autotune_dispatch!(dst, x, w, _autotune_regime(size(x.storage, 2), size(w.storage, 1)))
 end
 
@@ -592,6 +645,8 @@ function matmul!(
 )
     _cuda_device_storage!(:matmul!, dst)
     _cuda_device_storage!(:matmul!, x)
+    w.storage isa Gesso.Inference.HostOffload &&
+        return _cuda_host_offload_matmul!(dst, x, w)
     return _autotune_dispatch!(dst, x, w, _autotune_regime(size(x.storage, 2), size(w.storage, 1)))
 end
 
@@ -606,6 +661,8 @@ function matmul!(
 )
     _cuda_device_storage!(:matmul!, dst)
     _cuda_device_storage!(:matmul!, x)
+    w.storage isa Gesso.Inference.HostOffload &&
+        return _cuda_host_offload_matmul!(dst, x, w)
     return _autotune_dispatch!(dst, x, w, _autotune_regime(size(x.storage, 2), size(w.storage, 1)))
 end
 
@@ -618,7 +675,19 @@ function matmul!(
 )
     _cuda_device_storage!(:matmul!, dst)
     _cuda_device_storage!(:matmul!, x)
+    w.storage isa Gesso.Inference.HostOffload &&
+        return _cuda_host_offload_matmul!(dst, x, w)
     return _autotune_dispatch!(dst, x, w, _autotune_regime(size(x.storage, 2), size(w.storage, 1)))
+end
+
+# dst = x * Wᵀ with W host-resident. Used for overflow lm_head / projections
+# (35B embedding+head ~1.89 GiB each) — D2H hidden, host GEMM, H2D result.
+function _cuda_host_offload_matmul!(dst, x, w)
+    W = w.storage.data
+    xh = Array(x.storage)
+    yh = xh * transpose(W)
+    copyto!(dst.storage, yh)
+    return dst
 end
 
 function softmax!(
@@ -745,18 +814,99 @@ end
 """
     to_device(::CUDABackend, tensors) -> tensors'
 
-Copy `Array` storage to `CuArray{Float32}` (F64→F32 conversion is part of
-the lowering) and return a new named tuple of the same shape — `embedding`,
-`blocks`, `lm_head`, and `final_rms` when present. NEVER mutates the CPU
-tensors. Tied heads stay tied on device: `lm_head === embedding`.
+Copy `Array` storage to `CuArray{Float32}` until `GESSO_GPU_BUDGET_MIB`
+(default 6144) is exhausted, smallest first. Overflow becomes `HostOffload`
+(explicit host residency — a forgotten raw Array still fails the CUDA
+check). Remaining budget then uploads `GgufQuantSlice` expert slabs as
+`GpuQuantSlice` (quantized bytes, no F32 dump). Slabs that still do not
+fit stay mmap'd and the MoE path H2Ds one quantized expert at a time.
+NEVER mutates the CPU tensors. Tied heads stay tied: `lm_head === embedding`.
+
+Config-agnostic: geometry is whatever the tensors carry, so Ornith
+256/8, Xing 64/4, and Gemma4 128/8 share this path.
 """
 function _to_device_cuda(tensors)
-    _to_f32(s) = s isa CuArray ? s : CuArray{Float32}(s)
-    # tensors in the map carry (shape, storage); blocks are NAMED TUPLES of
-    # tensors, so their fields convert field-wise
+    budget = Gesso.Inference._gpu_budget_bytes()
+    used = Int64(0)
+    conv = IdDict{Any, Any}()
+    pending = Any[]
+    qpending = Any[]
+
+    function consider!(s)
+        s === nothing && return
+        haskey(conv, s) && return
+        if s isa CuArray
+            conv[s] = s
+            used += Int64(sizeof(s))
+        elseif s isa Gesso.Inference.HostOffload
+            conv[s] = s
+        elseif s isa Gesso.Inference.GpuQuantSlice
+            conv[s] = s
+            used += Int64(sizeof(s.data))
+        elseif s isa Gesso.Inference.GgufQuantSlice
+            push!(qpending, s)
+        else
+            push!(pending, s)
+        end
+        return
+    end
+    function consider_t!(t)
+        hasproperty(t, :storage) || return
+        consider!(t.storage)
+        return
+    end
+
+    consider_t!(tensors.embedding)
+    tensors.lm_head === tensors.embedding || consider_t!(tensors.lm_head)
+    for b in tensors.blocks
+        for v in values(b)
+            consider_t!(v)
+        end
+    end
+    fr0 = haskey(tensors, :final_rms) ? tensors.final_rms : nothing
+    fr0 === nothing || consider_t!(fr0)
+
+    seen = Set{UInt}()
+    uniq = Any[]
+    for s in pending
+        id = objectid(s)
+        id in seen && continue
+        push!(seen, id)
+        push!(uniq, s)
+    end
+    sort!(uniq; by=s -> Int(prod(size(s))))
+
+    remaining = max(Int64(0), budget - used)
+    for s in uniq
+        nbytes = Int64(prod(size(s))) * Int64(sizeof(Float32))
+        if nbytes <= remaining
+            conv[s] = CuArray{Float32}(s)
+            remaining -= nbytes
+        else
+            data = eltype(s) === Float32 && s isa Array ? s : convert(Array{Float32}, s)
+            conv[s] = Gesso.Inference.HostOffload(data)
+        end
+    end
+
+    qseen = Set{UInt}()
+    for s in qpending
+        id = objectid(s)
+        id in qseen && continue
+        push!(qseen, id)
+        nbytes = Gesso.Inference._quant_nbytes(s)
+        if nbytes <= remaining && nbytes > 0
+            packed = Gesso.Inference.packed_quant_bytes(s)
+            conv[s] = Gesso.Inference.gpu_quant_slice(s, CuArray{UInt8}(packed))
+            remaining -= nbytes
+        else
+            conv[s] = s
+        end
+    end
+
     _conv_t(t) = begin
+        hasproperty(t, :storage) || return t         # mixer tags and other metadata
         t.storage === nothing && return t            # unset storage stays unset
-        typeof(t)(; shape = t.shape, storage = _to_f32(t.storage))
+        typeof(t)(; shape = t.shape, storage = conv[t.storage])
     end
     _conv_blk(b) = NamedTuple{keys(b)}(map(_conv_t, values(b)))
     embedding = _conv_t(tensors.embedding)
@@ -765,7 +915,22 @@ function _to_device_cuda(tensors)
     fr = haskey(tensors, :final_rms) ? tensors.final_rms : nothing
     final_rms = fr === nothing ? nothing : _conv_t(fr)
     result = (; embedding, blocks, lm_head, final_rms)
-    return haskey(tensors, :rope) ? merge(result, (; rope = tensors.rope)) : result
+    return merge(result, _keep_tensor_meta(tensors))
+end
+
+# ArchitectureSpec, RoPEPolicy, mixer tags — anything without .storage.
+const _TO_DEVICE_STORAGE_KEYS = (:embedding, :blocks, :lm_head, :final_rms)
+
+function _keep_tensor_meta(tensors)
+    ks = Symbol[]
+    vs = Any[]
+    for k in keys(tensors)
+        k in _TO_DEVICE_STORAGE_KEYS && continue
+        push!(ks, k)
+        push!(vs, getproperty(tensors, k))
+    end
+    isempty(ks) && return (;)
+    return NamedTuple{Tuple(ks)}(Tuple(vs))
 end
 
 # ext-local dispatch wrapper (bound as Gesso.to_device when this extension is
@@ -796,4 +961,376 @@ function _attention_values_device!(::CUDABackend, attn::AbstractArray, probs, v:
         CUDA.CUBLAS.gemm!('N', 'N', one(eltype(attn)), probs, view(v, 1:K, hh, :), zero(eltype(attn)), view(attn, :, hh, :))
     end
     return attn
+end
+
+# --- Qwen3.5 hybrid extras: GDN, causal conv1d, sigmoid/silu gates --------------
+#
+# Inference-internal dispatch (same form as `_attention_scores_device!`).
+# One block per value head for the recurrent GDN step; conv/gate/silu are
+# elementwise. F32 on device; the CPU oracle stays F64 (atol, not bits).
+
+function _cuda_sigmoid_mul_kernel!(dst, src, gate)
+    i = (blockIdx().x - 1) * blockDim().x + threadIdx().x
+    i <= length(dst) || return
+    gv = gate[i]
+    dst[i] = src[i] / (Float32(1) + exp(-gv))
+    return
+end
+
+function _sigmoid_mul!(::CUDABackend, dst::AbstractArray, src::AbstractArray, gate::AbstractArray)
+    n = length(dst)
+    n == 0 && return dst
+    @cuda threads = (min(256, n),) blocks = (cld(n, 256),) _cuda_sigmoid_mul_kernel!(dst, src, gate)
+    return dst
+end
+
+function _cuda_silu_mul_kernel!(dst, src, gate)
+    i = (blockIdx().x - 1) * blockDim().x + threadIdx().x
+    i <= length(dst) || return
+    gv = gate[i]
+    dst[i] = src[i] * (gv / (Float32(1) + exp(-gv)))
+    return
+end
+
+function _silu_mul!(::CUDABackend, dst::AbstractArray, src::AbstractArray, gate::AbstractArray)
+    n = length(dst)
+    n == 0 && return dst
+    @cuda threads = (min(256, n),) blocks = (cld(n, 256),) _cuda_silu_mul_kernel!(dst, src, gate)
+    return dst
+end
+
+function _cuda_gdn_gates_kernel!(g, beta, a, b, A_log, dt_bias)
+    t = (blockIdx().x - 1) * blockDim().x + threadIdx().x
+    hh = (blockIdx().y - 1) * blockDim().y + threadIdx().y
+    seq = size(g, 1)
+    nv = size(g, 2)
+    (t > seq || hh > nv) && return
+    bv = b[t, hh]
+    beta[t, hh] = Float32(1) / (Float32(1) + exp(-bv))
+    av = a[t, hh] + dt_bias[hh]
+    sp = av > Float32(20) ? av : log1p(exp(av))
+    g[t, hh] = -exp(A_log[hh]) * sp
+    return
+end
+
+function _gdn_gate_params!(::CUDABackend, g, beta, a, b, A_log, dt_bias)
+    A_log = _cuda_materialize_small(A_log)
+    dt_bias = _cuda_materialize_small(dt_bias)
+    seq, nv = size(beta)
+    seq == 0 && return g, beta
+    tx = min(16, seq)
+    ty = min(16, nv)
+    @cuda threads = (tx, ty) blocks = (cld(seq, tx), cld(nv, ty)) _cuda_gdn_gates_kernel!(
+        g, beta, a, b, A_log, dt_bias)
+    return g, beta
+end
+
+function _cuda_conv1d_silu_kernel!(dst, x, weight, conv_state, k::Int)
+    t = (blockIdx().x - 1) * blockDim().x + threadIdx().x
+    c = (blockIdx().y - 1) * blockDim().y + threadIdx().y
+    seq = size(dst, 1)
+    channels = size(dst, 2)
+    (t > seq || c > channels) && return
+    acc = zero(eltype(dst))
+    for p in 1:k
+        src = t - (k - p)
+        v = src <= 0 ? conv_state[c, src + (k - 1)] : x[src, c]
+        acc += weight[c, 1, p] * v
+    end
+    dst[t, c] = acc / (Float32(1) + exp(-acc))
+    return
+end
+
+function _cuda_conv_state_update_kernel!(conv_state, x, seq::Int, k::Int)
+    c = (blockIdx().x - 1) * blockDim().x + threadIdx().x
+    channels = size(conv_state, 1)
+    c > channels && return
+    k1 = k - 1
+    if seq >= k1
+        for p in 1:k1
+            conv_state[c, p] = x[seq - k1 + p, c]
+        end
+    else
+        keep = k1 - seq
+        for p in 1:keep
+            conv_state[c, p] = conv_state[c, p + seq]
+        end
+        for p in 1:seq
+            conv_state[c, keep + p] = x[p, c]
+        end
+    end
+    return
+end
+
+function _causal_conv1d_silu!(::CUDABackend, dst, x, weight, conv_state)
+    weight = _cuda_materialize_small(weight)
+    conv_state = _cuda_materialize_small(conv_state)
+    seq, channels = size(x)
+    k = size(weight, 3)
+    if seq > 0
+        tx = min(16, seq)
+        ty = min(16, channels)
+        @cuda threads = (tx, ty) blocks = (cld(seq, tx), cld(channels, ty)) _cuda_conv1d_silu_kernel!(
+            dst, x, weight, conv_state, Int(k))
+    end
+    nthreads = min(256, channels)
+    @cuda threads = (nthreads,) blocks = (cld(channels, nthreads),) _cuda_conv_state_update_kernel!(
+        conv_state, x, Int(seq), Int(k))
+    return dst
+end
+
+function _cuda_gdn_qk_prep_kernel!(
+    qn, kn, q, k, nk::Int, group::Int, tiled::Bool, do_l2::Bool, scale::Float32, eps::Float32,
+)
+    t = Int(blockIdx().x)
+    hh = Int(blockIdx().y)
+    seq = size(q, 1)
+    nv = size(qn, 2)
+    dk = size(q, 3)
+    (t > seq || hh > nv) && return
+    h = tiled ? ((hh - 1) % nk) + 1 : ((hh - 1) ÷ group) + 1
+    accq = zero(Float32)
+    acck = zero(Float32)
+    for d in 1:dk
+        qv = q[t, h, d]
+        kv = k[t, h, d]
+        qn[t, hh, d] = qv
+        kn[t, hh, d] = kv
+        accq += qv * qv
+        acck += kv * kv
+    end
+    if do_l2
+        invq = Float32(1) / sqrt(accq + eps)
+        invk = Float32(1) / sqrt(acck + eps)
+        for d in 1:dk
+            qn[t, hh, d] *= invq * scale
+            kn[t, hh, d] *= invk
+        end
+    else
+        for d in 1:dk
+            qn[t, hh, d] *= scale
+        end
+    end
+    return
+end
+
+function _cuda_gdn_recurrent_kernel!(out, qn, kn, v, g, beta, state)
+    hh = Int(blockIdx().x)
+    nv = size(state, 1)
+    dk = size(state, 2)
+    dv = size(state, 3)
+    seq = size(out, 1)
+    hh > nv && return
+    j = Int(threadIdx().x)
+    while j <= dv
+        for t in 1:seq
+            decay = exp(g[t, hh])
+            bt = beta[t, hh]
+            for i in 1:dk
+                state[hh, i, j] *= decay
+            end
+            kv_mem = zero(eltype(state))
+            for i in 1:dk
+                kv_mem += state[hh, i, j] * kn[t, hh, i]
+            end
+            delta = (v[t, hh, j] - kv_mem) * bt
+            for i in 1:dk
+                state[hh, i, j] += kn[t, hh, i] * delta
+            end
+            acc = zero(eltype(out))
+            for i in 1:dk
+                acc += state[hh, i, j] * qn[t, hh, i]
+            end
+            out[t, hh, j] = acc
+        end
+        j += Int(blockDim().x)
+    end
+    return
+end
+
+function _gated_delta_rule!(
+    ::CUDABackend,
+    out,
+    q,
+    k,
+    v,
+    g,
+    beta,
+    state;
+    l2norm::Bool=true,
+    v_head_tiled::Bool=false,
+)
+    seq = size(q, 1)
+    nk, dk = size(q, 2), size(q, 3)
+    nv, dv = size(v, 2), size(v, 3)
+    nv % nk == 0 || error("gated_delta_rule: n_v_heads $nv not divisible by n_k_heads $nk")
+    group = div(nv, nk)
+    size(state) == (nv, dk, dv) ||
+        error("gated_delta_rule: state $(size(state)) ≠ ($nv, $dk, $dv)")
+    seq == 0 && return out
+    qn = similar(out, eltype(out), (seq, nv, dk))
+    kn = similar(out, eltype(out), (seq, nv, dk))
+    scale = Float32(1) / sqrt(Float32(dk))
+    @cuda threads = 1 blocks = (seq, nv) _cuda_gdn_qk_prep_kernel!(
+        qn, kn, q, k, Int(nk), Int(group), v_head_tiled, l2norm, scale, Float32(1e-6))
+    nthreads = min(256, dv)
+    @cuda threads = (nthreads,) blocks = (nv,) _cuda_gdn_recurrent_kernel!(
+        out, qn, kn, v, g, beta, state)
+    return out
+end
+
+# --- MoE expert offload (config-agnostic) --------------------------------------
+#
+# Router GEMM on GPU, softmax+top-k on host (n_exp is tens-to-hundreds, seq
+# is small), then for each of n_used experts: fused quantized GEMV when the
+# bank is GpuQuantSlice / GgufQuantSlice, else fetch into (ff,h)/(h,ff)
+# scratch and CUBLAS gemv. Same API for 256/8, 64/4, 128/8.
+
+function Gesso.Inference._fallback_zeros_factory(::CUDABackend)
+    return (dims::Tuple{Vararg{Int}}) -> CUDA.zeros(Float32, dims)
+end
+
+function _fetch_expert!(::CUDABackend, W::CuMatrix{Float32}, bank::CuArray{Float32, 3}, e::Int)
+    copyto!(W, view(bank, e, :, :))
+    return W
+end
+
+function _fetch_expert!(::CUDABackend, W::CuMatrix{Float32}, bank, e::Int)
+    hostW = Matrix{Float32}(undef, size(W, 1), size(W, 2))
+    Gesso.Inference._fetch_expert!(Gesso.CPUBackend(), hostW, bank, e)
+    copyto!(W, hostW)
+    return W
+end
+
+function _cuda_shared_gate_kernel!(y, sd, acc)
+    t = Int((blockIdx().x - 1) * blockDim().x + threadIdx().x)
+    i = Int((blockIdx().y - 1) * blockDim().y + threadIdx().y)
+    seq = size(y, 1)
+    h = size(y, 2)
+    (t > seq || i > h) && return
+    s = Float32(1) / (Float32(1) + exp(-acc[t]))
+    y[t, i] += s * sd[t, i]
+    return
+end
+
+function _shared_gate_add!(::CUDABackend, y, x, sd, gvec)
+    g = _cuda_materialize_small(gvec)
+    g isa CuArray || (g = CuArray{Float32}(g))
+    seq = size(x, 1)
+    h = size(x, 2)
+    acc = similar(y, eltype(y), seq)
+    CUDA.CUBLAS.gemv!('N', one(eltype(y)), x, g, zero(eltype(y)), acc)
+    tx = min(16, seq)
+    ty = min(16, h)
+    @cuda threads = (tx, ty) blocks = (cld(seq, tx), cld(h, ty)) _cuda_shared_gate_kernel!(
+        y, sd, acc)
+    return y
+end
+
+function _moe_topk_swiglu!(
+    backend::CUDABackend,
+    y::AbstractMatrix,
+    x::AbstractMatrix,
+    router,
+    gate,
+    up,
+    down,
+    n_used::Int,
+)
+    seq, h = size(x)
+    n_exp = size(router, 1)
+    ff = size(gate, 2)
+    0 < n_used <= n_exp || error("_moe_topk_swiglu!: n_used $n_used out of 1..$n_exp")
+    size(y) == (seq, h) || error("_moe_topk_swiglu!: y shape $(size(y)) ≠ ($seq, $h)")
+    size(router) == (n_exp, h) ||
+        error("_moe_topk_swiglu!: router $(size(router)) ≠ ($n_exp, $h)")
+    size(gate) == (n_exp, ff, h) ||
+        error("_moe_topk_swiglu!: gate $(size(gate)) ≠ ($n_exp, $ff, $h)")
+    size(up) == (n_exp, ff, h) ||
+        error("_moe_topk_swiglu!: up $(size(up)) ≠ ($n_exp, $ff, $h)")
+    size(down) == (n_exp, h, ff) ||
+        error("_moe_topk_swiglu!: down $(size(down)) ≠ ($n_exp, $h, $ff)")
+
+    rd = router isa CuArray ? router : CuArray{Float32}(Gesso.Inference._offload_host_array(router))
+    logits = CUDA.zeros(Float32, seq, n_exp)
+    CUDA.CUBLAS.gemm!('N', 'T', one(Float32), x, rd, zero(Float32), logits)
+    logits_h = Array(logits)
+
+    fill!(y, zero(eltype(y)))
+    gacc = CUDA.zeros(Float32, ff)
+    uacc = CUDA.zeros(Float32, ff)
+    hact = CUDA.zeros(Float32, ff)
+    yrow = CUDA.zeros(Float32, h)
+    xt = CUDA.zeros(Float32, h)
+    order = Vector{Int}(undef, n_exp)
+    quant = Gesso.Inference._is_quant_expert_bank(gate)
+    Wg = Wu = Wd = nothing
+    Gbat = Ubat = Hbat = Dbat = ws = nothing
+    experts = Vector{Int}(undef, n_used)
+    wbuf = Vector{Float32}(undef, n_used)
+    if quant
+        Gbat = CUDA.zeros(Float32, ff, n_used)
+        Ubat = CUDA.zeros(Float32, ff, n_used)
+        Hbat = CUDA.zeros(Float32, ff, n_used)
+        Dbat = CUDA.zeros(Float32, h, n_used)
+        ws = CUDA.zeros(Float32, n_used)
+    else
+        Wg = CUDA.zeros(Float32, ff, h)
+        Wu = CUDA.zeros(Float32, ff, h)
+        Wd = CUDA.zeros(Float32, h, ff)
+    end
+
+    for t in 1:seq
+        row = view(logits_h, t, :)
+        m = typemin(Float32)
+        @inbounds for e in 1:n_exp
+            row[e] > m && (m = row[e])
+        end
+        s = zero(Float32)
+        @inbounds for e in 1:n_exp
+            v = exp(row[e] - m)
+            row[e] = v
+            s += v
+        end
+        invs = one(Float32) / s
+        @inbounds for e in 1:n_exp
+            row[e] *= invs
+            order[e] = e
+        end
+        sort!(order; by=e -> (-row[e], e))
+        wsum = zero(Float32)
+        @inbounds for k in 1:n_used
+            wsum += row[order[k]]
+        end
+        wsum > 0 || continue
+        invw = one(Float32) / wsum
+        copyto!(xt, view(x, t, :))
+        fill!(yrow, zero(Float32))
+        if quant
+            @inbounds for k in 1:n_used
+                experts[k] = order[k]
+                wbuf[k] = row[order[k]] * invw
+            end
+            _cuda_qgemv_experts!(Gbat, xt, gate, experts)
+            _cuda_qgemv_experts!(Ubat, xt, up, experts)
+            _silu_mul!(backend, Hbat, Ubat, Gbat)
+            _cuda_qgemv_experts!(Dbat, Hbat, down, experts)
+            copyto!(ws, wbuf)
+            CUDA.CUBLAS.gemv!('N', one(Float32), Dbat, ws, zero(Float32), yrow)
+        else
+            for k in 1:n_used
+                e = order[k]
+                w = row[e] * invw
+                _fetch_expert!(backend, Wg, gate, e)
+                _fetch_expert!(backend, Wu, up, e)
+                _fetch_expert!(backend, Wd, down, e)
+                CUDA.CUBLAS.gemv!('N', one(Float32), Wg, xt, zero(Float32), gacc)
+                CUDA.CUBLAS.gemv!('N', one(Float32), Wu, xt, zero(Float32), uacc)
+                _silu_mul!(backend, hact, uacc, gacc)
+                CUDA.CUBLAS.gemv!('N', w, Wd, hact, one(Float32), yrow)
+            end
+        end
+        view(y, t, :) .= yrow
+    end
+    return y
 end

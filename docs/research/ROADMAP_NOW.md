@@ -30,8 +30,30 @@ eager 0.436 s / Gesso CUDA 0.630 s; Gesso F32 vs eager bfloat16).
 10C landed 2026-10-02 (`PHASE10C_NAMED_MODEL_HYGIENE.md`). 10D
 landed 2026-10-02 (`PHASE10D_FOUNDATION_HARDENING.md`): export
 inventory + parked-empty fence, fail-closed vanished-golden gate,
-`@inferred` byte counters, 1 RPDO win. Fusion is the pass after
-10D. Canon §LXXXIII stays parked.
+`@inferred` byte counters, 1 RPDO win. 10E landed 2026-10-02
+(`PHASE10E_FUSED_DECODE.md`): Session-owned decode workspace, in-place
+`gather_kv!`, in-place GQA repeat; warmed `decode!` host allocation
+89,120 → 10,736 B (toy2 CPU), 139,984 → 8,528 B (llama_micro CPU),
+15,864,048 → 100,480 B (SmolLM2 CPU). G2 factor republished at
+**0.737×** (2026-10-02.tsv; Gesso CUDA warmed 0.630 → 0.487 s, eager
+0.436 → 0.359 s — the ratio moved against us while both sides got
+faster). 10F landed 2026-10-03 (`PHASE10F_CUDA_DECODE_ALLOC.md`): the
+CUDA decode broadcast wrappers are gone — device kernels behind
+`CuArray` specializations of the SAME core copy helpers, so
+`Inference.jl` charges 0 B to a warmed SmolLM2 CUDA `decode!`.
+Warmed CUDA `decode!` 5,094,736 → 1,269,616 B (4.0x); toy2/micro CUDA
+back under item D's original 256 KiB gate (97,312 / 100,736 B); G2
+republished at **1.452×** (2026-10-03.tsv; Gesso CUDA warmed 0.487 →
+0.240 s, eager 0.359 → 0.348 s). SmolLM2 CUDA missed the 1 MiB ceiling
+by 221 KB and was carried as a `@test_broken` with an escalation packet
+in the goal file — the ceiling was NOT raised. 10G landed 2026-10-03
+(`PHASE10G_AUTOTUNE_RECEIPT.md`): a cache hit is not a decision, so
+`Autotune.select` returns the cached `TuneResult` and emits NO receipt
+(the miss receipt already named the winner). Warmed SmolLM2 CUDA
+`decode!` 1,269,616 → 942,128 B (1.35x, 106,448 B UNDER 1 MiB);
+`Autotune.jl` per-token cost 320,509 → 37,136 B. The 1 MiB gate is
+green and the ceiling was NOT raised to make it so. Canon §LXXXIII
+stays parked.
 
 Canon still lists Phases 0–22 in `docs/Gesso_Stack.md` §LXXIII–§XCV.
 This file says what that list *means* after Phases 0–4 and the first
@@ -114,11 +136,32 @@ G1–G3   speed floor                   LANDED 2026-10-01  PHASE10_SPEED_FLOOR.m
                                       G3 llama_micro 2048 vs 4096 held;
                                       named-model share measured (10C:
                                       SmolLM2 CPU N = 1_474_560).
-                                      Fusion later.
+                                      Fusion: PHASE10E LANDED.
 10C     named-model hygiene           LANDED 2026-10-02  PHASE10C_NAMED_MODEL_HYGIENE.md
 10D     foundation hardening          LANDED 2026-10-02  PHASE10D_FOUNDATION_HARDENING.md
                                       (inventory, fail-closed hunt,
-                                      @inferred, ≤5 RPDO wins; fusion later)
+                                      @inferred, ≤5 RPDO wins)
+10E     fused decode                  LANDED 2026-10-02  PHASE10E_FUSED_DECODE.md
+                                      Session scratch + in-place gather
+                                      + in-place GQA repeat (10D packet
+                                      P-2); warmed decode! alloc ≤16 KiB
+                                      toy2/micro CPU; G2 factor 0.737×
+10F     CUDA decode alloc             LANDED 2026-10-03  PHASE10F_CUDA_DECODE_ALLOC.md
+                                      broadcast wrappers + cuda_ops cut;
+                                      CUDA decode! 5,094,736 →
+                                      1,269,616 B; G2 factor 1.452×;
+                                      SmolLM2 1 MiB ceiling packeted
+10G     Autotune receipt              LANDED 2026-10-03  PHASE10G_AUTOTUNE_RECEIPT.md
+                                      miss-only emission: a hit is
+                                      not a decision; SmolLM2 CUDA
+                                      decode! 1,269,616 → 942,128 B;
+                                      the 1 MiB gate is GREEN
+10H     type stability (P-1)          LANDED 2026-10-03  PHASE10H_TYPE_STABILITY.md
+                                      one storage type parameter `S`
+                                      on the §XI families; the three
+                                      @inferred gates GREEN; Broken 3 → 0;
+                                      SmolLM2 CUDA decode! 942,128 →
+                                      814,544 B (type-stable dispatch)
 10–11   weight compiler + memory      AFTER G1∧G2∧G3 + encoding-owner open
 12–13   shared model runtime          AFTER Cyan MAO v0 reducer exists;
                                       consume branch/lease ids
@@ -144,9 +187,12 @@ pages. Full gate, hot-path inventory, and RPD/RPDO split:
 `docs/research/SPEED_FLOOR.md`.
 
 Do not open canon Phase 10 (representation) until G1∧G2∧G3 and
-the encoding owner writes that recipe. 10D is landed. Next: fused
-decode (factor next to 0.692×) or Llama-family import glue, one
-architecture at a time — each a new closed file.
+the encoding owner writes that recipe. 10F, 10G and 10H are landed
+(`PHASE10H_TYPE_STABILITY.md` closed 10D packet P-1 — one storage
+type parameter `S`, the three `@inferred` gates GREEN, snapshot-set
+Broken count 0), so no Gesso recipe is currently open. Llama-family
+import glue remains one architecture at a time, each a new closed
+file. Launch floor and Autotune `candidates()` copy stay named KEEP.
 
 The speed floor has two clocks: application (fusion, D2H, gather)
 and Julia compiler (TTFX, invalidation, GPUCompiler, Lava SPIR-V).

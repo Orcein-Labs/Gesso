@@ -98,8 +98,10 @@ questions about the same backend:
 # actually computes; :quantize/:dequantize stay false until Representation
 # lands their math; unknown capabilities stay false (probing is always safe).
 # BREADTH-1: CPU runs scaled RoPE (Session threads `inv_freq`; verified
-# engine == oracle for :linear and :llama3). :dense_ffn, :qk_norm,
-# :sliding_window_attention and :moe_routing are genuinely absent.
+# engine == oracle for :linear and :llama3). :dense_ffn and
+# :sliding_window_attention are genuinely absent.
+# Qwen3.5 hybrid extras (qk_norm, linear_attention, attn_output_gate,
+# mrope, rope_partial_dim, rope_interleaved) plus :moe_routing are CPU-ready.
 const CPU_SUPPORTED_CAPS = Set([
     :rmsnorm,
     :attention,
@@ -110,6 +112,13 @@ const CPU_SUPPORTED_CAPS = Set([
     :rope_none,
     :rope_linear,
     :rope_llama3,
+    :qk_norm,
+    :attn_output_gate,
+    :linear_attention,
+    :mrope,
+    :rope_partial_dim,
+    :rope_interleaved,
+    :moe_routing,
 ])
 supports(::CPUBackend, cap::Symbol) = cap in CPU_SUPPORTED_CAPS
 supports(::Type{CPUBackend}, cap::Symbol) = cap in CPU_SUPPORTED_CAPS

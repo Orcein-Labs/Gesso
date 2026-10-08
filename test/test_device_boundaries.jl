@@ -8,7 +8,12 @@
         cpu,
         Gesso.Activation(; shape=(2, 2), storage=view(ones(3, 2), 1:2, :)),
     ) === nothing
-    for storage in (nothing, ones(Float32, 2, 2))
+    @test check(
+        :probe,
+        cpu,
+        Gesso.Activation(; shape=(2, 2), storage=ones(Float32, 2, 2)),
+    ) === nothing
+    for storage in (nothing,)
         t=Gesso.Activation(; shape=(2, 2), storage)
         err=try
             check(:probe, cpu, t)

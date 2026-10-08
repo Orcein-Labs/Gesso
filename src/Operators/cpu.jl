@@ -2,8 +2,10 @@
 # docs/goals/PHASE2_CPU_ORACLE.md).
 #
 # Laws:
-#   * All CPU math is Float64 on dense Array{Float64} in `storage`;
-#     `shape == size(storage)`. No Float16/BFloat16 path exists.
+#   * CPU math is dense Array{<:AbstractFloat} in `storage` (`shape ==
+#     size(storage)`). The oracle fixtures stay Float64; GGUF qwen35moe
+#     materializes Float32 because F64 cannot hold a 35B-class MoE. No
+#     Float16/BFloat16 path exists.
 #   * These are MORE SPECIFIC METHODS on the same functions the stubs own
 #     (§CIX: no second vocabulary). The Phase-1 generic methods remain the
 #     decline for non-CPU backends; 3-arg un-typed calls still hit the stub.
@@ -31,11 +33,11 @@ function _cpu_storage!(op::Symbol, tensors...)
     for t in tensors
         s=t.storage
         s===nothing && continue
-        _backend_storage_root(s) isa Array && eltype(s)===Float64 && continue
+        _backend_storage_root(s) isa Array && eltype(s) <: AbstractFloat && continue
         throw(
             gesso_error(
                 ERR_INVALID_PLAN,
-                "$op: CPUBackend requires host Float64 storage; unsupported native arithmetic is rejected";
+                "$op: CPUBackend requires host Array{<:AbstractFloat} storage; unsupported native arithmetic is rejected";
                 storage_type=string(typeof(s)),
             ),
         )
@@ -45,7 +47,7 @@ end
 
 _unmaterialized(op::Symbol, what::Symbol) = error(
     "$op: $what.storage is unset — CPU math needs materialized " *
-    "Array{Float64} storage (§LXXV math law); nothing means the caller " *
+    "Array{<:AbstractFloat} storage (§LXXV math law); nothing means the caller " *
     "skipped materialization",
 )
 
@@ -130,14 +132,16 @@ function _cpu_rope_storage!(
     tθ,
     inv_freq,
     interleaved::Bool=true,
+    rotary_dim::Int=0,
 )
     for t in axes(storage, 1), h in axes(storage, 2)
         m = Float64(positions[t])           # 0-based position
         d = size(storage, 3)                # d_head, even by contract
-        for i in 0:(d÷2-1)
-            θ = inv_freq === nothing ? m * tθ^(-2i / d) : m * inv_freq[i+1]
+        rd = rotary_dim == 0 ? d : rotary_dim
+        for i in 0:(rd÷2-1)
+            θ = inv_freq === nothing ? m * tθ^(-2i / rd) : m * inv_freq[i+1]
             c, s = cos(θ), sin(θ)
-            a, b = interleaved ? (2i + 1, 2i + 2) : (i + 1, i + 1 + d ÷ 2)
+            a, b = interleaved ? (2i + 1, 2i + 2) : (i + 1, i + 1 + rd ÷ 2)
             x1, x2 = storage[t, h, a], storage[t, h, b]
             storage[t, h, a] = x1 * c - x2 * s
             storage[t, h, b] = x1 * s + x2 * c
@@ -217,7 +221,7 @@ function _cpu_rmsnorm!(dst, x, scale; eps=1e-6)
     return dst
 end
 
-function _validate_rope_inputs(q, k, positions, theta, inv_freq)
+function _validate_rope_inputs(q, k, positions, theta, inv_freq, rotary_dim=0)
     qs, ks=q.storage, k.storage
     ndims(qs)==3 && ndims(ks)==3 || throw(
         gesso_error(
@@ -228,6 +232,9 @@ function _validate_rope_inputs(q, k, positions, theta, inv_freq)
     d=size(qs, 3)
     d>0 && iseven(d) && size(ks, 3)==d && size(qs, 1)==size(ks, 1) ||
         throw(gesso_error(ERR_INVALID_PLAN, "rope!: invalid head/sequence geometry"))
+    rd = rotary_dim == 0 ? d : Int(rotary_dim)
+    0 < rd <= d && iseven(rd) ||
+        throw(gesso_error(ERR_INVALID_PLAN, "rope!: rotary_dim $rd is not in 2..$d even"))
     (_backend_storage_root(positions) isa Array || positions isa AbstractRange) &&
     length(positions)==size(qs, 1) &&
     all(>=(0), positions) || throw(
@@ -241,16 +248,24 @@ function _validate_rope_inputs(q, k, positions, theta, inv_freq)
     if inv_freq!==nothing
         inv_freq isa AbstractVector &&
         (_backend_storage_root(inv_freq) isa Array || inv_freq isa AbstractRange) &&
-        length(inv_freq)==d÷2 &&
+        length(inv_freq)==rd÷2 &&
         all(x->isfinite(x) && x>0, inv_freq) ||
             throw(gesso_error(ERR_INVALID_PLAN, "rope!: invalid inverse frequencies"))
     end
     return nothing
 end
 
-function _cpu_rope!(q, k, positions; theta=10000.0, inv_freq=nothing, interleaved=true)
+function _cpu_rope!(
+    q,
+    k,
+    positions;
+    theta=10000.0,
+    inv_freq=nothing,
+    interleaved=true,
+    rotary_dim=0,
+)
     _cpu_storage!(:rope!, q, k)
-    _validate_rope_inputs(q, k, positions, theta, inv_freq)
+    _validate_rope_inputs(q, k, positions, theta, inv_freq, rotary_dim)
     tθ = Float64(theta)
     size(q.storage, 3) == size(k.storage, 3) ||
         error("rope!: q d_head $(size(q.storage, 3)) ≠ k d_head $(size(k.storage, 3))")
@@ -258,8 +273,9 @@ function _cpu_rope!(q, k, positions; theta=10000.0, inv_freq=nothing, interleave
     # heads than Q; the old shared loop silently skipped K heads (MHA never
     # noticed because the counts are equal). Q is rotated first, then K, as
     # before.
-    _cpu_rope_storage!(q.storage, positions, tθ, inv_freq, interleaved)
-    _cpu_rope_storage!(k.storage, positions, tθ, inv_freq, interleaved)
+    rd = Int(rotary_dim)
+    _cpu_rope_storage!(q.storage, positions, tθ, inv_freq, interleaved, rd)
+    _cpu_rope_storage!(k.storage, positions, tθ, inv_freq, interleaved, rd)
     return q
 end
 
@@ -319,8 +335,9 @@ for wl in (:PrefillWorkload, :DecodeWorkload)
             theta::Real=10000.0,
             inv_freq=nothing,
             interleaved::Bool=true,
+            rotary_dim::Integer=0,
         )
-            return _cpu_rope!(q, k, positions; theta, inv_freq, interleaved)
+            return _cpu_rope!(q, k, positions; theta, inv_freq, interleaved, rotary_dim)
         end
 
         function matmul!(

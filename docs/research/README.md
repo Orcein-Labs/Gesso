@@ -32,7 +32,37 @@ snapshot; G2 factor is 0.692× (`2026-10-02.tsv`). 10C landed
 (CPU N = 1_474_560; fork == one session, isolated == 2N). 10D landed
 2026-10-02 (`PHASE10D_FOUNDATION_HARDENING.md`): export inventory +
 parked-empty fence, fail-closed hunt, `@inferred` byte counters.
-Canon §LXXXIII parked.
+10E landed 2026-10-02 (`PHASE10E_FUSED_DECODE.md`): Session-owned
+decode workspace, in-place `gather_kv!`, in-place GQA repeat; warmed
+`decode!` host allocation is O(1) in seqlen (SmolLM2 CPU 15,864,048 →
+100,480 B); G2 factor republished at 0.737×.
+10F landed 2026-10-03 (`PHASE10F_CUDA_DECODE_ALLOC.md`): the CUDA
+decode path's per-head broadcast wrappers are gone — device kernels
+behind `CuArray` specializations of the SAME core copy helpers, so
+`Inference.jl` now charges **0 B** to a warmed SmolLM2 CUDA `decode!`.
+Warmed CUDA `decode!` 5,094,736 → 1,269,616 B (4.0×); toy2/micro CUDA
+are back under item D's original 256 KiB gate (97,312 / 100,736 B);
+G2 factor republished at 1.452× (Gesso warmed 487 → 240 ms). The
+SmolLM2 CUDA 1 MiB ceiling was still missed by 221 KB — escalated as a
+packet inside the goal, gate left at the DECLARED 1 MiB as a tracked
+`@test_broken` rather than raised again.
+10G landed 2026-10-03 (`PHASE10G_AUTOTUNE_RECEIPT.md`): the packet is
+closed and the gate is GREEN. A cache hit is not a decision (§LXXII
+records a change; the miss receipt already named the winner), so
+`Autotune.select` returns the cached `TuneResult` and emits no receipt.
+Warmed SmolLM2 CUDA `decode!` 1,269,616 → 942,128 B (1.35×, 106,448 B
+under 1 MiB); `Autotune.jl` per-token cost 320,509 → 37,136 B. Miss
+receipts are untouched — the receipt schema did not bump. Canon
+§LXXXIII parked.
+10H landed 2026-10-03 (`PHASE10H_TYPE_STABILITY.md`): 10D packet P-1
+closed. §CIX amended by exactly one clause — the ARRAY TYPE that
+physically holds a tensor is a trait-equivalent and may be a single
+type parameter `S` on the §XI family structs; shape, seqlen, batch
+and allocation identity stay fields, and no second axis was added.
+`@inferred reference_prefill` and `@inferred decode!` are GREEN on
+toy2 and llama_micro, so the `@test_broken` trio is gone and the
+snapshot-set Broken count is 0. Type-stable dispatch also cut warmed
+SmolLM2 CUDA `decode!` 942,128 B → 814,544 B.
 Tackle each problem in this folder individually when its phase owns it.
 
 ---
@@ -47,6 +77,8 @@ Tackle each problem in this folder individually when its phase owns it.
 | [CYAN_TRIAL_GESSO_FALLOUT.md](CYAN_TRIAL_GESSO_FALLOUT.md) | promotion filter from the first Cyan/Palette engineer trial | generality × composability × ecosystem leverage, or it stays above Gesso | Phase 6+ spikes; not Phase 5 |
 | [CYAN_ELASTIC_ORCHESTRATION.md](CYAN_ELASTIC_ORCHESTRATION.md) | Gesso seam for Cyan MAO (WorkTree / leases / branch ids) | Cyan owns orchestration; Gesso consumes ids later | pointer only; freeze lives in Cyan Harness docs; not a /goal |
 | [ROADMAP_NOW.md](ROADMAP_NOW.md) | living reading of Phases 5–22 after 0–4 + the Cyan trial | 5a engine now; speed floor next; 5b and Phase 10 after G1∧G2∧G3 | map only — not a /goal |
+| [BREADTH-0_FINDINGS.md](BREADTH-0_FINDINGS.md) | BREADTH-0 landed: model breadth is an adapter exercise, not an engine rewrite | ArchitectureSpec + family adapters + canonical parameter identity + tokenizer protocol + capability lattice; a second family (Phi-3, fused QKV) runs on the CPU oracle | findings and receipt for the BREADTH-0 batch; open limitations listed there |
+| [CAPABILITY-0a_FINDINGS.md](CAPABILITY-0a_FINDINGS.md) | CAPABILITY-0a landed: the capability declaration is tied to execution | five-arm biconditional over `supports`; both directions mutation-verified; a from-scratch `:attention` fixture | findings and receipt; `supports` is still a hand-written Set — deriving it from dispatch is CAPABILITY-0b |
 | [SPEED_FLOOR.md](SPEED_FLOOR.md) | board constraint: somewhat-close decode before exotic compilers | named model + eager-PyTorch factor + fork-preserving fused step; compiler attribution before a Julia fork | gate on §LXXXIII; 10C recipe landed (`PHASE10C_NAMED_MODEL_HYGIENE.md`): golden frozen, named-model fork bytes pinned |
 | [EXOTIC_CAPABILITY_MASTER_LEDGER.md](EXOTIC_CAPABILITY_MASTER_LEDGER.md) | capability mine: meta-primitives, Gesso/Palette/Cyan primitives, six meta-tools | strings to undiscovered capabilities; evidence labels; not a roadmap override | parked; deep-dives after speed floor |
 
@@ -74,7 +106,7 @@ program until someone writes one **and** a phase owns it.
 | One semantic win (pick one) | §LXXX | **7 landed 2026-09-30** (`PHASE7_PREFIX_SHARE.md`) |
 | Lava / Vulkan | §LXXXI | **8 landed 2026-09-30** (`PHASE8_LAVA.md`) |
 | Autotune | §LXXXII | **9 landed 2026-10-01** (`PHASE9_AUTOTUNE.md`) |
-| Speed floor rungs 1–2 (device greedy + GEMM, G2 harness) | §LXXXII/§LXXXIII | **10/10B/10C/10D landed**; G2 factor 0.692×. §LXXXIII representation planner stays PARKED |
+| Speed floor rungs 1–2 (device greedy + GEMM, G2 harness) | §LXXXII/§LXXXIII | **10/10B/10C/10D/10E/10F/10G/10H landed**; G2 factor 1.452× (was 0.737× at 10E, 0.692× at 10B). §LXXXIII representation planner stays PARKED |
 | Representation planner | §LXXXIII | after G1∧G2∧G3 — seed is REPRESENTATION_PROGRAM.md |
 | Memory planner | §LXXXIV | Phase 11 |
 | Agent runtime / Palette / Cyan / C ABI | §LXXXV–LXXXIX | Phases 12–16 |

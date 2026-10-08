@@ -75,6 +75,9 @@ using Gesso: reference_prefill, reference_generate
     # it asserts the Llama path is UNCHANGED and pushes a second family
     # through the same CPU oracle.
     include("test_breadth0.jl")
+    include("test_qwen35_hybrid.jl")
+    include("test_moe_routing.jl")
+    include("test_gguf_import.jl")
 
     # BREADTH-0 Pass C: the tokenizer PROTOCOL — GPT-2 BPE is one
     # implementation, metaspace byte-level BPE is a materially different
@@ -98,6 +101,8 @@ using Gesso: reference_prefill, reference_generate
     # Phase 4 (§LXXVII item B): CUDA operator methods on CuArray{Float32} vs
     # the CPU oracle at declared atol — one named skip without a device
     include("test_cuda_ops.jl")
+    include("test_cuda_hybrid.jl")
+    include("test_cuda_moe.jl")
 
     # Phase 4 (§LXXVII item C): full prefill + generate on device vs the CPU
     # oracle — logits at declared atol, token ids EXACT (argmax is the gate)
@@ -212,6 +217,7 @@ using Gesso: reference_prefill, reference_generate
         stdlib_allowlist = Dict{String, String}( # name => justification
             "Dates" => "timestamps for structured log events (§XLII)",
             "LinearAlgebra" => "CPU reference matmul (§LXXV Phase 2)",
+            "Libdl" => "ggml to_float for GGUF dequant (qwen35moe)",
             "Mmap" => "safetensors byte region (§LXXVI)",
             "JSON" => "config.json + safetensors header parsing (§LXXVI)",
         )

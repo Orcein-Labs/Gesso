@@ -11,9 +11,15 @@
 **Depends on:** Phase 5a complete (`docs/goals/PHASE5_ENGINE.md`)
 **Packets:** 1 and 2 stay closed.
 
-**Status:** OPEN. Next after this lands: Phase 7 (one semantic win;
-default pick is CoW / identity prefix share — a later closed recipe).
-5b (scheduler / batching) is still not this sprint.
+**Status:** LANDED (Buffy, 2026-09-30). Items A–D committed
+(`4766699` Session receipts, `9807eaa` Profiling, `4bb81ad`
+TTFT/decode benches, `d9a7d0d` maps + §LXXIX, `74bfdbe`
+format/freezer). 1020 pass + 3 named skips; both runners green.
+Ids still equal the oracle; toy2 CUDA fingerprint print unchanged
+(`0.000376…` vs oracle, within atol). `kv_bytes` reconstructs from
+the page table. Attribution, not speed. Next:
+`docs/goals/PHASE7_PREFIX_SHARE.md`. Scheduler / continuous
+batching remains 5b.
 
 ---
 
@@ -295,13 +301,13 @@ decode vs KV bytes. We did not make it fast.
 
 ## Exit checklist
 
-- [ ] A, B, C landed
-- [ ] D maps truthful
-- [ ] `make test` green on CPU-only
-- [ ] `make format` run
-- [ ] `generate` still matches oracle ids
-- [ ] toy2 fingerprint unchanged
-- [ ] every generate leaves a receipt with prefill/decode/KV
-- [ ] no ExecutionResult, no scheduler, no speed claims
-- [ ] README does not advertise tok/s as a product number
-- [ ] receipt
+- [x] A, B, C landed
+- [x] D maps truthful (§LXXIX status in Gesso_Stack.md)
+- [x] `make test` green on CPU-only (Buffy receipt: 1020 pass + 3 named skips)
+- [x] `make format` run (`74bfdbe`)
+- [x] `generate` still matches oracle ids
+- [x] toy2 fingerprint unchanged
+- [x] every generate leaves a receipt with prefill/decode/KV
+- [x] no ExecutionResult, no scheduler, no speed claims
+- [x] README does not advertise tok/s as a product number
+- [x] receipt (Buffy §LXXII, 2026-09-30; Grok accepted from the tree + screenshot)

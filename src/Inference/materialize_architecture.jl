@@ -32,14 +32,20 @@ function expected_shape(spec::ArchitectureSpec, role::Symbol)
     h = spec.hidden_size
     qd = spec.n_heads * spec.head_dim
     kvd = spec.n_kv_heads * spec.head_dim
+    mx = spec.mixer
+    key_dim = mx === nothing ? 0 : mx.num_key_heads * mx.key_head_dim
+    value_dim = mx === nothing ? 0 : mx.num_value_heads * mx.value_head_dim
+    conv_dim = 2 * key_dim + value_dim
     return if role === ROLE_TOKEN_EMBEDDING || role === ROLE_LM_HEAD
         (spec.vocab_size, h)
     elseif role === ROLE_FINAL_NORM ||
            role === ROLE_NORM_PRE_ATTN ||
            role === ROLE_NORM_POST_ATTN
         (h,)
-    elseif role === ROLE_Q || role === ROLE_O
+    elseif role === ROLE_Q || role === ROLE_ATTN_GATE
         (qd, h)
+    elseif role === ROLE_O
+        (h, qd)
     elseif role === ROLE_K || role === ROLE_V
         (kvd, h)
     elseif role === ROLE_Q_NORM || role === ROLE_K_NORM
@@ -48,9 +54,59 @@ function expected_shape(spec::ArchitectureSpec, role::Symbol)
         (spec.intermediate_size, h)
     elseif role === ROLE_DOWN
         (h, spec.intermediate_size)
+    elseif role === ROLE_GDN_QKV
+        (conv_dim, h)
+    elseif role === ROLE_GDN_Z
+        (value_dim, h)
+    elseif role === ROLE_GDN_A || role === ROLE_GDN_B
+        (mx.num_value_heads, h)
+    elseif role === ROLE_GDN_CONV
+        (conv_dim, 1, mx.conv_kernel_dim)
+    elseif role === ROLE_GDN_A_LOG || role === ROLE_GDN_DT_BIAS
+        (mx.num_value_heads,)
+    elseif role === ROLE_GDN_NORM
+        (mx.value_head_dim,)
+    elseif role === ROLE_GDN_O
+        (h, value_dim)
+    elseif role === ROLE_ROUTER
+        spec.moe === nothing && error("expected_shape: ffn.router requires a MoeSpec")
+        (spec.moe.n_experts, h)
+    elseif role === ROLE_EXPERT_GATE || role === ROLE_EXPERT_UP
+        spec.moe === nothing && error("expected_shape: expert FFN requires a MoeSpec")
+        (spec.moe.n_experts, spec.moe.expert_ff, h)
+    elseif role === ROLE_EXPERT_DOWN
+        spec.moe === nothing && error("expected_shape: expert FFN requires a MoeSpec")
+        (spec.moe.n_experts, h, spec.moe.expert_ff)
+    elseif role === ROLE_SHARED_GATE || role === ROLE_SHARED_UP
+        spec.moe === nothing && error("expected_shape: shared expert requires a MoeSpec")
+        (spec.moe.shared_ff, h)
+    elseif role === ROLE_SHARED_DOWN
+        spec.moe === nothing && error("expected_shape: shared expert requires a MoeSpec")
+        (h, spec.moe.shared_ff)
+    elseif role === ROLE_SHARED_GATE_INP
+        spec.moe === nothing && error("expected_shape: shared gate requires a MoeSpec")
+        (h,)
     else
         error("expected_shape: no shape law for canonical role $(repr(role))")
     end
+end
+
+# Qwen3.5 / Qwen3Next RMSNorm is Gemma-style: y = rms(x) * (1 + weight),
+# with the checkpoint storing the residual to one. llama.cpp bakes +1 at
+# GGUF conversion (every `*.norm.weight` except `linear_attn.norm`). Gesso
+# keeps the operator as `rms(x) * scale` and converts at the binder.
+const _RMS_UNIT_OFFSET_ROLES = Set((
+    ROLE_NORM_PRE_ATTN,
+    ROLE_NORM_POST_ATTN,
+    ROLE_Q_NORM,
+    ROLE_K_NORM,
+    ROLE_FINAL_NORM,
+))
+
+function _apply_rms_unit_offset(spec::ArchitectureSpec, role::Symbol, arr)
+    :rms_unit_offset in spec.features || return arr
+    role in _RMS_UNIT_OFFSET_ROLES || return arr
+    return arr .+ 1
 end
 
 # --- layer origin detection (fixture protocol, once, at the boundary) -----------
@@ -68,17 +124,13 @@ function detect_layer_origin(
     tensors_by_name::AbstractDict,
     spec::ArchitectureSpec,
 )
-    probe = pmap.layer_prefix * "0." * pmap.layer_refs[2].external
-    probe1 = pmap.layer_prefix * "1." * pmap.layer_refs[2].external
+    probe = pmap.layer_prefix * "0." * pmap.layer_refs[1].external
+    probe1 = pmap.layer_prefix * "1." * pmap.layer_refs[1].external
     has0 = haskey(tensors_by_name, probe)
     has1 = haskey(tensors_by_name, probe1)
-    if has0 &&
-       has1 &&
-       spec.num_layers > 1 &&
-       haskey(
-           tensors_by_name,
-           pmap.layer_prefix * string(spec.num_layers) * "." * pmap.layer_refs[2].external,
-       )
+    extra_prefix = pmap.layer_prefix * string(spec.num_layers) * "."
+    has_extra = any(startswith(k, extra_prefix) for k in keys(tensors_by_name))
+    if has0 && has1 && spec.num_layers > 1 && has_extra
         error(
             "materialize_architecture: checkpoint mixes 0-based $(probe) with 1-based $(probe1) layers",
         )
@@ -144,6 +196,7 @@ function materialize_architecture(
         size(arr) == w || error(
             "materialize_architecture: final_norm expects shape $w but $(pmap.final_norm_external) has $(size(arr))",
         )
+        arr = _apply_rms_unit_offset(spec, ROLE_FINAL_NORM, arr)
         final_rms = FrozenParameter(; shape=w, storage=arr)
         push!(
             bindings,
@@ -178,11 +231,20 @@ function materialize_architecture(
     origin = detect_layer_origin(pmap, tensors_by_name, spec)
     blocks = map(origin) do i
         slots = Dict{Symbol, Any}()
-        for ref in pmap.layer_refs
-            layer = i - first(origin)          # 0-based layer index, whatever the origin
+        layer = i - first(origin)          # 0-based layer index, whatever the origin
+        mixer = layer_mixer(spec, layer)
+        slots[:mixer] = mixer
+        if spec.moe !== nothing
+            slots[:n_expert_used] = spec.moe.n_expert_used
+        end
+        refs =
+            mixer === :linear_attention && !isempty(pmap.linear_refs) ? pmap.linear_refs :
+            pmap.layer_refs
+        for ref in refs
             external = external_name(pmap, ref, i)
             arr = grab(external)
             slice = ref.rows === nothing ? arr : arr[ref.rows, :]
+            slice = _apply_rms_unit_offset(spec, ref.id.role, slice)
             slot = slot_for(ref.id.role)
             slot === nothing && error(
                 "materialize_architecture: canonical role $(repr(ref.id.role)) has no engine slot — " *
@@ -197,6 +259,8 @@ function materialize_architecture(
             )
             slots[slot] = if ref.id.param_family === :frozen
                 FrozenParameter(; shape=want, storage=slice)
+            elseif ref.id.param_family === :expert
+                ExpertWeight(; shape=want, storage=slice)
             else
                 ProjectionWeight(; shape=want, storage=slice)
             end
@@ -214,7 +278,13 @@ function materialize_architecture(
 
     # --- nothing silently discarded (§LXX) ----------------------------------
     leftover = sort(collect(setdiff(Set(keys(tensors_by_name)), consumed)))
-    unknown = filter(k -> !endswith(k, _IGNORED_ROPE_INV_FREQ_SUFFIX), leftover)
+    unknown = filter(leftover) do k
+        endswith(k, _IGNORED_ROPE_INV_FREQ_SUFFIX) && return false
+        for p in pmap.ignored_prefixes
+            startswith(k, p) && return false
+        end
+        return true
+    end
     isempty(unknown) || error(
         "materialize_architecture: unknown tensor(s) in checkpoint: $(join(unknown, ", "))" *
         (

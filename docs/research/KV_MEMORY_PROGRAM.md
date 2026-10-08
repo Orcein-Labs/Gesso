@@ -7,9 +7,9 @@
                     (external paper: BLOCKED until first composition
                      experiment produces numbers — Gesso_Stack.md §XLII,
                      North Star §42: no paper before there is data)
-    Derived from:       Gesso_musings.md (repo root — the dangerous
-                        notebook — do not sanitize; promote from it,
-                        never wholesale)
+    Index:              docs/research/README.md
+    Derived from:       Gesso_musings.md (the dangerous notebook —
+                        do not sanitize; promote from it, never wholesale)
     Canon:              docs/Gesso_Stack.md remains canon; this document
                         extends §XXXI, §X, §LIX and feeds Phases 5/9/10.
 

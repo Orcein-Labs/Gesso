@@ -200,6 +200,39 @@ function fused_qkv_rows(l::FusedQKVLayout, n_heads::Int, n_kv_heads::Int, head_d
     end
 end
 
+"""
+    fused_qg_rows(n_heads, head_dim) -> (q, gate) row indices
+
+Per-head interleaved packing of a fused Q|gate projection
+(`q_proj` of shape `(2 * n_heads * head_dim, hidden)`):
+
+    [H0_Q, H0_gate, H1_Q, H1_gate, …]
+
+HuggingFace `Qwen3NextAttention` / `Qwen3_5Attention` split with
+`view(..., n_heads, 2 * head_dim).chunk(2, dim=-1)`. A middle split
+(all-Q then all-gate) changes the model.
+"""
+function fused_qg_rows(n_heads::Int, head_dim::Int)
+    n_heads > 0 && head_dim > 0 ||
+        error("fused_qg_rows: n_heads and head_dim must be positive")
+    q = Vector{Int}(undef, n_heads * head_dim)
+    gate = Vector{Int}(undef, n_heads * head_dim)
+    qi = 1
+    gi = 1
+    for h in 0:(n_heads-1)
+        base = h * 2 * head_dim
+        for d in 1:head_dim
+            q[qi] = base + d
+            qi += 1
+        end
+        for d in 1:head_dim
+            gate[gi] = base + head_dim + d
+            gi += 1
+        end
+    end
+    return (q=q, gate=gate)
+end
+
 # --- the family adapters ---------------------------------------------------------
 
 """
@@ -322,6 +355,345 @@ function param_map(::Qwen2Adapter, spec::ArchitectureSpec)
         "model.embed_tokens.weight",
         "model.norm.weight",
         "lm_head.weight",
+    )
+end
+
+"""
+    Qwen35Adapter
+
+HuggingFace `qwen3_5` (Qwen3.5, Ornith-1.5, …). Nested `text_config` is the
+transformer; the root `model_type` is provenance. Hybrid mixer: most layers
+are Gated DeltaNet (`linear_attention`), every `full_attention_interval`-th
+layer is gated full attention. `head_dim` is a published field, not
+`hidden_size ÷ n_heads`. Partial / interleaved mRoPE is declared on the
+RoPEPolicy so execution fails at those named ops until they lower.
+"""
+struct Qwen35Adapter <: ArchitectureAdapter end
+family_symbol(::Qwen35Adapter) = :qwen3_5
+
+function _qwen35_text(raw::AbstractDict)
+    if haskey(raw, "text_config")
+        raw["text_config"] isa AbstractDict || error(
+            "parse_config: qwen3_5 text_config must be an object (got $(typeof(raw["text_config"])))",
+        )
+        return raw["text_config"]
+    end
+    return raw
+end
+
+function _qwen35_layer_types(text::AbstractDict, n_layers::Int)
+    lt = get(text, "layer_types", nothing)
+    if lt === nothing
+        interval = Int(get(text, "full_attention_interval", 4))
+        interval > 0 ||
+            error("parse_config: qwen3_5 full_attention_interval must be positive")
+        return [
+            i % interval == 0 ? "full_attention" : "linear_attention" for i in 1:n_layers
+        ]
+    end
+    lt isa AbstractVector ||
+        error("parse_config: qwen3_5 layer_types must be an array (got $(typeof(lt)))")
+    length(lt) == n_layers || error(
+        "parse_config: qwen3_5 layer_types length $(length(lt)) != num_hidden_layers $n_layers",
+    )
+    return String[String(x) for x in lt]
+end
+
+function _qwen35_rope(text::AbstractDict, head_dim::Int)
+    rp = get(text, "rope_parameters", nothing)
+    extra = Set{Symbol}()
+    if rp === nothing
+        return _rope_policy(text, :qwen3_5; head_dim), extra
+    end
+    rp isa AbstractDict ||
+        error("parse_config: qwen3_5 rope_parameters must be an object (got $(typeof(rp)))")
+    theta = Float64(get(rp, "rope_theta", get(text, "rope_theta", 10000.0)))
+    kind_str = String(get(rp, "rope_type", "default"))
+    kind = if kind_str == "default" || kind_str == "none"
+        :none
+    elseif kind_str == "linear"
+        :linear
+    elseif kind_str == "llama3"
+        :llama3
+    else
+        throw(LoweringNotImplemented(:rope_scaling, :qwen3_5))
+    end
+    # mrope_interleaved is the T/H/W section packing, NOT GPT-J pair layout.
+    # Text apply_rotary_pos_emb uses rotate_half (half-split), so
+    # RoPEPolicy.interleaved stays false. Partial rotary is a real op.
+    partial =
+        Float64(get(rp, "partial_rotary_factor", get(text, "partial_rotary_factor", 1.0)))
+    rotary_dim = partial == 1.0 ? 0 : Int(round(partial * head_dim))
+    section = Int[]
+    if haskey(rp, "mrope_section")
+        push!(extra, :mrope)
+        raw_sec = rp["mrope_section"]
+        raw_sec isa AbstractVector || error(
+            "parse_config: qwen3_5 mrope_section must be an array (got $(typeof(raw_sec)))",
+        )
+        section = Int[Int(x) for x in raw_sec]
+        rotary_dim == 0 || sum(section) == rotary_dim ÷ 2 || error(
+            "parse_config: qwen3_5 mrope_section $(section) sums to $(sum(section)), expected rotary_dim/2 = $(rotary_dim ÷ 2)",
+        )
+    end
+    return RoPEPolicy(; theta, kind, rotary_dim, interleaved=false, mrope_section=section),
+    extra
+end
+
+function parse_config(::Qwen35Adapter, raw::AbstractDict)
+    text = _qwen35_text(raw)
+    _require_keys(text, _COMMON_CONFIG_KEYS, :qwen3_5, "parse_config")
+    hd = Int(text["hidden_size"])
+    nh = Int(text["num_attention_heads"])
+    n_layers = Int(text["num_hidden_layers"])
+    published_head = haskey(text, "head_dim") ? Int(text["head_dim"]) : nothing
+    head_dim = published_head === nothing ? div(hd, nh) : published_head
+    layer_types = _qwen35_layer_types(text, n_layers)
+    rope, rope_feats = _qwen35_rope(text, head_dim)
+    feats = Set{Symbol}([:qk_norm, :rms_unit_offset])
+    any(==("linear_attention"), layer_types) && push!(feats, :linear_attention)
+    Bool(get(text, "attn_output_gate", false)) && push!(feats, :attn_output_gate)
+    union!(feats, rope_feats)
+    mixer = nothing
+    if :linear_attention in feats
+        mixer = LinearMixerSpec(;
+            layer_types=Symbol.(layer_types),
+            num_key_heads=Int(text["linear_num_key_heads"]),
+            key_head_dim=Int(text["linear_key_head_dim"]),
+            num_value_heads=Int(text["linear_num_value_heads"]),
+            value_head_dim=Int(text["linear_value_head_dim"]),
+            conv_kernel_dim=Int(get(text, "linear_conv_kernel_dim", 4)),
+        )
+    end
+    return ArchitectureSpec(;
+        family=:qwen3_5,
+        hidden_size=hd,
+        num_layers=n_layers,
+        n_heads=nh,
+        n_kv_heads=Int(text["num_key_value_heads"]),
+        vocab_size=Int(text["vocab_size"]),
+        intermediate_size=Int(text["intermediate_size"]),
+        head_dim,
+        norm_kind=_norm_kind(text, :qwen3_5, :swiglu),
+        activation_kind=_activation_kind(text, :qwen3_5),
+        rope,
+        tie_word_embeddings=Bool(
+            get(text, "tie_word_embeddings", get(raw, "tie_word_embeddings", false)),
+        ),
+        attention_bias=Bool(get(text, "attention_bias", false)),
+        features=feats,
+        mixer,
+        rms_norm_eps=Float64(get(text, "rms_norm_eps", 1e-6)),
+    )
+end
+
+function param_map(::Qwen35Adapter, spec::ArchitectureSpec)
+    # Hybrid: full-attention layers share Qwen2 names (with a fused Q|gate on
+    # q_proj). Linear-attention layers bind the Gated DeltaNet vocabulary.
+    # Vision / MTP tensors are declared unused this campaign.
+    # Q|gate packing is per-head interleaved (HF view+chunk, llama.cpp
+    # ggml_view_3d stride 2*head_dim) — not concatenated all-Q then all-gate.
+    (q_rows, gate_rows) = fused_qg_rows(spec.n_heads, spec.head_dim)
+    shared = ParamRef[
+        ParamRef(SemanticParamId(ROLE_NORM_PRE_ATTN, 0, :frozen), "input_layernorm.weight"),
+        ParamRef(
+            SemanticParamId(ROLE_NORM_POST_ATTN, 0, :frozen),
+            "post_attention_layernorm.weight",
+        ),
+        ParamRef(SemanticParamId(ROLE_GATE, 0, :projection), "mlp.gate_proj.weight"),
+        ParamRef(SemanticParamId(ROLE_UP, 0, :projection), "mlp.up_proj.weight"),
+        ParamRef(SemanticParamId(ROLE_DOWN, 0, :projection), "mlp.down_proj.weight"),
+    ]
+    full = ParamRef[
+        shared...,
+        ParamRef(SemanticParamId(ROLE_Q, 0, :projection), "self_attn.q_proj.weight", q_rows),
+        ParamRef(
+            SemanticParamId(ROLE_ATTN_GATE, 0, :projection),
+            "self_attn.q_proj.weight",
+            gate_rows,
+        ),
+        ParamRef(SemanticParamId(ROLE_Q_NORM, 0, :frozen), "self_attn.q_norm.weight"),
+        ParamRef(SemanticParamId(ROLE_K, 0, :projection), "self_attn.k_proj.weight"),
+        ParamRef(SemanticParamId(ROLE_K_NORM, 0, :frozen), "self_attn.k_norm.weight"),
+        ParamRef(SemanticParamId(ROLE_V, 0, :projection), "self_attn.v_proj.weight"),
+        ParamRef(SemanticParamId(ROLE_O, 0, :projection), "self_attn.o_proj.weight"),
+    ]
+    linear = ParamRef[
+        shared...,
+        ParamRef(SemanticParamId(ROLE_GDN_QKV, 0, :projection), "linear_attn.in_proj_qkv.weight"),
+        ParamRef(SemanticParamId(ROLE_GDN_Z, 0, :projection), "linear_attn.in_proj_z.weight"),
+        ParamRef(SemanticParamId(ROLE_GDN_A, 0, :projection), "linear_attn.in_proj_a.weight"),
+        ParamRef(SemanticParamId(ROLE_GDN_B, 0, :projection), "linear_attn.in_proj_b.weight"),
+        ParamRef(SemanticParamId(ROLE_GDN_CONV, 0, :projection), "linear_attn.conv1d.weight"),
+        ParamRef(SemanticParamId(ROLE_GDN_A_LOG, 0, :frozen), "linear_attn.A_log"),
+        ParamRef(SemanticParamId(ROLE_GDN_DT_BIAS, 0, :frozen), "linear_attn.dt_bias"),
+        ParamRef(SemanticParamId(ROLE_GDN_NORM, 0, :frozen), "linear_attn.norm.weight"),
+        ParamRef(SemanticParamId(ROLE_GDN_O, 0, :projection), "linear_attn.out_proj.weight"),
+    ]
+    return FamilyParamMap(
+        :qwen3_5,
+        "model.language_model.layers.",
+        full,
+        "model.language_model.embed_tokens.weight",
+        "model.language_model.norm.weight",
+        "lm_head.weight";
+        ignored_prefixes=["model.visual.", "mtp."],
+        linear_refs=linear,
+    )
+end
+
+"""
+    Qwen35MoeAdapter
+
+HuggingFace `qwen3_5_moe` / GGUF `qwen35moe` (Ornith-1.5-35B-A3B). Same
+hybrid mixer as `Qwen35Adapter`, plus softmax top-k routed experts and a
+sigmoid-gated shared SwiGLU expert on every layer.
+"""
+struct Qwen35MoeAdapter <: ArchitectureAdapter end
+family_symbol(::Qwen35MoeAdapter) = :qwen3_5_moe
+
+function _qwen35_moe_spec(text::AbstractDict)
+    n_experts = Int(text["num_experts"])
+    n_used = Int(get(text, "num_experts_per_tok", text["num_experts"]))
+    expert_ff = Int(
+        get(text, "moe_intermediate_size", get(text, "intermediate_size", 0)),
+    )
+    shared_ff = Int(get(text, "shared_expert_intermediate_size", expert_ff))
+    expert_ff > 0 ||
+        error("parse_config: qwen3_5_moe needs moe_intermediate_size or intermediate_size")
+    return MoeSpec(; n_experts, n_expert_used=n_used, expert_ff, shared_ff)
+end
+
+function parse_config(::Qwen35MoeAdapter, raw::AbstractDict)
+    text = _qwen35_text(raw)
+    haskey(text, "num_experts") ||
+        error("parse_config: qwen3_5_moe config is missing num_experts")
+    base = parse_config(Qwen35Adapter(), raw)
+    moe = _qwen35_moe_spec(text)
+    return ArchitectureSpec(;
+        family=:qwen3_5_moe,
+        hidden_size=base.hidden_size,
+        num_layers=base.num_layers,
+        n_heads=base.n_heads,
+        n_kv_heads=base.n_kv_heads,
+        vocab_size=base.vocab_size,
+        intermediate_size=moe.expert_ff,
+        head_dim=base.head_dim,
+        norm_kind=base.norm_kind,
+        activation_kind=base.activation_kind,
+        rope=base.rope,
+        tie_word_embeddings=base.tie_word_embeddings,
+        attention_bias=base.attention_bias,
+        mlp_bias=base.mlp_bias,
+        sliding_window=base.sliding_window,
+        features=base.features,
+        mixer=base.mixer,
+        rms_norm_eps=base.rms_norm_eps,
+        moe,
+    )
+end
+
+function _qwen35_moe_ffn_refs()
+    return ParamRef[
+        ParamRef(SemanticParamId(ROLE_ROUTER, 0, :projection), "mlp.gate.weight"),
+        ParamRef(SemanticParamId(ROLE_EXPERT_GATE, 0, :expert), "mlp.experts.gate_proj.weight"),
+        ParamRef(SemanticParamId(ROLE_EXPERT_UP, 0, :expert), "mlp.experts.up_proj.weight"),
+        ParamRef(SemanticParamId(ROLE_EXPERT_DOWN, 0, :expert), "mlp.experts.down_proj.weight"),
+        ParamRef(
+            SemanticParamId(ROLE_SHARED_GATE, 0, :projection),
+            "mlp.shared_expert.gate_proj.weight",
+        ),
+        ParamRef(
+            SemanticParamId(ROLE_SHARED_UP, 0, :projection),
+            "mlp.shared_expert.up_proj.weight",
+        ),
+        ParamRef(
+            SemanticParamId(ROLE_SHARED_DOWN, 0, :projection),
+            "mlp.shared_expert.down_proj.weight",
+        ),
+        ParamRef(
+            SemanticParamId(ROLE_SHARED_GATE_INP, 0, :frozen),
+            "mlp.shared_expert_gate.weight",
+        ),
+    ]
+end
+
+function param_map(::Qwen35MoeAdapter, spec::ArchitectureSpec)
+    dense = param_map(Qwen35Adapter(), spec)
+    ffn = _qwen35_moe_ffn_refs()
+    drop = Set((ROLE_GATE, ROLE_UP, ROLE_DOWN))
+    full = [r for r in dense.layer_refs if r.id.role ∉ drop]
+    append!(full, ffn)
+    linear = [r for r in dense.linear_refs if r.id.role ∉ drop]
+    append!(linear, ffn)
+    return FamilyParamMap(
+        :qwen3_5_moe,
+        dense.layer_prefix,
+        full,
+        dense.embedding_external,
+        dense.final_norm_external,
+        dense.lm_head_external;
+        ignored_prefixes=dense.ignored_prefixes,
+        linear_refs=linear,
+    )
+end
+
+"""
+    gguf_param_map(::Qwen35MoeAdapter, spec)
+
+llama.cpp `qwen35moe` tensor spellings. GGUF loader transposes weights into
+Gesso `(out, in)` before this map runs.
+"""
+function gguf_param_map(::Qwen35MoeAdapter, spec::ArchitectureSpec)
+    (q_rows, gate_rows) = fused_qg_rows(spec.n_heads, spec.head_dim)
+    ffn = ParamRef[
+        ParamRef(SemanticParamId(ROLE_NORM_PRE_ATTN, 0, :frozen), "attn_norm.weight"),
+        ParamRef(
+            SemanticParamId(ROLE_NORM_POST_ATTN, 0, :frozen),
+            "post_attention_norm.weight",
+        ),
+        ParamRef(SemanticParamId(ROLE_ROUTER, 0, :projection), "ffn_gate_inp.weight"),
+        ParamRef(SemanticParamId(ROLE_EXPERT_GATE, 0, :expert), "ffn_gate_exps.weight"),
+        ParamRef(SemanticParamId(ROLE_EXPERT_UP, 0, :expert), "ffn_up_exps.weight"),
+        ParamRef(SemanticParamId(ROLE_EXPERT_DOWN, 0, :expert), "ffn_down_exps.weight"),
+        ParamRef(SemanticParamId(ROLE_SHARED_GATE, 0, :projection), "ffn_gate_shexp.weight"),
+        ParamRef(SemanticParamId(ROLE_SHARED_UP, 0, :projection), "ffn_up_shexp.weight"),
+        ParamRef(SemanticParamId(ROLE_SHARED_DOWN, 0, :projection), "ffn_down_shexp.weight"),
+        ParamRef(
+            SemanticParamId(ROLE_SHARED_GATE_INP, 0, :frozen),
+            "ffn_gate_inp_shexp.weight",
+        ),
+    ]
+    full = ParamRef[
+        ffn...,
+        ParamRef(SemanticParamId(ROLE_Q, 0, :projection), "attn_q.weight", q_rows),
+        ParamRef(SemanticParamId(ROLE_ATTN_GATE, 0, :projection), "attn_q.weight", gate_rows),
+        ParamRef(SemanticParamId(ROLE_Q_NORM, 0, :frozen), "attn_q_norm.weight"),
+        ParamRef(SemanticParamId(ROLE_K, 0, :projection), "attn_k.weight"),
+        ParamRef(SemanticParamId(ROLE_K_NORM, 0, :frozen), "attn_k_norm.weight"),
+        ParamRef(SemanticParamId(ROLE_V, 0, :projection), "attn_v.weight"),
+        ParamRef(SemanticParamId(ROLE_O, 0, :projection), "attn_output.weight"),
+    ]
+    linear = ParamRef[
+        ffn...,
+        ParamRef(SemanticParamId(ROLE_GDN_QKV, 0, :projection), "attn_qkv.weight"),
+        ParamRef(SemanticParamId(ROLE_GDN_Z, 0, :projection), "attn_gate.weight"),
+        ParamRef(SemanticParamId(ROLE_GDN_A, 0, :projection), "ssm_alpha.weight"),
+        ParamRef(SemanticParamId(ROLE_GDN_B, 0, :projection), "ssm_beta.weight"),
+        ParamRef(SemanticParamId(ROLE_GDN_CONV, 0, :projection), "ssm_conv1d.weight"),
+        ParamRef(SemanticParamId(ROLE_GDN_A_LOG, 0, :frozen), "ssm_a"),
+        ParamRef(SemanticParamId(ROLE_GDN_DT_BIAS, 0, :frozen), "ssm_dt.bias"),
+        ParamRef(SemanticParamId(ROLE_GDN_NORM, 0, :frozen), "ssm_norm.weight"),
+        ParamRef(SemanticParamId(ROLE_GDN_O, 0, :projection), "ssm_out.weight"),
+    ]
+    return FamilyParamMap(
+        :qwen3_5_moe,
+        "blk.",
+        full,
+        "token_embd.weight",
+        "output_norm.weight",
+        "output.weight";
+        linear_refs=linear,
     )
 end
 
@@ -579,6 +951,8 @@ end
 const _ADAPTERS = Dict{String, ArchitectureAdapter}(
     "llama" => LlamaAdapter(),
     "qwen2" => Qwen2Adapter(),
+    "qwen3_5" => Qwen35Adapter(),
+    "qwen3_5_moe" => Qwen35MoeAdapter(),
     "gemma" => GemmaAdapter(),
     "mistral" => MistralAdapter(),
     "phi3" => Phi3Adapter(),
@@ -618,19 +992,31 @@ canonical doorway.
 """
 function architecture_spec(path::AbstractString)
     raw = _strict_jsonfile(path)
-    return parse_config(adapter_for(String(raw["model_type"])), raw)
+    mt = String(raw["model_type"])
+    text = raw
+    if haskey(raw, "text_config") && raw["text_config"] isa AbstractDict
+        text = raw["text_config"]
+    end
+    if mt == "qwen3_5" && haskey(text, "num_experts")
+        mt = "qwen3_5_moe"
+    end
+    return parse_config(adapter_for(mt), raw)
 end
 
 export ArchitectureAdapter,
     LlamaAdapter,
     Qwen2Adapter,
+    Qwen35Adapter,
+    Qwen35MoeAdapter,
     GemmaAdapter,
     MistralAdapter,
     Phi3Adapter,
     PhiAdapter,
     FusedQKVLayout,
     fused_qkv_rows,
+    fused_qg_rows,
     adapter_for,
     known_families,
     architecture_spec,
-    family_symbol
+    family_symbol,
+    gguf_param_map

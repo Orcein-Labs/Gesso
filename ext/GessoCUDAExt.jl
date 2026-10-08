@@ -54,7 +54,16 @@ import Gesso.Inference:
     _zero_tail_storage!,
     _write_hidden_row_storage!,
     _copy_row_storage!,
-    _copy_rows_storage!
+    _copy_rows_storage!,
+    _gated_delta_rule!,
+    _causal_conv1d_silu!,
+    _sigmoid_mul!,
+    _silu_mul!,
+    _gdn_gate_params!,
+    _moe_topk_swiglu!,
+    _fetch_expert!,
+    _shared_gate_add!,
+    _fallback_zeros_factory
 
 using Gesso:
     AbstractGessoBackend,
@@ -109,16 +118,13 @@ execution_tier(::CUDABackend) = 1   # OPTIMIZED_GENERIC (§XXI)
 backend_name(::Type{CUDABackend}) = :cuda
 execution_tier(::Type{CUDABackend}) = 1
 
-# Same capability coverage as the CPU reference: the six implemented ops,
-# plus the Phase 10 device-only fast-path caps: :argmax (reduction ON the
-# device — host receives one Int, never the logits row) and :attn_gemm (the
-# Session attention contraction as one flat device GEMM over the gathered
-# scratch). :quantize / :dequantize stay false (Representation-phase
-# concern), and unknown capabilities stay false — probing is always safe (§XX).
-# BREADTH-1: the semantic vocabulary (see backends.jl). CUDA's `rope!` still
-# refuses a scaled policy at the operation — it accepts the `inv_freq` kwarg
-# and raises LoweringNotImplemented on anything but `nothing` — so only
-# `:rope_none` is claimed. :argmax / :attn_gemm are STRATEGY gates.
+# Semantic coverage matches the CPU hybrid extras that now execute on
+# CuArray{Float32}: partial / inv_freq RoPE, qk_norm (3-D rmsnorm),
+# attn_output_gate (sigmoid mul), Gated DeltaNet, mRoPE-as-1D-text.
+# :quantize / :dequantize stay false (Representation-phase concern).
+# :moe_routing executes via fused IQ2_XS / IQ3_XXS / IQ4_XS expert GEMV
+# (GpuQuantSlice when the slab fits, else H2D of one quantized expert).
+# :argmax / :attn_gemm are STRATEGY gates.
 const CUDA_SUPPORTED_CAPS = Set([
     :rmsnorm,
     :attention,
@@ -127,6 +133,15 @@ const CUDA_SUPPORTED_CAPS = Set([
     :embedding_lookup,
     :swiglu_ffn,
     :rope_none,
+    :rope_linear,
+    :rope_llama3,
+    :qk_norm,
+    :attn_output_gate,
+    :linear_attention,
+    :mrope,
+    :rope_partial_dim,
+    :rope_interleaved,
+    :moe_routing,
     :argmax,
     :attn_gemm,
 ])
@@ -137,6 +152,7 @@ supports(::Type{CUDABackend}, cap::Symbol) = cap in CUDA_SUPPORTED_CAPS
 # Phase 4 item B (§LXXVII): the CUDA operator methods on CuArray{Float32}
 # + explicit to_device transfer. Same op names, more-specific methods (§CIX).
 include("cuda_ops.jl")
+include("cuda_quant_gemm.jl")
 
 # Bind the backend into the package's namespace: after this ext triggers,
 # `Gesso.CUDABackend` resolves to the type defined HERE — while a CUDA-less

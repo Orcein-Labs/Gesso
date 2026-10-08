@@ -754,6 +754,7 @@ function _prefill_impl!(s::Session, tokens::AbstractVector{Int}, span::_EngineSp
             theta=s.theta,
             inv_freq=s.inv_freq,
             interleaved=s.interleaved,
+            rotary_dim=_tensor_rotary_dim(tensors),
         )
         # KV APPEND through the paged manager: post-RoPE rows 1..P, one page
         # row per token, K and V as a pair (§LXXVIII)
@@ -952,6 +953,7 @@ function _session_consume!(s::Session, tok::Int)
             theta=s.theta,
             inv_freq=s.inv_freq,
             interleaved=s.interleaved,
+            rotary_dim=_tensor_rotary_dim(tensors),
         )   # 0-based position
         # KV APPEND through the paged manager (K and V as a pair), THEN gather
         # rows 1..K IN PLACE into the context_length workspace — identical bytes

@@ -86,6 +86,30 @@ SmolLM2-135M-when-present (skipped here); backends: CUDA (fast paths
 :attn_gemm + :argmax), CPU (oracle + ids gate), Lava (unchanged, negatives
 pinned).
 
+## Foreman close (encoding owner, 2026-10-01)
+
+Accept. Gauntlet green. Critic hole was real (`--help` vs `--probe`); Builder
+fixed it, plus junk-dir snapshot gate. Parallel workstream untouched.
+
+Same-fixture CUDA `Session.generate` [0,1,2]+3 greedy, post-warmup,
+schema 0.2.0 (not a PyTorch comparison):
+
+| when | row | median |
+|------|-----|--------|
+| Phase 8 (`fcc8cd3`, pre-GEMM) | `session_generate_3tok_cuda` | 17.9 ms |
+| Phase 10 (`fd4ed23`, `:attn_gemm`) | `session_generate_3tok_cuda` | 9.48 ms |
+| 10B (`llama_micro_gesso_cuda_warmed`) | dedicated two-clock row | 9.87 ms |
+| 10B first-token | compile inside | 42.1 ms |
+
+Warmed generate on this micro is ~1.9× the Phase 8 row. First-token is
+~4.3× warmed (compile). CPU generate on the same fixture is ~1.6 ms —
+launch tax still dominates llama_micro; do not put CUDA-vs-CPU on a
+slide. The board factor is still SmolLM2 vs eager PyTorch, still
+**NOT MEASURED**.
+
+Next is **ops**, not a Buffy recipe: `GESSO_SMOLLM2_DIR=<snapshot> make bench`.
+§LXXXIII stays parked. Packet (page-table kernel) waits on that factor.
+
 **Known limits / unresolved.** G1 and the G2 factor remain ops-owned:
 snapshot + torch on one box converts the three SmolLM2 skips to required
 green and the factor row to a number (both sides' dtype stamps travel in

@@ -542,10 +542,12 @@ function rope!(
     theta::Real = 10000.0,
     inv_freq = nothing,
     interleaved::Bool = true,
+    rotary_dim::Integer = 0,
 )
     # Imported default, linear and Llama3 frequency metadata travels with Q/K.
     # Validate and rotate on the requested Lava storage (§LXX: no silent
     # representation change). The CPU oracle implements these policies today.
+    rotary_dim == 0 || Gesso.lowering_not_implemented(:rope_partial_dim, Gesso.LavaBackend())
     _lava_device_storage!(:rope!, q)
     _lava_device_storage!(:rope!, k)
     r = _lava_rope!(q, k, positions; theta, inv_freq, interleaved)
@@ -562,10 +564,13 @@ function rope!(
     theta::Real = 10000.0,
     inv_freq = nothing,
     interleaved::Bool = true,
+    rotary_dim::Integer = 0,
 )
     # Imported default, linear and Llama3 frequency metadata travels with Q/K.
     # Validate and rotate on the requested Lava storage (§LXX: no silent
-    # representation change). The CPU oracle implements these policies today.
+    # representation change). Partial rotary is a CUDA/CPU lowering this
+    # sprint; Lava refuses rather than rotating the full head.
+    rotary_dim == 0 || Gesso.lowering_not_implemented(:rope_partial_dim, Gesso.LavaBackend())
     _lava_device_storage!(:rope!, q)
     _lava_device_storage!(:rope!, k)
     r = _lava_rope!(q, k, positions; theta, inv_freq, interleaved)
@@ -912,6 +917,7 @@ function _lava_to_device(tensors)
     # tensors in the map carry (shape, storage); blocks are NAMED TUPLES of
     # tensors, so their fields convert field-wise
     _conv_t(t) = begin
+        hasproperty(t, :storage) || return t         # mixer tags and other metadata
         t.storage === nothing && return t            # unset storage stays unset
         typeof(t)(; shape = t.shape, storage = _to_f32(t.storage))
     end
@@ -923,7 +929,22 @@ function _lava_to_device(tensors)
     final_rms = fr === nothing ? nothing : _conv_t(fr)
     _lava_sync!()
     result = (; embedding, blocks, lm_head, final_rms)
-    return haskey(tensors, :rope) ? merge(result, (; rope = tensors.rope)) : result
+    return merge(result, _keep_tensor_meta(tensors))
+end
+
+# ArchitectureSpec, RoPEPolicy, mixer tags — anything without .storage.
+const _TO_DEVICE_STORAGE_KEYS = (:embedding, :blocks, :lm_head, :final_rms)
+
+function _keep_tensor_meta(tensors)
+    ks = Symbol[]
+    vs = Any[]
+    for k in keys(tensors)
+        k in _TO_DEVICE_STORAGE_KEYS && continue
+        push!(ks, k)
+        push!(vs, getproperty(tensors, k))
+    end
+    isempty(ks) && return (;)
+    return NamedTuple{Tuple(ks)}(Tuple(vs))
 end
 
 # ext-local dispatch wrapper (bound as Gesso.to_device when this extension is
