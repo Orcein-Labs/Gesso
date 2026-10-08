@@ -768,7 +768,7 @@ end
 _storage_root(s) = _backend_storage_root(s)
 
 _is_host_float_storage(s) =
-    _storage_root(s) isa Array && eltype(s) <: AbstractFloat
+    _storage_root(s) isa Array && eltype(s) in (Float32, Float64)
 
 function _check_device_storage(where::Symbol, backend, t)
     throw(

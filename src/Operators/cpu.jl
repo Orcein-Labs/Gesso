@@ -2,7 +2,7 @@
 # docs/goals/PHASE2_CPU_ORACLE.md).
 #
 # Laws:
-#   * CPU math is dense Array{<:AbstractFloat} in `storage` (`shape ==
+#   * CPU math is dense Array{Float32 or Float64} in `storage` (`shape ==
 #     size(storage)`). The oracle fixtures stay Float64; GGUF qwen35moe
 #     materializes Float32 because F64 cannot hold a 35B-class MoE. No
 #     Float16/BFloat16 path exists.
@@ -33,11 +33,11 @@ function _cpu_storage!(op::Symbol, tensors...)
     for t in tensors
         s=t.storage
         s===nothing && continue
-        _backend_storage_root(s) isa Array && eltype(s) <: AbstractFloat && continue
+        _backend_storage_root(s) isa Array && eltype(s) in (Float32, Float64) && continue
         throw(
             gesso_error(
                 ERR_INVALID_PLAN,
-                "$op: CPUBackend requires host Array{<:AbstractFloat} storage; unsupported native arithmetic is rejected";
+                "$op: CPUBackend requires host Float32 or Float64 storage; unsupported native arithmetic is rejected";
                 storage_type=string(typeof(s)),
             ),
         )
