@@ -2,7 +2,10 @@
 #
 #   GESSO_ORNITH35_GGUF=/path/to/Unsloth-Ornith-1.5-35B-A3B-UD-Q2_K_XL.gguf \
 #   GESSO_GGML_DIR=/path/to/llama.cpp/build/bin \
-#   julia --project=. -t 16 scripts/gate_35b.jl [cuda|cpu]
+#   julia --project=benchmark -t 16 scripts/gate_35b.jl [cuda|cpu]
+#
+# The benchmark workspace env carries CUDA; the root project only lists it as
+# a weak dependency, so `--project=.` cannot load it.
 #
 # Prints one RECEIPT line. Exit 1 if the greedy ids do not match.
 # Decode rate excludes prefill: (t(8 tokens) - t(1 token)) / 7, on a warmed
