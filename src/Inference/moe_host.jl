@@ -22,6 +22,7 @@ mutable struct MoeHostScratch
     hq::Vector{Q8KVec}
     gu::Matrix{Float32}
     dn::Matrix{Float32}
+    hacts::Matrix{Float32}
     hact::Vector{Float32}
     gacc::Vector{Float32}
     uacc::Vector{Float32}
@@ -35,6 +36,7 @@ function MoeHostScratch(h::Int, ff::Int, n_used::Int)
         [Q8KVec(div(ff, QK_K)) for _ in 1:n_used],
         zeros(Float32, ff, 2 * n_used),
         zeros(Float32, h, n_used),
+        zeros(Float32, ff, n_used),
         zeros(Float32, ff),
         zeros(Float32, ff),
         zeros(Float32, ff),
@@ -124,12 +126,7 @@ function _moe_host_experts_batched!(
         gu_nc, gu_total * length(scr.xq),
     )
 
-    @inbounds for k in 1:n_used
-        for j in 1:ff
-            scr.hact[j] = _cpu_silu(scr.gu[j, 2k - 1]) * scr.gu[j, 2k]
-        end
-        quantize_q8_K!(scr.hq[k], scr.hact)
-    end
+    _run_row_chunks!(_MoeSiluQuantChunk(scr.gu, scr.hacts, scr.hq, ff), n_used, n_used * ff)
 
     dn_total = n_used * h
     dn_nc = _moe_host_nchunks(dn_total)
@@ -182,6 +179,25 @@ function (g::_MoeGateUpChunk)(c::Int)
         end
         r += jend - j + 1
     end
+    return nothing
+end
+
+# SwiGLU activation and its Q8_K quantization for selected expert `k`. Base
+# Float32 `exp` does not vectorize, so this costs about 5 us per expert serially;
+# a faster exp would change the values the exact-ids gate checks, so the experts
+# run in parallel instead. Each chunk owns column `k` of `hacts`.
+struct _MoeSiluQuantChunk
+    gu::Matrix{Float32}
+    hacts::Matrix{Float32}
+    hq::Vector{Q8KVec}
+    ff::Int
+end
+
+function (g::_MoeSiluQuantChunk)(k::Int)
+    @inbounds for j in 1:g.ff
+        g.hacts[j, k] = _cpu_silu(g.gu[j, 2k - 1]) * g.gu[j, 2k]
+    end
+    quantize_q8_K!(g.hq[k], view(g.hacts, :, k))
     return nothing
 end
 
