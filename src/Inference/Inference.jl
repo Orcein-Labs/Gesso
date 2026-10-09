@@ -106,6 +106,8 @@ copies host memory, and host Array storage under a non-CPU backend is
 
 _block_mixer(bt) = haskey(bt, :mixer) ? bt.mixer : :full_attention
 
+include("decode_profile.jl")       # GESSO_PROFILE=1 decode stage profiler
+
 const _T_GDN_NS = Ref(Int64(0))
 const _T_ATTN_NS = Ref(Int64(0))
 const _T_FFN_NS = Ref(Int64(0))
@@ -460,10 +462,12 @@ function _ffn_block!(cpu, down, gate, up, act, normed2, bt, wl, zeros_like)
     if haskey(bt, :wrouter)
         return _moe_ffn!(cpu, down, normed2, bt, wl, zeros_like)
     end
-    matmul!(cpu, gate, normed2, bt.wgate, wl)
-    matmul!(cpu, up, normed2, bt.wup, wl)
-    swiglu!(cpu, act, gate, up, wl)
-    matmul!(cpu, down, act, bt.wdown, wl)
+    @decode_stage :dense_ffn cpu begin
+        matmul!(cpu, gate, normed2, bt.wgate, wl)
+        matmul!(cpu, up, normed2, bt.wup, wl)
+        swiglu!(cpu, act, gate, up, wl)
+        matmul!(cpu, down, act, bt.wdown, wl)
+    end
     return down
 end
 
@@ -482,20 +486,22 @@ function _moe_ffn!(cpu, down, normed2, bt, wl, zeros_like)
         n_used,
     )
     if haskey(bt, :wshared_gate)
-        seq, h = size(x)
-        ff = size(bt.wshared_gate.storage, 1)
-        sg = Activation(; shape=(seq, ff), storage=zeros_like((seq, ff)))
-        su = Activation(; shape=(seq, ff), storage=zeros_like((seq, ff)))
-        sa = Activation(; shape=(seq, ff), storage=zeros_like((seq, ff)))
-        sd = Activation(; shape=(seq, h), storage=zeros_like((seq, h)))
-        matmul!(cpu, sg, normed2, bt.wshared_gate, wl)
-        matmul!(cpu, su, normed2, bt.wshared_up, wl)
-        swiglu!(cpu, sa, sg, su, wl)
-        matmul!(cpu, sd, sa, bt.wshared_down, wl)
-        if haskey(bt, :wshared_gate_inp)
-            _shared_gate_add!(cpu, y, x, sd.storage, bt.wshared_gate_inp.storage)
-        else
-            y .+= sd.storage
+        @decode_stage :shared_expert cpu begin
+            seq, h = size(x)
+            ff = size(bt.wshared_gate.storage, 1)
+            sg = Activation(; shape=(seq, ff), storage=zeros_like((seq, ff)))
+            su = Activation(; shape=(seq, ff), storage=zeros_like((seq, ff)))
+            sa = Activation(; shape=(seq, ff), storage=zeros_like((seq, ff)))
+            sd = Activation(; shape=(seq, h), storage=zeros_like((seq, h)))
+            matmul!(cpu, sg, normed2, bt.wshared_gate, wl)
+            matmul!(cpu, su, normed2, bt.wshared_up, wl)
+            swiglu!(cpu, sa, sg, su, wl)
+            matmul!(cpu, sd, sa, bt.wshared_down, wl)
+            if haskey(bt, :wshared_gate_inp)
+                _shared_gate_add!(cpu, y, x, sd.storage, bt.wshared_gate_inp.storage)
+            else
+                y .+= sd.storage
+            end
         end
     end
     return down
@@ -1081,12 +1087,15 @@ function reference_generate(
         flush(stdout)
     end
     while steps < cap
+        tok_t0 = _profile_token_begin()
         # greedy argmax at the current last position (row P + steps); the
         # argmax may run over device storage — only the scalar id crosses
         # back to the host
         t_head = time_ns()
-        logits_row = _last_logits(model, tensors, h, cpu, wd, vocab, P + steps; eps)
-        next = _greedy_id(logits_row)            # 0-based id
+        logits_row = @decode_stage :lm_head cpu _last_logits(
+            model, tensors, h, cpu, wd, vocab, P + steps; eps,
+        )
+        next = @decode_stage :sample cpu _greedy_id(logits_row)            # 0-based id
         head_ms = (time_ns() - t_head) / 1e6
         push!(ids, next)
         steps += 1
@@ -1094,7 +1103,10 @@ function reference_generate(
             println("gesso_timing token=$(steps) id=$(next) head_ms=$(round(head_ms; digits=1))")
             flush(stdout)
         end
-        (next == TOY_EOS || steps >= cap) && break
+        if next == TOY_EOS || steps >= cap
+            _profile_token_end(tok_t0, false)
+            break
+        end
         t_dec = time_ns()
         _decode_step!(
             model,
@@ -1118,6 +1130,7 @@ function reference_generate(
             gdn_conv,
             gdn_rec,
         )
+        _profile_token_end(tok_t0, true)
         if timing
             println(
                 "gesso_timing token=$(steps) decode_ms=$(round((time_ns() - t_dec) / 1e6; digits=1)) gdn_ms=$(round(_T_GDN_NS[] / 1e6; digits=1)) attn_ms=$(round(_T_ATTN_NS[] / 1e6; digits=1)) ffn_ms=$(round(_T_FFN_NS[] / 1e6; digits=1))",
@@ -1190,7 +1203,7 @@ function _decode_step!(
     qdim = n_heads * d_head
     zeros_like = _zeros_like_factory(cpu, tensors)
     hp = Activation(; shape=(1, dim), storage=zeros_like((1, dim)))
-    embedding_lookup!(cpu, hp, tensors.embedding, [tok], wl)
+    @decode_stage :embed cpu embedding_lookup!(cpu, hp, tensors.embedding, [tok], wl)
     normed = Activation(; shape=(1, dim), storage=zeros_like((1, dim)))
     q = Activation(; shape=(1, qdim), storage=zeros_like((1, qdim)))
     gate_attn = Activation(; shape=(1, qdim), storage=zeros_like((1, qdim)))
@@ -1226,7 +1239,7 @@ function _decode_step!(
         bt = tensors.blocks[bi]
         if _block_mixer(bt) === :linear_attention
             t0 = time_ns()
-            _hybrid_linear_block!(
+            @decode_stage :gdn_mixer cpu _hybrid_linear_block!(
                 cpu,
                 hp,
                 normed,
@@ -1243,62 +1256,64 @@ function _decode_step!(
             _T_GDN_NS[] += time_ns() - t0
         else
         t0 = time_ns()
-        rmsnorm!(cpu, normed, hp, bt.attn_rms, wl; eps)
-        matmul!(cpu, q, normed, bt.wq, wl)
-        matmul!(cpu, k, normed, bt.wk, wl)
-        matmul!(cpu, v, normed, bt.wv, wl)
-        _split_heads!(qh, q, n_heads, d_head)
-        _split_heads!(kh, k, n_kv_heads, d_head)
-        _split_heads!(vh, v, n_kv_heads, d_head)
-        if haskey(bt, :wq_norm)
-            rmsnorm!(cpu, qh, qh, bt.wq_norm, wl; eps)
-            rmsnorm!(cpu, kh, kh, bt.wk_norm, wl; eps)
-        end
-        rope!(
-            cpu,
-            qh,
-            kh,
-            [pos0 - 1],
-            wl;
-            theta,
-            inv_freq,
-            interleaved=_tensors_rope_interleaved(tensors),
-            rotary_dim,
-        )  # 0-based position
-        # KV APPEND: exactly one row per layer per step, at n_kv_heads
-        kc[bi].storage[pos0, :, :] .= kh.storage[1, :, :]
-        vc[bi].storage[pos0, :, :] .= vh.storage[1, :, :]
-        # the query is the LAST position: it attends to the whole cache —
-        # repeat the CACHE rows per query head (kh above is the single
-        # new row; it was consumed by the append)
-        kx = _repeat_heads(kc[bi], group)
-        vx = _repeat_heads(vc[bi], group)
-        _attention_heads!(
-            cpu,
-            attn.storage,
-            scores,
-            scores_out,
-            qh.storage,
-            kx.storage,
-            vx.storage,
-            n_heads,
-            d_head,
-            1,
-            K,
-            wl,
-        )
+        @decode_stage :norm cpu rmsnorm!(cpu, normed, hp, bt.attn_rms, wl; eps)
+        @decode_stage :attn_mixer cpu begin
+            matmul!(cpu, q, normed, bt.wq, wl)
+            matmul!(cpu, k, normed, bt.wk, wl)
+            matmul!(cpu, v, normed, bt.wv, wl)
+            _split_heads!(qh, q, n_heads, d_head)
+            _split_heads!(kh, k, n_kv_heads, d_head)
+            _split_heads!(vh, v, n_kv_heads, d_head)
+            if haskey(bt, :wq_norm)
+                rmsnorm!(cpu, qh, qh, bt.wq_norm, wl; eps)
+                rmsnorm!(cpu, kh, kh, bt.wk_norm, wl; eps)
+            end
+            rope!(
+                cpu,
+                qh,
+                kh,
+                [pos0 - 1],
+                wl;
+                theta,
+                inv_freq,
+                interleaved=_tensors_rope_interleaved(tensors),
+                rotary_dim,
+            )  # 0-based position
+            # KV APPEND: exactly one row per layer per step, at n_kv_heads
+            kc[bi].storage[pos0, :, :] .= kh.storage[1, :, :]
+            vc[bi].storage[pos0, :, :] .= vh.storage[1, :, :]
+            # the query is the LAST position: it attends to the whole cache —
+            # repeat the CACHE rows per query head (kh above is the single
+            # new row; it was consumed by the append)
+            kx = _repeat_heads(kc[bi], group)
+            vx = _repeat_heads(vc[bi], group)
+            _attention_heads!(
+                cpu,
+                attn.storage,
+                scores,
+                scores_out,
+                qh.storage,
+                kx.storage,
+                vx.storage,
+                n_heads,
+                d_head,
+                1,
+                K,
+                wl,
+            )
 
-        _merge_heads!(merged, attn, n_heads, d_head)
-        if haskey(bt, :wattn_gate)
-            matmul!(cpu, gate_attn, normed, bt.wattn_gate, wl)
-            _sigmoid_mul!(cpu, merged.storage, merged.storage, gate_attn.storage)
+            _merge_heads!(merged, attn, n_heads, d_head)
+            if haskey(bt, :wattn_gate)
+                matmul!(cpu, gate_attn, normed, bt.wattn_gate, wl)
+                _sigmoid_mul!(cpu, merged.storage, merged.storage, gate_attn.storage)
+            end
+            matmul!(cpu, sub, merged, bt.wo, wl)
+            hp.storage .+= sub.storage              # residual
         end
-        matmul!(cpu, sub, merged, bt.wo, wl)
-        hp.storage .+= sub.storage              # residual
         _T_ATTN_NS[] += time_ns() - t0
         end
         t1 = time_ns()
-        rmsnorm!(cpu, normed2, hp, bt.ffn_rms, wl; eps)
+        @decode_stage :norm cpu rmsnorm!(cpu, normed2, hp, bt.ffn_rms, wl; eps)
         _ffn_block!(cpu, down, gate, up, act, normed2, bt, wl, zeros_like)
         hp.storage .+= down.storage             # residual
         _T_FFN_NS[] += time_ns() - t1

@@ -77,6 +77,7 @@ using Gesso: reference_prefill, reference_generate
     include("test_breadth0.jl")
     include("test_qwen35_hybrid.jl")
     include("test_moe_routing.jl")
+    include("test_decode_profile.jl")
     include("test_gguf_import.jl")
 
     # BREADTH-0 Pass C: the tokenizer PROTOCOL — GPT-2 BPE is one
