@@ -943,6 +943,7 @@ _host_f32(s::Gesso.Inference.QuantMatrix) = Gesso.Inference._quant_host_f32(s)
 _host_f32(s) = convert(Array{Float32}, s)
 
 function _to_device_cuda(tensors)
+    @info "vram before dense placement" free_mib=div(Int64(CUDA.free_memory()), Int64(1024 * 1024)) dense_budget_mib=div(Gesso.Inference._gpu_budget_bytes(), Int64(1024 * 1024))
     budget = Gesso.Inference._gpu_budget_bytes()
     wdt = _gpu_weight_eltype()
     used = Int64(0)
@@ -1039,6 +1040,7 @@ function _to_device_cuda(tensors)
 
     # Complete gate/up/down expert triples take the per-expert cache below,
     # never the whole-slab path, so one layer cannot end up mixed.
+    @info "vram after dense placement" free_mib=div(Int64(CUDA.free_memory()), Int64(1024 * 1024))
     triples = _moe_expert_triples(tensors.blocks)
     expert_ids = Set{UInt}()
     for (_, g, u, d) in triples
@@ -1076,6 +1078,21 @@ function _to_device_cuda(tensors)
     lm_head = tensors.lm_head === tensors.embedding ? embedding : _conv_t(tensors.lm_head)
     fr = haskey(tensors, :final_rms) ? tensors.final_rms : nothing
     final_rms = fr === nothing ? nothing : _conv_t(fr)
+    cached_n = 0
+    slab_n = 0
+    host_n = 0
+    for bt in blocks, k in (:wexp_gate, :wexp_up, :wexp_down)
+        haskey(bt, k) || continue
+        s = bt[k].storage
+        if s isa Gesso.Inference.CachedExpertBank
+            cached_n += 1
+        elseif s isa Gesso.Inference.GpuQuantSlice
+            slab_n += 1
+        elseif s isa Gesso.Inference.GgufQuantSlice
+            host_n += 1
+        end
+    end
+    @info "expert storage census" cached_projections=cached_n whole_slab_projections=slab_n host_projections=host_n vram_free_mib=div(Int64(CUDA.free_memory()), Int64(1024 * 1024))
     result = (; embedding, blocks, lm_head, final_rms)
     return merge(result, _keep_tensor_meta(tensors))
 end
@@ -1099,8 +1116,18 @@ function _expert_cache_budget_bytes()
     rraw = strip(get(ENV, "GESSO_GPU_RESERVE_MIB", string(_EXPERT_RESERVE_DEFAULT_MIB)))
     reserve = tryparse(Int, rraw)
     reserve === nothing && error("GESSO_GPU_RESERVE_MIB must be an integer MiB, got '$rraw'")
+    free_raw = Int64(CUDA.free_memory())
+    CUDA.reclaim()   # return the allocator's cached blocks so the free figure is real
     free = Int64(CUDA.free_memory())
-    return max(Int64(0), free - Int64(max(0, reserve)) * mib)
+    budget = _expert_budget_from_free(free, reserve)
+    @info "expert cache budget" free_before_reclaim_mib=div(free_raw, mib) free_mib=div(free, mib) reserve_mib=reserve budget_mib=div(budget, mib)
+    return budget
+end
+
+# Pure budget arithmetic: free device bytes minus the reserve, never negative.
+function _expert_budget_from_free(free_bytes::Integer, reserve_mib::Integer)
+    free_bytes >= 0 || error("_expert_budget_from_free: negative free bytes $free_bytes")
+    return max(Int64(0), Int64(free_bytes) - Int64(max(0, reserve_mib)) * Int64(1024 * 1024))
 end
 
 # (layer, gate, up, down) for every block whose three expert banks are all

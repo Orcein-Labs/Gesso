@@ -190,6 +190,16 @@ else
         @test Gesso.Inference._check_device_storage(:probe, cuda, t) === nothing
     end
 
+    @testset "device expert cache: budget arithmetic is free minus reserve" begin
+        MiB = Int64(1024 * 1024)
+        @test ext._expert_budget_from_free(Int64(3) * 1024 * MiB, 1024) == Int64(2) * 1024 * MiB
+        @test ext._expert_budget_from_free(Int64(7300) * MiB, 1024) == Int64(6276) * MiB
+        @test ext._expert_budget_from_free(Int64(500) * MiB, 1024) == 0
+        @test ext._expert_budget_from_free(Int64(500) * MiB, 0) == Int64(500) * MiB
+        @test ext._expert_budget_from_free(Int64(500) * MiB, -5) == Int64(500) * MiB
+        @test_throws ErrorException ext._expert_budget_from_free(-1, 0)
+    end
+
     @testset "device expert cache: budget env and fallbacks" begin
         withenv("GESSO_GPU_EXPERT_CACHE_MIB" => "0") do
             @test ext._expert_cache_budget_bytes() == 0
