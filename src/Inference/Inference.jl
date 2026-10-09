@@ -840,6 +840,11 @@ function _first_array_storage(tensors)
     return hit(fr.storage)
 end
 
+# Activations for one decode step. A device backend may serve every step from
+# the buffers of the previous one (the CUDA extension does), so nothing taken
+# from this factory may outlive the step that asked for it.
+_decode_zeros_like(backend, tensors) = _zeros_like_factory(backend, tensors)
+
 function _zeros_like_factory(backend, tensors)
     s = _first_array_storage(tensors)
     if s !== nothing
@@ -1324,7 +1329,7 @@ function _decode_step!(
     dim = model.embedding.dim
     kdim = n_kv_heads * d_head
     qdim = n_heads * d_head
-    zeros_like = _zeros_like_factory(cpu, tensors)
+    zeros_like = _decode_zeros_like(cpu, tensors)
     xq_dim = cpu_scratch === nothing ? nothing : cpu_scratch.xq_dim
     xq_qdim = cpu_scratch === nothing ? nothing : cpu_scratch.xq_qdim
     xq_ff = cpu_scratch === nothing ? nothing : cpu_scratch.xq_ff

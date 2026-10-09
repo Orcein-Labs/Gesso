@@ -1721,6 +1721,38 @@ end
 
 Gesso.Inference._profile_sync(::CUDABackend) = CUDA.synchronize()
 
+# A decode step requests the same sequence of activation shapes every token, so
+# the n-th request is served from the n-th buffer the previous step used. Each
+# request within a step still gets its own buffer, and every decode kernel is
+# ordered on one stream, so a buffer is never rewritten while an earlier step
+# reads it. Buffers are zeroed like `zeros_like`. Without this the ~185 fresh
+# CuArrays per 35B token keep VRAM near full and CUDA.jl's allocator runs a GC
+# every few tokens.
+struct DecodeArena
+    bufs::Vector{CuArray{Float32}}
+    next::Base.RefValue{Int}
+end
+
+function (a::DecodeArena)(dims::NTuple{N, Int}) where {N}
+    i = (a.next[] += 1)
+    if i > length(a.bufs)
+        push!(a.bufs, CUDA.zeros(Float32, dims))
+    elseif size(a.bufs[i]) != dims
+        CUDA.unsafe_free!(a.bufs[i])
+        a.bufs[i] = CUDA.zeros(Float32, dims)
+    else
+        fill!(a.bufs[i], 0.0f0)
+    end
+    return a.bufs[i]::CuArray{Float32, N, CUDA.DeviceMemory}
+end
+
+const _DECODE_ARENAS = Dict{Int, Vector{CuArray{Float32}}}()
+
+function Gesso.Inference._decode_zeros_like(::CUDABackend, tensors)
+    bufs = get!(Vector{CuArray{Float32}}, _DECODE_ARENAS, Int(CUDA.deviceid(CUDA.device())))
+    return DecodeArena(bufs, Ref(0))
+end
+
 # Stage backend tag for CUDA work issued outside a CUDABackend method.
 struct _CUDASync end
 Gesso.Inference._profile_sync(::_CUDASync) = CUDA.synchronize()
