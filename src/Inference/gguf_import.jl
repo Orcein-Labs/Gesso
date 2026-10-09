@@ -810,16 +810,19 @@ function _cpu_moe_topk_swiglu_gguf!(
             @inbounds for i in 1:h
                 xf0[i] = Float32(xrow[i])
             end
+            # `xf` must not be the name the task body assigns: the serial branch
+            # above also assigns `xf`, so the @threads closure would capture that
+            # one variable (a Core.Box) and every task would overwrite it.
             Threads.@threads for k in 1:n_used
                 tid = Threads.threadid()
                 e = order[k]
                 w = Float32(logits[e] * invw)
-                xf = xbufs[tid]
+                xft = xbufs[tid]
                 if tid != 1
-                    copyto!(xf, xf0)
+                    copyto!(xft, xf0)
                 end
-                _qgemv_expert!(gaccs[tid], xf, gate_s, e)
-                _qgemv_expert!(uaccs[tid], xf, up_s, e)
+                _qgemv_expert!(gaccs[tid], xft, gate_s, e)
+                _qgemv_expert!(uaccs[tid], xft, up_s, e)
                 @inbounds for j in 1:ff
                     hacts[tid][j] = _cpu_silu(gaccs[tid][j]) * uaccs[tid][j]
                 end
