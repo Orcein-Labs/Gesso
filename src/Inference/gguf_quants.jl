@@ -321,12 +321,42 @@ function _qgemv_bytes_threaded!(
     nc = clamp(nchunks, 1, ne1)
     rb = _qrow_bytes(ggml_type, ne0)
     nq = length(q)
-    Threads.@threads for c in 1:nc
-        j0 = div((c - 1) * ne1, nc) + 1
-        j1 = div(c * ne1, nc)
-        qc = view(q, ((j0 - 1) * rb + 1):nq)
-        _qgemv_bytes!(view(y, j0:j1), x, qc, ggml_type, ne0, j1 - j0 + 1, alpha, beta)
+    p = _PROFILE[]
+    if p !== nothing && p.window
+        return _qgemv_bytes_threaded_timed!(p, y, x, q, ggml_type, ne0, ne1, alpha, beta, nc, rb, nq)
     end
+    Threads.@threads for c in 1:nc
+        _qgemv_chunk!(y, x, q, ggml_type, ne0, ne1, alpha, beta, nc, c, rb, nq)
+    end
+    return y
+end
+
+@inline function _qgemv_chunk!(y, x, q, ggml_type, ne0, ne1, alpha, beta, nc, c, rb, nq)
+    j0 = div((c - 1) * ne1, nc) + 1
+    j1 = div(c * ne1, nc)
+    qc = view(q, ((j0 - 1) * rb + 1):nq)
+    _qgemv_bytes!(view(y, j0:j1), x, qc, ggml_type, ne0, j1 - j0 + 1, alpha, beta)
+    return nothing
+end
+
+# Profiled twin of the threaded GEMV: times each chunk on its own thread so
+# the fork/join cost (wall minus the slowest chunk) is separated from the
+# kernel work. Same chunks, same arithmetic.
+function _qgemv_bytes_threaded_timed!(p, y, x, q, ggml_type, ne0, ne1, alpha, beta, nc, rb, nq)
+    length(p.chunk_ns) >= nc || resize!(p.chunk_ns, nc)
+    cns = p.chunk_ns
+    t_wall = time_ns()
+    Threads.@threads for c in 1:nc
+        t0 = time_ns()
+        _qgemv_chunk!(y, x, q, ggml_type, ne0, ne1, alpha, beta, nc, c, rb, nq)
+        @inbounds cns[c] = Int64(time_ns() - t0)
+    end
+    wall = Int64(time_ns() - t_wall)
+    crit = maximum(view(cns, 1:nc))
+    p.sub_ns[:host_fork_join] += wall - crit
+    p.sub_ns[:host_critical_path] += crit
+    p.sub_ns[:host_cpu_work] += sum(view(cns, 1:nc))
+    p.counters[:host_threaded_calls] += 1
     return y
 end
 

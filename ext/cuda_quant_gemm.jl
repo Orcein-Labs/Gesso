@@ -299,14 +299,20 @@ function _cuda_bind_experts!(bank, experts::Vector{Int})
         total = nbytes * n_used
         hostpack = _CUDA_Q_HOSTPACK[]
         length(hostpack) >= total || (hostpack = Vector{UInt8}(undef, total); _CUDA_Q_HOSTPACK[] = hostpack)
+        timed = Inf_._profile_window_open()
+        t_gather = timed ? time_ns() : UInt64(0)
         @inbounds for k in 1:n_used
             off = Inf_._quant_expert_off0(bank, experts[k])
             copyto!(hostpack, (k - 1) * nbytes + 1, bank.data, off + 1, nbytes)
             hostoff[k] = Int32((k - 1) * nbytes)
         end
+        timed && Inf_._profile_sub!(:upload_gather, time_ns() - t_gather)
         scratch = _cuda_q_scratch(total)
+        Inf_._profile_copy!(false)
+        Inf_._profile_count!(:expert_h2d_bytes, total)
         CUDA.unsafe_copyto!(pointer(scratch), pointer(hostpack), total)
         offv = _cuda_q_offsets(n_used)
+        Inf_._profile_copy!(false)
         copyto!(offv, 1, hostoff, 1, n_used)
         return scratch, offv
     else
@@ -323,9 +329,9 @@ function _cuda_qgemv_experts!(
     beta::Float32=0.0f0,
 )
     n_used = length(experts)
-    q, offv = _cuda_bind_experts!(bank, experts)
+    q, offv = Gesso.Inference.@decode_stage :moe_qupload _CUDASync() _cuda_bind_experts!(bank, experts)
     xx = ndims(x) == 1 ? reshape(x, length(x), 1) : x
-    return _cuda_launch_qgemv!(
+    return Gesso.Inference.@decode_stage :moe_qgemv _CUDASync() _cuda_launch_qgemv!(
         y, xx, q, bank.ggml_type, offv, n_used, bank.ne0, bank.ne1, alpha, beta,
     )
 end

@@ -1286,6 +1286,19 @@ function Gesso.Inference._fallback_zeros_factory(::CUDABackend)
     return (dims::Tuple{Vararg{Int}}) -> CUDA.zeros(Float32, dims)
 end
 
+Gesso.Inference._profile_sync(::CUDABackend) = CUDA.synchronize()
+
+# Stage backend tag for CUDA work issued outside a CUDABackend method.
+struct _CUDASync end
+Gesso.Inference._profile_sync(::_CUDASync) = CUDA.synchronize()
+
+# CUDA.zeros with the allocation counted in the decode profile.
+function _moe_zeros(dims::Integer...)
+    Gesso.Inference._profile_count!(:cuda_alloc_calls, 1)
+    Gesso.Inference._profile_count!(:cuda_alloc_bytes, 4 * prod(dims))
+    return CUDA.zeros(Float32, dims...)
+end
+
 function _fetch_expert!(::CUDABackend, W::CuMatrix{Float32}, bank::CuArray{Float32, 3}, e::Int)
     copyto!(W, view(bank, e, :, :))
     return W
@@ -1347,17 +1360,23 @@ function _moe_topk_swiglu!(
     size(down) == (n_exp, h, ff) ||
         error("_moe_topk_swiglu!: down $(size(down)) ≠ ($n_exp, $h, $ff)")
 
-    rd = router isa CuArray ? router : CuArray{Float32}(Gesso.Inference._offload_host_array(router))
-    logits = CUDA.zeros(Float32, seq, n_exp)
-    CUDA.CUBLAS.gemm!('N', 'T', one(Float32), x, rd, zero(Float32), logits)
-    logits_h = Array(logits)
+    Gesso.Inference.@decode_stage :moe_alloc _CUDASync() begin
+        logits = _moe_zeros(seq, n_exp)
+        fill!(y, zero(eltype(y)))
+        gacc = _moe_zeros(ff)
+        uacc = _moe_zeros(ff)
+        hact = _moe_zeros(ff)
+        yrow = _moe_zeros(h)
+        xt = _moe_zeros(h)
+    end
 
-    fill!(y, zero(eltype(y)))
-    gacc = CUDA.zeros(Float32, ff)
-    uacc = CUDA.zeros(Float32, ff)
-    hact = CUDA.zeros(Float32, ff)
-    yrow = CUDA.zeros(Float32, h)
-    xt = CUDA.zeros(Float32, h)
+    Gesso.Inference.@decode_stage :moe_router backend begin
+        rd = router isa CuArray ? router : CuArray{Float32}(Gesso.Inference._offload_host_array(router))
+        CUDA.CUBLAS.gemm!('N', 'T', one(Float32), x, rd, zero(Float32), logits)
+        Gesso.Inference._profile_copy!(true)
+        logits_h = Array(logits)
+    end
+
     order = Vector{Int}(undef, n_exp)
     quant = Gesso.Inference._is_quant_expert_bank(gate)
     # Banks that are mmap'd on the host (GgufQuantSlice in all three slabs)
@@ -1382,67 +1401,81 @@ function _moe_topk_swiglu!(
         uh = Vector{Float32}(undef, ff)
         hh = Vector{Float32}(undef, ff)
         dh = Vector{Float32}(undef, h)
-        ordk = Vector{Int}(undef, n_used)
     elseif quant
-        Gbat = CUDA.zeros(Float32, ff, n_used)
-        Ubat = CUDA.zeros(Float32, ff, n_used)
-        Hbat = CUDA.zeros(Float32, ff, n_used)
-        Dbat = CUDA.zeros(Float32, h, n_used)
-        ws = CUDA.zeros(Float32, n_used)
+        Gesso.Inference.@decode_stage :moe_alloc _CUDASync() begin
+            Gbat = _moe_zeros(ff, n_used)
+            Ubat = _moe_zeros(ff, n_used)
+            Hbat = _moe_zeros(ff, n_used)
+            Dbat = _moe_zeros(h, n_used)
+            ws = _moe_zeros(n_used)
+        end
     else
-        Wg = CUDA.zeros(Float32, ff, h)
-        Wu = CUDA.zeros(Float32, ff, h)
-        Wd = CUDA.zeros(Float32, h, ff)
+        Gesso.Inference.@decode_stage :moe_alloc _CUDASync() begin
+            Wg = _moe_zeros(ff, h)
+            Wu = _moe_zeros(ff, h)
+            Wd = _moe_zeros(h, ff)
+        end
     end
 
     for t in 1:seq
         row = view(logits_h, t, :)
-        m = typemin(Float32)
-        @inbounds for e in 1:n_exp
-            row[e] > m && (m = row[e])
-        end
-        s = zero(Float32)
-        @inbounds for e in 1:n_exp
-            v = exp(row[e] - m)
-            row[e] = v
-            s += v
-        end
-        invs = one(Float32) / s
-        @inbounds for e in 1:n_exp
-            row[e] *= invs
-            order[e] = e
-        end
-        sort!(order; by=e -> (-row[e], e))
-        wsum = zero(Float32)
-        @inbounds for k in 1:n_used
-            wsum += row[order[k]]
-        end
-        wsum > 0 || continue
-        invw = one(Float32) / wsum
-        copyto!(xt, view(x, t, :))
-        fill!(yrow, zero(Float32))
-        if host_all
-            @inbounds for k in 1:n_used
-                ordk[k] = order[k]
-                wbuf[k] = row[order[k]] * invw
+        Gesso.Inference.@decode_stage :moe_router nothing begin
+            m = typemin(Float32)
+            @inbounds for e in 1:n_exp
+                row[e] > m && (m = row[e])
             end
-            copyto!(xh, xt)
-            Gesso.Inference._moe_host_experts!(
-                yh, xh, ordk, wbuf, n_used, gate, up, down, gh, uh, hh, dh,
-            )
-            copyto!(yrow, yh)
-        elseif quant
+            s = zero(Float32)
+            @inbounds for e in 1:n_exp
+                v = exp(row[e] - m)
+                row[e] = v
+                s += v
+            end
+            invs = one(Float32) / s
+            @inbounds for e in 1:n_exp
+                row[e] *= invs
+                order[e] = e
+            end
+            sort!(order; by=e -> (-row[e], e))
+            wsum = zero(Float32)
+            @inbounds for k in 1:n_used
+                wsum += row[order[k]]
+            end
+            invw = wsum > 0 ? one(Float32) / wsum : zero(Float32)
             @inbounds for k in 1:n_used
                 experts[k] = order[k]
                 wbuf[k] = row[order[k]] * invw
             end
+        end
+        wsum > 0 || continue
+        fill!(yrow, zero(Float32))
+        if host_all
+            Gesso.Inference.@decode_stage :moe_d2h backend begin
+                copyto!(xt, view(x, t, :))
+                Gesso.Inference._profile_copy!(true)
+                copyto!(xh, xt)
+            end
+            Gesso.Inference.@decode_stage :moe_host nothing Gesso.Inference._moe_host_experts!(
+                yh, xh, experts, wbuf, n_used, gate, up, down, gh, uh, hh, dh,
+            )
+            Gesso.Inference.@decode_stage :moe_h2d backend begin
+                Gesso.Inference._profile_copy!(false)
+                copyto!(yrow, yh)
+            end
+        elseif quant
+            copyto!(xt, view(x, t, :))
             _cuda_qgemv_experts!(Gbat, xt, gate, experts)
             _cuda_qgemv_experts!(Ubat, xt, up, experts)
-            _silu_mul!(backend, Hbat, Ubat, Gbat)
+            Gesso.Inference.@decode_stage :moe_qgemv backend _silu_mul!(backend, Hbat, Ubat, Gbat)
             _cuda_qgemv_experts!(Dbat, Hbat, down, experts)
-            copyto!(ws, wbuf)
-            CUDA.CUBLAS.gemv!('N', one(Float32), Dbat, ws, zero(Float32), yrow)
+            Gesso.Inference.@decode_stage :moe_qupload backend begin
+                Gesso.Inference._profile_copy!(false)
+                copyto!(ws, wbuf)
+            end
+            Gesso.Inference.@decode_stage :moe_qgemv backend CUDA.CUBLAS.gemv!(
+                'N', one(Float32), Dbat, ws, zero(Float32), yrow,
+            )
         else
+            copyto!(xt, view(x, t, :))
             for k in 1:n_used
                 e = order[k]
                 w = row[e] * invw
