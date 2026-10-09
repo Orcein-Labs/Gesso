@@ -1607,27 +1607,26 @@ end
     return red[1]
 end
 
-# Thread hh is value head hh; block j is state column j of every head.
+# Block j is state column j of every head. Thread (hh, y) is value head hh and
+# takes the state rows i ≡ y (mod Y); the Y partial sums of each head meet in
+# shared memory. A thread per head walking all dk rows serially left the state
+# reads latency-bound (one 4-byte load in flight per thread). The q and k norms
+# are applied to the sums instead of to every element, which is the same math
+# to rounding.
 function _cuda_gdn_delta_kernel!(
     core, conv_out, a, b, A_log, dt_bias, state,
     nk::Int, group::Int, tiled::Bool, dk::Int, dv::Int, scale::Float32, eps::Float32,
 )
     hh = Int(threadIdx().x)
+    y = Int(threadIdx().y)
+    nvh = Int(blockDim().x)
+    Y = Int(blockDim().y)
     j = Int(blockIdx().x)
+    red = CUDA.CuDynamicSharedArray(Float32, (nvh, Y, 3))
     key_dim = nk * dk
     h = tiled ? ((hh - 1) % nk) + 1 : ((hh - 1) ÷ group) + 1
     qoff = (h - 1) * dk
     koff = key_dim + (h - 1) * dk
-    sq = 0.0f0
-    sk = 0.0f0
-    for i in 1:dk
-        qv = conv_out[1, qoff + i]
-        kv = conv_out[1, koff + i]
-        sq += qv * qv
-        sk += kv * kv
-    end
-    invq = scale / sqrt(sq + eps)
-    invk = 1.0f0 / sqrt(sk + eps)
 
     bv = b[1, hh]
     beta = 1.0f0 / (1.0f0 + exp(-bv))
@@ -1635,20 +1634,53 @@ function _cuda_gdn_delta_kernel!(
     sp = av > 20.0f0 ? av : log1p(exp(av))
     decay = exp(-exp(A_log[hh]) * sp)
 
-    kv_mem = 0.0f0
-    for i in 1:dk
-        st = state[hh, i, j] * decay
-        state[hh, i, j] = st
-        kv_mem += st * (conv_out[1, koff + i] * invk)
+    sq = 0.0f0
+    sk = 0.0f0
+    sm = 0.0f0
+    i = y
+    while i <= dk
+        qv = conv_out[1, qoff + i]
+        kv = conv_out[1, koff + i]
+        sq += qv * qv
+        sk += kv * kv
+        sm += (state[hh, i, j] * decay) * kv
+        i += Y
     end
-    delta = (conv_out[1, 2 * key_dim + (hh - 1) * dv + j] - kv_mem) * beta
+    red[hh, y, 1] = sq
+    red[hh, y, 2] = sk
+    red[hh, y, 3] = sm
+    CUDA.sync_threads()
+    sq = 0.0f0
+    sk = 0.0f0
+    sm = 0.0f0
+    for t in 1:Y
+        sq += red[hh, t, 1]
+        sk += red[hh, t, 2]
+        sm += red[hh, t, 3]
+    end
+    invq = scale / sqrt(sq + eps)
+    invk = 1.0f0 / sqrt(sk + eps)
+    delta = (conv_out[1, 2 * key_dim + (hh - 1) * dv + j] - sm * invk) * beta
+    kd = invk * delta
     acc = 0.0f0
-    for i in 1:dk
-        sn = state[hh, i, j] + (conv_out[1, koff + i] * invk) * delta
+    i = y
+    while i <= dk
+        sn = state[hh, i, j] * decay + conv_out[1, koff + i] * kd
         state[hh, i, j] = sn
-        acc += sn * (conv_out[1, qoff + i] * invq)
+        acc += sn * conv_out[1, qoff + i]
+        i += Y
     end
-    core[1, (hh - 1) * dv + j] = acc
+    # Every thread must be done reading the first reduction before it is reused.
+    CUDA.sync_threads()
+    red[hh, y, 1] = acc
+    CUDA.sync_threads()
+    if y == 1
+        tot = 0.0f0
+        for t in 1:Y
+            tot += red[hh, t, 1]
+        end
+        core[1, (hh - 1) * dv + j] = tot * invq
+    end
     return
 end
 
@@ -1694,12 +1726,13 @@ function Gesso.Inference._gdn_decode_core!(
     scale = Float32(1) / sqrt(Float32(dk))
     eps32 = Float32(eps)
     T = min(256, nextpow(2, max(32, dv)))
+    Y = clamp(256 ÷ nv, 1, dk)
     Gesso.Inference.@decode_sub :gdn_conv backend begin
         @cuda threads = 256 blocks = cld(conv_dim, 256) _cuda_gdn_conv_decode_kernel!(
             s.conv, conv_state, s.mixed, weight, Int(ksz))
     end
     Gesso.Inference.@decode_sub :gdn_recur backend begin
-        @cuda threads = nv blocks = dv _cuda_gdn_delta_kernel!(
+        @cuda threads = (nv, Y) blocks = dv shmem = nv * Y * 3 * sizeof(Float32) _cuda_gdn_delta_kernel!(
             s.core, s.conv, s.a, s.b, A_log, dt_bias, rec_state,
             Int(nk), Int(div(nv, nk)), mx.v_head_tiled, Int(dk), Int(dv), scale, eps32)
         @cuda threads = T blocks = nv shmem = T * sizeof(Float32) _cuda_gdn_gnorm_kernel!(
@@ -1725,32 +1758,86 @@ Gesso.Inference._profile_sync(::CUDABackend) = CUDA.synchronize()
 # the n-th request is served from the n-th buffer the previous step used. Each
 # request within a step still gets its own buffer, and every decode kernel is
 # ordered on one stream, so a buffer is never rewritten while an earlier step
-# reads it. Buffers are zeroed like `zeros_like`. Without this the ~185 fresh
-# CuArrays per 35B token keep VRAM near full and CUDA.jl's allocator runs a GC
-# every few tokens.
+# reads it. Without this the ~185 fresh CuArrays per 35B token keep VRAM near
+# full and CUDA.jl's allocator runs a GC every few tokens.
+#
+# The buffers are views into one slab, so zeroing them (callers expect
+# `zeros_like`) is one memset per step instead of one per buffer. A step whose
+# requests differ from the layout gets fresh buffers for the requests that do
+# not fit, and the next step lays the slab out again from what it asked for.
+mutable struct ArenaSlab
+    slab::Union{Nothing, CuVector{Float32}}
+    views::Vector{CuArray{Float32}}
+    layout::Vector{NTuple{5, Int}}
+    requested::Vector{NTuple{5, Int}}
+    loose::Vector{CuArray{Float32}}
+end
+
 struct DecodeArena
-    bufs::Vector{CuArray{Float32}}
+    s::ArenaSlab
     next::Base.RefValue{Int}
 end
 
-function (a::DecodeArena)(dims::NTuple{N, Int}) where {N}
-    i = (a.next[] += 1)
-    if i > length(a.bufs)
-        push!(a.bufs, CUDA.zeros(Float32, dims))
-    elseif size(a.bufs[i]) != dims
-        CUDA.unsafe_free!(a.bufs[i])
-        a.bufs[i] = CUDA.zeros(Float32, dims)
-    else
-        fill!(a.bufs[i], 0.0f0)
+# (ndims, dims padded to four); 0 for a rank the layout cannot hold.
+_arena_key(dims::NTuple{N, Int}) where {N} =
+    N <= 4 ? (N, ntuple(k -> k <= N ? dims[k] : 0, 4)...) : (0, 0, 0, 0, 0)
+
+# 64 Float32s: views start on 256-byte boundaries, as separate allocations would.
+_arena_round(n::Int) = cld(n, 64) * 64
+
+function _arena_relayout!(s::ArenaSlab)
+    for v in s.views
+        CUDA.unsafe_free!(v)
     end
-    return a.bufs[i]::CuArray{Float32, N, CUDA.DeviceMemory}
+    s.slab === nothing || CUDA.unsafe_free!(s.slab)
+    empty!(s.views)
+    copy!(s.layout, s.requested)
+    total = 0
+    for key in s.layout
+        total += _arena_round(prod(key[2:(key[1] + 1)]))
+    end
+    s.slab = CuVector{Float32}(undef, max(total, 1))
+    off = 0
+    for key in s.layout
+        dims = key[2:(key[1] + 1)]
+        n = prod(dims)
+        push!(s.views, reshape(view(s.slab, (off + 1):(off + n)), dims))
+        off += _arena_round(n)
+    end
+    return s
 end
 
-const _DECODE_ARENAS = Dict{Int, Vector{CuArray{Float32}}}()
+function (a::DecodeArena)(dims::NTuple{N, Int}) where {N}
+    s = a.s
+    i = (a.next[] += 1)
+    key = _arena_key(dims)
+    push!(s.requested, key)
+    if key[1] != 0 && i <= length(s.layout) && s.layout[i] == key
+        return s.views[i]::CuArray{Float32, N, CUDA.DeviceMemory}
+    end
+    buf = CUDA.zeros(Float32, dims)
+    push!(s.loose, buf)
+    return buf
+end
+
+const _DECODE_ARENAS = Dict{Int, ArenaSlab}()
 
 function Gesso.Inference._decode_zeros_like(::CUDABackend, tensors)
-    bufs = get!(Vector{CuArray{Float32}}, _DECODE_ARENAS, Int(CUDA.deviceid(CUDA.device())))
-    return DecodeArena(bufs, Ref(0))
+    s = get!(_DECODE_ARENAS, Int(CUDA.deviceid(CUDA.device()))) do
+        ArenaSlab(nothing, CuArray{Float32}[], NTuple{5, Int}[], NTuple{5, Int}[], CuArray{Float32}[])
+    end
+    if !isempty(s.requested) && (s.requested != s.layout || !isempty(s.loose))
+        if all(k -> k[1] != 0, s.requested)
+            _arena_relayout!(s)
+        end
+        for b in s.loose
+            CUDA.unsafe_free!(b)
+        end
+        empty!(s.loose)
+    end
+    empty!(s.requested)
+    s.slab === nothing || fill!(s.slab, 0.0f0)
+    return DecodeArena(s, Ref(0))
 end
 
 # Stage backend tag for CUDA work issued outside a CUDABackend method.
