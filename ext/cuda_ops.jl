@@ -18,6 +18,23 @@
 using LinearAlgebra: mul!
 using Gesso: ERR_VERIFY_MISMATCH   # the all-fail / stale-winner code (§LXX, §LXXXII)
 
+# cuBLAS runs in device pointer mode, so a Number alpha or beta becomes a fresh
+# CuRef per call: a pool allocation (which can run CUDACore's early GC), a
+# pageable 4-byte upload and a finalizer. About 1200 of those per 35B token, so
+# the constants are kept on the device, one box per context and value.
+const _CU_SCALARS = Dict{Tuple{CUDA.CuContext, Float32}, CUDA.CUDACore.CuRefValue{Float32}}()
+const _CU_SCALARS_LOCK = ReentrantLock()
+_cu_scalar(x::Number) = x
+function _cu_scalar(x::Float32)
+    key = (CUDA.context(), x)
+    @lock _CU_SCALARS_LOCK get!(_CU_SCALARS, key) do
+        r = CUDA.CuRef{Float32}(x)
+        # the box is shared across streams, so its upload must land first
+        CUDA.synchronize()
+        r
+    end
+end
+
 # --- device guard (the interpreter does not copy) -----------------------------
 
 # every op first checks that storage actually lives on the device: handing
@@ -85,6 +102,15 @@ function _cuda_rmsnorm!(dst, x, scale; eps=1e-6)
     return dst
 end
 
+# q and k norms alternate row counts every layer, so one resizing scratch slot
+# would reallocate on every call; keep one buffer per row count instead. Decode
+# row counts are head counts; prefill's grow with the prompt and are not kept.
+const _RMSNORM_SUMSQ = Dict{Tuple{CUDA.CuContext, Int}, CuArray{Float32, 2}}()
+function _rmsnorm_sumsq(rows::Int)
+    rows <= 256 || return CuArray{Float32}(undef, rows, 1)
+    get!(() -> CUDA.zeros(Float32, rows, 1), _RMSNORM_SUMSQ, (CUDA.context(), rows))
+end
+
 function _cuda_rmsnorm_storage!(dsts::AbstractArray, xs::AbstractArray, scales::AbstractArray, eps)
     native_eps=eltype(xs)(eps)
     isfinite(native_eps) && native_eps>0 || throw(gesso_error(ERR_INVALID_PLAN,
@@ -99,6 +125,22 @@ function _cuda_rmsnorm_storage!(dsts::AbstractArray, xs::AbstractArray, scales::
     end
     # Retain the legacy mixed-precision normalization to meet its fixed
     # small-fixture accuracy budget. Comparison receipts name this explicitly.
+    # The per-head q/k norm arrives 3-D (seq, heads, d_head); folding the
+    # leading axes into rows reduces the same elements in the same order, and
+    # with a Float64 eps the apply kernel's arithmetic is the broadcast's, so
+    # both ranks share the allocation-free path.
+    if (nd == 2 || (nd == 3 && eps isa Float64)) && xs isa CuArray && dsts isa CuArray
+        d == 0 && return dsts
+        rows = length(xs) ÷ d
+        x2 = reshape(xs, rows, d)
+        d2 = reshape(dsts, rows, d)
+        ss = _rmsnorm_sumsq(rows)
+        sum!(abs2, ss, x2)
+        nthreads = min(256, d)
+        @cuda threads = (nthreads,) blocks = (rows,) _cuda_rmsnorm_apply_kernel!(
+            d2, x2, ss, scales, eps, rows, d)
+        return dsts
+    end
     rms = sqrt.(sum(abs2, xs; dims = nd) ./ d .+ eps)
     if nd == 2
         rows = size(dsts, 1)
@@ -108,7 +150,7 @@ function _cuda_rmsnorm_storage!(dsts::AbstractArray, xs::AbstractArray, scales::
             dsts, xs, rms, scales, rows, d)
         return dsts
     end
-    # generic rank: the previous chain, unchanged (nothing in Gesso is 3-D)
+    # generic rank: the previous chain, unchanged
     stail = reshape(scales, (ntuple(_ -> 1, nd - 1)..., d))
     dsts .= (xs ./ rms) .* stail
     return dsts
@@ -163,7 +205,20 @@ end
 function _cuda_rmsnorm_apply_kernel!(dst2, xs2, rms, scale1, rows::Int, d::Int)
     r = blockIdx().x
     r > rows && return
-    nrm = Float64(rms[r, 1])
+    _cuda_rmsnorm_apply_row!(dst2, xs2, Float64(rms[r, 1]), scale1, r, d)
+    return
+end
+
+# Same, from the row's sum of squares: `sumsq / d + eps` is the expression the
+# host broadcast evaluated per element, in the same types.
+function _cuda_rmsnorm_apply_kernel!(dst2, xs2, sumsq, scale1, eps, rows::Int, d::Int)
+    r = blockIdx().x
+    r > rows && return
+    _cuda_rmsnorm_apply_row!(dst2, xs2, Float64(sqrt(sumsq[r, 1] / d + eps)), scale1, r, d)
+    return
+end
+
+@inline function _cuda_rmsnorm_apply_row!(dst2, xs2, nrm::Float64, scale1, r, d::Int)
     f = threadIdx().x
     while f <= d
         dst2[r, f] = Float32((Float64(xs2[r, f]) / nrm) * Float64(scale1[f]))
@@ -207,6 +262,28 @@ function _cuda_rope!(
     return q
 end
 
+struct _OnePos
+    p::Int
+end
+Base.getindex(o::_OnePos, ::Integer) = o.p
+
+# The frequency table is fixed per model, but arrives as a host vector on every
+# call; upload each distinct table once per context.
+const _ROPE_FREQ = Dict{Tuple{CUDA.CuContext, Union{Nothing, Vector{Float64}}}, CuArray{Float32, 1}}()
+const _ROPE_FREQ_LOCK = ReentrantLock()
+function _rope_freq_device(inv_freq)
+    ctx = CUDA.context()
+    host = inv_freq === nothing || inv_freq isa Vector{Float64} ? inv_freq : Vector{Float64}(inv_freq)
+    @lock _ROPE_FREQ_LOCK begin
+        dev = get(_ROPE_FREQ, (ctx, host), nothing)
+        dev === nothing || return dev
+        dev = host === nothing ? CUDA.zeros(Float32, 1) : CuArray{Float32}(Float32.(host))
+        # the key is a private copy: the caller's vector may be reused or mutated
+        _ROPE_FREQ[(ctx, host === nothing ? nothing : copy(host))] = dev
+        return dev
+    end
+end
+
 # Keep launch arguments concrete across semantic tensors' erased storage fields.
 function _cuda_rope_storage!(
     qs::AbstractArray,
@@ -222,9 +299,11 @@ function _cuda_rope_storage!(
     tθ = Float64(theta)
     d = size(qs, 3)
     rd = rotary_dim == 0 ? Int(d) : Int(rotary_dim)
-    pos_d = CuArray{Int}(positions)               # kernels never auto-transfer
+    # kernels never auto-transfer; a decode step's single position rides in
+    # the launch parameters instead of a fresh device array
+    pos_d = length(positions) == 1 ? _OnePos(Int(first(positions))) : CuArray{Int}(positions)
     use_inv = inv_freq !== nothing
-    freq_d = use_inv ? CuArray{Float32}(Float32.(inv_freq)) : CUDA.zeros(Float32, 1)
+    freq_d = _rope_freq_device(inv_freq)
     for x in (qs, ks)
         seq, nheads, _ = size(x)
         nthreads = min(256, seq)
@@ -297,7 +376,7 @@ function _cuda_swiglu!(dst, gate, up)
 end
 
 function _cuda_matmul_storage!(dst::AbstractArray, x::AbstractArray, w::AbstractArray)
-    CUDA.CUBLAS.gemm!('N', 'T', one(eltype(dst)), x, w, zero(eltype(dst)), dst)
+    CUDA.CUBLAS.gemm!('N', 'T', _cu_scalar(one(eltype(dst))), x, w, _cu_scalar(zero(eltype(dst))), dst)
     return dst
 end
 
@@ -1235,17 +1314,17 @@ function _attention_scores_device!(::CUDABackend, sc, q::AbstractArray, k::Abstr
     qh = view(q, :, hh, :)
     kh = view(k, 1:K, hh, :)
     if size(q, 1) == 1
-        CUDA.CUBLAS.gemv!('N', eltype(sc)(1 / sqrt(d_head)), kh, view(q, 1, hh, :), zero(eltype(sc)), view(sc, 1, :))
+        CUDA.CUBLAS.gemv!('N', _cu_scalar(eltype(sc)(1 / sqrt(d_head))), kh, view(q, 1, hh, :), _cu_scalar(zero(eltype(sc))), view(sc, 1, :))
     else
-        CUDA.CUBLAS.gemm!('N', 'T', eltype(sc)(1 / sqrt(d_head)), qh, kh, zero(eltype(sc)), sc)
+        CUDA.CUBLAS.gemm!('N', 'T', _cu_scalar(eltype(sc)(1 / sqrt(d_head))), qh, kh, _cu_scalar(zero(eltype(sc))), sc)
     end
     return sc
 end
 function _attention_values_device!(::CUDABackend, attn::AbstractArray, probs, v::AbstractArray, hh, K)
     if size(attn, 1) == 1
-        CUDA.CUBLAS.gemv!('T', one(eltype(attn)), view(v, 1:K, hh, :), view(probs, 1, :), zero(eltype(attn)), view(attn, 1, hh, :))
+        CUDA.CUBLAS.gemv!('T', _cu_scalar(one(eltype(attn))), view(v, 1:K, hh, :), view(probs, 1, :), _cu_scalar(zero(eltype(attn))), view(attn, 1, hh, :))
     else
-        CUDA.CUBLAS.gemm!('N', 'N', one(eltype(attn)), probs, view(v, 1:K, hh, :), zero(eltype(attn)), view(attn, :, hh, :))
+        CUDA.CUBLAS.gemm!('N', 'N', _cu_scalar(one(eltype(attn))), probs, view(v, 1:K, hh, :), _cu_scalar(zero(eltype(attn))), view(attn, :, hh, :))
     end
     return attn
 end
@@ -1697,8 +1776,8 @@ function _shared_gate_add!(::CUDABackend, y, x, sd, gvec)
     g isa CuArray || (g = CuArray{Float32}(g))
     seq = size(x, 1)
     h = size(x, 2)
-    acc = similar(y, eltype(y), seq)
-    CUDA.CUBLAS.gemv!('N', one(eltype(y)), x, g, zero(eltype(y)), acc)
+    acc = _dev_scratch(:shared_gate_acc, seq)
+    CUDA.CUBLAS.gemv!('N', _cu_scalar(one(eltype(y))), x, g, _cu_scalar(zero(eltype(y))), acc)
     tx = min(16, seq)
     ty = min(16, h)
     @cuda threads = (tx, ty) blocks = (cld(seq, tx), cld(h, ty)) _cuda_shared_gate_kernel!(
@@ -1813,7 +1892,7 @@ function _moe_topk_host!(backend::CUDABackend, y, x, router, gate, up, down, n_u
     s = CUDA.stream()
     Gesso.Inference.@decode_stage :moe_router backend begin
         rd = router isa CuArray ? router : CuArray{Float32}(Gesso.Inference._offload_host_array(router))
-        CUDA.CUBLAS.gemm!('N', 'T', one(Float32), x, rd, zero(Float32), logits)
+        CUDA.CUBLAS.gemm!('N', 'T', _cu_scalar(one(Float32)), x, rd, _cu_scalar(zero(Float32)), logits)
         Gesso.Inference._profile_copy!(true)
         unsafe_copyto!(pointer(b.logits), pointer(logits), seq * n_exp; async=true, stream=s)
         unsafe_copyto!(pointer(b.x), pointer(xd), seq * h; async=true, stream=s)
@@ -1903,7 +1982,7 @@ function _moe_topk_swiglu!(
 
     Gesso.Inference.@decode_stage :moe_router backend begin
         rd = router isa CuArray ? router : CuArray{Float32}(Gesso.Inference._offload_host_array(router))
-        CUDA.CUBLAS.gemm!('N', 'T', one(Float32), x, rd, zero(Float32), logits)
+        CUDA.CUBLAS.gemm!('N', 'T', _cu_scalar(one(Float32)), x, rd, _cu_scalar(zero(Float32)), logits)
         Gesso.Inference._profile_copy!(true)
         logits_h = Array(logits)
     end
@@ -1977,7 +2056,7 @@ function _moe_topk_swiglu!(
                 copyto!(ws, wbuf)
             end
             Gesso.Inference.@decode_stage :moe_qgemv backend CUDA.CUBLAS.gemv!(
-                'N', one(Float32), Dbat, ws, zero(Float32), yrow,
+                'N', _cu_scalar(one(Float32)), Dbat, ws, _cu_scalar(zero(Float32)), yrow,
             )
         elseif quant
             copyto!(xt, view(x, t, :))
@@ -1990,7 +2069,7 @@ function _moe_topk_swiglu!(
                 copyto!(ws, wbuf)
             end
             Gesso.Inference.@decode_stage :moe_qgemv backend CUDA.CUBLAS.gemv!(
-                'N', one(Float32), Dbat, ws, zero(Float32), yrow,
+                'N', _cu_scalar(one(Float32)), Dbat, ws, _cu_scalar(zero(Float32)), yrow,
             )
         else
             copyto!(xt, view(x, t, :))
@@ -2000,8 +2079,8 @@ function _moe_topk_swiglu!(
                 _fetch_expert!(backend, Wg, gate, e)
                 _fetch_expert!(backend, Wu, up, e)
                 _fetch_expert!(backend, Wd, down, e)
-                CUDA.CUBLAS.gemv!('N', one(Float32), Wg, xt, zero(Float32), gacc)
-                CUDA.CUBLAS.gemv!('N', one(Float32), Wu, xt, zero(Float32), uacc)
+                CUDA.CUBLAS.gemv!('N', _cu_scalar(one(Float32)), Wg, xt, _cu_scalar(zero(Float32)), gacc)
+                CUDA.CUBLAS.gemv!('N', _cu_scalar(one(Float32)), Wu, xt, _cu_scalar(zero(Float32)), uacc)
                 _silu_mul!(backend, hact, uacc, gacc)
                 CUDA.CUBLAS.gemv!('N', w, Wd, hact, one(Float32), yrow)
             end
