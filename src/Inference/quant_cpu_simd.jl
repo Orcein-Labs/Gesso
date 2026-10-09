@@ -1,5 +1,7 @@
-# Native CPU quantized dot products: Q8_K activations against IQ4_XS, IQ2_XS
-# and IQ3_XXS weight rows, plus the GEMV built on them.
+# Native CPU quantized dot products: Q8_K activations against IQ4_XS, IQ2_XS,
+# IQ3_XXS weight rows, plus the GEMV built on them. IQ2_S, IQ3_S and IQ1_M
+# are in quant_cpu_iq_s.jl (included at the end of this file), and the K-quants
+# in quant_cpu_kquants.jl.
 #
 # Attribution: the scalar references are Julia ports of ggml's generic CPU
 # kernels ggml_vec_dot_iq4_xs_q8_K_generic, ggml_vec_dot_iq2_xs_q8_K_generic
@@ -500,6 +502,8 @@ kernel, `false` the scalar reference. The two agree bit for bit.
         return simd ? _dot_iq2_xs_q8k_avx2(w, woff, x) : _dot_iq2_xs_q8k_ref(w, woff, x)
     elseif ggml_type == GGML_TYPE_IQ3_XXS
         return simd ? _dot_iq3_xxs_q8k_avx2(w, woff, x) : _dot_iq3_xxs_q8k_ref(w, woff, x)
+    elseif _q8k_iq_s_type(ggml_type)
+        return _dot_iq_s_q8k(ggml_type, w, woff, x, simd)
     end
     return _dot_kq(ggml_type, w, woff, x, simd)
 end
@@ -514,9 +518,13 @@ function _q8k_check_gemv(y, ggml_type::Int32, ne0::Int, ne1::Int, q)
     return nothing
 end
 
+# Weight types with a native Q8_K (or Q8_0) integer kernel: the i-quants here
+# and in quant_cpu_iq_s.jl, and the K-quants and Q8_0 in quant_cpu_kquants.jl.
+_q8k_supported_type(t::Int32) =
+    t in (GGML_TYPE_IQ4_XS, GGML_TYPE_IQ2_XS, GGML_TYPE_IQ3_XXS) || _q8k_iq_s_type(t) || _kq_supported(t)
+
 function _q8k_check_type(ggml_type::Int32)
-    (ggml_type in (GGML_TYPE_IQ4_XS, GGML_TYPE_IQ2_XS, GGML_TYPE_IQ3_XXS) || _kq_supported(ggml_type)) ||
-        error("q8k gemv: unsupported ggml type $ggml_type")
+    _q8k_supported_type(ggml_type) || error("q8k gemv: unsupported ggml type $ggml_type")
     return nothing
 end
 
@@ -623,3 +631,7 @@ function _qgemv_q8k_f32!(
     end
     return _qgemv_q8k!(y, xq, q, ggml_type, ne0, ne1; alpha, beta, simd)
 end
+
+# IQ2_S, IQ3_S and IQ1_M kernels. They use the AVX2 primitives above and are
+# dispatched from _dot_q8k.
+include("quant_cpu_iq_s.jl")

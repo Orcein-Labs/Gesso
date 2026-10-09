@@ -26,13 +26,24 @@ const DECODE_GDN_SUBSTAGES = (
     :gdn_qk, :gdn_recur, :gdn_gnorm, :gdn_outproj,
 )
 
+# Full-attention decode sub-stages (inside :attn_mixer).
+const DECODE_ATTN_SUBSTAGES = (
+    :attn_proj, :attn_headnorm_rope, :attn_kv_append, :attn_core, :attn_outproj,
+)
+
+# Dense FFN decode sub-stages (inside :dense_ffn).
+const DECODE_FFN_SUBSTAGES = (:ffn_gateup, :ffn_act, :ffn_down)
+
 const DECODE_SUBSTAGES = (
     :host_fork_join, :host_critical_path, :host_cpu_work, :upload_gather,
     DECODE_GDN_SUBSTAGES...,
+    DECODE_ATTN_SUBSTAGES...,
+    DECODE_FFN_SUBSTAGES...,
 )
 
 const DECODE_COUNTERS = (
-    :expert_h2d_bytes, :cuda_alloc_calls, :cuda_alloc_bytes,
+    :expert_h2d_bytes, :expert_hits, :expert_misses,
+    :cuda_alloc_calls, :cuda_alloc_bytes,
     :host_threaded_calls, :minflt, :majflt,
 )
 
