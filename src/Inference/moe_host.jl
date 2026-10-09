@@ -45,12 +45,14 @@ function MoeHostScratch(h::Int, ff::Int, n_used::Int)
 end
 
 # A single global buffer: every layer of one model shares its expert shape, so
-# the cache does not thrash. A shape change rebuilds it.
+# the cache does not thrash. A shape change rebuilds it. Callers may run fewer
+# than n_used experts (the GPU hot-expert path sends only its misses), so a
+# larger buffer serves a smaller count.
 const _MOE_HOST_SCRATCH = Ref{MoeHostScratch}(MoeHostScratch(0, 0, 0))
 
 function _moe_host_scratch(h::Int, ff::Int, n_used::Int)
     s = _MOE_HOST_SCRATCH[]
-    if s.h != h || s.ff != ff || s.n_used != n_used
+    if s.h != h || s.ff != ff || s.n_used < n_used
         s = MoeHostScratch(h, ff, n_used)
         _MOE_HOST_SCRATCH[] = s
     end
@@ -114,7 +116,7 @@ function _moe_host_experts_batched!(
     ff = scr.ff
     length(yrow) == h || error("moe host: yrow length $(length(yrow)) ≠ h $h")
     length(xf) == h || error("moe host: xf length $(length(xf)) ≠ h $h")
-    scr.n_used == n_used || error("moe host: scratch built for $(scr.n_used) experts, got $n_used")
+    scr.n_used >= n_used || error("moe host: scratch built for $(scr.n_used) experts, got $n_used")
     simd = q8k_simd_enabled()
 
     quantize_q8_K!(scr.xq, xf)

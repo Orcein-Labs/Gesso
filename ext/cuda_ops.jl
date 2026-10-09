@@ -1199,6 +1199,7 @@ function _to_device_cuda(tensors)
         end
     end
     _prefault_host_experts!(blocks)
+    _hot_experts_enabled() ? _hot_register!(blocks) : _hot_release_all!()
     @debug "expert storage census" cached_projections=cached_n whole_slab_projections=slab_n host_projections=host_n vram_free_mib=div(Int64(CUDA.free_memory()), Int64(1024 * 1024))
     result = (; embedding, blocks, lm_head, final_rms)
     return merge(result, _keep_tensor_meta(tensors))
@@ -2186,6 +2187,10 @@ function _moe_topk_host!(backend::CUDABackend, y, x, router, gate, up, down, n_u
         copyto!(xd, x)
     end
     s = CUDA.stream()
+    hot = _hot_layer(gate)
+    # A long prompt needs the pool memory for its activations; the pools
+    # refill at the next decode token from scores this prefill has warmed.
+    hot !== nothing && seq > _HOT_CFG[].keep_seq && _hot_release!(hot)
     Gesso.Inference.@decode_stage :moe_router backend begin
         rd = router isa CuArray ? router : CuArray{Float32}(Gesso.Inference._offload_host_array(router))
         _cuda_router_logits!(logits, x, rd)
@@ -2197,10 +2202,13 @@ function _moe_topk_host!(backend::CUDABackend, y, x, router, gate, up, down, n_u
     # experts, so wait on the copies alone.
     copied = _moe_host_event()
     CUDA.record(copied, s)
+    prefetch = hot !== nothing && seq == 1
     if overlap !== nothing && _moe_overlap_enabled()
         overlap()
+        prefetch && _hot_prefetch!(hot, gate, up, down)
         Gesso.Inference.@decode_stage :moe_router backend _cuda_event_wait(copied)
     else
+        prefetch && _hot_prefetch!(hot, gate, up, down)
         Gesso.Inference.@decode_stage :moe_router backend _cuda_event_wait(copied)
         overlap === nothing || overlap()
     end
@@ -2219,6 +2227,12 @@ function _moe_topk_host!(backend::CUDABackend, y, x, router, gate, up, down, n_u
         end
         @inbounds for i in 1:h
             b.xrow[i] = X[t, i]
+        end
+        if hot !== nothing
+            if seq == 1 && y isa DenseCuArray && _hot_alloc!(hot, gate, up, n_used)
+                return _moe_hot_token!(backend, hot, y, xd, b, gate, up, down, n_used, s)
+            end
+            _hot_observe!(hot, b.experts, n_used)
         end
         Gesso.Inference.@decode_stage :moe_host nothing Gesso.Inference._moe_host_experts_auto!(
             b.yrow, b.xrow, b.experts, b.wbuf, n_used, gate, up, down,
