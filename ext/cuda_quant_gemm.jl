@@ -45,12 +45,13 @@ end
 end
 
 function _cuda_qgemv_iq2_xs_kernel!(
-    y, x, q, offsets, ne0::Int32, ne1::Int32, alpha::Float32, beta::Float32, grid, ksigns, kmask,
+    y, x, q, offsets, cols, ne0::Int32, ne1::Int32, alpha::Float32, beta::Float32, grid, ksigns, kmask,
 )
     j0 = Int32((blockIdx().x - Int32(1)) * blockDim().x + threadIdx().x) - Int32(1)
-    k = Int(blockIdx().y)
+    i = Int(blockIdx().y)
+    k = Int(cols[i])
     j0 >= ne1 && return
-    expert_off = offsets[k]
+    expert_off = offsets[i]
     nb = div(ne0, Int32(256))
     bsz = Int32(74)
     acc = 0.0f0
@@ -93,12 +94,13 @@ function _cuda_qgemv_iq2_xs_kernel!(
 end
 
 function _cuda_qgemv_iq3_xxs_kernel!(
-    y, x, q, offsets, ne0::Int32, ne1::Int32, alpha::Float32, beta::Float32, grid, ksigns, kmask,
+    y, x, q, offsets, cols, ne0::Int32, ne1::Int32, alpha::Float32, beta::Float32, grid, ksigns, kmask,
 )
     j0 = Int32((blockIdx().x - Int32(1)) * blockDim().x + threadIdx().x) - Int32(1)
-    k = Int(blockIdx().y)
+    i = Int(blockIdx().y)
+    k = Int(cols[i])
     j0 >= ne1 && return
-    expert_off = offsets[k]
+    expert_off = offsets[i]
     nb = div(ne0, Int32(256))
     bsz = Int32(98)
     acc = 0.0f0
@@ -142,12 +144,13 @@ function _cuda_qgemv_iq3_xxs_kernel!(
 end
 
 function _cuda_qgemv_iq4_xs_kernel!(
-    y, x, q, offsets, ne0::Int32, ne1::Int32, alpha::Float32, beta::Float32, kv4,
+    y, x, q, offsets, cols, ne0::Int32, ne1::Int32, alpha::Float32, beta::Float32, kv4,
 )
     j0 = Int32((blockIdx().x - Int32(1)) * blockDim().x + threadIdx().x) - Int32(1)
-    k = Int(blockIdx().y)
+    i = Int(blockIdx().y)
+    k = Int(cols[i])
     j0 >= ne1 && return
-    expert_off = offsets[k]
+    expert_off = offsets[i]
     nb = div(ne0, Int32(256))
     bsz = Int32(136)
     acc = 0.0f0
@@ -183,11 +186,12 @@ function _cuda_qgemv_iq4_xs_kernel!(
     return
 end
 
-function _cuda_qgemv_f32_kernel!(y, x, q, offsets, ne0::Int32, ne1::Int32, alpha::Float32, beta::Float32)
+function _cuda_qgemv_f32_kernel!(y, x, q, offsets, cols, ne0::Int32, ne1::Int32, alpha::Float32, beta::Float32)
     j0 = Int32((blockIdx().x - Int32(1)) * blockDim().x + threadIdx().x) - Int32(1)
-    k = Int(blockIdx().y)
+    i = Int(blockIdx().y)
+    k = Int(cols[i])
     j0 >= ne1 && return
-    expert_off = offsets[k]
+    expert_off = offsets[i]
     acc = 0.0f0
     base = expert_off + j0 * ne0 * Int32(4)
     i = Int32(0)
@@ -216,12 +220,39 @@ function _cuda_q_offsets(n::Int)
     return s
 end
 
+# Identity column map 1:n (launch i writes rank i). Read-only: a prefix of it
+# is valid for any n up to its length. Never written after it is built.
+const _CUDA_Q_IDENT = Ref{Any}(nothing)
+# Per-launch column map for the cached path (launch i writes rank cols[i]).
+const _CUDA_Q_MAPCOLS = Ref{Any}(nothing)
+
+function _cuda_q_ident(n::Int)
+    s = _CUDA_Q_IDENT[]
+    if s === nothing || length(s) < n
+        s = CUDA.CuArray(Int32.(1:max(n, 8)))
+        _CUDA_Q_IDENT[] = s
+    end
+    return s
+end
+
+function _cuda_q_mapcols(cols::AbstractVector{Int32})
+    n = length(cols)
+    s = _CUDA_Q_MAPCOLS[]
+    if s === nothing || length(s) < n
+        s = CUDA.zeros(Int32, max(n, 8))
+        _CUDA_Q_MAPCOLS[] = s
+    end
+    copyto!(s, 1, cols, 1, n)
+    return s
+end
+
 function _cuda_launch_qgemv!(
     y::CuMatrix{Float32},
     x::CuArray{Float32},
     q::CuVector{UInt8},
     ggml_type::Int32,
     offsets::CuVector{Int32},
+    cols::CuVector{Int32},
     n_used::Int,
     ne0::Int,
     ne1::Int,
@@ -235,19 +266,19 @@ function _cuda_launch_qgemv!(
     n1 = Int32(ne1)
     if ggml_type == Gesso.Inference.GGML_TYPE_IQ2_XS
         @cuda threads = nthreads blocks = (nblocks, n_used) _cuda_qgemv_iq2_xs_kernel!(
-            y, x, q, offsets, n0, n1, alpha, beta, tables.iq2grid, tables.ksigns, tables.kmask,
+            y, x, q, offsets, cols, n0, n1, alpha, beta, tables.iq2grid, tables.ksigns, tables.kmask,
         )
     elseif ggml_type == Gesso.Inference.GGML_TYPE_IQ3_XXS
         @cuda threads = nthreads blocks = (nblocks, n_used) _cuda_qgemv_iq3_xxs_kernel!(
-            y, x, q, offsets, n0, n1, alpha, beta, tables.iq3grid, tables.ksigns, tables.kmask,
+            y, x, q, offsets, cols, n0, n1, alpha, beta, tables.iq3grid, tables.ksigns, tables.kmask,
         )
     elseif ggml_type == Gesso.Inference.GGML_TYPE_IQ4_XS
         @cuda threads = nthreads blocks = (nblocks, n_used) _cuda_qgemv_iq4_xs_kernel!(
-            y, x, q, offsets, n0, n1, alpha, beta, tables.kv4,
+            y, x, q, offsets, cols, n0, n1, alpha, beta, tables.kv4,
         )
     elseif ggml_type == Gesso.Inference.GGML_TYPE_F32
         @cuda threads = nthreads blocks = (nblocks, n_used) _cuda_qgemv_f32_kernel!(
-            y, x, q, offsets, n0, n1, alpha, beta,
+            y, x, q, offsets, cols, n0, n1, alpha, beta,
         )
     else
         error("cuda qgemv: unsupported ggml type $ggml_type")
@@ -274,6 +305,7 @@ function _cuda_launch_qgemv!(
         q,
         ggml_type,
         offv,
+        _cuda_q_ident(1),
         1,
         ne0,
         ne1,
@@ -282,7 +314,7 @@ function _cuda_launch_qgemv!(
     )
 end
 
-function _cuda_bind_experts!(bank, experts::Vector{Int})
+function _cuda_bind_experts!(bank, experts::AbstractVector{Int})
     Inf_ = Gesso.Inference
     n_used = length(experts)
     nbytes = bank.bytes_per_expert
@@ -332,8 +364,50 @@ function _cuda_qgemv_experts!(
     q, offv = Gesso.Inference.@decode_stage :moe_qupload _CUDASync() _cuda_bind_experts!(bank, experts)
     xx = ndims(x) == 1 ? reshape(x, length(x), 1) : x
     return Gesso.Inference.@decode_stage :moe_qgemv _CUDASync() _cuda_launch_qgemv!(
-        y, xx, q, bank.ggml_type, offv, n_used, bank.ne0, bank.ne1, alpha, beta,
+        y, xx, q, bank.ggml_type, offv, _cuda_q_ident(n_used), n_used, bank.ne0, bank.ne1, alpha, beta,
     )
+end
+
+# Device-side bind for one projection of a cached layer.
+#
+# Hits: resident experts already sit in the layer's slot pool, so their launch
+# only receives slot byte offsets. Misses: the existing gather-and-upload of
+# the missed experts (`_cuda_bind_experts!`) runs for those experts alone.
+# This is the one miss-path entry point; a later CPU-side miss compute replaces
+# this function, not the caller.
+function _cuda_cached_project!(
+    out::CuMatrix{Float32},
+    xin::CuMatrix{Float32},
+    layer::Gesso.Inference.ExpertLayerCache,
+    role::Int,
+    hit_rank::Vector{Int32},
+    hit_slot::Vector{Int32},
+    nh::Int,
+    miss_rank::Vector{Int32},
+    miss_exp::Vector{Int},
+    nm::Int,
+)
+    Inf_ = Gesso.Inference
+    bank = layer.banks[role]
+    bpe = Int32(bank.bytes_per_expert)
+    if nh > 0
+        offs = Int32[(hit_slot[i] - Int32(1)) * bpe for i in 1:nh]
+        offv = _cuda_q_offsets(nh)
+        copyto!(offv, 1, offs, 1, nh)
+        colv = _cuda_q_mapcols(hit_rank[1:nh])
+        Inf_._profile_copy!(false)
+        Gesso.Inference.@decode_stage :moe_qgemv _CUDASync() _cuda_launch_qgemv!(
+            out, xin, layer.pools[role], bank.ggml_type, offv, colv, nh, bank.ne0, bank.ne1, 1.0f0, 0.0f0,
+        )
+    end
+    if nm > 0
+        q, offv = Gesso.Inference.@decode_stage :moe_qupload _CUDASync() _cuda_bind_experts!(bank, miss_exp[1:nm])
+        colv = _cuda_q_mapcols(miss_rank[1:nm])
+        Gesso.Inference.@decode_stage :moe_qgemv _CUDASync() _cuda_launch_qgemv!(
+            out, xin, q, bank.ggml_type, offv, colv, nm, bank.ne0, bank.ne1, 1.0f0, 0.0f0,
+        )
+    end
+    return out
 end
 
 function Gesso.Inference._qgemv_expert!(

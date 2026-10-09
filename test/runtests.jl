@@ -84,11 +84,20 @@ using Gesso: reference_prefill, reference_generate
     # Native CPU Q8_K x IQ dot products: quantizer vs port, AVX2 bit-exact vs
     # scalar, GEMV threading invariance, Ornith slices (env-gated)
     include("test_quant_cpu_simd.jl")
+    include("test_cpu_pool.jl")
 
     # Native CPU K-quant (Q2_K..Q6_K) and Q8_0 dot products: Q8_0 quantizer vs
     # port, F32 dequant references (bit-equal to ggml to_float when GESSO_GGML_DIR
     # is set), AVX2 bit-exact vs scalar, real Ornith / Qwen3.8-27B tensors (env-gated)
     include("test_quant_cpu_kquants.jl")
+
+    # Native CPU IQ2_S / IQ3_S / IQ1_M dot products: scalar vs F32 dequant,
+    # AVX2 bit-exact vs scalar, real Qwen3.8-27B UD-IQ2_M rows (env-gated)
+    include("test_quant_cpu_iq_s.jl")
+
+    # K-quant and Q8_0 MoE expert GEMV and top-k SwiGLU vs dequant + F32;
+    # real Kolibri-1 Q2_K expert rows (env-gated)
+    include("test_moe_kquant_experts.jl")
 
     # BREADTH-0 Pass C: the tokenizer PROTOCOL — GPT-2 BPE is one
     # implementation, metaspace byte-level BPE is a materially different
@@ -115,6 +124,8 @@ using Gesso: reference_prefill, reference_generate
     include("test_cuda_hybrid.jl")
     include("test_gdn_decode_fused.jl")
     include("test_cuda_moe.jl")
+    include("test_expert_cache.jl")
+    include("test_cuda_quant_dense.jl")
 
     # Phase 4 (§LXXVII item C): full prefill + generate on device vs the CPU
     # oracle — logits at declared atol, token ids EXACT (argmax is the gate)

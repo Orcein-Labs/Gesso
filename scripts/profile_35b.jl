@@ -62,9 +62,23 @@ INF.profile_enable!()
 gen(1)
 a = INF.profile_snapshot()
 INF.profile_reset!()
+hits0 = INF.expert_hit_summary(dev.blocks)
 ids_warm = gen(N + 1)
+hits1 = INF.expert_hit_summary(dev.blocks)
 b = INF.profile_snapshot()
 INF.profile_disable!()
+
+# per-layer residency and hit counts for the warm run only
+let H = 0, M = 0
+    for (x0, x1) in zip(hits0, hits1)
+        h = x1.hits - x0.hits
+        m = x1.misses - x0.misses
+        H += h
+        M += m
+        println("expert layer=$(x1.layer) slots=$(x1.slots) hits=$h misses=$m rate=$(round(h / max(1, h + m); digits=3))")
+    end
+    println("RECEIPT expert_hits warm_hits=$H warm_misses=$M rate=$(round(H / max(1, H + M); digits=4))")
+end
 
 ids_warm == ids_cold || error("profile_35b: ids differ between the cold and warm profiled runs")
 if N == length(EXPECTED) - 1
