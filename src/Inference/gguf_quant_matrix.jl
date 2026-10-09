@@ -47,8 +47,7 @@ _is_quant_storage(::QuantMatrix) = true
 
 # Types whose matmul runs the integer Q8_K / Q8_0 kernels: the i-quants in
 # quant_cpu_simd.jl and the K-quants in quant_cpu_kquants.jl.
-_quant_q8k_native(t::Int32) =
-    t == GGML_TYPE_IQ2_XS || t == GGML_TYPE_IQ3_XXS || t == GGML_TYPE_IQ4_XS || _kq_supported(t)
+_quant_q8k_native(t::Int32) = _q8k_supported_type(t)
 
 _quant_native(t::Int32) =
     t == GGML_TYPE_F32 || t == GGML_TYPE_IQ2_XS || t == GGML_TYPE_IQ3_XXS || t == GGML_TYPE_IQ4_XS ||
