@@ -284,7 +284,21 @@ function _cuda_dq_matmul_group!(dsts::Tuple, x, ws::Tuple)
     return dsts
 end
 
+_dq_weight(w) = w isa ProjectionWeight && w.storage isa GpuDenseQuant
+_f32_weight(w) = w isa ProjectionWeight && w.storage isa CuMatrix{Float32}
+
 function Gesso.Inference._matmul_shared_input!(cpu::CUDABackend, dsts::Tuple, x::Activation, ws::Tuple, wl)
+    # The one-token GDN projections: qkv and z quantized, a and b small F32.
+    # The quantized pair shares one quantization of x, the F32 pair one launch.
+    if length(ws) == 4 && _dq_weight(ws[1]) && _dq_weight(ws[2]) && _f32_weight(ws[3]) && _f32_weight(ws[4]) &&
+       size(x.storage, 1) == 1 && _xwt_ok(dsts[3].storage, x.storage, ws[3].storage) &&
+       _xwt_ok(dsts[4].storage, x.storage, ws[4].storage)
+        _cuda_device_storage!(:matmul!, x)
+        foreach(d -> _cuda_device_storage!(:matmul!, d), dsts)
+        _cuda_dq_matmul_group!((dsts[1], dsts[2]), x, (ws[1], ws[2]))
+        _cuda_xwt2!(dsts[3].storage, dsts[4].storage, x.storage, ws[3].storage, ws[4].storage)
+        return dsts
+    end
     if length(ws) > 1 && all(w -> w isa ProjectionWeight && w.storage isa GpuDenseQuant, ws)
         _cuda_device_storage!(:matmul!, x)
         foreach(d -> _cuda_device_storage!(:matmul!, d), dsts)

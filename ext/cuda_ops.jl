@@ -376,6 +376,7 @@ function _cuda_swiglu!(dst, gate, up)
 end
 
 function _cuda_matmul_storage!(dst::AbstractArray, x::AbstractArray, w::AbstractArray)
+    _xwt_ok(dst, x, w) && return _cuda_xwt!(dst, x, w)
     CUDA.CUBLAS.gemm!('N', 'T', _cu_scalar(one(eltype(dst))), x, w, _cu_scalar(zero(eltype(dst))), dst)
     return dst
 end
@@ -2015,6 +2016,8 @@ function _shared_gate_add!(::CUDABackend, y, x, sd, gvec)
     g isa CuArray || (g = CuArray{Float32}(g))
     seq = size(x, 1)
     h = size(x, 2)
+    seq == 1 && x isa DenseCuArray && y isa DenseCuArray && sd isa DenseCuArray &&
+        return _cuda_shared_gate1!(y, x, sd, g)
     acc = _dev_scratch(:shared_gate_acc, seq)
     CUDA.CUBLAS.gemv!('N', _cu_scalar(one(eltype(y))), x, g, _cu_scalar(zero(eltype(y))), acc)
     tx = min(16, seq)
@@ -2145,7 +2148,7 @@ function _moe_topk_host!(backend::CUDABackend, y, x, router, gate, up, down, n_u
     s = CUDA.stream()
     Gesso.Inference.@decode_stage :moe_router backend begin
         rd = router isa CuArray ? router : CuArray{Float32}(Gesso.Inference._offload_host_array(router))
-        CUDA.CUBLAS.gemm!('N', 'T', _cu_scalar(one(Float32)), x, rd, _cu_scalar(zero(Float32)), logits)
+        _cuda_router_logits!(logits, x, rd)
         Gesso.Inference._profile_copy!(true)
         unsafe_copyto!(pointer(b.logits), pointer(logits), seq * n_exp; async=true, stream=s)
         unsafe_copyto!(pointer(b.x), pointer(xd), seq * h; async=true, stream=s)
@@ -2364,7 +2367,7 @@ function _moe_topk_device!(backend::CUDABackend, y, x, router, gate, up, down, n
     end
     rt = _moe_route_meta(n_used)
     Gesso.Inference.@decode_stage :moe_router backend begin
-        CUDA.CUBLAS.gemm!('N', 'T', _cu_scalar(one(Float32)), x, router, _cu_scalar(zero(Float32)), logits)
+        _cuda_router_logits!(logits, x, router)
         @cuda threads = 256 _moe_route_kernel!(
             ws, rt.g, rt.u, rt.d, logits, Int32(n_exp), Int32(n_used),
             Int32(gate.bytes_per_expert), Int32(up.bytes_per_expert), Int32(down.bytes_per_expert),
@@ -2373,10 +2376,12 @@ function _moe_topk_device!(backend::CUDABackend, y, x, router, gate, up, down, n
     xt = reshape(x, h, 1)
     Gesso.Inference.@decode_stage :moe_qgemv backend begin
         _cuda_launch_qgemv!(Gbat, xt, gate.data, gate.ggml_type, rt.g, n_used, n_used, gate.ne0, gate.ne1, 1.0f0, 0.0f0)
-        _cuda_launch_qgemv!(Ubat, xt, up.data, up.ggml_type, rt.u, n_used, n_used, up.ne0, up.ne1, 1.0f0, 0.0f0)
+        # gate and up read the same x, so up reuses the q8_1 copy gate just made
+        _cuda_launch_qgemv!(Ubat, xt, up.data, up.ggml_type, rt.u, n_used, n_used, up.ne0, up.ne1, 1.0f0, 0.0f0;
+            quantize=up.ne0 != gate.ne0 || gate.ggml_type == Gesso.Inference.GGML_TYPE_F32)
         _silu_mul!(backend, Hbat, Ubat, Gbat)
         _cuda_launch_qgemv!(Dbat, Hbat, down.data, down.ggml_type, rt.d, n_used, n_used, down.ne0, down.ne1, 1.0f0, 0.0f0)
-        CUDA.CUBLAS.gemv!('N', _cu_scalar(one(Float32)), Dbat, ws, _cu_scalar(zero(Float32)), reshape(y, h))
+        _cuda_combine!(reshape(y, h), Dbat, ws)
     end
     return y
 end
@@ -2435,7 +2440,7 @@ function _moe_topk_swiglu!(
 
     Gesso.Inference.@decode_stage :moe_router backend begin
         rd = router isa CuArray ? router : CuArray{Float32}(Gesso.Inference._offload_host_array(router))
-        CUDA.CUBLAS.gemm!('N', 'T', _cu_scalar(one(Float32)), x, rd, _cu_scalar(zero(Float32)), logits)
+        _cuda_router_logits!(logits, x, rd)
         Gesso.Inference._profile_copy!(true)
         logits_h = Array(logits)
     end
@@ -2508,9 +2513,7 @@ function _moe_topk_swiglu!(
                 Gesso.Inference._profile_copy!(false)
                 copyto!(ws, wbuf)
             end
-            Gesso.Inference.@decode_stage :moe_qgemv backend CUDA.CUBLAS.gemv!(
-                'N', _cu_scalar(one(Float32)), Dbat, ws, _cu_scalar(zero(Float32)), yrow,
-            )
+            Gesso.Inference.@decode_stage :moe_qgemv backend _cuda_combine!(yrow, Dbat, ws)
         elseif quant
             copyto!(xt, view(x, t, :))
             _cuda_qgemv_experts!(Gbat, xt, gate, experts)
@@ -2521,9 +2524,7 @@ function _moe_topk_swiglu!(
                 Gesso.Inference._profile_copy!(false)
                 copyto!(ws, wbuf)
             end
-            Gesso.Inference.@decode_stage :moe_qgemv backend CUDA.CUBLAS.gemv!(
-                'N', _cu_scalar(one(Float32)), Dbat, ws, _cu_scalar(zero(Float32)), yrow,
-            )
+            Gesso.Inference.@decode_stage :moe_qgemv backend _cuda_combine!(yrow, Dbat, ws)
         else
             copyto!(xt, view(x, t, :))
             for k in 1:n_used

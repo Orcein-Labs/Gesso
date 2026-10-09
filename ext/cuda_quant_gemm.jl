@@ -301,7 +301,8 @@ function _cuda_launch_qgemv!(
     ne0::Int,
     ne1::Int,
     alpha::Float32,
-    beta::Float32,
+    beta::Float32;
+    quantize::Bool=true,
 )
     I = Gesso.Inference
     if ggml_type == I.GGML_TYPE_F32
@@ -327,7 +328,8 @@ function _cuda_launch_qgemv!(
     ncols = size(x, 2)
     total = ncols * nbk
     qx, dx, _ = _cuda_q8_buffers!(_CUDA_Q8_EXPERT, total)
-    @cuda threads = 256 blocks = cld(total, 256) _cuda_q8_1_quant_cols_kernel!(qx, dx, x, nbk, total)
+    # quantize=false: the caller just quantized this same x into these buffers
+    quantize && @cuda threads = 256 blocks = cld(total, 256) _cuda_q8_1_quant_cols_kernel!(qx, dx, x, nbk, total)
     @cuda threads = 128 blocks = (cld(ne1, 4), n_used) _cuda_eqgemv_kernel!(
         y, q, qx, dx, meta, coloff, ncols == 1, ne1, nbk, bsz, (nbk ÷ 8) * bsz, alpha, beta,
         Val{K}(), grid, tables.kv4, tables.ksigns, tables.kmask,
