@@ -115,6 +115,11 @@ program until someone writes one **and** a phase owns it.
 | Plastic / lifecycle compute | §XCV | Phase 22 |
 | Distributed / sharding as a lowering | musings | V1.5+; no program yet |
 
+Campaign findings: `grok-wip/2026-10-09_35b-cuda-decode-parity.md`. The
+35B CUDA decode reached llama.cpp parity (36.64 tok/s), and with opt-in
+VRAM hot experts the gate reads 39.9 tok/s. Single-channel DRAM is the
+binding cost.
+
 Phase 7 pick (locked): identity prefix share / CoW KV
 (`docs/goals/PHASE7_PREFIX_SHARE.md`). Other candidates stay
 parked (fusion needs more numbers; cages need Measurement 1).
