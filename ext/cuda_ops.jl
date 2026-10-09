@@ -37,7 +37,8 @@ function Gesso.Inference._check_device_storage(op::Symbol, backend::CUDABackend,
     s = t.storage
     (s isa Gesso.Inference.HostOffload ||
      s isa Gesso.Inference.GgufQuantSlice ||
-     s isa Gesso.Inference.GpuQuantSlice) &&
+     s isa Gesso.Inference.GpuQuantSlice ||
+     s isa Gesso.Inference.CachedExpertBank) &&
         return nothing
     s isa CuArray{Float16} && return nothing   # device F16 weight (matmul / table)
     _cuda_device_storage!(op, t)
@@ -942,6 +943,7 @@ _host_f32(s::Gesso.Inference.QuantMatrix) = Gesso.Inference._quant_host_f32(s)
 _host_f32(s) = convert(Array{Float32}, s)
 
 function _to_device_cuda(tensors)
+    @info "vram before dense placement" free_mib=div(Int64(CUDA.free_memory()), Int64(1024 * 1024)) dense_budget_mib=div(Gesso.Inference._gpu_budget_bytes(), Int64(1024 * 1024))
     budget = Gesso.Inference._gpu_budget_bytes()
     wdt = _gpu_weight_eltype()
     used = Int64(0)
@@ -1036,11 +1038,23 @@ function _to_device_cuda(tensors)
         end
     end
 
+    # Complete gate/up/down expert triples take the per-expert cache below,
+    # never the whole-slab path, so one layer cannot end up mixed.
+    @info "vram after dense placement" free_mib=div(Int64(CUDA.free_memory()), Int64(1024 * 1024))
+    triples = _moe_expert_triples(tensors.blocks)
+    expert_ids = Set{UInt}()
+    for (_, g, u, d) in triples
+        union!(expert_ids, (objectid(g), objectid(u), objectid(d)))
+    end
     qseen = Set{UInt}()
     for s in qpending
         id = objectid(s)
         id in qseen && continue
         push!(qseen, id)
+        if id in expert_ids
+            conv[s] = s
+            continue
+        end
         nbytes = Gesso.Inference._quant_nbytes(s)
         if nbytes <= remaining && nbytes > 0
             packed = Gesso.Inference.packed_quant_bytes(s)
@@ -1050,6 +1064,8 @@ function _to_device_cuda(tensors)
             conv[s] = s
         end
     end
+
+    _place_expert_caches!(conv, triples)
 
     _conv_t(t) = begin
         hasproperty(t, :storage) || return t         # mixer tags and other metadata
@@ -1062,8 +1078,108 @@ function _to_device_cuda(tensors)
     lm_head = tensors.lm_head === tensors.embedding ? embedding : _conv_t(tensors.lm_head)
     fr = haskey(tensors, :final_rms) ? tensors.final_rms : nothing
     final_rms = fr === nothing ? nothing : _conv_t(fr)
+    cached_n = 0
+    slab_n = 0
+    host_n = 0
+    for bt in blocks, k in (:wexp_gate, :wexp_up, :wexp_down)
+        haskey(bt, k) || continue
+        s = bt[k].storage
+        if s isa Gesso.Inference.CachedExpertBank
+            cached_n += 1
+        elseif s isa Gesso.Inference.GpuQuantSlice
+            slab_n += 1
+        elseif s isa Gesso.Inference.GgufQuantSlice
+            host_n += 1
+        end
+    end
+    @info "expert storage census" cached_projections=cached_n whole_slab_projections=slab_n host_projections=host_n vram_free_mib=div(Int64(CUDA.free_memory()), Int64(1024 * 1024))
     result = (; embedding, blocks, lm_head, final_rms)
     return merge(result, _keep_tensor_meta(tensors))
+end
+
+# --- per-expert device residency (see src/Inference/expert_residency.jl) ----
+
+const _EXPERT_RESERVE_DEFAULT_MIB = 1024
+
+# Device bytes for expert slot pools: GESSO_GPU_EXPERT_CACHE_MIB when set (0
+# disables residency, every expert misses), else free device memory now minus
+# GESSO_GPU_RESERVE_MIB (default 1024) for activations, KV and scratch. Called
+# after dense placement, so the free figure already reflects dense weights.
+function _expert_cache_budget_bytes()
+    mib = Int64(1024 * 1024)
+    raw = strip(get(ENV, "GESSO_GPU_EXPERT_CACHE_MIB", ""))
+    if !isempty(raw)
+        v = tryparse(Int, raw)
+        v === nothing && error("GESSO_GPU_EXPERT_CACHE_MIB must be an integer MiB, got '$raw'")
+        return Int64(max(0, v)) * mib
+    end
+    rraw = strip(get(ENV, "GESSO_GPU_RESERVE_MIB", string(_EXPERT_RESERVE_DEFAULT_MIB)))
+    reserve = tryparse(Int, rraw)
+    reserve === nothing && error("GESSO_GPU_RESERVE_MIB must be an integer MiB, got '$rraw'")
+    free_raw = Int64(CUDA.free_memory())
+    CUDA.reclaim()   # return the allocator's cached blocks so the free figure is real
+    free = Int64(CUDA.free_memory())
+    budget = _expert_budget_from_free(free, reserve)
+    @info "expert cache budget" free_before_reclaim_mib=div(free_raw, mib) free_mib=div(free, mib) reserve_mib=reserve budget_mib=div(budget, mib)
+    return budget
+end
+
+# Pure budget arithmetic: free device bytes minus the reserve, never negative.
+function _expert_budget_from_free(free_bytes::Integer, reserve_mib::Integer)
+    free_bytes >= 0 || error("_expert_budget_from_free: negative free bytes $free_bytes")
+    return max(Int64(0), Int64(free_bytes) - Int64(max(0, reserve_mib)) * Int64(1024 * 1024))
+end
+
+# (layer, gate, up, down) for every block whose three expert banks are all
+# host GgufQuantSlice. `layer` is the 1-based block index: the routing trace
+# and the profile use it.
+function _moe_expert_triples(blocks)
+    out = Any[]
+    for (li, bt) in enumerate(blocks)
+        (haskey(bt, :wexp_gate) && haskey(bt, :wexp_up) && haskey(bt, :wexp_down)) || continue
+        g = bt.wexp_gate.storage
+        u = bt.wexp_up.storage
+        d = bt.wexp_down.storage
+        (g isa Gesso.Inference.GgufQuantSlice && u isa Gesso.Inference.GgufQuantSlice &&
+         d isa Gesso.Inference.GgufQuantSlice) || continue
+        push!(out, (li, g, u, d))
+    end
+    return out
+end
+
+# Fill each layer's pools from the profile (GESSO_EXPERT_PROFILE) or by id,
+# then bind the three projections of every layer to one residency table.
+function _place_expert_caches!(conv, triples; budget::Int64=_expert_cache_budget_bytes())
+    isempty(triples) && return conv
+    Inf_ = Gesso.Inference
+    prof_path = get(ENV, "GESSO_EXPERT_PROFILE", "")
+    profile = isempty(prof_path) ? nothing : Inf_.read_expert_profile(prof_path)
+    per_layer = div(budget, Int64(length(triples)))
+    slots_log = Int[]
+    for (li, g, u, d) in triples
+        banks = convert(NTuple{3,Inf_.GgufQuantSlice}, (g, u, d))
+        n_exp = g.n_exp
+        slots = Inf_.expert_layer_quota(per_layer, banks, n_exp)
+        counts = profile === nothing ? nothing : get(profile, li, nothing)
+        order = Inf_.expert_fill_order(counts, n_exp)
+        pools = ntuple(p -> CuArray{UInt8}(undef, slots * banks[p].bytes_per_expert), 3)
+        cache = Inf_.ExpertLayerCache(li, banks, pools, n_exp, slots)
+        Inf_.expert_fill!(cache, order)
+        for s in 1:slots
+            e = Int(cache.slot_expert[s])
+            for p in 1:3
+                bank = banks[p]
+                nb = bank.bytes_per_expert
+                copyto!(pools[p], (s - 1) * nb + 1, bank.data, Inf_._quant_expert_off0(bank, e) + 1, nb)
+            end
+        end
+        conv[g] = Inf_.CachedExpertBank(cache, 1)
+        conv[u] = Inf_.CachedExpertBank(cache, 2)
+        conv[d] = Inf_.CachedExpertBank(cache, 3)
+        push!(slots_log, slots)
+    end
+    @info "expert cache placed" budget_mib=div(budget, Int64(1024 * 1024)) layers=length(triples) slots=slots_log profile=(isempty(prof_path) ? "none" : prof_path)
+    return conv
 end
 
 # ArchitectureSpec, RoPEPolicy, mixer tags — anything without .storage.
@@ -1610,6 +1726,7 @@ function _moe_topk_swiglu!(
 
     order = Vector{Int}(undef, n_exp)
     quant = Gesso.Inference._is_quant_expert_bank(gate)
+    cached = gate isa Gesso.Inference.CachedExpertBank
     # Banks that are mmap'd on the host (GgufQuantSlice in all three slabs)
     # can run on the CPU; only the activation goes D2H and the output goes H2D.
     # Opt-in (GESSO_MOE_HOST_EXPERTS=1): measured slower than uploading the
@@ -1623,6 +1740,10 @@ function _moe_topk_swiglu!(
     Gbat = Ubat = Hbat = Dbat = ws = nothing
     experts = Vector{Int}(undef, n_used)
     wbuf = Vector{Float32}(undef, n_used)
+    hit_rank = Vector{Int32}(undef, n_used)
+    hit_slot = Vector{Int32}(undef, n_used)
+    miss_rank = Vector{Int32}(undef, n_used)
+    miss_exp = Vector{Int}(undef, n_used)
     xh = yh = nothing
     gh = uh = hh = dh = nothing
     if host_all
@@ -1632,7 +1753,7 @@ function _moe_topk_swiglu!(
         uh = Vector{Float32}(undef, ff)
         hh = Vector{Float32}(undef, ff)
         dh = Vector{Float32}(undef, h)
-    elseif quant
+    elseif quant || cached
         Gesso.Inference.@decode_stage :moe_alloc _CUDASync() begin
             Gbat = _dev_scratch(:moe_gbat, ff, n_used)
             Ubat = _dev_scratch(:moe_ubat, ff, n_used)
@@ -1692,6 +1813,42 @@ function _moe_topk_swiglu!(
                 Gesso.Inference._profile_copy!(false)
                 copyto!(yrow, yh)
             end
+        elseif cached
+            copyto!(xt, view(x, t, :))
+            layer = gate.layer
+            nh = 0
+            nm = 0
+            for k in 1:n_used
+                e = experts[k]
+                s = layer.slot_of[e]
+                if s > 0
+                    nh += 1
+                    hit_rank[nh] = Int32(k)
+                    hit_slot[nh] = s
+                else
+                    nm += 1
+                    miss_rank[nm] = Int32(k)
+                    miss_exp[nm] = e
+                end
+            end
+            layer.hits += nh
+            layer.misses += nm
+            Gesso.Inference._profile_count!(:expert_hits, nh)
+            Gesso.Inference._profile_count!(:expert_misses, nm)
+            io = Gesso.Inference.routing_trace_io()
+            io === nothing || Gesso.Inference.routing_trace_record!(io, layer, view(experts, 1:n_used))
+            xg = reshape(xt, h, 1)
+            _cuda_cached_project!(Gbat, xg, layer, 1, hit_rank, hit_slot, nh, miss_rank, miss_exp, nm)
+            _cuda_cached_project!(Ubat, xg, layer, 2, hit_rank, hit_slot, nh, miss_rank, miss_exp, nm)
+            Gesso.Inference.@decode_stage :moe_qgemv backend _silu_mul!(backend, Hbat, Ubat, Gbat)
+            _cuda_cached_project!(Dbat, Hbat, layer, 3, hit_rank, hit_slot, nh, miss_rank, miss_exp, nm)
+            Gesso.Inference.@decode_stage :moe_qupload backend begin
+                Gesso.Inference._profile_copy!(false)
+                copyto!(ws, wbuf)
+            end
+            Gesso.Inference.@decode_stage :moe_qgemv backend CUDA.CUBLAS.gemv!(
+                'N', one(Float32), Dbat, ws, zero(Float32), yrow,
+            )
         elseif quant
             copyto!(xt, view(x, t, :))
             _cuda_qgemv_experts!(Gbat, xt, gate, experts)

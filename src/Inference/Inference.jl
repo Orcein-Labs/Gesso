@@ -577,6 +577,8 @@ end
 _offload_host_array(s) = s
 
 function _moe_topk_swiglu!(backend, y, x, router, gate, up, down, n_used)
+    gate isa CachedExpertBank &&
+        error("_moe_topk_swiglu!: CachedExpertBank needs a device backend, got $(typeof(backend))")
     if gate isa GgufQuantSlice || gate isa GpuQuantSlice
         return _cpu_moe_topk_swiglu_gguf!(y, x, router, gate, up, down, n_used)
     end
@@ -1429,6 +1431,7 @@ include("arch_adapters.jl")          # Pass A/B: the family boundary
 include("materialize_architecture.jl") # Pass B/E: the generic binder
 include("gguf_import.jl")          # qwen35moe GGUF mmap + lazy experts
 include("gguf_quants.jl")          # IQ2_XS / IQ3_XXS / IQ4_XS fused expert GEMV
+include("expert_residency.jl")     # per-expert device residency, profile, routing trace
 include("quant_q8k.jl")            # Q8_K activation quantization (ggml block_q8_K)
 include("quant_cpu_simd.jl")       # native Q8_K x IQ dot products: scalar ref + AVX2
 include("quant_cpu_kquants.jl")    # native Q8_K / Q8_0 x K-quant dot products: scalar ref + AVX2

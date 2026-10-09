@@ -32,7 +32,8 @@ const DECODE_SUBSTAGES = (
 )
 
 const DECODE_COUNTERS = (
-    :expert_h2d_bytes, :cuda_alloc_calls, :cuda_alloc_bytes,
+    :expert_h2d_bytes, :expert_hits, :expert_misses,
+    :cuda_alloc_calls, :cuda_alloc_bytes,
     :host_threaded_calls, :minflt, :majflt,
 )
 
