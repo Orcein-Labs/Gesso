@@ -153,6 +153,7 @@ supports(::Type{CUDABackend}, cap::Symbol) = cap in CUDA_SUPPORTED_CAPS
 # + explicit to_device transfer. Same op names, more-specific methods (§CIX).
 include("cuda_ops.jl")
 include("cuda_quant_gemm.jl")
+include("cuda_quant_dense.jl")
 
 # Bind the backend into the package's namespace: after this ext triggers,
 # `Gesso.CUDABackend` resolves to the type defined HERE — while a CUDA-less

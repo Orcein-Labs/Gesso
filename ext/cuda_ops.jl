@@ -41,6 +41,7 @@ function Gesso.Inference._check_device_storage(op::Symbol, backend::CUDABackend,
      s isa Gesso.Inference.CachedExpertBank) &&
         return nothing
     s isa CuArray{Float16} && return nothing   # device F16 weight (matmul / table)
+    s isa GpuDenseQuant && return nothing      # native dense quant weight (matmul)
     _cuda_device_storage!(op, t)
     return nothing
 end
@@ -653,6 +654,7 @@ function matmul!(
 )
     _cuda_device_storage!(:matmul!, dst)
     _cuda_device_storage!(:matmul!, x)
+    w.storage isa GpuDenseQuant && return _cuda_dq_matmul!(dst, x, w)
     w.storage isa CuArray{Float16} && return _cuda_f16w_matmul!(dst, x, w)
     w.storage isa Gesso.Inference.HostOffload &&
         return _cuda_host_offload_matmul!(dst, x, w)
@@ -668,6 +670,7 @@ function matmul!(
 )
     _cuda_device_storage!(:matmul!, dst)
     _cuda_device_storage!(:matmul!, x)
+    w.storage isa GpuDenseQuant && return _cuda_dq_matmul!(dst, x, w)
     w.storage isa CuArray{Float16} && return _cuda_f16w_matmul!(dst, x, w)
     w.storage isa Gesso.Inference.HostOffload &&
         return _cuda_host_offload_matmul!(dst, x, w)
@@ -951,8 +954,9 @@ function _to_device_cuda(tensors)
     pending = Any[]
     qpending = Any[]
     f16set = Set{UInt}()
+    nativeset = Set{UInt}()
 
-    function consider!(s; matmul::Bool=false)
+    function consider!(s; matmul::Bool=false, native::Bool=false)
         s === nothing && return
         haskey(conv, s) && return
         if s isa CuArray
@@ -967,6 +971,7 @@ function _to_device_cuda(tensors)
             push!(qpending, s)
         else
             push!(pending, s)
+            native && _dq_eligible(s) && push!(nativeset, objectid(s))
             if matmul && (s isa Array || s isa Gesso.Inference.QuantMatrix) &&
                ndims(s) == 2 && length(s) >= _GPU_F16_MIN_ELEMS
                 push!(f16set, objectid(s))
@@ -976,8 +981,12 @@ function _to_device_cuda(tensors)
     end
     function consider_t!(t)
         hasproperty(t, :storage) || return
+        # A distinct lm_head is a ProjectionWeight and may stay quantized on
+        # the device. A tied table is also the embedding lookup, which reads
+        # F16 device rows, so it keeps the F16 path.
         consider!(t.storage;
-            matmul = t isa Gesso.ProjectionWeight || t isa Gesso.EmbeddingTable)
+            matmul = t isa Gesso.ProjectionWeight || t isa Gesso.EmbeddingTable,
+            native = t isa Gesso.ProjectionWeight)
         return
     end
     # Untied embedding: a row-gather table only. It stays on the host, so it
@@ -1018,9 +1027,18 @@ function _to_device_cuda(tensors)
 
     remaining = max(Int64(0), budget - used)
     for s in uniq
-        # A quantized dense weight is dequantized here, per tensor, to host F32
-        # and then takes the same F16/F32/offload path as an Array. The device
-        # bytes match the pre-quant loader exactly.
+        # Dense quant weights of a supported type stay in their GGUF bytes on
+        # the device (GpuDenseQuant). When that does not fit the budget, or the
+        # type is unsupported, the weight is dequantized here, per tensor, to
+        # host F32 and takes the same F16/F32/offload path as an Array.
+        if objectid(s) in nativeset
+            nb = _dq_device_bytes(s)
+            if nb <= remaining
+                conv[s] = _to_gpu_dense_quant(s)
+                remaining -= nb
+                continue
+            end
+        end
         arr = s isa Gesso.Inference.QuantMatrix ? Gesso.Inference._quant_host_f32(s) : s
         n = Int64(prod(size(s)))
         if wdt === Float16 && objectid(s) in f16set && 2n <= remaining
