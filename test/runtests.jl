@@ -130,6 +130,7 @@ using Gesso: reference_prefill, reference_generate
     include("test_cuda_moe.jl")
     include("test_expert_cache.jl")
     include("test_cuda_quant_dense.jl")
+    include("test_cuda_attention_decode.jl")
 
     # Phase 4 (§LXXVII item C): full prefill + generate on device vs the CPU
     # oracle — logits at declared atol, token ids EXACT (argmax is the gate)

@@ -712,6 +712,13 @@ function _attention_values_device!(
     return attn
 end
 
+# Single-query decode attention over cache rows 1:K, read in place with the GQA
+# mapping (query head h reads KV head div(h-1, group)+1). The generic method
+# declines by returning false, and the caller runs the reference repeat +
+# per-head path, so every other backend keeps its arithmetic unchanged. A
+# backend extension returns true after it has written `attn`.
+_attention_decode_device!(backend, attn, q, kc, vc, n_heads, d_head, group, K) = false
+
 function _attention_scores_cpu!(sc, q, k, hh, d_head, L, K)
     for t in 1:L, u in 1:K, j in 1:d_head
         sc[t, u] += q[t, hh, j] * k[u, hh, j] / sqrt(d_head)
@@ -1334,9 +1341,6 @@ function _decode_step!(
     act = Activation(; shape=(1, hidden_ffn), storage=_decode_buf(cpu_scratch, Val(:act), zeros_like, (1, hidden_ffn)))
     down = Activation(; shape=(1, dim), storage=_decode_buf(cpu_scratch, Val(:down), zeros_like, (1, dim)))
     K = pos0                                    # cache rows now: P + steps
-    # the reference attention needs (1, K) workspaces; the CPU path does not
-    scores = cpu_scratch === nothing ? TemporaryWorkspace(; shape=(1, K), storage=zeros_like((1, K))) : nothing
-    scores_out = cpu_scratch === nothing ? TemporaryWorkspace(; shape=(1, K), storage=zeros_like((1, K))) : nothing
     _T_GDN_NS[] = 0
     _T_ATTN_NS[] = 0
     _T_FFN_NS[] = 0
@@ -1402,27 +1406,39 @@ function _decode_step!(
                 @views vc[bi].storage[pos0, :, :] .= vh.storage[1, :, :]
             end
             if cpu_scratch === nothing
-                # the query is the LAST position: it attends to the whole cache —
-                # repeat the CACHE rows per query head (kh above is the single
-                # new row; it was consumed by the append)
-                @decode_sub :attn_kv_append cpu begin
-                    kx = _repeat_heads(kc[bi], group)
-                    vx = _repeat_heads(vc[bi], group)
-                end
-                @decode_sub :attn_core cpu _attention_heads!(
-                    cpu,
-                    attn.storage,
-                    scores,
-                    scores_out,
-                    qh.storage,
-                    kx.storage,
-                    vx.storage,
-                    n_heads,
-                    d_head,
-                    1,
-                    K,
-                    wl,
+                # the query is the LAST position: it attends to the whole cache.
+                # A device backend that fuses the decode attention reads the
+                # cache rows in place; otherwise the CACHE rows are repeated per
+                # query head (kh above is the single new row; it was consumed by
+                # the append) and the reference per-head loop runs.
+                fused = @decode_sub :attn_core cpu _attention_decode_device!(
+                    cpu, attn.storage, qh.storage, kc[bi].storage, vc[bi].storage,
+                    n_heads, d_head, group, K,
                 )
+                if !fused
+                    # the reference attention needs (1, K) workspaces; the fused
+                    # path allocates none
+                    scores = TemporaryWorkspace(; shape=(1, K), storage=zeros_like((1, K)))
+                    scores_out = TemporaryWorkspace(; shape=(1, K), storage=zeros_like((1, K)))
+                    @decode_sub :attn_kv_append cpu begin
+                        kx = _repeat_heads(kc[bi], group)
+                        vx = _repeat_heads(vc[bi], group)
+                    end
+                    @decode_sub :attn_core cpu _attention_heads!(
+                        cpu,
+                        attn.storage,
+                        scores,
+                        scores_out,
+                        qh.storage,
+                        kx.storage,
+                        vx.storage,
+                        n_heads,
+                        d_head,
+                        1,
+                        K,
+                        wl,
+                    )
+                end
             else
                 # fused: reads the cache rows 1:K in place, no repeat copy
                 @decode_sub :attn_core cpu _attention_decode_cpu!(
