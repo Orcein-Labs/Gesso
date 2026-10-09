@@ -59,6 +59,9 @@ function Gesso.Inference._check_device_storage(op::Symbol, backend::CUDABackend,
         return nothing
     s isa CuArray{Float16} && return nothing   # device F16 weight (matmul / table)
     s isa GpuDenseQuant && return nothing      # native dense quant weight (matmul)
+    # Untied GGUF embedding gathered on the host. Projections are excluded so
+    # a QuantMatrix the device conversion missed still fails here.
+    t isa Gesso.EmbeddingTable && s isa Gesso.Inference.QuantMatrix && return nothing
     _cuda_device_storage!(op, t)
     return nothing
 end
@@ -398,6 +401,8 @@ function embedding_lookup!(
     _cuda_device_storage!(:embedding_lookup!, dst)
     table.storage isa Gesso.Inference.HostOffload &&
         return _cuda_host_offload_embed!(dst, table, tokens)
+    table.storage isa Gesso.Inference.QuantMatrix &&
+        return _cuda_host_quant_embed!(dst, table, tokens)
     _cuda_embed_table_check!(table)
     return _cuda_embedding_lookup!(dst, table, tokens)
 end
@@ -412,6 +417,8 @@ function embedding_lookup!(
     _cuda_device_storage!(:embedding_lookup!, dst)
     table.storage isa Gesso.Inference.HostOffload &&
         return _cuda_host_offload_embed!(dst, table, tokens)
+    table.storage isa Gesso.Inference.QuantMatrix &&
+        return _cuda_host_quant_embed!(dst, table, tokens)
     _cuda_embed_table_check!(table)
     return _cuda_embedding_lookup!(dst, table, tokens)
 end
@@ -419,6 +426,15 @@ end
 function _cuda_host_offload_embed!(dst, table, tokens)
     Gesso._validate_embedding_inputs(dst, table, tokens)
     copyto!(dst.storage, _host_embed_rows(table.storage.data, tokens))
+    return dst
+end
+
+function _cuda_host_quant_embed!(dst, table, tokens)
+    Gesso._validate_embedding_inputs(dst, table, tokens)
+    q = table.storage
+    host = Matrix{Float32}(undef, length(tokens), q.ne0)
+    Gesso.Inference._quant_embedding_rows!(host, q, tokens)
+    copyto!(dst.storage, host)
     return dst
 end
 
@@ -1075,12 +1091,15 @@ function _to_device_cuda(tensors)
         return
     end
     # Untied embedding: a row-gather table only. It stays on the host, so it
-    # never competes for GPU budget and never has a device copy.
+    # never competes for GPU budget and never has a device copy. A GGUF table
+    # stays quantized: its rows are contiguous per token, while the F32
+    # (vocab, dim) copy spreads one row over dim pages (2 GB on the 35B, and
+    # 13-18 ms/token of page faults once swap holds it).
     function host_table_t!(t)
         hasproperty(t, :storage) || return
         s = t.storage
         (s === nothing || haskey(conv, s)) && return
-        conv[s] = s isa Gesso.Inference.HostOffload ? s :
+        conv[s] = s isa Gesso.Inference.HostOffload || s isa Gesso.Inference.QuantMatrix ? s :
             Gesso.Inference.HostOffload(_host_f32(s))
         return
     end
