@@ -1706,6 +1706,147 @@ function _shared_gate_add!(::CUDABackend, y, x, sd, gvec)
     return y
 end
 
+# Softmax over one router row in place, then the top `n_used` experts by
+# (probability descending, index ascending) and their renormalised weights.
+# That key is a strict total order, so a partial sort selects exactly the
+# prefix a full sort would. Returns the weight sum before renormalisation.
+function _moe_route_row!(order, experts, wbuf, row, n_exp::Int, n_used::Int)
+    m = typemin(Float32)
+    @inbounds for e in 1:n_exp
+        row[e] > m && (m = row[e])
+    end
+    s = zero(Float32)
+    @inbounds for e in 1:n_exp
+        v = exp(row[e] - m)
+        row[e] = v
+        s += v
+    end
+    invs = one(Float32) / s
+    @inbounds for e in 1:n_exp
+        row[e] *= invs
+        order[e] = e
+    end
+    partialsort!(order, 1:n_used; by=e -> (-row[e], e))
+    wsum = zero(Float32)
+    @inbounds for k in 1:n_used
+        wsum += row[order[k]]
+    end
+    invw = wsum > 0 ? one(Float32) / wsum : zero(Float32)
+    @inbounds for k in 1:n_used
+        experts[k] = order[k]
+        wbuf[k] = row[order[k]] * invw
+    end
+    return wsum
+end
+
+# Page-locked host staging for the host-expert MoE path. Pinned memory lets the
+# router logits and the activation come back in one async D2H pair with one
+# wait, and the result go up as one async H2D the stream orders before the
+# next kernel. Capacity grows with `seq` and is never shrunk, so decode reuses
+# one registration.
+mutable struct _MoeHostXfer
+    cap::Int
+    n_exp::Int
+    h::Int
+    logits::Vector{Float32}
+    x::Vector{Float32}
+    y::Vector{Float32}
+    xrow::Vector{Float32}
+    yrow::Vector{Float32}
+    order::Vector{Int}
+    experts::Vector{Int}
+    wbuf::Vector{Float32}
+end
+
+const _MOE_HOST_XFER = Ref{Union{Nothing,_MoeHostXfer}}(nothing)
+
+function _moe_host_xfer(seq::Int, n_exp::Int, h::Int, n_used::Int)
+    b = _MOE_HOST_XFER[]
+    if b === nothing || b.cap < seq || b.n_exp != n_exp || b.h != h || length(b.experts) != n_used
+        # The previous buffers may still feed an in-flight H2D; unpinning them
+        # (their finalizer) must not race it.
+        b === nothing || _cuda_stream_wait()
+        cap = b === nothing ? seq : max(seq, b.cap)
+        lg = Vector{Float32}(undef, cap * n_exp)
+        xx = Vector{Float32}(undef, cap * h)
+        yy = Vector{Float32}(undef, cap * h)
+        CUDA.pin(lg)
+        CUDA.pin(xx)
+        CUDA.pin(yy)
+        b = _MoeHostXfer(cap, n_exp, h, lg, xx, yy, Vector{Float32}(undef, h),
+            Vector{Float32}(undef, h), Vector{Int}(undef, n_exp),
+            Vector{Int}(undef, n_used), Vector{Float32}(undef, n_used))
+        _MOE_HOST_XFER[] = b
+    end
+    return b
+end
+
+# Waits for the stream by polling it. CUDA.synchronize first runs CUDA.jl's
+# early-GC heuristic, which fires on nearly every call once a large model
+# fills the device; this wait is on the critical path of every host layer.
+function _cuda_stream_wait(s::CuStream=CUDA.stream())
+    while !CUDA.isdone(s)
+        ccall(:jl_cpu_pause, Cvoid, ())
+    end
+    return nothing
+end
+
+# Top-k SwiGLU for one MoE layer whose expert slabs stay mmap'd on the host.
+# The GPU computes the router logits; the CPU routes and runs the experts; the
+# result returns to `y`. Per layer: one D2H wait and one async H2D.
+function _moe_topk_host!(backend::CUDABackend, y, x, router, gate, up, down, n_used::Int)
+    seq, h = size(x)
+    n_exp = size(router, 1)
+    b = _moe_host_xfer(seq, n_exp, h, n_used)
+    logits = _dev_scratch(:moe_logits, seq, n_exp)
+    xd = x
+    if !(x isa DenseCuArray)
+        xd = _dev_scratch(:moe_xall, seq, h)
+        copyto!(xd, x)
+    end
+    s = CUDA.stream()
+    Gesso.Inference.@decode_stage :moe_router backend begin
+        rd = router isa CuArray ? router : CuArray{Float32}(Gesso.Inference._offload_host_array(router))
+        CUDA.CUBLAS.gemm!('N', 'T', one(Float32), x, rd, zero(Float32), logits)
+        Gesso.Inference._profile_copy!(true)
+        unsafe_copyto!(pointer(b.logits), pointer(logits), seq * n_exp; async=true, stream=s)
+        unsafe_copyto!(pointer(b.x), pointer(xd), seq * h; async=true, stream=s)
+        _cuda_stream_wait(s)
+    end
+    L = unsafe_wrap(Array, pointer(b.logits), (seq, n_exp))
+    X = unsafe_wrap(Array, pointer(b.x), (seq, h))
+    Y = unsafe_wrap(Array, pointer(b.y), (seq, h))
+    for t in 1:seq
+        wsum = Gesso.Inference.@decode_stage :moe_router nothing _moe_route_row!(
+            b.order, b.experts, b.wbuf, view(L, t, :), n_exp, n_used,
+        )
+        if !(wsum > 0)
+            @inbounds for i in 1:h
+                Y[t, i] = 0.0f0
+            end
+            continue
+        end
+        @inbounds for i in 1:h
+            b.xrow[i] = X[t, i]
+        end
+        Gesso.Inference.@decode_stage :moe_host nothing Gesso.Inference._moe_host_experts_auto!(
+            b.yrow, b.xrow, b.experts, b.wbuf, n_used, gate, up, down,
+        )
+        @inbounds for i in 1:h
+            Y[t, i] = b.yrow[i]
+        end
+    end
+    Gesso.Inference.@decode_stage :moe_h2d backend begin
+        Gesso.Inference._profile_copy!(false)
+        if y isa DenseCuArray
+            unsafe_copyto!(pointer(y), pointer(b.y), seq * h; async=true, stream=s)
+        else
+            copyto!(y, Y)
+        end
+    end
+    return y
+end
+
 function _moe_topk_swiglu!(
     backend::CUDABackend,
     y::AbstractMatrix,
@@ -1730,6 +1871,19 @@ function _moe_topk_swiglu!(
     size(down) == (n_exp, h, ff) ||
         error("_moe_topk_swiglu!: down $(size(down)) ≠ ($n_exp, $h, $ff)")
 
+    # Banks that are mmap'd on the host (GgufQuantSlice in all three slabs)
+    # run on the CPU; only the activation goes D2H and the output goes H2D.
+    # Default on; GESSO_MOE_HOST_EXPERTS=0 uploads the active experts instead.
+    # Ornith-35B Q2_K_XL, warm profile: host mode 132 ms/token (moe_host 35.9 ms
+    # over 21 calls) against 477 ms/token before the batched Q8_K host path.
+    # Gate decode: 8.48 tok/s host vs 6.80 tok/s upload, both ids_ok=true.
+    if _moe_host_experts_enabled() &&
+       gate isa Gesso.Inference.GgufQuantSlice &&
+       up isa Gesso.Inference.GgufQuantSlice &&
+       down isa Gesso.Inference.GgufQuantSlice
+        return _moe_topk_host!(backend, y, x, router, gate, up, down, n_used)
+    end
+
     Gesso.Inference.@decode_stage :moe_alloc _CUDASync() begin
         logits = _dev_scratch(:moe_logits, seq, n_exp)
         fill!(y, zero(eltype(y)))
@@ -1750,16 +1904,6 @@ function _moe_topk_swiglu!(
     order = Vector{Int}(undef, n_exp)
     quant = Gesso.Inference._is_quant_expert_bank(gate)
     cached = gate isa Gesso.Inference.CachedExpertBank
-    # Banks that are mmap'd on the host (GgufQuantSlice in all three slabs)
-    # can run on the CPU; only the activation goes D2H and the output goes H2D.
-    # Default on; GESSO_MOE_HOST_EXPERTS=0 uploads the active experts instead.
-    # Ornith-35B Q2_K_XL, warm profile: host mode 132 ms/token (moe_host 35.9 ms
-    # over 21 calls) against 477 ms/token before the batched Q8_K host path.
-    # Gate decode: 8.48 tok/s host vs 6.80 tok/s upload, both ids_ok=true.
-    host_all = _moe_host_experts_enabled() &&
-               gate isa Gesso.Inference.GgufQuantSlice &&
-               up isa Gesso.Inference.GgufQuantSlice &&
-               down isa Gesso.Inference.GgufQuantSlice
     Wg = Wu = Wd = nothing
     Gbat = Ubat = Hbat = Dbat = ws = nothing
     experts = Vector{Int}(undef, n_used)
@@ -1768,12 +1912,7 @@ function _moe_topk_swiglu!(
     hit_slot = Vector{Int32}(undef, n_used)
     miss_rank = Vector{Int32}(undef, n_used)
     miss_exp = Vector{Int}(undef, n_used)
-    xh = yh = nothing
-    gh = uh = hh = dh = nothing
-    if host_all
-        xh = Vector{Float32}(undef, h)
-        yh = Vector{Float32}(undef, h)
-    elseif quant || cached
+    if quant || cached
         Gesso.Inference.@decode_stage :moe_alloc _CUDASync() begin
             Gbat = _dev_scratch(:moe_gbat, ff, n_used)
             Ubat = _dev_scratch(:moe_ubat, ff, n_used)
@@ -1791,49 +1930,13 @@ function _moe_topk_swiglu!(
 
     for t in 1:seq
         row = view(logits_h, t, :)
-        Gesso.Inference.@decode_stage :moe_router nothing begin
-            m = typemin(Float32)
-            @inbounds for e in 1:n_exp
-                row[e] > m && (m = row[e])
-            end
-            s = zero(Float32)
-            @inbounds for e in 1:n_exp
-                v = exp(row[e] - m)
-                row[e] = v
-                s += v
-            end
-            invs = one(Float32) / s
-            @inbounds for e in 1:n_exp
-                row[e] *= invs
-                order[e] = e
-            end
-            sort!(order; by=e -> (-row[e], e))
-            wsum = zero(Float32)
-            @inbounds for k in 1:n_used
-                wsum += row[order[k]]
-            end
-            invw = wsum > 0 ? one(Float32) / wsum : zero(Float32)
-            @inbounds for k in 1:n_used
-                experts[k] = order[k]
-                wbuf[k] = row[order[k]] * invw
-            end
-        end
+        wsum = Gesso.Inference.@decode_stage :moe_router nothing _moe_route_row!(
+            order, experts, wbuf, row, n_exp, n_used,
+        )
+        invw = one(Float32) / wsum
         wsum > 0 || continue
         fill!(yrow, zero(Float32))
-        if host_all
-            Gesso.Inference.@decode_stage :moe_d2h backend begin
-                copyto!(xt, view(x, t, :))
-                Gesso.Inference._profile_copy!(true)
-                copyto!(xh, xt)
-            end
-            Gesso.Inference.@decode_stage :moe_host nothing Gesso.Inference._moe_host_experts_auto!(
-                yh, xh, experts, wbuf, n_used, gate, up, down,
-            )
-            Gesso.Inference.@decode_stage :moe_h2d backend begin
-                Gesso.Inference._profile_copy!(false)
-                copyto!(yrow, yh)
-            end
-        elseif cached
+        if cached
             copyto!(xt, view(x, t, :))
             layer = gate.layer
             nh = 0

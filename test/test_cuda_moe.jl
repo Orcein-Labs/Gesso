@@ -246,6 +246,48 @@ else
         @test approx_eq(Array(y_gpu), y_cpu; atol=1e-3)
     end
 
+    @testset "cuda host-expert MoE: router ties and staging regrowth" begin
+        ext = Base.get_extension(Gesso, :GessoCUDAExt)
+        # partialsort! must keep the full sort's tie order: higher probability
+        # first, lower expert index among equals.
+        rng = deterministic_rng(31)
+        row = randn(rng, Float32, 64)
+        m0 = maximum(row)
+        row[[5, 9, 40]] .= m0 + 1
+        row[[12, 13]] .= m0 + 0.5f0
+        order = collect(1:64)
+        experts = zeros(Int, 6)
+        wbuf = zeros(Float32, 6)
+        p = copy(row)
+        ext._moe_route_row!(order, experts, wbuf, p, 64, 6)
+        m = maximum(row)
+        pr = exp.(row .- m)
+        pr ./= sum(pr)
+        @test experts == sort(1:64; by=e -> (-pr[e], e))[1:6]
+        @test experts[1:3] == [5, 9, 40]
+        @test sum(wbuf) ≈ 1
+
+        # Pinned staging is sized by seq; grow, shrink back and grow again.
+        h, ff, n_exp, n_used = 8, 4, 6, 2
+        router = randn(rng, Float32, n_exp, h)
+        gate3 = randn(rng, Float32, n_exp, ff, h)
+        up3 = randn(rng, Float32, n_exp, ff, h)
+        down3 = randn(rng, Float32, n_exp, h, ff)
+        gs = _pack_f32_slice(gate3, h, ff)
+        us = _pack_f32_slice(up3, h, ff)
+        ds = _pack_f32_slice(down3, ff, h)
+        for seq in (1, 3, 1, 5)
+            x = randn(rng, Float32, seq, h)
+            y_cpu = zeros(Float32, seq, h)
+            Inf_._moe_topk_swiglu!(cpu, y_cpu, x, router, gate3, up3, down3, n_used)
+            y_gpu = CUDA.fill(NaN32, seq, h)
+            Inf_._moe_topk_swiglu!(
+                cuda, y_gpu, CuArray{Float32}(x), CuArray{Float32}(router), gs, us, ds, n_used,
+            )
+            @test approx_eq(Array(y_gpu), y_cpu; atol=1e-3)
+        end
+    end
+
     @testset "cuda synthetic MoE block greedy ids match CPU F32" begin
         h, nh, nkv, hd, vocab = 8, 2, 2, 4, 16
         n_exp, k, ff = 4, 2, 8
