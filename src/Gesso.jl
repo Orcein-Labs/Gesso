@@ -37,6 +37,7 @@ include("Runtime/Runtime.jl")               # Phase 5+
 include("Profiling/Profiling.jl")           # Phase 6
 include("Representation/Representation.jl") # Phase 10
 include("Autotune/Autotune.jl")             # Phase 9
+include("Speculation/Speculation.jl")       # Phase 20: host-side draft seam (SPECULATION_SEAM.md)
 include("Planning/Planning.jl")             # Phase 7
 include("Agents/Agents.jl")                 # Phase 12
 include("CAPI/CAPI.jl")                     # Phase 16
@@ -250,5 +251,37 @@ export SemanticTensor,
     compatibility_table,
     tokenizer_metadata,
     vocab_size
+
+# Phase 20 (§XCIII; docs/design/SPECULATION_SEAM.md): the draft-source seam and
+# its host-only sources. No verifier is wired here; decoding is unchanged.
+using .Speculation:
+    DraftSource,
+    DraftContext,
+    Draft,
+    propose,
+    observe!,
+    SuffixSource,
+    TemplateRule,
+    TemplateSource,
+    SymbolicSource,
+    IntegerArithmetic,
+    IntegerSequence,
+    LastLineProcedure,
+    complete_text,
+    feedback_counts
+export DraftSource,
+    DraftContext,
+    Draft,
+    propose,
+    observe!,
+    SuffixSource,
+    TemplateRule,
+    TemplateSource,
+    SymbolicSource,
+    IntegerArithmetic,
+    IntegerSequence,
+    LastLineProcedure,
+    complete_text,
+    feedback_counts
 
 end
