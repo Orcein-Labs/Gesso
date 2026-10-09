@@ -210,13 +210,19 @@ end
 # pmaddubsw never saturates. Q8_K quants never reach -128: the quantizer caps
 # them at 127 and its scale is -127/max.
 
-# Lane k of the 32-lane vector takes its sign from bit (k mod 8) of byte
-# (k ÷ 8) of `s4`, matching the reference's kmask[j] over 8-value groups.
-const _Q8K_MASK4 = join(["i32 $k" for k in 0:3 for _ in 1:8], ", ")
-const _Q8K_KMASK32 = join(
-    ["i8 $(v >= 128 ? v - 256 : v)" for v in (1 << (k & 7) for k in 0:31)],
-    ", ",
-)
+# Sign masks for the IQ2_XS and IQ3_XXS kernels. Entry s (0:127) holds 8 bytes,
+# one per value of an 8-value group: 0xff where bit j of KSIGNS_IQ2XS[s] is set
+# (negate) and 0x01 where it is not (keep). psign with these bytes applies the
+# reference's sign to each Q8_K quant.
+function _iq_sign8(s::UInt8)::UInt64
+    v = UInt64(0)
+    for j in 0:7
+        byte = ((s >> j) & 0x01) == 0x01 ? UInt64(0xff) : UInt64(0x01)
+        v |= byte << (8 * j)
+    end
+    return v
+end
+const _IQ_SIGN8_TAB = UInt64[_iq_sign8(s) for s in KSIGNS_IQ2XS]
 
 _q8k_hsum4_ir(src::AbstractString, dst::AbstractString) = """
   $(dst)_1 = shufflevector <4 x i32> $src, <4 x i32> poison, <4 x i32> <i32 2, i32 3, i32 0, i32 1>
@@ -226,51 +232,55 @@ _q8k_hsum4_ir(src::AbstractString, dst::AbstractString) = """
   $dst = extractelement <4 x i32> $(dst)_4, i32 0
 """
 
-# Signed ±1 per lane, then the 32 products with the unsigned grid bytes %gb.
-# Sums land in %p32 (eight int32 lanes, four per 16-value half).
-_q8k_grid_ir(gty::AbstractString) = """
-  %gb = bitcast $gty %g to <32 x i8>
-  %sb4 = bitcast i32 %s4 to <4 x i8>
-  %sb = shufflevector <4 x i8> %sb4, <4 x i8> poison, <32 x i32> <$(_Q8K_MASK4)>
-  %km = and <32 x i8> %sb, <$(_Q8K_KMASK32)>
-  %nz = icmp ne <32 x i8> %km, zeroinitializer
-  %sg = select <32 x i1> %nz, <32 x i8> splat (i8 -1), <32 x i8> splat (i8 1)
-  %a = load <32 x i8>, ptr %q8, align 1
-  %bs = call <32 x i8> @llvm.x86.avx2.psign.b(<32 x i8> %a, <32 x i8> %sg)
-  %p16 = call <16 x i16> @llvm.x86.avx2.pmadd.ub.sw(<32 x i8> %gb, <32 x i8> %bs)
-  %p32 = call <8 x i32> @llvm.x86.avx2.pmadd.wd(<16 x i16> %p16, <16 x i16> splat (i16 1))
-  %pl = shufflevector <8 x i32> %p32, <8 x i32> poison, <4 x i32> <i32 0, i32 1, i32 2, i32 3>
-  %ph = shufflevector <8 x i32> %p32, <8 x i32> poison, <4 x i32> <i32 4, i32 5, i32 6, i32 7>
-"""
-
 const _Q8K_GRID_DECLS = """
 declare <32 x i8> @llvm.x86.avx2.psign.b(<32 x i8>, <32 x i8>)
 declare <16 x i16> @llvm.x86.avx2.pmadd.ub.sw(<32 x i8>, <32 x i8>)
 declare <8 x i32> @llvm.x86.avx2.pmadd.wd(<16 x i16>, <16 x i16>)
 """
 
-# IQ2_XS: sums for values 0-15 (groups l=0,1) and 16-31 (groups l=2,3).
+# IQ2_XS and IQ3_XXS sub-block step. %g holds the 32 grid bytes of the sub-block
+# (group l at bytes 8l..8l+7), %s the matching 32 sign bytes (+-1 as 0x01/0xff),
+# %q8 the 32 Q8_K quants. psign applies the signs, pmaddubsw forms int16 pair
+# sums, and pmaddwd with the int16 multiplier vector %m scales each pair sum and
+# folds it into the int32 accumulator %acc. Each int32 lane holds the sum over
+# four bytes; lanes 0-3 are groups 0-1 (16 values) and lanes 4-7 groups 2-3.
+# The multiplier is the sub-block's scale for that half, so the lane sums are
+# exact integers and their total equals the reference's bsum.
 const _Q8K_IR_IQ2 = """
 $(_Q8K_GRID_DECLS)
-define <2 x i32> @entry(<4 x i64> %g, i32 %s4, ptr %q8) #0 {
-$(_q8k_grid_ir("<4 x i64>"))
-$(_q8k_hsum4_ir("%pl", "%lo"))
-$(_q8k_hsum4_ir("%ph", "%hi"))
-  %r0 = insertelement <2 x i32> poison, i32 %lo, i32 0
-  %r1 = insertelement <2 x i32> %r0, i32 %hi, i32 1
-  ret <2 x i32> %r1
+define <8 x i32> @entry(<8 x i32> %acc, <4 x i64> %g, <4 x i64> %s, ptr %q8, i32 %ls1, i32 %ls2) #0 {
+  %gb = bitcast <4 x i64> %g to <32 x i8>
+  %sb = bitcast <4 x i64> %s to <32 x i8>
+  %a = load <32 x i8>, ptr %q8, align 1
+  %bs = call <32 x i8> @llvm.x86.avx2.psign.b(<32 x i8> %a, <32 x i8> %sb)
+  %p16 = call <16 x i16> @llvm.x86.avx2.pmadd.ub.sw(<32 x i8> %gb, <32 x i8> %bs)
+  %m1 = trunc i32 %ls1 to i16
+  %m2 = trunc i32 %ls2 to i16
+  %v1 = insertelement <16 x i16> poison, i16 %m1, i64 0
+  %v2 = insertelement <16 x i16> poison, i16 %m2, i64 0
+  %m = shufflevector <16 x i16> %v1, <16 x i16> %v2, <16 x i32> <i32 0, i32 0, i32 0, i32 0, i32 0, i32 0, i32 0, i32 0, i32 16, i32 16, i32 16, i32 16, i32 16, i32 16, i32 16, i32 16>
+  %p32 = call <8 x i32> @llvm.x86.avx2.pmadd.wd(<16 x i16> %p16, <16 x i16> %m)
+  %r = add <8 x i32> %acc, %p32
+  ret <8 x i32> %r
 }
 attributes #0 = { alwaysinline }
 """
 
-# IQ3_XXS: one sum over the 32 values of the sub-block.
+# IQ3_XXS: one scale per sub-block, so the multiplier is a splat.
 const _Q8K_IR_IQ3 = """
 $(_Q8K_GRID_DECLS)
-define i32 @entry(<8 x i32> %g, i32 %s4, ptr %q8) #0 {
-$(_q8k_grid_ir("<8 x i32>"))
-  %pa = add <4 x i32> %pl, %ph
-$(_q8k_hsum4_ir("%pa", "%tot"))
-  ret i32 %tot
+define <8 x i32> @entry(<8 x i32> %acc, <8 x i32> %g, <4 x i64> %s, ptr %q8, i32 %ls) #0 {
+  %gb = bitcast <8 x i32> %g to <32 x i8>
+  %sb = bitcast <4 x i64> %s to <32 x i8>
+  %a = load <32 x i8>, ptr %q8, align 1
+  %bs = call <32 x i8> @llvm.x86.avx2.psign.b(<32 x i8> %a, <32 x i8> %sb)
+  %p16 = call <16 x i16> @llvm.x86.avx2.pmadd.ub.sw(<32 x i8> %gb, <32 x i8> %bs)
+  %m1 = trunc i32 %ls to i16
+  %v1 = insertelement <16 x i16> poison, i16 %m1, i64 0
+  %m = shufflevector <16 x i16> %v1, <16 x i16> poison, <16 x i32> zeroinitializer
+  %p32 = call <8 x i32> @llvm.x86.avx2.pmadd.wd(<16 x i16> %p16, <16 x i16> %m)
+  %r = add <8 x i32> %acc, %p32
+  ret <8 x i32> %r
 }
 attributes #0 = { alwaysinline }
 """
@@ -313,14 +323,49 @@ function _iq4_sub_avx2(tab::NTuple{32,VecElement{Int8}}, qs::Ptr{UInt8}, q8::Ptr
         Tuple{NTuple{32,VecElement{Int8}}, Ptr{UInt8}, Ptr{Int8}}, tab, qs, q8)
 end
 
-function _iq2_sub_avx2(g::NTuple{4,VecElement{UInt64}}, s4::UInt32, q8::Ptr{Int8})::NTuple{2,VecElement{Int32}}
-    Base.llvmcall((_Q8K_IR_IQ2, "entry"), NTuple{2,VecElement{Int32}},
-        Tuple{NTuple{4,VecElement{UInt64}}, UInt32, Ptr{Int8}}, g, s4, q8)
+const _IQ_ACC_ZERO = ntuple(_ -> VecElement(Int32(0)), 8)
+
+@inline function _iq2_sub_acc(
+    acc::NTuple{8,VecElement{Int32}},
+    g::NTuple{4,VecElement{UInt64}},
+    s::NTuple{4,VecElement{UInt64}},
+    q8::Ptr{Int8},
+    ls1::Int32,
+    ls2::Int32,
+)::NTuple{8,VecElement{Int32}}
+    Base.llvmcall((_Q8K_IR_IQ2, "entry"), NTuple{8,VecElement{Int32}},
+        Tuple{NTuple{8,VecElement{Int32}}, NTuple{4,VecElement{UInt64}}, NTuple{4,VecElement{UInt64}},
+            Ptr{Int8}, Int32, Int32},
+        acc, g, s, q8, ls1, ls2)
 end
 
-function _iq3_sub_avx2(g::NTuple{8,VecElement{UInt32}}, s4::UInt32, q8::Ptr{Int8})::Int32
-    Base.llvmcall((_Q8K_IR_IQ3, "entry"), Int32,
-        Tuple{NTuple{8,VecElement{UInt32}}, UInt32, Ptr{Int8}}, g, s4, q8)
+@inline function _iq3_sub_acc(
+    acc::NTuple{8,VecElement{Int32}},
+    g::NTuple{8,VecElement{UInt32}},
+    s::NTuple{4,VecElement{UInt64}},
+    q8::Ptr{Int8},
+    ls::Int32,
+)::NTuple{8,VecElement{Int32}}
+    Base.llvmcall((_Q8K_IR_IQ3, "entry"), NTuple{8,VecElement{Int32}},
+        Tuple{NTuple{8,VecElement{Int32}}, NTuple{8,VecElement{UInt32}}, NTuple{4,VecElement{UInt64}},
+            Ptr{Int8}, Int32},
+        acc, g, s, q8, ls)
+end
+
+# Horizontal sum of the eight int32 lanes. Integer, so the order is immaterial.
+@inline function _iq_hsum8(acc::NTuple{8,VecElement{Int32}})::Int32
+    return acc[1].value + acc[2].value + acc[3].value + acc[4].value +
+           acc[5].value + acc[6].value + acc[7].value + acc[8].value
+end
+
+# f16 super-scale at a raw byte pointer, the same value as _ld_f16.
+@inline _iq_f16_at(p::Ptr{UInt8})::Float32 =
+    Float32(reinterpret(Float16, ltoh(unsafe_load(Ptr{UInt16}(p)))))
+
+function _q8k_check_row(w::AbstractVector{UInt8}, woff::Int, nbytes::Int)
+    (woff >= 0 && woff + nbytes <= length(w)) ||
+        error("q8k row: bytes $(woff)..$(woff + nbytes) exceed weight length $(length(w))")
+    return nothing
 end
 
 # ---------------------------------------------------------------- AVX2 kernels
@@ -351,39 +396,45 @@ end
     return sumf
 end
 
+# The row is read through raw pointers after one bounds check on the whole row;
+# the per-byte loaders in gguf_quants.jl check every byte, which the hot loop
+# cannot afford. Each block's int32 sum is accumulated in a vector across its
+# eight sub-blocks, and reduced once per block.
 @noinline function _dot_iq2_xs_q8k_avx2(w::AbstractVector{UInt8}, woff::Int, x::Q8KVec)::Float32
     nb = length(x.d)
+    _q8k_check_row(w, woff, 74 * nb)
     sumf = 0.0f0
+    nb == 0 && return sumf
     GC.@preserve w x begin
+        pw = pointer(w, woff + 1)
         pq = pointer(x.qs)
+        pg = pointer(IQ2XS_GRID)
+        ps = pointer(_IQ_SIGN8_TAB)
         @inbounds for ib in 0:(nb - 1)
-            b = woff + ib * 74
-            d = _ld_f16(w, b) * x.d[ib + 1]
-            bsum = Int32(0)
+            b = pw + 74 * ib
+            d = _iq_f16_at(b) * x.d[ib + 1]
+            acc = _IQ_ACC_ZERO
             for ib32 in 0:7
-                sc = _ld_u8(w, b + 66 + ib32)
+                sc = unsafe_load(b + 66 + ib32)
                 ls1 = Int32(2 * (sc & 0x0f) + 1)
                 ls2 = Int32(2 * (sc >> 4) + 1)
-                qo = b + 2 + 8 * ib32
-                q0 = _ld_u16(w, qo)
-                q1 = _ld_u16(w, qo + 2)
-                q2 = _ld_u16(w, qo + 4)
-                q3 = _ld_u16(w, qo + 6)
+                # four qv = (grid index 9 bits | sign index 7 bits) for groups 0..3
+                qw = ltoh(unsafe_load(Ptr{UInt64}(b + 2 + 8 * ib32)))
                 g = (
-                    VecElement(IQ2XS_GRID[Int(q0 & 0x01ff) + 1]),
-                    VecElement(IQ2XS_GRID[Int(q1 & 0x01ff) + 1]),
-                    VecElement(IQ2XS_GRID[Int(q2 & 0x01ff) + 1]),
-                    VecElement(IQ2XS_GRID[Int(q3 & 0x01ff) + 1]),
+                    VecElement(unsafe_load(pg, Int(qw & 0x1ff) + 1)),
+                    VecElement(unsafe_load(pg, Int((qw >> 16) & 0x1ff) + 1)),
+                    VecElement(unsafe_load(pg, Int((qw >> 32) & 0x1ff) + 1)),
+                    VecElement(unsafe_load(pg, Int((qw >> 48) & 0x1ff) + 1)),
                 )
-                s4 = UInt32(KSIGNS_IQ2XS[Int(q0 >> 9) + 1]) |
-                     (UInt32(KSIGNS_IQ2XS[Int(q1 >> 9) + 1]) << 8) |
-                     (UInt32(KSIGNS_IQ2XS[Int(q2 >> 9) + 1]) << 16) |
-                     (UInt32(KSIGNS_IQ2XS[Int(q3 >> 9) + 1]) << 24)
-                r = _iq2_sub_avx2(g, s4, pq + (ib * QK_K + 32 * ib32))
-                bsum += r[1].value * ls1
-                bsum += r[2].value * ls2
+                s = (
+                    VecElement(unsafe_load(ps, Int((qw >> 9) & 0x7f) + 1)),
+                    VecElement(unsafe_load(ps, Int((qw >> 25) & 0x7f) + 1)),
+                    VecElement(unsafe_load(ps, Int((qw >> 41) & 0x7f) + 1)),
+                    VecElement(unsafe_load(ps, Int((qw >> 57) & 0x7f) + 1)),
+                )
+                acc = _iq2_sub_acc(acc, g, s, pq + (ib * QK_K + 32 * ib32), ls1, ls2)
             end
-            sumf += d * Float32(bsum)
+            sumf += d * Float32(_iq_hsum8(acc))
         end
     end
     return 0.125f0 * sumf
@@ -391,37 +442,43 @@ end
 
 @noinline function _dot_iq3_xxs_q8k_avx2(w::AbstractVector{UInt8}, woff::Int, x::Q8KVec)::Float32
     nb = length(x.d)
+    _q8k_check_row(w, woff, 98 * nb)
     sumf = 0.0f0
+    nb == 0 && return sumf
     GC.@preserve w x begin
+        pw = pointer(w, woff + 1)
         pq = pointer(x.qs)
+        pg = pointer(IQ3XXS_GRID)
+        ps = pointer(_IQ_SIGN8_TAB)
         @inbounds for ib in 0:(nb - 1)
-            b = woff + ib * 98
-            d = _ld_f16(w, b) * x.d[ib + 1]
-            bsum = Int32(0)
+            b = pw + 98 * ib
+            d = _iq_f16_at(b) * x.d[ib + 1]
+            acc = _IQ_ACC_ZERO
             for ib32 in 0:7
-                aux = _ld_u32(w, b + 66 + 4 * ib32)
+                aux = ltoh(unsafe_load(Ptr{UInt32}(b + 66 + 4 * ib32)))
                 ls = Int32(2 * (aux >> 28) + 1)
-                qb = b + 2 + 8 * ib32
-                g1_0 = IQ3XXS_GRID[Int(_ld_u8(w, qb)) + 1]
-                g2_0 = IQ3XXS_GRID[Int(_ld_u8(w, qb + 1)) + 1]
-                g1_1 = IQ3XXS_GRID[Int(_ld_u8(w, qb + 2)) + 1]
-                g2_1 = IQ3XXS_GRID[Int(_ld_u8(w, qb + 3)) + 1]
-                g1_2 = IQ3XXS_GRID[Int(_ld_u8(w, qb + 4)) + 1]
-                g2_2 = IQ3XXS_GRID[Int(_ld_u8(w, qb + 5)) + 1]
-                g1_3 = IQ3XXS_GRID[Int(_ld_u8(w, qb + 6)) + 1]
-                g2_3 = IQ3XXS_GRID[Int(_ld_u8(w, qb + 7)) + 1]
+                # eight grid indices, one byte each, in group order g1_0 g2_0 g1_1 ...
+                qi = ltoh(unsafe_load(Ptr{UInt64}(b + 2 + 8 * ib32)))
                 g = (
-                    VecElement(g1_0), VecElement(g2_0), VecElement(g1_1), VecElement(g2_1),
-                    VecElement(g1_2), VecElement(g2_2), VecElement(g1_3), VecElement(g2_3),
+                    VecElement(unsafe_load(pg, Int(qi & 0xff) + 1)),
+                    VecElement(unsafe_load(pg, Int((qi >> 8) & 0xff) + 1)),
+                    VecElement(unsafe_load(pg, Int((qi >> 16) & 0xff) + 1)),
+                    VecElement(unsafe_load(pg, Int((qi >> 24) & 0xff) + 1)),
+                    VecElement(unsafe_load(pg, Int((qi >> 32) & 0xff) + 1)),
+                    VecElement(unsafe_load(pg, Int((qi >> 40) & 0xff) + 1)),
+                    VecElement(unsafe_load(pg, Int((qi >> 48) & 0xff) + 1)),
+                    VecElement(unsafe_load(pg, Int((qi >> 56) & 0xff) + 1)),
                 )
-                s4 = UInt32(KSIGNS_IQ2XS[Int(aux & UInt32(127)) + 1]) |
-                     (UInt32(KSIGNS_IQ2XS[Int((aux >> 7) & UInt32(127)) + 1]) << 8) |
-                     (UInt32(KSIGNS_IQ2XS[Int((aux >> 14) & UInt32(127)) + 1]) << 16) |
-                     (UInt32(KSIGNS_IQ2XS[Int((aux >> 21) & UInt32(127)) + 1]) << 24)
-                t = _iq3_sub_avx2(g, s4, pq + (ib * QK_K + 32 * ib32))
-                bsum += t * ls
+                # four 7-bit sign indices, one per group
+                s = (
+                    VecElement(unsafe_load(ps, Int(aux & 0x7f) + 1)),
+                    VecElement(unsafe_load(ps, Int((aux >> 7) & 0x7f) + 1)),
+                    VecElement(unsafe_load(ps, Int((aux >> 14) & 0x7f) + 1)),
+                    VecElement(unsafe_load(ps, Int((aux >> 21) & 0x7f) + 1)),
+                )
+                acc = _iq3_sub_acc(acc, g, s, pq + (ib * QK_K + 32 * ib32), ls)
             end
-            sumf += d * Float32(bsum)
+            sumf += d * Float32(_iq_hsum8(acc))
         end
     end
     return 0.25f0 * sumf
