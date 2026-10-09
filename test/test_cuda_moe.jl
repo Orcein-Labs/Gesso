@@ -212,11 +212,25 @@ else
             einfo = only(t for t in hdr.tensors if t.name == "blk.0.ffn_gate_exps.weight")
             live = Gesso.Inference._expert_slice(hdr, einfo)
             xl = randn(rng, Float32, live.ne0)
-            yc = zeros(Float32, live.ne1)
-            Inf_._qgemv_expert!(yc, xl, live, 1)
             yg = CUDA.zeros(Float32, live.ne1)
             Inf_._qgemv_expert!(yg, CuArray{Float32}(xl), live, 1)
-            @test approx_eq(Array(yg), yc; atol=2e-4)
+            # The device kernel quantizes x to Q8_1 (32-value blocks), so it is
+            # held to the derived activation bound of test_cuda_quant_dense.jl
+            # against an F64 reference, not to the host's F32 result.
+            bytes = Vector{UInt8}(Inf_._quant_expert_bytes(live, 1))
+            W = Float64.(permutedims(reshape(
+                Inf_._dequant_f32(bytes, 0, live.ggml_type, live.ne0 * live.ne1),
+                live.ne0, live.ne1)))
+            x64 = Float64.(xl)
+            ref = W * x64
+            nb = div(live.ne0, 32)
+            bound = zeros(Float64, live.ne1)
+            for b in 1:nb
+                cols = (32 * (b - 1) + 1):(32 * b)
+                bound .+= maximum(abs, view(x64, cols)) / 254.0 .* vec(sum(abs, view(W, :, cols); dims=2))
+            end
+            tol = bound .+ 5.0e-5 .* (abs.(W) * abs.(x64)) .+ 1.0e-9
+            @test all(abs.(Float64.(Array(yg)) .- ref) .<= tol)
         else
             _skip("Ornith 35B GGUF not on disk — live IQ2_XS CUDA qgemv skipped")
         end
