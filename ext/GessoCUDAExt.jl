@@ -177,6 +177,12 @@ include("cuda_attention.jl")
 # the definition must go through the NAME — interpolating the function
 # object into the definition head is not a legal method definition.)
 function __init__()
+    # Resident weights keep device pressure above 0.9, so CUDA.jl's early GC
+    # runs a full GC.gc(false) inside nearly every synchronize: one 3.5 ms
+    # pause per decode token, and it frees nothing because the weights and
+    # decode arena stay live. An OOM still collects in CUDA.jl's alloc retry.
+    # CUDA.jl reads the variable on its first allocation; a user's own setting wins.
+    haskey(ENV, "JULIA_CUDA_GC_EARLY") || (ENV["JULIA_CUDA_GC_EARLY"] = "false")
     Core.eval(Gesso, :(const CUDABackend = $CUDABackend))
     _autotune_register!()   # §LXXXII: backend extensions register candidates (runtime state)
     if isdefined(Gesso, :to_device)
