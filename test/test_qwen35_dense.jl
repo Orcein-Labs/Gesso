@@ -263,12 +263,12 @@ end
 @testset "quant matmul matches dequant + F32 (native and fallback)" begin
     _HAS_GGML_QD || return @test_skip "set GESSO_GGML_DIR (libggml to_float)"
     rng = MersenneTwister(7)
-    # IQ4_XS and IQ3_XXS: fused F32-activation GEMV. Q2_K: native Q8_K integer
-    # kernel, so the activations are quantized and the bound is looser.
+    # All three run the native Q8_K integer kernels, so the activations are
+    # quantized and the bound is the Q8_K one (measured about 0.7% of scale).
     for t in (_T_IQ4XS, _T_IQ3XXS, _T_Q2K)
         q = _quant_fixture(rng, t, 512, 96)
         W = _GI._quant_host_f32(q)
-        tol = t == _T_Q2K ? 2.0e-2 : 1.0e-4
+        tol = 2.0e-2
         for seq in (1, 3)
             x = randn(rng, Float32, seq, 512)
             dst = zeros(Float32, seq, 96)
@@ -290,7 +290,8 @@ end
     xa = Gesso.Activation(; shape=(2, 512), storage=x)
     da = Gesso.Activation(; shape=(2, 64), storage=zeros(Float32, 2, 64))
     Gesso.matmul!(Gesso.CPUBackend(), da, xa, w, Gesso.PrefillWorkload())
-    @test maximum(abs, da.storage .- x * transpose(W)) <= 1.0e-4 * maximum(abs, x * transpose(W))
+    # Q8_K-quantized activations (native kernel): the same bound as above.
+    @test maximum(abs, da.storage .- x * transpose(W)) <= 2.0e-2 * maximum(abs, x * transpose(W))
 
     tab = Gesso.EmbeddingTable((64, 512), q)
     dst = Gesso.Activation(; shape=(2, 512), storage=zeros(Float32, 2, 512))
