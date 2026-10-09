@@ -10,18 +10,26 @@
 # (1:n); activation column of each launch (n+1:2n)]. It is uploaded with one
 # copy per launch, so the offsets and the column map cost one sync, not four.
 
-const _CUDA_Q_TABLES = Ref{Any}(nothing)
-const _CUDA_Q_SCRATCH = Ref{Any}(nothing)
+# The caches are concretely typed: a `Ref{Any}` here made every launch site
+# that reads them dispatch at run time, a few microseconds per op.
+const _QTables = NamedTuple{(:iq2grid, :ksigns, :kmask, :iq3grid, :kv4),Tuple{
+    _CuVec{eltype(Gesso.Inference.IQ2XS_GRID)},_CuVec{eltype(Gesso.Inference.KSIGNS_IQ2XS)},
+    _CuVec{eltype(Gesso.Inference.KMASK_IQ2XS)},_CuVec{eltype(Gesso.Inference.IQ3XXS_GRID)},
+    _CuVec{eltype(Gesso.Inference.KVALUES_IQ4NL)}}}
+const _Q8Bufs = Tuple{_CuVec{Int32},_CuVec{Float32},_CuVec{Int32}}
+
+const _CUDA_Q_TABLES = Ref{Union{Nothing,_QTables}}(nothing)
+const _CUDA_Q_SCRATCH = Ref{Union{Nothing,_CuVec{UInt8}}}(nothing)
 # Activation Q8 buffers for expert launches. Kept apart from the dense slot so
 # that a dense matmul never reallocates the expert buffers.
-const _CUDA_Q8_EXPERT = Ref{Any}(nothing)
-const _CUDA_Q8_DENSE = Ref{Any}(nothing)
-const _CUDA_Q_META = Ref{Any}(nothing)
+const _CUDA_Q8_EXPERT = Ref{Union{Nothing,_Q8Bufs}}(nothing)
+const _CUDA_Q8_DENSE = Ref{Union{Nothing,_Q8Bufs}}(nothing)
+const _CUDA_Q_META = Ref{Union{Nothing,_CuVec{Int32}}}(nothing)
 const _CUDA_Q_META_HOST = Ref{Vector{Int32}}(Int32[])
 const _CUDA_Q_HOSTPACK = Ref{Vector{UInt8}}(UInt8[])
 const _CUDA_Q_HOSTOFF = Ref{Vector{Int32}}(Int32[])
 
-function _cuda_q_tables()
+function _cuda_q_tables()::_QTables
     t = _CUDA_Q_TABLES[]
     t !== nothing && return t
     Inf_ = Gesso.Inference
@@ -59,7 +67,7 @@ end
 
 # Activation buffers for `nblocks` 32-value blocks: (qx, dx, sx). Grown on
 # demand and reused, so a steady decode allocates nothing per call.
-function _cuda_q8_buffers!(slot::Ref, nblocks::Int)
+function _cuda_q8_buffers!(slot::Ref{Union{Nothing,_Q8Bufs}}, nblocks::Int)::_Q8Bufs
     s = slot[]
     if s === nothing || length(s[2]) < nblocks
         n = max(nblocks, 1)
@@ -313,28 +321,35 @@ function _cuda_launch_qgemv!(
         )
         return y
     end
-    tables = _cuda_q_tables()
-    if ggml_type == I.GGML_TYPE_IQ2_XS
-        K, bsz, grid = :iq2_xs, 74, tables.iq2grid
-    elseif ggml_type == I.GGML_TYPE_IQ3_XXS
-        K, bsz, grid = :iq3_xxs, 98, tables.iq3grid
-    elseif ggml_type == I.GGML_TYPE_IQ4_XS
-        K, bsz, grid = :iq4_xs, 136, tables.kv4
-    else
+    ggml_type in (I.GGML_TYPE_IQ2_XS, I.GGML_TYPE_IQ3_XXS, I.GGML_TYPE_IQ4_XS) ||
         error("cuda qgemv: unsupported ggml type $ggml_type")
-    end
     _cu_aligned(q, 4) || error("cuda qgemv: expert bytes not 4-byte aligned")
+    tables = _cuda_q_tables()
     nbk = ne0 ÷ 32
     ncols = size(x, 2)
     total = ncols * nbk
     qx, dx, _ = _cuda_q8_buffers!(_CUDA_Q8_EXPERT, total)
     # quantize=false: the caller just quantized this same x into these buffers
     quantize && @fastcuda threads = 256 blocks = cld(total, 256) _cuda_q8_1_quant_cols_kernel!(qx, dx, x, nbk, total)
-    @fastcuda threads = 128 blocks = (cld(ne1, 4), n_used) _cuda_eqgemv_kernel!(
-        y, q, qx, dx, meta, coloff, ncols == 1, ne1, nbk, bsz, (nbk ÷ 8) * bsz, alpha, beta,
-        Val{K}(), grid, tables.kv4, tables.ksigns, tables.kmask,
-    )
+    # One launch per type so each `Val` is a compile-time constant.
+    args = (y, q, qx, dx, meta, coloff, ncols == 1, ne1, nbk, alpha, beta, n_used, tables)
+    if ggml_type == I.GGML_TYPE_IQ2_XS
+        _cuda_eqgemv_launch!(Val(:iq2_xs), 74, tables.iq2grid, args...)
+    elseif ggml_type == I.GGML_TYPE_IQ3_XXS
+        _cuda_eqgemv_launch!(Val(:iq3_xxs), 98, tables.iq3grid, args...)
+    else
+        _cuda_eqgemv_launch!(Val(:iq4_xs), 136, tables.kv4, args...)
+    end
     return y
+end
+
+@inline function _cuda_eqgemv_launch!(vk::Val, bsz, grid, y, q, qx, dx, meta, coloff, onecol,
+                                      ne1, nbk, alpha, beta, n_used, tables)
+    @fastcuda threads = 128 blocks = (cld(ne1, 4), n_used) _cuda_eqgemv_kernel!(
+        y, q, qx, dx, meta, coloff, onecol, ne1, nbk, bsz, (nbk ÷ 8) * bsz, alpha, beta,
+        vk, grid, tables.kv4, tables.ksigns, tables.kmask,
+    )
+    return nothing
 end
 
 function _cuda_launch_qgemv!(

@@ -2023,10 +2023,10 @@ function _cuda_argmax_final_kernel!(out, pv, pi, pb, nparts::Int)
 end
 
 struct ArgmaxBuffers
-    pv::CuVector{Float32}
-    pi::CuVector{Int32}
-    pb::CuVector{Int32}
-    out::CuVector{Int32}
+    pv::_CuVec{Float32}
+    pi::_CuVec{Int32}
+    pb::_CuVec{Int32}
+    out::_CuVec{Int32}
     host::Vector{Int32}
 end
 const _ARGMAX_BUFS = Dict{Int, ArgmaxBuffers}()
@@ -2284,9 +2284,9 @@ const _MOE_ROUTE_MAX_USED = 32
 
 # Per-slab launch metadata, [offsets; columns] as _cuda_launch_qgemv! reads it.
 struct _MoeRouteMeta
-    g::CuVector{Int32}
-    u::CuVector{Int32}
-    d::CuVector{Int32}
+    g::_CuVec{Int32}
+    u::_CuVec{Int32}
+    d::_CuVec{Int32}
 end
 const _MOE_ROUTE_META = Dict{Tuple{Int,Int},_MoeRouteMeta}()
 

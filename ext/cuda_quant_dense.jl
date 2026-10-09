@@ -21,7 +21,7 @@ const _DQ_KINDS = (:q4_k, :q5_k, :q6_k, :iq4_xs, :q8_0)
 # (r-1)*row_bytes, in ggml block order. Not an AbstractArray on purpose, as on
 # the host side (`QuantMatrix`).
 struct GpuDenseQuant
-    data::CuVector{UInt8}
+    data::_CuVec{UInt8}
     ggml_type::Int32
     ne0::Int
     nrows::Int
@@ -259,29 +259,55 @@ end
 _cuda_dq_matmul!(dst, x, w) = (_cuda_dq_matmul_group!((dst,), x, (w,)); dst)
 
 # The same for several weights reading one `x`: it is quantized once.
+# `storage` fields are untyped, so the work happens behind a function barrier:
+# one run-time dispatch per group instead of one per launch.
 function _cuda_dq_matmul_group!(dsts::Tuple, x, ws::Tuple)
-    xs = x.storage
+    _cuda_dq_group!(map(d -> d.storage, dsts), x.storage, map(w -> w.storage::GpuDenseQuant, ws))
+    return dsts
+end
+
+@noinline _dq_shape_error(what, a, b) =
+    throw(DimensionMismatch("dense quant matmul: $what is $a, want $b"))
+
+function _cuda_dq_group!(ds::Tuple, xs, qs::Tuple{Vararg{GpuDenseQuant}})
     n, k = size(xs, 1), size(xs, 2)
-    for (dst, w) in zip(dsts, ws)
-        q = w.storage
-        k == q.ne0 || throw(DimensionMismatch("dense quant matmul: x is $(size(xs)), W is $(size(q))"))
-        size(dst.storage) == (n, q.nrows) ||
-            throw(DimensionMismatch("dense quant matmul: dst is $(size(dst.storage)), want ($n, $(q.nrows))"))
+    for (d, q) in zip(ds, qs)
+        k == q.ne0 || _dq_shape_error("x", size(xs), ("_", q.ne0))
+        size(d) == (n, q.nrows) || _dq_shape_error("dst", size(d), (n, q.nrows))
         _cu_aligned(q.data, 4) || error("dense quant matmul: weight bytes not 4-byte aligned")
     end
-    n == 0 && return dsts
+    n == 0 && return nothing
     nb = k ÷ 32
     total = n * nb
     qx, dx, sx = _cuda_q8_buffers!(_CUDA_Q8_DENSE, total)
     @fastcuda threads = 256 blocks = cld(total, 256) _cuda_q8_1_quant_kernel!(qx, dx, sx, xs, nb, total)
     kv = _cuda_q_tables().kv4
-    for (dst, w) in zip(dsts, ws)
-        q = w.storage
-        @fastcuda threads = 128 blocks = (cld(q.nrows, 4), n) _cuda_dq_gemv_kernel!(
-            dst.storage, q.data, qx, dx, sx, kv, Val{_dq_kind(q.ggml_type)}(), q.nrows, nb, q.row_bytes,
-        )
+    for (d, q) in zip(ds, qs)
+        t = q.ggml_type
+        I = Gesso.Inference
+        # One launch per type so each `Val` is a compile-time constant.
+        if t == I.GGML_TYPE_Q5_K
+            _cuda_dq_launch!(Val(:q5_k), d, q, qx, dx, sx, kv, n, nb)
+        elseif t == I.GGML_TYPE_Q6_K
+            _cuda_dq_launch!(Val(:q6_k), d, q, qx, dx, sx, kv, n, nb)
+        elseif t == I.GGML_TYPE_Q4_K
+            _cuda_dq_launch!(Val(:q4_k), d, q, qx, dx, sx, kv, n, nb)
+        elseif t == I.GGML_TYPE_IQ4_XS
+            _cuda_dq_launch!(Val(:iq4_xs), d, q, qx, dx, sx, kv, n, nb)
+        elseif t == I.GGML_TYPE_Q8_0
+            _cuda_dq_launch!(Val(:q8_0), d, q, qx, dx, sx, kv, n, nb)
+        else
+            error("dense quant matmul: unsupported ggml type $t")
+        end
     end
-    return dsts
+    return nothing
+end
+
+@inline function _cuda_dq_launch!(vk::Val, d, q::GpuDenseQuant, qx, dx, sx, kv, n, nb)
+    @fastcuda threads = 128 blocks = (cld(q.nrows, 4), n) _cuda_dq_gemv_kernel!(
+        d, q.data, qx, dx, sx, kv, vk, q.nrows, nb, q.row_bytes,
+    )
+    return nothing
 end
 
 _dq_weight(w) = w isa ProjectionWeight && w.storage isa GpuDenseQuant

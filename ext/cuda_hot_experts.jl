@@ -82,8 +82,8 @@ mutable struct _HotLayer
     layer::Int
     nslots::Int
     stride::Int
-    pool::Union{Nothing,CuVector{UInt8}}
-    views::Union{Nothing,NTuple{3,CuVector{UInt8}}}
+    pool::Union{Nothing,_CuVec{UInt8}}
+    views::Union{Nothing,NTuple{3,_CuVec{UInt8}}}
     base::CuPtr{UInt8}
     slot_of::Vector{Int32}     # expert -> slot, 0 when not resident
     expert_in::Vector{Int32}   # slot -> expert, 0 empty, -1 copy in flight
@@ -93,7 +93,7 @@ mutable struct _HotLayer
     t::Int
     # [offsets; columns; weight bits], pinned so one async copy carries it
     meta_h::Vector{Int32}
-    meta_d::Union{Nothing,CuVector{Int32}}
+    meta_d::Union{Nothing,_CuVec{Int32}}
     pend_slot::Vector{Int}
     pend_exp::Vector{Int}
     copying::Bool
