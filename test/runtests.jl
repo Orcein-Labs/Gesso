@@ -113,6 +113,7 @@ using Gesso: reference_prefill, reference_generate
     # the CPU oracle at declared atol — one named skip without a device
     include("test_cuda_ops.jl")
     include("test_cuda_hybrid.jl")
+    include("test_gdn_decode_fused.jl")
     include("test_cuda_moe.jl")
 
     # Phase 4 (§LXXVII item C): full prefill + generate on device vs the CPU

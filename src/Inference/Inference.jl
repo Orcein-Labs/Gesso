@@ -377,6 +377,36 @@ function _gdn_gate_params!(backend, g, beta, a, b, A_log, dt_bias)
     return g, beta
 end
 
+# Fused single-token GDN decode is a backend capability. Only a backend that
+# defines `_gdn_decode_core!` (the device extension) turns it on; the
+# unfused multi-token path stays the reference for every other case.
+_gdn_fused_decode(::AbstractGessoBackend) = false
+
+function _gdn_decode_core!(backend, scratch, bt, spec, eps, conv_state, rec_state)
+    error("_gdn_decode_core!: no fused GDN decode kernel for $(backend_name(backend))")
+end
+
+# Preallocated per-token GDN temporaries (shape (1, n) each), created once per
+# generation and reused by every linear-attention layer. Layers share shapes.
+function _gdn_decode_scratch(zeros_like, tensors)
+    spec = haskey(tensors, :spec) ? tensors.spec : nothing
+    mx = spec === nothing ? nothing : spec.mixer
+    mx === nothing && return nothing
+    key_dim = mx.num_key_heads * mx.key_head_dim
+    value_dim = mx.num_value_heads * mx.value_head_dim
+    conv_dim = 2 * key_dim + value_dim
+    nv = mx.num_value_heads
+    return (
+        mixed=zeros_like((1, conv_dim)),
+        conv=zeros_like((1, conv_dim)),
+        z=zeros_like((1, value_dim)),
+        a=zeros_like((1, nv)),
+        b=zeros_like((1, nv)),
+        core=zeros_like((1, value_dim)),
+        merged=zeros_like((1, value_dim)),
+    )
+end
+
 function _hybrid_linear_block!(
     cpu,
     h::Activation,
@@ -389,6 +419,8 @@ function _hybrid_linear_block!(
     zeros_like;
     conv_state=nothing,
     rec_state=nothing,
+    gdn_scratch=nothing,
+    gdn_fused::Bool=true,
 )
     mx = spec.mixer
     seq = size(h.storage, 1)
@@ -399,39 +431,70 @@ function _hybrid_linear_block!(
     dk, dv = mx.key_head_dim, mx.value_head_dim
     ksz = mx.conv_kernel_dim
 
-    rmsnorm!(cpu, normed, h, bt.attn_rms, wl; eps)
+    if seq == 1 && gdn_fused && gdn_scratch !== nothing && conv_state !== nothing &&
+       rec_state !== nothing && _gdn_fused_decode(cpu)
+        # single-token decode: same ops, preallocated buffers, fused GDN kernels
+        @decode_sub :gdn_norm cpu rmsnorm!(cpu, normed, h, bt.attn_rms, wl; eps)
+        s = gdn_scratch
+        mixed = Activation(; shape=(1, conv_dim), storage=s.mixed)
+        z = Activation(; shape=(1, value_dim), storage=s.z)
+        a = Activation(; shape=(1, nv), storage=s.a)
+        b = Activation(; shape=(1, nv), storage=s.b)
+        @decode_sub :gdn_proj cpu begin
+            matmul!(cpu, mixed, normed, bt.wgdn_qkv, wl)
+            matmul!(cpu, z, normed, bt.wgdn_z, wl)
+            matmul!(cpu, a, normed, bt.wgdn_a, wl)
+            matmul!(cpu, b, normed, bt.wgdn_b, wl)
+        end
+        # conv+SiLU+state, gates, q/k L2norm, delta rule, gated norm: device kernels
+        _gdn_decode_core!(cpu, s, bt, spec, eps, conv_state, rec_state)
+        @decode_sub :gdn_outproj cpu begin
+            merged_act = Activation(; shape=(1, value_dim), storage=s.merged)
+            matmul!(cpu, sub, merged_act, bt.wgdn_o, wl)
+        end
+        return sub
+    end
+
+    @decode_sub :gdn_norm cpu rmsnorm!(cpu, normed, h, bt.attn_rms, wl; eps)
     mixed = Activation(; shape=(seq, conv_dim), storage=zeros_like((seq, conv_dim)))
     z = Activation(; shape=(seq, value_dim), storage=zeros_like((seq, value_dim)))
     a = Activation(; shape=(seq, nv), storage=zeros_like((seq, nv)))
     b = Activation(; shape=(seq, nv), storage=zeros_like((seq, nv)))
-    matmul!(cpu, mixed, normed, bt.wgdn_qkv, wl)
-    matmul!(cpu, z, normed, bt.wgdn_z, wl)
-    matmul!(cpu, a, normed, bt.wgdn_a, wl)
-    matmul!(cpu, b, normed, bt.wgdn_b, wl)
+    @decode_sub :gdn_proj cpu begin
+        matmul!(cpu, mixed, normed, bt.wgdn_qkv, wl)
+        matmul!(cpu, z, normed, bt.wgdn_z, wl)
+        matmul!(cpu, a, normed, bt.wgdn_a, wl)
+        matmul!(cpu, b, normed, bt.wgdn_b, wl)
+    end
 
     conv_out = zeros_like((seq, conv_dim))
     if conv_state === nothing
         conv_state = zeros_like((conv_dim, ksz - 1))
     end
-    _causal_conv1d_silu!(cpu, conv_out, mixed.storage, bt.wgdn_conv.storage, conv_state)
+    @decode_sub :gdn_conv cpu _causal_conv1d_silu!(
+        cpu, conv_out, mixed.storage, bt.wgdn_conv.storage, conv_state)
 
     q = zeros_like((seq, nk, dk))
     k = zeros_like((seq, nk, dk))
     v = zeros_like((seq, nv, dv))
-    _split_heads!(q, view(conv_out, :, 1:key_dim), nk, dk)
-    _split_heads!(k, view(conv_out, :, (key_dim+1):(2*key_dim)), nk, dk)
-    _split_heads!(v, view(conv_out, :, (2*key_dim+1):conv_dim), nv, dv)
+    @decode_sub :gdn_split cpu begin
+        _split_heads!(q, view(conv_out, :, 1:key_dim), nk, dk)
+        _split_heads!(k, view(conv_out, :, (key_dim+1):(2*key_dim)), nk, dk)
+        _split_heads!(v, view(conv_out, :, (2*key_dim+1):conv_dim), nv, dv)
+    end
 
     g = zeros_like((seq, nv))
     beta = zeros_like((seq, nv))
     A_log = bt.wgdn_A_log.storage
     dt_bias = bt.wgdn_dt_bias.storage
-    _gdn_gate_params!(cpu, g, beta, a.storage, b.storage, A_log, dt_bias)
+    @decode_sub :gdn_gates cpu _gdn_gate_params!(
+        cpu, g, beta, a.storage, b.storage, A_log, dt_bias)
 
     core = zeros_like((seq, nv, dv))
     if rec_state === nothing
         rec_state = zeros_like((nv, dk, dv))
     end
+    # :gdn_qk and :gdn_recur are timed inside the backend's _gated_delta_rule!
     _gated_delta_rule!(
         cpu, core, q, k, v, g, beta, rec_state;
         v_head_tiled=mx.v_head_tiled,
@@ -442,7 +505,7 @@ function _hybrid_linear_block!(
     nrm = zeros_like((seq, dv))
     xh = zeros_like((seq, dv))
     scale = bt.wgdn_norm
-    for hh in 1:nv
+    @decode_sub :gdn_gnorm cpu for hh in 1:nv
         @views xh[:, :] .= core[:, hh, :]
         xh_act = Activation(; shape=(seq, dv), storage=xh)
         nrm_act = Activation(; shape=(seq, dv), storage=nrm)
@@ -451,10 +514,12 @@ function _hybrid_linear_block!(
         _silu_mul!(cpu, nrm, nrm, xh)
         @views core[:, hh, :] .= nrm
     end
-    merged = zeros_like((seq, value_dim))
-    _merge_heads!(merged, core, nv, dv)
-    merged_act = Activation(; shape=(seq, value_dim), storage=merged)
-    matmul!(cpu, sub, merged_act, bt.wgdn_o, wl)
+    @decode_sub :gdn_outproj cpu begin
+        merged = zeros_like((seq, value_dim))
+        _merge_heads!(merged, core, nv, dv)
+        merged_act = Activation(; shape=(seq, value_dim), storage=merged)
+        matmul!(cpu, sub, merged_act, bt.wgdn_o, wl)
+    end
     return sub
 end
 
@@ -993,6 +1058,7 @@ function reference_generate(
     scores = TemporaryWorkspace(; shape=(P, P), storage=zeros_like((P, P)))
     scores_out = TemporaryWorkspace(; shape=(P, P), storage=zeros_like((P, P)))
     gdn_conv, gdn_rec = _gdn_states(tensors, zeros_like)
+    gdn_scratch = _gdn_decode_scratch(zeros_like, tensors)
 
     positions = collect(0:(P-1))
     # BREADTH-0 Pass D — see reference_prefill. `nothing` = unscaled model.
@@ -1129,6 +1195,7 @@ function reference_generate(
             rotary_dim,
             gdn_conv,
             gdn_rec,
+            gdn_scratch,
         )
         _profile_token_end(tok_t0, true)
         if timing
@@ -1197,6 +1264,7 @@ function _decode_step!(
     rotary_dim=0,
     gdn_conv=nothing,
     gdn_rec=nothing,
+    gdn_scratch=nothing,
 )
     dim = model.embedding.dim
     kdim = n_kv_heads * d_head
@@ -1251,6 +1319,7 @@ function _decode_step!(
                 zeros_like;
                 conv_state=gdn_conv === nothing ? nothing : gdn_conv[bi],
                 rec_state=gdn_rec === nothing ? nothing : gdn_rec[bi],
+                gdn_scratch=gdn_scratch,
             )
             hp.storage .+= sub.storage
             _T_GDN_NS[] += time_ns() - t0
