@@ -35,6 +35,8 @@ else
         :q5_k => (176, 256, (0, 2)),
         :q6_k => (210, 256, (208,)),
         :iq4_xs => (136, 256, (0,)),
+        :iq2_xs => (74, 256, (0,)),
+        :iq3_xxs => (98, 256, (0,)),
         :q8_0 => (34, 32, (0,)),
     )
     const _DQ_TYPE = Dict(
@@ -42,6 +44,8 @@ else
         :q5_k => Inf_.GGML_TYPE_Q5_K,
         :q6_k => Inf_.GGML_TYPE_Q6_K,
         :iq4_xs => Inf_.GGML_TYPE_IQ4_XS,
+        :iq2_xs => Inf_.GGML_TYPE_IQ2_XS,
+        :iq3_xxs => Inf_.GGML_TYPE_IQ3_XXS,
         :q8_0 => Inf_.GGML_TYPE_Q8_0,
     )
 
@@ -136,6 +140,27 @@ else
         withenv("GESSO_GPU_DENSE_QUANT" => "1", "GESSO_GPU_BUDGET_MIB" => "0") do
             gpu = Gesso.to_device(cuda, ts)
             @test gpu.blocks[1].w.storage isa Gesso.Inference.HostOffload
+        end
+    end
+
+    # Expert path: one launch of the vector entry point on a single-column
+    # activation, against the same host reference and bound as the dense path.
+    function _device_expert_matmul(qm, X1)
+        k = size(X1, 2)
+        nrows = size(qm, 1)
+        q = CuArray{UInt8}(Inf_._quant_bytes(qm))
+        x = CuArray{Float32}(vec(X1))
+        y = CUDA.zeros(Float32, nrows)
+        _dq_ext._cuda_launch_qgemv!(y, x, q, qm.ggml_type, 0, k, nrows, 1.0f0, 0.0f0)
+        return reshape(Array(y), 1, nrows)
+    end
+
+    @testset "CUDA expert MMVQ: IQ2_XS, IQ3_XXS, IQ4_XS vs host dequant" begin
+        rng = MersenneTwister(41)
+        for kind in (:iq2_xs, :iq3_xxs, :iq4_xs)
+            qm = _random_quant_matrix(rng, kind, 37, 512)
+            X = randn(rng, Float32, 1, 512)
+            _check_against_host(qm, X, _device_expert_matmul(qm, X); label="$kind expert n=1")
         end
     end
 

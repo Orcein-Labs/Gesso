@@ -255,9 +255,7 @@ function _cuda_dq_matmul!(dst, x, w)
     n == 0 && return dst
     nb = k ÷ 32
     total = n * nb
-    qx = CuArray{Int32}(undef, total * 8)
-    dx = CuArray{Float32}(undef, total)
-    sx = CuArray{Int32}(undef, total)
+    qx, dx, sx = _cuda_q8_buffers!(_CUDA_Q8_DENSE, total)
     @cuda threads = 256 blocks = cld(total, 256) _cuda_q8_1_quant_kernel!(qx, dx, sx, xs, nb, total)
     kv = _cuda_q_tables().kv4
     @cuda threads = 128 blocks = (cld(q.nrows, 4), n) _cuda_dq_gemv_kernel!(
