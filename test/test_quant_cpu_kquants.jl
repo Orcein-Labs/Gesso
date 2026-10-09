@@ -409,6 +409,36 @@ end
     end
 end
 
+# QuantMatrix dispatch: K-quant and Q8_0 weights run natively (no to_float
+# fallback), and the matmul matches a dequant reference within the activation
+# quantization error.
+@testset "QuantMatrix matmul runs K-quant and Q8_0 natively" begin
+    rng = Xoshiro(90)
+    for (name, ty) in _KQTYPES
+        nval = _kq_nvals(ty)
+        ne0 = 2 * nval
+        nrows, seq = 9, 3
+        rb = _KQ._qrow_bytes(ty, ne0)
+        W = _kq_random_rows(rng, ty, nrows, 2)
+        q = _KQ.QuantMatrix(W, 0, ty, ne0, nrows, rb, C_NULL, Int64(nval))
+        x = randn(rng, Float32, seq, ne0)
+        dst = zeros(Float32, seq, nrows)
+        _KQ._quant_matmul!(dst, x, q)
+        yref = zeros(Float64, seq, nrows)
+        for r in 1:nrows
+            wdq = Vector{Float32}(undef, ne0)
+            _KQ._kq_dequant_row!(wdq, W, (r - 1) * rb, ty, ne0)
+            for t in 1:seq
+                yref[t, r] = sum(Float64.(wdq) .* Float64.(x[t, :]))
+            end
+        end
+        @testset "$name" begin
+            @test !(ty in _KQ._QUANT_FALLBACK_TYPES)
+            @test maximum(abs, Float64.(dst) .- yref) <= 2.0e-2 * maximum(abs, yref)
+        end
+    end
+end
+
 @testset "real tensors: K-quant path vs F32 reference" begin
     named = ("blk.0.attn_qkv.weight", "blk.0.ssm_out.weight", "output.weight", "blk.0.ffn_down_shexp.weight")
     ggml_ok_dir = isfile(joinpath(get(ENV, "GESSO_GGML_DIR", ""), "libggml-base.so"))

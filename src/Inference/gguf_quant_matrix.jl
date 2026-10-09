@@ -9,6 +9,8 @@
 # Matmul dispatch (CPU, correctness first):
 #   * native formats in `_qgemv_bytes!` (IQ2_XS, IQ3_XXS, IQ4_XS): the fused
 #     quant GEMV, no dequant buffer;
+#   * K-quants Q2_K..Q6_K and Q8_0: native integer kernels against Q8_K/Q8_0
+#     activations (`_qgemv_q8k_f32!`, quant_cpu_kquants.jl);
 #   * every other format: FALLBACK. Rows are dequantized per call through the
 #     existing ggml `to_float` path (`_dequant_f32`), in bounded row chunks,
 #     then multiplied in F32. This is a temporary correctness bridge. It is
@@ -43,8 +45,12 @@ Base.eltype(::QuantMatrix) = Float32
 _is_host_float_storage(::QuantMatrix) = true
 _is_quant_storage(::QuantMatrix) = true
 
+# Types whose matmul runs the integer Q8_K / Q8_0 kernels (quant_cpu_kquants.jl).
+_quant_q8k_native(t::Int32) = _kq_supported(t)
+
 _quant_native(t::Int32) =
-    t == GGML_TYPE_F32 || t == GGML_TYPE_IQ2_XS || t == GGML_TYPE_IQ3_XXS || t == GGML_TYPE_IQ4_XS
+    t == GGML_TYPE_F32 || t == GGML_TYPE_IQ2_XS || t == GGML_TYPE_IQ3_XXS || t == GGML_TYPE_IQ4_XS ||
+    _quant_q8k_native(t)
 
 _contiguous_rows(rows) = all(i -> rows[i + 1] == rows[i] + 1, 1:(length(rows) - 1))
 
@@ -116,7 +122,11 @@ function _quant_matmul!(dst::AbstractMatrix, x::AbstractMatrix, q::QuantMatrix)
             @inbounds for i in 1:q.ne0
                 xf[i] = Float32(x[t, i])
             end
-            _qgemv_bytes_threaded!(y, xf, bytes, q.ggml_type, q.ne0, q.nrows, 1.0f0, 0.0f0)
+            if _quant_q8k_native(q.ggml_type)
+                _qgemv_q8k_f32!(y, xf, bytes, q.ggml_type, q.ne0, q.nrows; threaded=true)
+            else
+                _qgemv_bytes_threaded!(y, xf, bytes, q.ggml_type, q.ne0, q.nrows, 1.0f0, 0.0f0)
+            end
             @inbounds for r in 1:q.nrows
                 dst[t, r] = y[r]
             end
