@@ -872,6 +872,8 @@ Config-agnostic: geometry is whatever the tensors carry, so Ornith
 # matmul accumulates in Float32; f32 keeps the exact F32 device path. Norms,
 # biases and other small parameters stay F32 either way. F16 exists only on
 # the device: the host copy is always F32.
+_moe_host_experts_enabled() = get(ENV, "GESSO_MOE_HOST_EXPERTS", "0") == "1"
+
 function _gpu_weight_eltype()
     raw = lowercase(strip(get(ENV, "GESSO_GPU_WEIGHT_DTYPE", "f16")))
     raw == "f16" && return Float16
@@ -1359,8 +1361,12 @@ function _moe_topk_swiglu!(
     order = Vector{Int}(undef, n_exp)
     quant = Gesso.Inference._is_quant_expert_bank(gate)
     # Banks that are mmap'd on the host (GgufQuantSlice in all three slabs)
-    # run on the CPU; only the activation goes D2H and the output goes H2D.
-    host_all = gate isa Gesso.Inference.GgufQuantSlice &&
+    # can run on the CPU; only the activation goes D2H and the output goes H2D.
+    # Opt-in (GESSO_MOE_HOST_EXPERTS=1): measured slower than uploading the
+    # active experts (0.573 vs 1.226 tok/s on Ornith-35B) until the host
+    # kernels are reworked.
+    host_all = _moe_host_experts_enabled() &&
+               gate isa Gesso.Inference.GgufQuantSlice &&
                up isa Gesso.Inference.GgufQuantSlice &&
                down isa Gesso.Inference.GgufQuantSlice
     Wg = Wu = Wd = nothing
