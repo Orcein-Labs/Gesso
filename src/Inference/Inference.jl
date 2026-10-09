@@ -421,6 +421,7 @@ function _hybrid_linear_block!(
     rec_state=nothing,
     gdn_scratch=nothing,
     gdn_fused::Bool=true,
+    cpu_scratch=nothing,
 )
     mx = spec.mixer
     seq = size(h.storage, 1)
@@ -453,6 +454,11 @@ function _hybrid_linear_block!(
             matmul!(cpu, sub, merged_act, bt.wgdn_o, wl)
         end
         return sub
+    end
+
+    if seq == 1 && cpu_scratch !== nothing && _cpu_gdn_fast_ok(bt, conv_state, rec_state, h)
+        # CPU single-token decode: preallocated F32 mixer (cpu_decode.jl)
+        return _gdn_decode_cpu!(cpu, h, normed, sub, bt, spec, wl, eps, conv_state, rec_state, cpu_scratch)
     end
 
     @decode_sub :gdn_norm cpu rmsnorm!(cpu, normed, h, bt.attn_rms, wl; eps)
@@ -494,8 +500,9 @@ function _hybrid_linear_block!(
     if rec_state === nothing
         rec_state = zeros_like((nv, dk, dv))
     end
-    # :gdn_qk and :gdn_recur are timed inside the backend's _gated_delta_rule!
-    _gated_delta_rule!(
+    # CPU: the whole call (q/k repeat + L2 norm + delta rule) is :gdn_recur;
+    # :gdn_qk stays 0 here. The CUDA backend times its own split inside.
+    @decode_sub :gdn_recur cpu _gated_delta_rule!(
         cpu, core, q, k, v, g, beta, rec_state;
         v_head_tiled=mx.v_head_tiled,
     )
@@ -528,10 +535,12 @@ function _ffn_block!(cpu, down, gate, up, act, normed2, bt, wl, zeros_like)
         return _moe_ffn!(cpu, down, normed2, bt, wl, zeros_like)
     end
     @decode_stage :dense_ffn cpu begin
-        matmul!(cpu, gate, normed2, bt.wgate, wl)
-        matmul!(cpu, up, normed2, bt.wup, wl)
-        swiglu!(cpu, act, gate, up, wl)
-        matmul!(cpu, down, act, bt.wdown, wl)
+        @decode_sub :ffn_gateup cpu begin
+            matmul!(cpu, gate, normed2, bt.wgate, wl)
+            matmul!(cpu, up, normed2, bt.wup, wl)
+        end
+        @decode_sub :ffn_act cpu swiglu!(cpu, act, gate, up, wl)
+        @decode_sub :ffn_down cpu matmul!(cpu, down, act, bt.wdown, wl)
     end
     return down
 end
@@ -1061,6 +1070,8 @@ function reference_generate(
     scores_out = TemporaryWorkspace(; shape=(P, P), storage=zeros_like((P, P)))
     gdn_conv, gdn_rec = _gdn_states(tensors, zeros_like)
     gdn_scratch = _gdn_decode_scratch(zeros_like, tensors)
+    spec_mx = haskey(tensors, :spec) && tensors.spec !== nothing ? tensors.spec.mixer : nothing
+    cpu_scratch = on_cpu && spec_mx !== nothing ? _cpu_decode_scratch(spec_mx, dim) : nothing
 
     positions = collect(0:(P-1))
     # BREADTH-0 Pass D — see reference_prefill. `nothing` = unscaled model.
@@ -1198,6 +1209,7 @@ function reference_generate(
             gdn_conv,
             gdn_rec,
             gdn_scratch,
+            cpu_scratch,
         )
         _profile_token_end(tok_t0, true)
         if timing
@@ -1267,6 +1279,7 @@ function _decode_step!(
     gdn_conv=nothing,
     gdn_rec=nothing,
     gdn_scratch=nothing,
+    cpu_scratch=nothing,
 )
     dim = model.embedding.dim
     kdim = n_kv_heads * d_head
@@ -1322,6 +1335,7 @@ function _decode_step!(
                 conv_state=gdn_conv === nothing ? nothing : gdn_conv[bi],
                 rec_state=gdn_rec === nothing ? nothing : gdn_rec[bi],
                 gdn_scratch=gdn_scratch,
+                cpu_scratch=cpu_scratch,
             )
             hp.storage .+= sub.storage
             _T_GDN_NS[] += time_ns() - t0
@@ -1329,36 +1343,44 @@ function _decode_step!(
         t0 = time_ns()
         @decode_stage :norm cpu rmsnorm!(cpu, normed, hp, bt.attn_rms, wl; eps)
         @decode_stage :attn_mixer cpu begin
-            matmul!(cpu, q, normed, bt.wq, wl)
-            matmul!(cpu, k, normed, bt.wk, wl)
-            matmul!(cpu, v, normed, bt.wv, wl)
-            _split_heads!(qh, q, n_heads, d_head)
-            _split_heads!(kh, k, n_kv_heads, d_head)
-            _split_heads!(vh, v, n_kv_heads, d_head)
-            if haskey(bt, :wq_norm)
-                rmsnorm!(cpu, qh, qh, bt.wq_norm, wl; eps)
-                rmsnorm!(cpu, kh, kh, bt.wk_norm, wl; eps)
+            @decode_sub :attn_proj cpu begin
+                matmul!(cpu, q, normed, bt.wq, wl)
+                matmul!(cpu, k, normed, bt.wk, wl)
+                matmul!(cpu, v, normed, bt.wv, wl)
             end
-            rope!(
-                cpu,
-                qh,
-                kh,
-                [pos0 - 1],
-                wl;
-                theta,
-                inv_freq,
-                interleaved=_tensors_rope_interleaved(tensors),
-                rotary_dim,
-            )  # 0-based position
-            # KV APPEND: exactly one row per layer per step, at n_kv_heads
-            kc[bi].storage[pos0, :, :] .= kh.storage[1, :, :]
-            vc[bi].storage[pos0, :, :] .= vh.storage[1, :, :]
+            @decode_sub :attn_headnorm_rope cpu begin
+                _split_heads!(qh, q, n_heads, d_head)
+                _split_heads!(kh, k, n_kv_heads, d_head)
+                _split_heads!(vh, v, n_kv_heads, d_head)
+                if haskey(bt, :wq_norm)
+                    rmsnorm!(cpu, qh, qh, bt.wq_norm, wl; eps)
+                    rmsnorm!(cpu, kh, kh, bt.wk_norm, wl; eps)
+                end
+                rope!(
+                    cpu,
+                    qh,
+                    kh,
+                    [pos0 - 1],
+                    wl;
+                    theta,
+                    inv_freq,
+                    interleaved=_tensors_rope_interleaved(tensors),
+                    rotary_dim,
+                )  # 0-based position
+            end
+            @decode_sub :attn_kv_append cpu begin
+                # KV APPEND: exactly one row per layer per step, at n_kv_heads
+                kc[bi].storage[pos0, :, :] .= kh.storage[1, :, :]
+                vc[bi].storage[pos0, :, :] .= vh.storage[1, :, :]
+            end
             # the query is the LAST position: it attends to the whole cache —
             # repeat the CACHE rows per query head (kh above is the single
             # new row; it was consumed by the append)
-            kx = _repeat_heads(kc[bi], group)
-            vx = _repeat_heads(vc[bi], group)
-            _attention_heads!(
+            @decode_sub :attn_kv_append cpu begin
+                kx = _repeat_heads(kc[bi], group)
+                vx = _repeat_heads(vc[bi], group)
+            end
+            @decode_sub :attn_core cpu _attention_heads!(
                 cpu,
                 attn.storage,
                 scores,
@@ -1372,14 +1394,15 @@ function _decode_step!(
                 K,
                 wl,
             )
-
-            _merge_heads!(merged, attn, n_heads, d_head)
-            if haskey(bt, :wattn_gate)
-                matmul!(cpu, gate_attn, normed, bt.wattn_gate, wl)
-                _sigmoid_mul!(cpu, merged.storage, merged.storage, gate_attn.storage)
+            @decode_sub :attn_outproj cpu begin
+                _merge_heads!(merged, attn, n_heads, d_head)
+                if haskey(bt, :wattn_gate)
+                    matmul!(cpu, gate_attn, normed, bt.wattn_gate, wl)
+                    _sigmoid_mul!(cpu, merged.storage, merged.storage, gate_attn.storage)
+                end
+                matmul!(cpu, sub, merged, bt.wo, wl)
+                hp.storage .+= sub.storage              # residual
             end
-            matmul!(cpu, sub, merged, bt.wo, wl)
-            hp.storage .+= sub.storage              # residual
         end
         _T_ATTN_NS[] += time_ns() - t0
         end
@@ -1436,6 +1459,7 @@ include("quant_q8k.jl")            # Q8_K activation quantization (ggml block_q8
 include("quant_cpu_simd.jl")       # native Q8_K x IQ dot products: scalar ref + AVX2
 include("quant_cpu_kquants.jl")    # native Q8_K / Q8_0 x K-quant dot products: scalar ref + AVX2
 include("gguf_quant_matrix.jl")    # quantized dense 2-D weights (QuantMatrix) + CPU matmul
+include("cpu_decode.jl")           # CPU seq = 1 GDN decode: preallocated F32 mixer
 include("tokenizer_protocol.jl")   # Pass C: the tokenizer PROTOCOL
 include("import_report.jl")      # Passes I/J: report + generated matrix
 
