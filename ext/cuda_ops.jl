@@ -1870,6 +1870,19 @@ function _cuda_stream_wait(s::CuStream=CUDA.stream())
     return nothing
 end
 
+function _cuda_event_wait(e::CuEvent)
+    while !CUDA.isdone(e)
+        ccall(:jl_cpu_pause, Cvoid, ())
+    end
+    return nothing
+end
+
+const _MOE_HOST_EVENT = Dict{Int,CuEvent}()
+_moe_host_event() = get!(() -> CuEvent(CUDA.EVENT_DISABLE_TIMING), _MOE_HOST_EVENT, CUDA.deviceid(CUDA.device()))
+
+# GESSO_MOE_OVERLAP=0 runs the shared expert after the copies land instead, for A/B.
+_moe_overlap_enabled() = get(ENV, "GESSO_MOE_OVERLAP", "1") == "1"
+
 # How long the CPU pool stays hot after a host-expert layer. It must cover the
 # GPU work up to the next host-expert layer (about 1 to 2 ms on the 35B); a
 # worker that parks in that gap makes the next layer's experts about twice as
@@ -1879,7 +1892,8 @@ const _MOE_HOST_HOLD_NS = 5_000_000
 # Top-k SwiGLU for one MoE layer whose expert slabs stay mmap'd on the host.
 # The GPU computes the router logits; the CPU routes and runs the experts; the
 # result returns to `y`. Per layer: one D2H wait and one async H2D.
-function _moe_topk_host!(backend::CUDABackend, y, x, router, gate, up, down, n_used::Int)
+function _moe_topk_host!(backend::CUDABackend, y, x, router, gate, up, down, n_used::Int;
+    overlap=nothing)
     seq, h = size(x)
     n_exp = size(router, 1)
     b = _moe_host_xfer(seq, n_exp, h, n_used)
@@ -1896,7 +1910,17 @@ function _moe_topk_host!(backend::CUDABackend, y, x, router, gate, up, down, n_u
         Gesso.Inference._profile_copy!(true)
         unsafe_copyto!(pointer(b.logits), pointer(logits), seq * n_exp; async=true, stream=s)
         unsafe_copyto!(pointer(b.x), pointer(xd), seq * h; async=true, stream=s)
-        _cuda_stream_wait(s)
+    end
+    # Work queued behind the copies runs on the GPU while the CPU runs the
+    # experts, so wait on the copies alone.
+    copied = _moe_host_event()
+    CUDA.record(copied, s)
+    if overlap !== nothing && _moe_overlap_enabled()
+        overlap()
+        Gesso.Inference.@decode_stage :moe_router backend _cuda_event_wait(copied)
+    else
+        Gesso.Inference.@decode_stage :moe_router backend _cuda_event_wait(copied)
+        overlap === nothing || overlap()
     end
     L = unsafe_wrap(Array, pointer(b.logits), (seq, n_exp))
     X = unsafe_wrap(Array, pointer(b.x), (seq, h))
@@ -1933,6 +1957,191 @@ function _moe_topk_host!(backend::CUDABackend, y, x, router, gate, up, down, n_u
     return y
 end
 
+# Device routing for decode on device-resident banks. Routing on the host meant
+# a logits D2H the host waits on, then the expert table, the weights and three
+# metadata blocks back up, all in every GPU MoE layer. That is 19 host
+# round trips per Ornith-35B token, and each one stops the host queueing work
+# ahead of the GPU. GESSO_MOE_DEVICE_ROUTE=0 restores the host route.
+_moe_device_route_enabled() = get(ENV, "GESSO_MOE_DEVICE_ROUTE", "1") == "1"
+
+const _MOE_ROUTE_MAX_EXP = 1024
+const _MOE_ROUTE_MAX_USED = 32
+
+# Per-slab launch metadata, [offsets; columns] as _cuda_launch_qgemv! reads it.
+struct _MoeRouteMeta
+    g::CuVector{Int32}
+    u::CuVector{Int32}
+    d::CuVector{Int32}
+end
+const _MOE_ROUTE_META = Dict{Tuple{Int,Int},_MoeRouteMeta}()
+
+function _moe_route_meta(n_used::Int)
+    k = (Int(CUDA.deviceid(CUDA.device())), n_used)
+    get!(_MOE_ROUTE_META, k) do
+        _MoeRouteMeta(CUDA.zeros(Int32, 2n_used), CUDA.zeros(Int32, 2n_used), CUDA.zeros(Int32, 2n_used))
+    end
+end
+
+# One block routes one row and matches _moe_route_row! bit for bit. The max is
+# order-free, so it reduces in a tree. The exp sum stays serial in index order.
+# exp is Base's own Float32 kernel, not the __nv_expf CUDA substitutes for it;
+# an exhaustive check over every non-positive Float32 down to -110 found no
+# mismatch. The top-k takes n_used argmax rounds keyed on (probability
+# descending, index ascending), the same strict order the host partial sort
+# uses. Taken experts drop to -1, below any probability.
+function _moe_route_kernel!(ws, mg, mu, md, logits, n_exp::Int32, n_used::Int32,
+                            bpe_g::Int32, bpe_u::Int32, bpe_d::Int32)
+    tid = threadIdx().x
+    nt = blockDim().x
+    p = CUDA.@cuStaticSharedMem(Float32, _MOE_ROUTE_MAX_EXP)
+    bv = CUDA.@cuStaticSharedMem(Float32, 256)
+    bi = CUDA.@cuStaticSharedMem(Int32, 256)
+    sv = CUDA.@cuStaticSharedMem(Float32, _MOE_ROUTE_MAX_USED)
+    si = CUDA.@cuStaticSharedMem(Int32, _MOE_ROUTE_MAX_USED)
+    @inbounds begin
+        m = typemin(Float32)
+        e = tid
+        while e <= n_exp
+            v = logits[1, e]
+            p[e] = v
+            v > m && (m = v)
+            e += nt
+        end
+        bv[tid] = m
+        CUDA.sync_threads()
+        stride = nt >> 1
+        while stride > 0
+            if tid <= stride
+                o = bv[tid + stride]
+                o > bv[tid] && (bv[tid] = o)
+            end
+            CUDA.sync_threads()
+            stride >>= 1
+        end
+        m = bv[1]
+        e = tid
+        while e <= n_exp
+            p[e] = Base.Math.exp_impl(p[e] - m, Val(:ℯ))
+            e += nt
+        end
+        CUDA.sync_threads()
+        if tid == 1
+            s = 0.0f0
+            for j in 1:n_exp
+                s += p[j]
+            end
+            bv[1] = 1.0f0 / s
+        end
+        CUDA.sync_threads()
+        invs = bv[1]
+        e = tid
+        while e <= n_exp
+            p[e] *= invs
+            e += nt
+        end
+        CUDA.sync_threads()
+        for k in 1:n_used
+            best = -2.0f0
+            besti = typemax(Int32)
+            e = tid
+            while e <= n_exp
+                v = p[e]
+                if v > best
+                    best = v
+                    besti = Int32(e)
+                end
+                e += nt
+            end
+            bv[tid] = best
+            bi[tid] = besti
+            CUDA.sync_threads()
+            stride = nt >> 1
+            while stride > 0
+                if tid <= stride
+                    ov = bv[tid + stride]
+                    oi = bi[tid + stride]
+                    if ov > bv[tid] || (ov == bv[tid] && oi < bi[tid])
+                        bv[tid] = ov
+                        bi[tid] = oi
+                    end
+                end
+                CUDA.sync_threads()
+                stride >>= 1
+            end
+            if tid == 1
+                w = bi[1]
+                si[k] = w
+                sv[k] = p[w]
+                p[w] = -1.0f0
+            end
+            CUDA.sync_threads()
+        end
+        if tid == 1
+            wsum = 0.0f0
+            for k in 1:n_used
+                wsum += sv[k]
+            end
+            invw = wsum > 0 ? 1.0f0 / wsum : 0.0f0
+            for k in 1:n_used
+                ws[k] = sv[k] * invw
+                e0 = si[k] - Int32(1)
+                mg[k] = e0 * bpe_g
+                mu[k] = e0 * bpe_u
+                md[k] = e0 * bpe_d
+                mg[n_used + k] = k
+                mu[n_used + k] = k
+                md[n_used + k] = k
+            end
+        end
+    end
+    return
+end
+
+function _moe_device_route_ok(y, x, router, gate, up, down, n_used::Int)
+    G = Gesso.Inference.GpuQuantSlice
+    return _moe_device_route_enabled() && size(x, 1) == 1 &&
+           x isa DenseCuArray && y isa DenseCuArray && router isa CuArray &&
+           gate isa G && up isa G && down isa G &&
+           gate.data isa CuVector && up.data isa CuVector && down.data isa CuVector &&
+           size(router, 1) <= _MOE_ROUTE_MAX_EXP && n_used <= _MOE_ROUTE_MAX_USED &&
+           down.n_exp * down.bytes_per_expert <= typemax(Int32) &&
+           gate.n_exp * max(gate.bytes_per_expert, up.bytes_per_expert) <= typemax(Int32)
+end
+
+# Decode MoE for one token with routing, expert projections and the weighted
+# combine all queued on the stream. Same kernels and cuBLAS calls as the
+# host-routed quant path below, so the output is bit-identical.
+function _moe_topk_device!(backend::CUDABackend, y, x, router, gate, up, down, n_used::Int)
+    h = size(x, 2)
+    n_exp = size(router, 1)
+    ff = size(gate, 2)
+    Gesso.Inference.@decode_stage :moe_alloc _CUDASync() begin
+        logits = _dev_scratch(:moe_logits, 1, n_exp)
+        Gbat = _dev_scratch(:moe_gbat, ff, n_used)
+        Ubat = _dev_scratch(:moe_ubat, ff, n_used)
+        Hbat = _dev_scratch(:moe_hbat, ff, n_used)
+        Dbat = _dev_scratch(:moe_dbat, h, n_used)
+        ws = _dev_scratch(:moe_ws, n_used)
+    end
+    rt = _moe_route_meta(n_used)
+    Gesso.Inference.@decode_stage :moe_router backend begin
+        CUDA.CUBLAS.gemm!('N', 'T', _cu_scalar(one(Float32)), x, router, _cu_scalar(zero(Float32)), logits)
+        @cuda threads = 256 _moe_route_kernel!(
+            ws, rt.g, rt.u, rt.d, logits, Int32(n_exp), Int32(n_used),
+            Int32(gate.bytes_per_expert), Int32(up.bytes_per_expert), Int32(down.bytes_per_expert),
+        )
+    end
+    xt = reshape(x, h, 1)
+    Gesso.Inference.@decode_stage :moe_qgemv backend begin
+        _cuda_launch_qgemv!(Gbat, xt, gate.data, gate.ggml_type, rt.g, n_used, n_used, gate.ne0, gate.ne1, 1.0f0, 0.0f0)
+        _cuda_launch_qgemv!(Ubat, xt, up.data, up.ggml_type, rt.u, n_used, n_used, up.ne0, up.ne1, 1.0f0, 0.0f0)
+        _silu_mul!(backend, Hbat, Ubat, Gbat)
+        _cuda_launch_qgemv!(Dbat, Hbat, down.data, down.ggml_type, rt.d, n_used, n_used, down.ne0, down.ne1, 1.0f0, 0.0f0)
+        CUDA.CUBLAS.gemv!('N', _cu_scalar(one(Float32)), Dbat, ws, _cu_scalar(zero(Float32)), reshape(y, h))
+    end
+    return y
+end
+
 function _moe_topk_swiglu!(
     backend::CUDABackend,
     y::AbstractMatrix,
@@ -1941,7 +2150,8 @@ function _moe_topk_swiglu!(
     gate,
     up,
     down,
-    n_used::Int,
+    n_used::Int;
+    overlap=nothing,
 )
     seq, h = size(x)
     n_exp = size(router, 1)
@@ -1967,7 +2177,11 @@ function _moe_topk_swiglu!(
        gate isa Gesso.Inference.GgufQuantSlice &&
        up isa Gesso.Inference.GgufQuantSlice &&
        down isa Gesso.Inference.GgufQuantSlice
-        return _moe_topk_host!(backend, y, x, router, gate, up, down, n_used)
+        return _moe_topk_host!(backend, y, x, router, gate, up, down, n_used; overlap)
+    end
+    overlap === nothing || overlap()
+    if _moe_device_route_ok(y, x, router, gate, up, down, n_used)
+        return _moe_topk_device!(backend, y, x, router, gate, up, down, n_used)
     end
 
     Gesso.Inference.@decode_stage :moe_alloc _CUDASync() begin

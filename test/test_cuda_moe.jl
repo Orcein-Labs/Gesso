@@ -294,11 +294,72 @@ else
             x = randn(rng, Float32, seq, h)
             y_cpu = zeros(Float32, seq, h)
             Inf_._moe_topk_swiglu!(cpu, y_cpu, x, router, gate3, up3, down3, n_used)
-            y_gpu = CUDA.fill(NaN32, seq, h)
-            Inf_._moe_topk_swiglu!(
-                cuda, y_gpu, CuArray{Float32}(x), CuArray{Float32}(router), gs, us, ds, n_used,
-            )
-            @test approx_eq(Array(y_gpu), y_cpu; atol=1e-3)
+            # the overlap is queued between the copies and the event wait in
+            # one mode and after it in the other; either way it runs once and
+            # its GPU work lands before the caller reads it
+            for ov in ("1", "0")
+                y_gpu = CUDA.fill(NaN32, seq, h)
+                xd = CuArray{Float32}(x)
+                side = CUDA.zeros(Float32, seq, h)
+                ran = Ref(0)
+                withenv("GESSO_MOE_OVERLAP" => ov) do
+                    Inf_._moe_topk_swiglu!(
+                        cuda, y_gpu, xd, CuArray{Float32}(router), gs, us, ds, n_used;
+                        overlap=() -> (ran[] += 1; side .= 2 .* xd; nothing),
+                    )
+                end
+                @test approx_eq(Array(y_gpu), y_cpu; atol=1e-3)
+                @test ran[] == 1
+                @test Array(side) == 2 .* x
+            end
+        end
+    end
+
+    @testset "cuda device MoE route matches the host route bit for bit" begin
+        ext = Base.get_extension(Gesso, :GessoCUDAExt)
+        rng = deterministic_rng(41)
+        h, ff, n_exp, n_used = 16, 8, 256, 8
+        gpu_slice(A3, ne0, ne1) = (s = _pack_f32_slice(A3, ne0, ne1);
+            Gesso.GpuQuantSlice(CuArray(s.data), s.ggml_type, s.n_exp, ne0, ne1, s.bytes_per_expert, s.blck_size))
+        gate3 = randn(rng, Float32, n_exp, ff, h)
+        up3 = randn(rng, Float32, n_exp, ff, h)
+        down3 = randn(rng, Float32, n_exp, h, ff)
+        gs, us, ds = gpu_slice(gate3, h, ff), gpu_slice(up3, h, ff), gpu_slice(down3, ff, h)
+        tied = [200, 7, 130, 64, 9, 251, 33, 180, 2, 99]
+        for trial in 1:6
+            x = randn(rng, Float32, 1, h)
+            router = randn(rng, Float32, n_exp, h)
+            if trial > 3
+                # identical router rows give identical logits: the tie order
+                # (lower index first) decides which of them make the top k
+                lead = vec(x) .* (30 / sum(abs2, x))
+                for e in tied
+                    router[e, :] .= lead
+                end
+            end
+            rd = CuArray(router)
+            xd = CuArray(x)
+            y_host = CUDA.fill(NaN32, 1, h)
+            withenv("GESSO_MOE_DEVICE_ROUTE" => "0") do
+                Inf_._moe_topk_swiglu!(cuda, y_host, xd, rd, gs, us, ds, n_used)
+            end
+            y_dev = CUDA.fill(NaN32, 1, h)
+            ran = Ref(0)
+            Inf_._moe_topk_swiglu!(cuda, y_dev, xd, rd, gs, us, ds, n_used;
+                overlap=() -> (ran[] += 1; nothing))
+            @test Array(y_dev) == Array(y_host)
+            @test ran[] == 1
+
+            logits = Array(ext._dev_scratch(:moe_logits, 1, n_exp))
+            order = collect(1:n_exp)
+            experts = zeros(Int, n_used)
+            wbuf = zeros(Float32, n_used)
+            ext._moe_route_row!(order, experts, wbuf, vec(logits), n_exp, n_used)
+            meta = Array(ext._moe_route_meta(n_used).g)
+            @test meta[1:n_used] .÷ gs.bytes_per_expert .+ 1 == experts
+            @test meta[(n_used + 1):end] == 1:n_used
+            @test Array(ext._dev_scratch(:moe_ws, n_used)) == wbuf
+            trial > 3 && @test experts == sort(tied)[1:n_used]
         end
     end
 

@@ -558,6 +558,9 @@ function _moe_ffn!(cpu, down, normed2, bt, wl, zeros_like)
     x = normed2.storage
     y = down.storage
     n_used = haskey(bt, :n_expert_used) ? Int(bt.n_expert_used) : size(bt.wrouter.storage, 1)
+    shared = haskey(bt, :wshared_gate)
+    sd = shared ? Activation(; shape=size(x), storage=zeros_like(size(x))) : nothing
+    shared_ffn = shared ? _shared_expert_thunk(cpu, sd, normed2, bt, wl, zeros_like) : nothing
     _moe_topk_swiglu!(
         cpu,
         y,
@@ -566,20 +569,11 @@ function _moe_ffn!(cpu, down, normed2, bt, wl, zeros_like)
         bt.wexp_gate.storage,
         bt.wexp_up.storage,
         bt.wexp_down.storage,
-        n_used,
+        n_used;
+        overlap=shared_ffn,
     )
-    if haskey(bt, :wshared_gate)
+    if shared
         @decode_stage :shared_expert cpu begin
-            seq, h = size(x)
-            ff = size(bt.wshared_gate.storage, 1)
-            sg = Activation(; shape=(seq, ff), storage=zeros_like((seq, ff)))
-            su = Activation(; shape=(seq, ff), storage=zeros_like((seq, ff)))
-            sa = Activation(; shape=(seq, ff), storage=zeros_like((seq, ff)))
-            sd = Activation(; shape=(seq, h), storage=zeros_like((seq, h)))
-            matmul!(cpu, sg, normed2, bt.wshared_gate, wl)
-            matmul!(cpu, su, normed2, bt.wshared_up, wl)
-            swiglu!(cpu, sa, sg, su, wl)
-            matmul!(cpu, sd, sa, bt.wshared_down, wl)
             if haskey(bt, :wshared_gate_inp)
                 _shared_gate_add!(cpu, y, x, sd.storage, bt.wshared_gate_inp.storage)
             else
@@ -590,13 +584,34 @@ function _moe_ffn!(cpu, down, normed2, bt, wl, zeros_like)
     return down
 end
 
+# The shared expert reads only `normed2` and writes only `sd`, so it is handed
+# to `_moe_topk_swiglu!` as `overlap` and queued wherever it hides best behind
+# the routed experts.
+function _shared_expert_thunk(cpu, sd, normed2, bt, wl, zeros_like)
+    seq = size(normed2.storage, 1)
+    ff = size(bt.wshared_gate.storage, 1)
+    return () -> @decode_stage :shared_expert cpu begin
+        sg = Activation(; shape=(seq, ff), storage=zeros_like((seq, ff)))
+        su = Activation(; shape=(seq, ff), storage=zeros_like((seq, ff)))
+        sa = Activation(; shape=(seq, ff), storage=zeros_like((seq, ff)))
+        matmul!(cpu, sg, normed2, bt.wshared_gate, wl)
+        matmul!(cpu, su, normed2, bt.wshared_up, wl)
+        swiglu!(cpu, sa, sg, su, wl)
+        matmul!(cpu, sd, sa, bt.wshared_down, wl)
+        nothing
+    end
+end
+
 # HostOffload unwraps in gguf_import.jl; this generic keeps dense Array /
 # CuArray / LavaArray banks pass-through for any MoE config.
 _offload_host_array(s) = s
 
-function _moe_topk_swiglu!(backend, y, x, router, gate, up, down, n_used)
+# `overlap`, when given, is work that touches neither `y` nor the experts; it
+# runs exactly once before this returns.
+function _moe_topk_swiglu!(backend, y, x, router, gate, up, down, n_used; overlap=nothing)
     gate isa CachedExpertBank &&
         error("_moe_topk_swiglu!: CachedExpertBank needs a device backend, got $(typeof(backend))")
+    overlap === nothing || overlap()
     if gate isa GgufQuantSlice || gate isa GpuQuantSlice
         return _cpu_moe_topk_swiglu_gguf!(y, x, router, gate, up, down, n_used)
     end
