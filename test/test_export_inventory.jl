@@ -191,6 +191,22 @@ const INVENTORY = Dict{Symbol, Tuple{Symbol, Vector{String}}}(
     :compatibility_table => (:live, ["test_breadth0.jl"]),
     :vocab_size => (:live, ["test_tokenizer_protocol.jl"]),
 
+    # --- Phase 20 speculation seam (§XCIII; SPECULATION_SEAM.md) ------------
+    :DraftSource => (:live, ["test_speculation.jl"]),
+    :DraftContext => (:live, ["test_speculation.jl"]),
+    :Draft => (:live, ["test_speculation.jl"]),
+    :propose => (:live, ["test_speculation.jl"]),
+    :observe! => (:live, ["test_speculation.jl"]),
+    :SuffixSource => (:live, ["test_speculation.jl"]),
+    :TemplateRule => (:live, ["test_speculation.jl"]),
+    :TemplateSource => (:live, ["test_speculation.jl"]),
+    :SymbolicSource => (:live, ["test_speculation.jl"]),
+    :IntegerArithmetic => (:live, ["test_speculation.jl"]),
+    :IntegerSequence => (:live, ["test_speculation.jl"]),
+    :LastLineProcedure => (:live, ["test_speculation.jl"]),
+    :complete_text => (:live, ["test_speculation.jl"]),
+    :feedback_counts => (:live, ["test_speculation.jl"]),
+
     # --- Phase 5 engine (§LXXVIII) ------------------------------------------
     :Session => (:live, ["test_session.jl"]),
     :prefill! => (:live, ["test_session.jl"]),

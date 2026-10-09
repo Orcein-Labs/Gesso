@@ -189,6 +189,10 @@ using Gesso: reference_prefill, reference_generate
     # torch, a snapshot, or a device (CI never requires any of them).
     include("test_speed_floor_harness.jl")
 
+    # Phase 20 (§XCIII; docs/design/SPECULATION_SEAM.md): the host-side draft
+    # seam and its sources, ported from GessoSymbolicDrafts 59553aa. No verifier.
+    include("test_speculation.jl")
+
     # Phase 10D (foundation hardening item A): every public name has a home —
     # export inventory + parked-empty fence. Always-on, no device/snapshot.
     include("test_export_inventory.jl")
