@@ -894,6 +894,11 @@ function _f16_device_copy(s)
     return h
 end
 
+# Host F32 view of a weight for upload. Quantized storage dequantizes here;
+# an Array is returned as it is (converted to Float32 like before).
+_host_f32(s::Gesso.Inference.QuantMatrix) = Gesso.Inference._quant_host_f32(s)
+_host_f32(s) = convert(Array{Float32}, s)
+
 function _to_device_cuda(tensors)
     budget = Gesso.Inference._gpu_budget_bytes()
     wdt = _gpu_weight_eltype()
@@ -918,7 +923,8 @@ function _to_device_cuda(tensors)
             push!(qpending, s)
         else
             push!(pending, s)
-            if matmul && s isa Array && ndims(s) == 2 && length(s) >= _GPU_F16_MIN_ELEMS
+            if matmul && (s isa Array || s isa Gesso.Inference.QuantMatrix) &&
+               ndims(s) == 2 && length(s) >= _GPU_F16_MIN_ELEMS
                 push!(f16set, objectid(s))
             end
         end
@@ -937,7 +943,7 @@ function _to_device_cuda(tensors)
         s = t.storage
         (s === nothing || haskey(conv, s)) && return
         conv[s] = s isa Gesso.Inference.HostOffload ? s :
-            Gesso.Inference.HostOffload(convert(Array{Float32}, s))
+            Gesso.Inference.HostOffload(_host_f32(s))
         return
     end
 
@@ -968,18 +974,22 @@ function _to_device_cuda(tensors)
 
     remaining = max(Int64(0), budget - used)
     for s in uniq
+        # A quantized dense weight is dequantized here, per tensor, to host F32
+        # and then takes the same F16/F32/offload path as an Array. The device
+        # bytes match the pre-quant loader exactly.
+        arr = s isa Gesso.Inference.QuantMatrix ? Gesso.Inference._quant_host_f32(s) : s
         n = Int64(prod(size(s)))
         if wdt === Float16 && objectid(s) in f16set && 2n <= remaining
-            conv[s] = _f16_device_copy(s)
+            conv[s] = _f16_device_copy(arr)
             remaining -= 2n
             continue
         end
         nbytes = n * Int64(sizeof(Float32))
         if nbytes <= remaining
-            conv[s] = CuArray{Float32}(s)
+            conv[s] = CuArray{Float32}(arr)
             remaining -= nbytes
         else
-            data = eltype(s) === Float32 && s isa Array ? s : convert(Array{Float32}, s)
+            data = eltype(arr) === Float32 && arr isa Array ? arr : convert(Array{Float32}, arr)
             conv[s] = Gesso.Inference.HostOffload(data)
         end
     end
