@@ -99,6 +99,10 @@ using Gesso: reference_prefill, reference_generate
     # real Kolibri-1 Q2_K expert rows (env-gated)
     include("test_moe_kquant_experts.jl")
 
+    # Batched Q8_K host MoE (one quantization per token, two pool dispatches)
+    # vs the per-expert path; red control on permuted routing weights
+    include("test_moe_host_batched.jl")
+
     # BREADTH-0 Pass C: the tokenizer PROTOCOL — GPT-2 BPE is one
     # implementation, metaspace byte-level BPE is a materially different
     # second one, and both answer the same protocol.

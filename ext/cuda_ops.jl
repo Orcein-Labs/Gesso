@@ -1772,10 +1772,6 @@ function _moe_topk_swiglu!(
     if host_all
         xh = Vector{Float32}(undef, h)
         yh = Vector{Float32}(undef, h)
-        gh = Vector{Float32}(undef, ff)
-        uh = Vector{Float32}(undef, ff)
-        hh = Vector{Float32}(undef, ff)
-        dh = Vector{Float32}(undef, h)
     elseif quant || cached
         Gesso.Inference.@decode_stage :moe_alloc _CUDASync() begin
             Gbat = _dev_scratch(:moe_gbat, ff, n_used)
@@ -1829,8 +1825,8 @@ function _moe_topk_swiglu!(
                 Gesso.Inference._profile_copy!(true)
                 copyto!(xh, xt)
             end
-            Gesso.Inference.@decode_stage :moe_host nothing Gesso.Inference._moe_host_experts!(
-                yh, xh, experts, wbuf, n_used, gate, up, down, gh, uh, hh, dh,
+            Gesso.Inference.@decode_stage :moe_host nothing Gesso.Inference._moe_host_experts_auto!(
+                yh, xh, experts, wbuf, n_used, gate, up, down,
             )
             Gesso.Inference.@decode_stage :moe_h2d backend begin
                 Gesso.Inference._profile_copy!(false)
