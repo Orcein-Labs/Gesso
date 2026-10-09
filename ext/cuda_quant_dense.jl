@@ -74,27 +74,29 @@ function _cuda_q8_1_quant_kernel!(qx, dx, sx, X, nb::Int, total::Int)
     t = (g - 1) ÷ nb + 1
     b = (g - 1) % nb
     base = b * 32
-    amax = 0.0f0
-    for l in 1:32
-        amax = max(amax, abs(X[t, base + l]))
-    end
-    d = amax / 127.0f0
-    inv = amax == 0.0f0 ? 0.0f0 : 127.0f0 / amax
-    ssum = Int32(0)
-    wbase = (t - 1) * nb * 8 + b * 8
-    for w in 0:7
-        u = UInt32(0)
-        for tt in 0:3
-            v = X[t, base + 4 * w + tt + 1] * inv
-            qi = unsafe_trunc(Int32, v + copysign(0.5f0, v))
-            qi = clamp(qi, Int32(-127), Int32(127))
-            ssum += qi
-            u |= UInt32(qi & 0xff) << (8 * tt)
+    @inbounds begin
+        amax = 0.0f0
+        for l in 1:32
+            amax = max(amax, abs(X[t, base + l]))
         end
-        qx[wbase + w + 1] = reinterpret(Int32, u)
+        d = amax / 127.0f0
+        inv = amax == 0.0f0 ? 0.0f0 : 127.0f0 / amax
+        ssum = Int32(0)
+        wbase = (t - 1) * nb * 8 + b * 8
+        for w in 0:7
+            u = UInt32(0)
+            for tt in 0:3
+                v = X[t, base + 4 * w + tt + 1] * inv
+                qi = unsafe_trunc(Int32, v + copysign(0.5f0, v))
+                qi = clamp(qi, Int32(-127), Int32(127))
+                ssum += qi
+                u |= UInt32(qi & 0xff) << (8 * tt)
+            end
+            qx[wbase + w + 1] = reinterpret(Int32, u)
+        end
+        dx[g] = d
+        sx[g] = ssum
     end
-    dx[g] = d
-    sx[g] = ssum
     return
 end
 
@@ -105,95 +107,102 @@ end
 
 # Q4_K / Q5_K: value = d*sc*q - dmin*mn, q is 4 bits (Q5_K adds one high bit
 # from qh). Sub-block s of a superblock takes nibble (s&1) of qs chunk s>>1.
+# Superblocks are 144 and 176 bytes, so every word read here is 4-aligned and
+# four values unpack at once with byte-lane masks.
 @inline function _dq_kq45(W, boff::Int, has_qh::Bool, b::Int, gb::Int, qx, dx, sx)
-    s = b & 7
-    d = _cu_f16(W, boff)
-    dmin = _cu_f16(W, boff + 2)
-    sbase = boff + 4
-    if s < 4
-        sc = Float32(W[sbase + s + 1] & 0x3f)
-        mn = Float32(W[sbase + s + 5] & 0x3f)
-    else
-        sc = Float32((W[sbase + s + 5] & 0x0f) | ((W[sbase + s - 3] >> 6) << 4))
-        mn = Float32((W[sbase + s + 5] >> 4) | ((W[sbase + s + 1] >> 6) << 4))
-    end
-    qs0 = boff + (has_qh ? 48 : 16) + 32 * (s >> 1)
-    qh0 = boff + 16
-    shift = 4 * (s & 1)
-    isum = Int32(0)
-    for w in 0:7
-        word = UInt32(0)
-        for tt in 0:3
-            l = 4 * w + tt
-            nib = (W[qs0 + l + 1] >> shift) & 0x0f
-            if has_qh
-                nib |= ((W[qh0 + l + 1] >> s) & 0x01) << 4
-            end
-            word |= UInt32(nib) << (8 * tt)
+    @inbounds begin
+        s = b & 7
+        dd = _cu_u32a(W, boff)
+        d = Float32(reinterpret(Float16, UInt16(dd & 0xffff)))
+        dmin = Float32(reinterpret(Float16, UInt16(dd >> 16)))
+        sbase = boff + 4
+        if s < 4
+            sc = Float32(W[sbase + s + 1] & 0x3f)
+            mn = Float32(W[sbase + s + 5] & 0x3f)
+        else
+            sc = Float32((W[sbase + s + 5] & 0x0f) | ((W[sbase + s - 3] >> 6) << 4))
+            mn = Float32((W[sbase + s + 5] >> 4) | ((W[sbase + s + 1] >> 6) << 4))
         end
-        isum = CUDA.dp4a(reinterpret(Int32, word), qx[gb * 8 + w + 1], isum)
+        qs0 = boff + (has_qh ? 48 : 16) + 32 * (s >> 1)
+        qh0 = boff + 16
+        shift = 4 * (s & 1)
+        isum = Int32(0)
+        for w in 0:7
+            word = (_cu_u32a(W, qs0 + 4 * w) >> shift) & 0x0f0f0f0f
+            if has_qh
+                word |= ((_cu_u32a(W, qh0 + 4 * w) >> s) & 0x01010101) << 4
+            end
+            isum = CUDA.dp4a(reinterpret(Int32, word), qx[gb * 8 + w + 1], isum)
+        end
+        return dx[gb + 1] * (d * sc * Float32(isum) - dmin * mn * Float32(sx[gb + 1]))
     end
-    return dx[gb + 1] * (d * sc * Float32(isum) - dmin * mn * Float32(sx[gb + 1]))
 end
 
 # Q6_K: value = d*sc*(q - 32), 6-bit q split into ql (low 4) and qh (high 2).
 # Sub-block s = 4h + g covers values 32s..32s+31; its first 16 values use scale
-# 2s and the last 16 use scale 2s+1.
+# 2s and the last 16 use scale 2s+1. The 210-byte superblock is only 2-aligned.
 @inline function _dq_q6k(W, boff::Int, b::Int, gb::Int, qx, dx)
-    s = b & 7
-    h = s >> 2
-    g = s & 3
-    ql0 = boff + 64 * h + 32 * (g & 1)
-    hi = g >> 1
-    qh0 = boff + 128 + 32 * h
-    sh = 2 * g
-    ia = Int32(0)
-    ib = Int32(0)
-    for w in 0:7
+    @inbounds begin
+        s = b & 7
+        h = s >> 2
+        g = s & 3
+        ql0 = boff + 64 * h + 32 * (g & 1)
+        hi = g >> 1
+        qh0 = boff + 128 + 32 * h
+        sh = 2 * g
+        ia = Int32(0)
+        ib = Int32(0)
+        for w in 0:7
+            lw = (_cu_u32h(W, ql0 + 4 * w) >> (4 * hi)) & 0x0f0f0f0f
+            hw = (_cu_u32h(W, qh0 + 4 * w) >> sh) & 0x03030303
+            # q - 32 in each byte lane. q is 0..63, so with bit 7 set first the
+            # subtraction never borrows from the next lane.
+            word = ((lw | (hw << 4) | 0x80808080) - 0x20202020) ⊻ 0x80808080
+            xw = qx[gb * 8 + w + 1]
+            if w < 4
+                ia = CUDA.dp4a(reinterpret(Int32, word), xw, ia)
+            else
+                ib = CUDA.dp4a(reinterpret(Int32, word), xw, ib)
+            end
+        end
+        d = _cu_f16a(W, boff + 208)
+        sc_a = Float32(reinterpret(Int8, W[boff + 192 + 2 * s + 1]))
+        sc_b = Float32(reinterpret(Int8, W[boff + 192 + 2 * s + 2]))
+        return dx[gb + 1] * d * (sc_a * Float32(ia) + sc_b * Float32(ib))
+    end
+end
+
+# Four IQ4_NL table values for the four nibbles in the low bits of each byte lane.
+@inline function _kv4_word(kv, nibs::UInt32)
+    @inbounds begin
         word = UInt32(0)
         for tt in 0:3
-            l = 4 * w + tt
-            byte = W[ql0 + l + 1]
-            nib = hi == 1 ? (byte >> 4) : (byte & 0x0f)
-            hb = (W[qh0 + l + 1] >> sh) & 0x03
-            qv = Int32(nib | (hb << 4)) - Int32(32)
-            word |= UInt32(qv & 0xff) << (8 * tt)
+            word |= UInt32(reinterpret(UInt8, kv[Int((nibs >> (8 * tt)) & 0x0f) + 1])) << (8 * tt)
         end
-        xw = qx[gb * 8 + w + 1]
-        if w < 4
-            ia = CUDA.dp4a(reinterpret(Int32, word), xw, ia)
-        else
-            ib = CUDA.dp4a(reinterpret(Int32, word), xw, ib)
-        end
+        return reinterpret(Int32, word)
     end
-    d = _cu_f16(W, boff + 208)
-    sc_a = Float32(reinterpret(Int8, W[boff + 192 + 2 * s + 1]))
-    sc_b = Float32(reinterpret(Int8, W[boff + 192 + 2 * s + 2]))
-    return dx[gb + 1] * d * (sc_a * Float32(ia) + sc_b * Float32(ib))
 end
 
 # IQ4_XS: 6-bit sub-block scale ls (value ls-32), values are the IQ4_NL table
 # entries for the nibbles; the low nibbles of a 16-byte run are values 0..15,
 # the high nibbles are values 16..31.
 @inline function _dq_iq4xs(W, boff::Int, b::Int, gb::Int, qx, dx, kv)
-    ib = b & 7
-    d = _cu_f16(W, boff)
-    scales_h = _cu_u16(W, boff + 2)
-    sl = W[boff + 4 + (ib >> 1) + 1]
-    ls = Int((sl >> (4 * (ib & 1))) & 0x0f) | (Int((scales_h >> (2 * ib)) & 0x03) << 4)
-    dl = d * Float32(ls - 32)
-    qs0 = boff + 8 + 16 * ib
-    isum = Int32(0)
-    for w in 0:7
-        word = UInt32(0)
-        for tt in 0:3
-            byte = W[qs0 + 4 * (w & 3) + tt + 1]
-            nib = w < 4 ? (byte & 0x0f) : (byte >> 4)
-            word |= UInt32(reinterpret(UInt8, kv[Int(nib) + 1])) << (8 * tt)
+    @inbounds begin
+        ib = b & 7
+        d = _cu_f16a(W, boff)
+        scales_h = _cu_u16a(W, boff + 2)
+        sl = W[boff + 4 + (ib >> 1) + 1]
+        ls = Int((sl >> (4 * (ib & 1))) & 0x0f) | (Int((scales_h >> (2 * ib)) & 0x03) << 4)
+        dl = d * Float32(ls - 32)
+        qs0 = boff + 8 + 16 * ib
+        isum = Int32(0)
+        for w in 0:3
+            qw = _cu_u32a(W, qs0 + 4 * w)
+            isum = CUDA.dp4a(_kv4_word(kv, qw), qx[gb * 8 + w + 1], isum)
+            isum = CUDA.dp4a(_kv4_word(kv, qw >> 4), qx[gb * 8 + w + 5], isum)
         end
-        isum = CUDA.dp4a(reinterpret(Int32, word), qx[gb * 8 + w + 1], isum)
+        return dx[gb + 1] * dl * Float32(isum)
     end
-    return dx[gb + 1] * dl * Float32(isum)
 end
 
 @inline function _cuda_dq_block(::Val{:q4_k}, W, rowoff::Int, b::Int, qx, dx, sx, tok::Int, nb::Int, kv)
@@ -209,14 +218,16 @@ end
     return _dq_iq4xs(W, rowoff + (b >> 3) * 136, b, (tok - 1) * nb + b, qx, dx, kv)
 end
 @inline function _cuda_dq_block(::Val{:q8_0}, W, rowoff::Int, b::Int, qx, dx, sx, tok::Int, nb::Int, kv)
-    off = rowoff + b * 34
-    d = _cu_f16(W, off)
-    gb = (tok - 1) * nb + b
-    isum = Int32(0)
-    for w in 0:7
-        isum = CUDA.dp4a(reinterpret(Int32, _cu_u32(W, off + 2 + 4 * w)), qx[gb * 8 + w + 1], isum)
+    @inbounds begin
+        off = rowoff + b * 34
+        d = _cu_f16a(W, off)
+        gb = (tok - 1) * nb + b
+        isum = Int32(0)
+        for w in 0:7
+            isum = CUDA.dp4a(reinterpret(Int32, _cu_u32h(W, off + 2 + 4 * w)), qx[gb * 8 + w + 1], isum)
+        end
+        return d * dx[gb + 1] * Float32(isum)
     end
-    return d * dx[gb + 1] * Float32(isum)
 end
 
 # --- decode GEMV: one warp per output row, four rows per block --------------
@@ -239,7 +250,7 @@ function _cuda_dq_gemv_kernel!(y, W, qx, dx, sx, kv, ::Val{K}, nrows::Int, nb::I
         off >>= 1
     end
     if lane == 0
-        y[tok, row] = acc
+        @inbounds y[tok, row] = acc
     end
     return
 end
@@ -253,6 +264,7 @@ function _cuda_dq_matmul!(dst, x, w)
     k == q.ne0 || throw(DimensionMismatch("dense quant matmul: x is $(size(xs)), W is $(size(q))"))
     size(ds) == (n, q.nrows) || throw(DimensionMismatch("dense quant matmul: dst is $(size(ds)), want ($n, $(q.nrows))"))
     n == 0 && return dst
+    _cu_aligned(q.data, 4) || error("dense quant matmul: weight bytes not 4-byte aligned")
     nb = k ÷ 32
     total = n * nb
     qx, dx, sx = _cuda_q8_buffers!(_CUDA_Q8_DENSE, total)

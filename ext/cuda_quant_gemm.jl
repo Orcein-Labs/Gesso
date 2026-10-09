@@ -77,6 +77,22 @@ end
 @inline function _cu_f16(q, off0)
     return Float32(reinterpret(Float16, _cu_u16(q, off0)))
 end
+
+# Aligned loads straight from the device pointer. Assembling a word from four
+# checked byte loads costs four load instructions plus the checks, and that,
+# not DRAM, bounded the GEMV kernels. The caller guarantees `off0` is a
+# multiple of the width; slab bases are allocation-aligned, which the launch
+# sites check.
+@inline _cu_ptr_as(::Type{T}, p::Core.LLVMPtr{UInt8,A}) where {T,A} = reinterpret(Core.LLVMPtr{T,A}, p)
+@inline _cu_u32a(q, off0) = unsafe_load(_cu_ptr_as(UInt32, pointer(q) + off0), 1, Val(4))
+@inline _cu_u16a(q, off0) = unsafe_load(_cu_ptr_as(UInt16, pointer(q) + off0), 1, Val(2))
+# A 32-bit word at a 2-aligned offset: block sizes 210, 98, 74 and 34 leave
+# every other block on a half-word boundary.
+@inline _cu_u32h(q, off0) = UInt32(_cu_u16a(q, off0)) | (UInt32(_cu_u16a(q, off0 + 2)) << 16)
+@inline _cu_f16a(q, off0) = Float32(reinterpret(Float16, _cu_u16a(q, off0)))
+
+_cu_aligned(a, n::Int) = UInt(pointer(a)) % n == 0
+
 @inline function _cu_x(x, i, k)
     return size(x, 2) == 1 ? x[i, 1] : x[i, k]
 end
@@ -89,22 +105,24 @@ function _cuda_q8_1_quant_cols_kernel!(qx, dx, X, nbk::Int, total::Int)
     gb = g - 1
     k = gb ÷ nbk + 1
     base = (gb % nbk) * 32
-    amax = 0.0f0
-    for l in 1:32
-        amax = max(amax, abs(X[base + l, k]))
-    end
-    inv = amax == 0.0f0 ? 0.0f0 : 127.0f0 / amax
-    for w in 0:7
-        u = UInt32(0)
-        for tt in 0:3
-            v = X[base + 4 * w + tt + 1, k] * inv
-            qi = unsafe_trunc(Int32, v + copysign(0.5f0, v))
-            qi = clamp(qi, Int32(-127), Int32(127))
-            u |= UInt32(qi & 0xff) << (8 * tt)
+    @inbounds begin
+        amax = 0.0f0
+        for l in 1:32
+            amax = max(amax, abs(X[base + l, k]))
         end
-        qx[gb * 8 + w + 1] = reinterpret(Int32, u)
+        inv = amax == 0.0f0 ? 0.0f0 : 127.0f0 / amax
+        for w in 0:7
+            u = UInt32(0)
+            for tt in 0:3
+                v = X[base + 4 * w + tt + 1, k] * inv
+                qi = unsafe_trunc(Int32, v + copysign(0.5f0, v))
+                qi = clamp(qi, Int32(-127), Int32(127))
+                u |= UInt32(qi & 0xff) << (8 * tt)
+            end
+            qx[gb * 8 + w + 1] = reinterpret(Int32, u)
+        end
+        dx[g] = amax / 127.0f0
     end
-    dx[g] = amax / 127.0f0
     return
 end
 
@@ -117,61 +135,66 @@ end
 # l = 0,1 of the block, the high nibble l = 2,3. Each l covers 8 values taken
 # from one 8-byte grid entry, signed by kmask.
 @inline function _eq_iq2xs(Q, boff::Int, b::Int, gb::Int, qx, dx, grid, ksigns, kmask)
-    ib32 = b & 7
-    d = _cu_f16(Q, boff)
-    sc = Q[boff + 66 + ib32 + 1]
-    db0 = d * (0.5f0 + Float32(sc & 0x0f)) * 0.25f0
-    db1 = d * (0.5f0 + Float32(sc >> 4)) * 0.25f0
-    s_lo = Int32(0)
-    s_hi = Int32(0)
-    for l in 0:3
-        qv = _cu_u16(Q, boff + 2 + (4 * ib32 + l) * 2)
-        g64 = grid[Int(qv & 0x01ff) + 1]
-        sg = ksigns[Int(qv >> 9) + 1]
-        for h in 0:1
-            word = UInt32(0)
-            for t in 0:3
-                tt = 4 * h + t
-                gv = Int32((g64 >> (8 * tt)) & 0xff)
-                v = (sg & kmask[tt + 1]) != 0x00 ? -gv : gv
-                word |= UInt32(v & 0xff) << (8 * t)
-            end
-            p = CUDA.dp4a(reinterpret(Int32, word), qx[gb * 8 + 2 * l + h + 1], Int32(0))
-            if 2 * l + h < 4
-                s_lo += p
-            else
-                s_hi += p
+    @inbounds begin
+        ib32 = b & 7
+        d = _cu_f16a(Q, boff)
+        sc = Q[boff + 66 + ib32 + 1]
+        db0 = d * (0.5f0 + Float32(sc & 0x0f)) * 0.25f0
+        db1 = d * (0.5f0 + Float32(sc >> 4)) * 0.25f0
+        s_lo = Int32(0)
+        s_hi = Int32(0)
+        for l in 0:3
+            qv = _cu_u16a(Q, boff + 2 + (4 * ib32 + l) * 2)
+            g64 = grid[Int(qv & 0x01ff) + 1]
+            sg = ksigns[Int(qv >> 9) + 1]
+            for h in 0:1
+                word = UInt32(0)
+                for t in 0:3
+                    tt = 4 * h + t
+                    gv = Int32((g64 >> (8 * tt)) & 0xff)
+                    v = (sg & kmask[tt + 1]) != 0x00 ? -gv : gv
+                    word |= UInt32(v & 0xff) << (8 * t)
+                end
+                p = CUDA.dp4a(reinterpret(Int32, word), qx[gb * 8 + 2 * l + h + 1], Int32(0))
+                if 2 * l + h < 4
+                    s_lo += p
+                else
+                    s_hi += p
+                end
             end
         end
+        return dx[gb + 1] * (db0 * Float32(s_lo) + db1 * Float32(s_hi))
     end
-    return dx[gb + 1] * (db0 * Float32(s_lo) + db1 * Float32(s_hi))
 end
 
 # IQ3_XXS (98 B): f16 d, 64 grid bytes (qs), then 8 x u32 aux (4-bit scale in
 # bits 28..31, four 7-bit sign indices). Each l takes two 4-byte grid entries:
 # the first covers values 0..3 of the l-th group, the second 4..7.
 @inline function _eq_iq3xxs(Q, boff::Int, b::Int, gb::Int, qx, dx, grid, ksigns, kmask)
-    ib32 = b & 7
-    d = _cu_f16(Q, boff)
-    aux32 = _cu_u32(Q, boff + 2 + 64 + 4 * ib32)
-    db = d * (0.5f0 + Float32(aux32 >> 28)) * 0.5f0
-    qbase = boff + 2 + 8 * ib32
-    isum = Int32(0)
-    for l in 0:3
-        sg = ksigns[Int((aux32 >> (7 * l)) & UInt32(127)) + 1]
-        for h in 0:1
-            gv = grid[Int(Q[qbase + 2 * l + h + 1]) + 1]
-            word = UInt32(0)
-            for t in 0:3
-                tt = 4 * h + t
-                bt = Int32((gv >> (8 * t)) & 0xff)
-                v = (sg & kmask[tt + 1]) != 0x00 ? -bt : bt
-                word |= UInt32(v & 0xff) << (8 * t)
+    @inbounds begin
+        ib32 = b & 7
+        d = _cu_f16a(Q, boff)
+        aux32 = _cu_u32h(Q, boff + 2 + 64 + 4 * ib32)
+        db = d * (0.5f0 + Float32(aux32 >> 28)) * 0.5f0
+        qbase = boff + 2 + 8 * ib32
+        isum = Int32(0)
+        for l in 0:3
+            sg = ksigns[Int((aux32 >> (7 * l)) & UInt32(127)) + 1]
+            qq = _cu_u16a(Q, qbase + 2 * l)
+            for h in 0:1
+                gv = grid[Int((qq >> (8 * h)) & 0x00ff) + 1]
+                word = UInt32(0)
+                for t in 0:3
+                    tt = 4 * h + t
+                    bt = Int32((gv >> (8 * t)) & 0xff)
+                    v = (sg & kmask[tt + 1]) != 0x00 ? -bt : bt
+                    word |= UInt32(v & 0xff) << (8 * t)
+                end
+                isum = CUDA.dp4a(reinterpret(Int32, word), qx[gb * 8 + 2 * l + h + 1], isum)
             end
-            isum = CUDA.dp4a(reinterpret(Int32, word), qx[gb * 8 + 2 * l + h + 1], isum)
         end
+        return dx[gb + 1] * db * Float32(isum)
     end
-    return dx[gb + 1] * db * Float32(isum)
 end
 
 @inline function _eq_block(::Val{:iq2_xs}, Q, boff::Int, b::Int, gb::Int, qx, dx, grid, kv, ksigns, kmask)
@@ -196,23 +219,25 @@ function _cuda_eqgemv_kernel!(
     row = Int((blockIdx().x - 1) * 4 + (threadIdx().x - 1) ÷ 32 + 1)
     i = Int(blockIdx().y)
     row > nrows && return
-    k = Int(meta[coloff + i])
-    gbase = (xshared ? 0 : (k - 1) * nbk)
-    rowoff = Int(meta[i]) + (row - 1) * row_bytes
-    acc = 0.0f0
-    b = lane
-    while b < nbk
-        acc += _eq_block(Val{K}(), Q, rowoff + (b >> 3) * bsz, b, gbase + b, qx, dx, grid, kv, ksigns, kmask)
-        b += 32
-    end
-    off = 16
-    while off >= 1
-        acc += CUDA.shfl_down_sync(0xffffffff, acc, off)
-        off >>= 1
-    end
-    if lane == 0
-        yv = beta == 0.0f0 ? 0.0f0 : beta * y[row, k]
-        y[row, k] = alpha * acc + yv
+    @inbounds begin
+        k = Int(meta[coloff + i])
+        gbase = (xshared ? 0 : (k - 1) * nbk)
+        rowoff = Int(meta[i]) + (row - 1) * row_bytes
+        acc = 0.0f0
+        b = lane
+        while b < nbk
+            acc += _eq_block(Val{K}(), Q, rowoff + (b >> 3) * bsz, b, gbase + b, qx, dx, grid, kv, ksigns, kmask)
+            b += 32
+        end
+        off = 16
+        while off >= 1
+            acc += CUDA.shfl_down_sync(0xffffffff, acc, off)
+            off >>= 1
+        end
+        if lane == 0
+            yv = beta == 0.0f0 ? 0.0f0 : beta * y[row, k]
+            y[row, k] = alpha * acc + yv
+        end
     end
     return
 end
@@ -291,6 +316,7 @@ function _cuda_launch_qgemv!(
     else
         error("cuda qgemv: unsupported ggml type $ggml_type")
     end
+    _cu_aligned(q, 4) || error("cuda qgemv: expert bytes not 4-byte aligned")
     nbk = ne0 ÷ 32
     ncols = size(x, 2)
     total = ncols * nbk
