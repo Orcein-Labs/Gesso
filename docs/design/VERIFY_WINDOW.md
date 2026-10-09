@@ -54,6 +54,38 @@ A kernel that cannot meet its row is not used on the window path. Correctness ou
 - **MTP draft layer** (Qwen3.8 `blk.64`, `nextn_predict_layers = 1`). It has its own KV cache and
   is committed the same way.
 
+## Transaction rules
+
+These rules refine the contract above. They come from Codex's RPDO handoff of 2026-10-08.
+
+- **State is defined by consumed inputs**, not by emitted text. Decode holds a pending anchor
+  token that has been emitted but not yet consumed. A window consumes `[anchor, d₁ … d_{T-1}]`.
+  If `n` drafts agree, the commit is the state after consuming the anchor and those `n` drafts.
+  The model's correction (or bonus token) becomes the next pending anchor. Prefill already
+  consumed the prompt, so its last token is never fed twice.
+- **EOS and output caps** can stop before the final emitted token is consumed. Match the baseline's
+  state convention at those boundaries exactly.
+- **Snapshot/commit covers** attention KV contents and valid lengths, conv history, GDN recurrent
+  matrices, the last hidden/logit position, consumed and emitted counters, and EOS state. Derived
+  scratch may be recomputed only if no rejected value can leak into the continuation. A KV-only
+  rewind is not sufficient.
+- **Required tests:**
+  - forced rejection at every draft depth;
+  - all accepted;
+  - zero drafts;
+  - EOS mid-window;
+  - output cap mid-window;
+  - cancellation;
+  - after every commit, check that the NEXT ordinary decode step equals sequential decode.
+
+## MoE caveat
+
+A draft window can route each position to a different expert set. On MoE models the union of
+experts touched per window can approach `T` single-token sets, which erodes weight reuse. Cost
+each layer's actual expert union, weighted by encoded bytes and cache residency, before claiming
+a gain. The window pays most clearly on dense models such as Qwen3.8-27B. Verifier routing is
+never constrained to resident experts in the exact arm: that would change the model.
+
 ## Draft sources
 
 - **MTP (model-native).** The draft forward is
