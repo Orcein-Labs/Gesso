@@ -1,8 +1,9 @@
-# GGUF transport for qwen35moe (Ornith-1.5-35B-A3B). Header parse is pure
-# Julia. Quantized payloads dequant through the local llama.cpp ggml
-# `to_float` (same third-column binary the ID-gate already uses). Experts
-# stay mmap'd and dequant per selected expert; everything else materializes
-# as Float32 in Gesso `(out, in)` layout.
+# GGUF transport for qwen35 (dense) and qwen35moe (Ornith-1.5-35B-A3B). Header
+# parse is pure Julia. Quantized payloads dequant through the local llama.cpp
+# ggml `to_float` (same third-column binary the ID-gate already uses). Experts
+# stay mmap'd and dequant per selected expert. Large 2-D projections and the
+# embedding/head stay quantized as `QuantMatrix` (gguf_quant_matrix.jl); small
+# and 1-D tensors materialize as Float32 in Gesso `(out, in)` layout.
 
 using Mmap
 using Libdl
@@ -272,20 +273,55 @@ function gguf_header(path::AbstractString)
     return (data=data, kv=kv, tensors=infos, data_start=data_start)
 end
 
+"""
+    spec_from_gguf_kv(kv) -> ArchitectureSpec
+
+Derive the spec from GGUF metadata. Two arches are supported:
+
+* `qwen35`: dense Gated DeltaNet hybrid, `moe = nothing`, FFN width from
+  `feed_forward_length`. `block_count` includes `nextn_predict_layers` MTP
+  blocks at the end; those are not main layers, so `num_layers` excludes them.
+* `qwen35moe`: the same hybrid mixer with routed experts (`expert_count` and
+  friends are required).
+
+Every head count, width and SSM dimension is read from the file. Nothing
+defaults to a particular checkpoint's shape, except `full_attention_interval`
+(4) and `rope.freq_base` (10000), which the GGUF may omit.
+"""
 function spec_from_gguf_kv(kv::AbstractDict)
     arch = String(get(kv, "general.architecture", "qwen35moe"))
+    arch in ("qwen35", "qwen35moe") || error(
+        "spec_from_gguf_kv: unsupported general.architecture $(repr(arch)) " *
+        "(supported: qwen35 dense, qwen35moe)",
+    )
     p(key, default=nothing) = get(kv, "$arch.$key", default)
-    n_layers = Int(p("block_count"))
-    hidden = Int(p("embedding_length"))
-    n_heads = Int(p("attention.head_count"))
+    req(key) = (v = p(key); v === nothing ? error("spec_from_gguf_kv: missing $arch.$key") : v)
+    nextn = Int(p("nextn_predict_layers", 0))
+    block_count = Int(req("block_count"))
+    n_layers = block_count - nextn
+    n_layers > 0 || error(
+        "spec_from_gguf_kv: block_count $block_count minus nextn_predict_layers $nextn leaves no main layers",
+    )
+    hidden = Int(req("embedding_length"))
+    n_heads = Int(req("attention.head_count"))
     n_kv = Int(p("attention.head_count_kv", n_heads))
-    n_exp = Int(p("expert_count"))
-    n_used = Int(p("expert_used_count"))
-    expert_ff = Int(p("expert_feed_forward_length"))
-    shared_ff = Int(p("expert_shared_feed_forward_length", expert_ff))
     head_dim = Int(p("attention.key_length", p("attention.head_dim", 0)))
-    if head_dim == 0
-        head_dim = 256
+    is_moe = arch == "qwen35moe"
+    if is_moe
+        n_exp = Int(req("expert_count"))
+        n_used = Int(req("expert_used_count"))
+        expert_ff = Int(req("expert_feed_forward_length"))
+        shared_ff = Int(p("expert_shared_feed_forward_length", expert_ff))
+        moe = MoeSpec(; n_experts=n_exp, n_expert_used=n_used, expert_ff, shared_ff)
+        intermediate = expert_ff
+        family = :qwen3_5_moe
+    else
+        p("expert_count") === nothing || error(
+            "spec_from_gguf_kv: arch qwen35 is dense but the file carries expert keys",
+        )
+        moe = nothing
+        intermediate = Int(req("feed_forward_length"))
+        family = :qwen3_5
     end
     toks = get(kv, "tokenizer.ggml.tokens", nothing)
     vocab = if toks isa Integer
@@ -302,40 +338,44 @@ function spec_from_gguf_kv(kv::AbstractDict)
     layer_types = [
         (i % interval == 0 ? :full_attention : :linear_attention) for i in 1:n_layers
     ]
-    ssm_group = Int(p("ssm.group_count", 16))
-    ssm_state = Int(p("ssm.state_size", 128))
-    ssm_dt = Int(p("ssm.time_step_rank", 32))
-    ssm_inner = Int(p("ssm.inner_size", 4096))
-    conv_k = Int(p("ssm.conv_kernel", 4))
-    value_head_dim = ssm_state
-    ssm_inner == ssm_dt * value_head_dim || error(
-        "spec_from_gguf_kv: ssm.inner_size $ssm_inner ≠ time_step_rank $ssm_dt × state $ssm_state",
-    )
+    has_linear = any(!=(:full_attention), layer_types)
+    mixer = nothing
+    feats = Set{Symbol}([:qk_norm, :attn_output_gate, :mrope])
+    if has_linear
+        ssm_group = Int(req("ssm.group_count"))
+        ssm_state = Int(req("ssm.state_size"))
+        ssm_dt = Int(req("ssm.time_step_rank"))
+        ssm_inner = Int(req("ssm.inner_size"))
+        conv_k = Int(req("ssm.conv_kernel"))
+        value_head_dim = ssm_state
+        ssm_inner == ssm_dt * value_head_dim || error(
+            "spec_from_gguf_kv: ssm.inner_size $ssm_inner ≠ time_step_rank $ssm_dt × state $ssm_state",
+        )
+        mixer = LinearMixerSpec(;
+            layer_types,
+            num_key_heads=ssm_group,
+            key_head_dim=ssm_state,
+            num_value_heads=ssm_dt,
+            value_head_dim,
+            conv_kernel_dim=conv_k,
+            v_head_tiled=true,
+        )
+        push!(feats, :linear_attention)
+    end
     theta = Float64(p("rope.freq_base", 10000.0))
     rotary_dim = Int(p("rope.dimension_count", 0))
     section = Int[Int(x) for x in p("rope.dimension_sections", Int[])]
     isempty(section) || (section = filter(>(0), section))
-    mixer = LinearMixerSpec(;
-        layer_types,
-        num_key_heads=ssm_group,
-        key_head_dim=ssm_state,
-        num_value_heads=ssm_dt,
-        value_head_dim,
-        conv_kernel_dim=conv_k,
-        v_head_tiled=true,
-    )
-    moe = MoeSpec(; n_experts=n_exp, n_expert_used=n_used, expert_ff, shared_ff)
     # GGUF already bakes RMSNorm +1 except ssm_norm; do not set :rms_unit_offset.
-    feats = Set{Symbol}([:qk_norm, :linear_attention, :attn_output_gate, :mrope, :moe])
     return ArchitectureSpec(;
-        family=:qwen3_5_moe,
+        family,
         hidden_size=hidden,
         num_layers=n_layers,
         n_heads=n_heads,
         n_kv_heads=n_kv,
         vocab_size=vocab,
-        intermediate_size=expert_ff,
-        head_dim,
+        intermediate_size=intermediate,
+        head_dim=head_dim > 0 ? head_dim : nothing,
         rope=RoPEPolicy(; theta, rotary_dim, interleaved=false, mrope_section=section),
         tie_word_embeddings=false,
         features=feats,
@@ -555,10 +595,51 @@ function _gguf_unreorder_linear(A, name::AbstractString, spec::ArchitectureSpec)
     return A
 end
 
+"""
+Smallest 2-D tensor (in elements) that stays quantized. Below this, the
+tensor is materialized as F32: norms and gates are 1-D or tiny, the bytes
+saved are negligible, and router-like values feed top-k decisions where
+rounding changes routing. The same 2^20 line is the GPU F16 threshold, so
+the two residency decisions agree.
+"""
+const _QUANT_RESIDENT_MIN_ELEMS = 1 << 20
+
+"""
+A 2-D non-F32 tensor at or above `_QUANT_RESIDENT_MIN_ELEMS` stays as quant
+bytes (`QuantMatrix`). `GESSO_GGUF_UNREORDER_V=1` is the opt-in tiled→grouped
+V gather, which rewrites F32 arrays, so it keeps the all-F32 load.
+"""
+function _quant_resident(info::GgufTensorInfo)
+    length(info.dims) == 2 || return false
+    info.ggml_type == GGML_TYPE_F32 && return false
+    prod(info.dims) >= _QUANT_RESIDENT_MIN_ELEMS || return false
+    return get(ENV, "GESSO_GGUF_UNREORDER_V", "") != "1"
+end
+
+function _quant_matrix(hdr, info::GgufTensorInfo)
+    ne0, nrows = info.dims
+    traits = _ggml_traits(info.ggml_type)
+    rem(ne0, Int(traits.blck_size)) == 0 || error(
+        "gguf_import: $(info.name) ne0 $ne0 not divisible by blck_size $(traits.blck_size)",
+    )
+    rb = div(ne0, Int(traits.blck_size)) * traits.type_size
+    return QuantMatrix(
+        hdr.data,
+        Int(hdr.data_start) + Int(info.offset),
+        info.ggml_type,
+        ne0,
+        nrows,
+        rb,
+        traits.to_float,
+        traits.blck_size,
+    )
+end
+
 function _materialize_gguf_tensor(hdr, info::GgufTensorInfo, spec::ArchitectureSpec, ::Type{T}) where {T}
     if _is_expert_tensor(info.name)
         return _expert_slice(hdr, info)
     end
+    _quant_resident(info) && return _quant_matrix(hdr, info)
     A = _gguf_array(hdr, info)
     if endswith(info.name, ".ssm_conv1d.weight") || info.name == "ssm_conv1d.weight"
         ndims(A) == 2 || error("gguf_import: conv1d $(info.name) not 2D")
@@ -575,17 +656,42 @@ function _materialize_gguf_tensor(hdr, info::GgufTensorInfo, spec::ArchitectureS
     return _maybe_T(A, T)
 end
 
+_gguf_param_map(spec::ArchitectureSpec) =
+    spec.moe === nothing ? gguf_param_map(Qwen35Adapter(), spec) :
+    gguf_param_map(Qwen35MoeAdapter(), spec)
+
+"""
+Record the MTP (nextn) blocks that `spec_from_gguf_kv` excludes from
+`num_layers`. They are not loaded and not executed. The record is what a
+later draft-source path needs: the layer index, the count, and every tensor
+name in those blocks. `nothing` when the file has no MTP blocks.
+"""
+function _gguf_mtp_record(hdr, spec::ArchitectureSpec)
+    arch = String(get(hdr.kv, "general.architecture", "qwen35moe"))
+    nextn = Int(get(hdr.kv, "$arch.nextn_predict_layers", 0))
+    nextn == 0 && return nothing
+    first_blk = spec.num_layers
+    prefixes = ["blk.$(first_blk + k)." for k in 0:(nextn - 1)]
+    names = sort!([t.name for t in hdr.tensors if any(p -> startswith(t.name, p), prefixes)])
+    isempty(names) && error(
+        "load_gguf: nextn_predict_layers=$nextn but no tensors under $(prefixes)",
+    )
+    return (layer=first_blk, n_predict=nextn, tensor_names=names)
+end
+
 """
     load_gguf(path; T=Float32) -> (model, tensors, spec)
 
-Load a `qwen35moe` GGUF. Non-expert weights dequant to host `T` (Float32 by
-default — F64 cannot hold this checkpoint). Routed experts stay mmap'd as
-`GgufQuantSlice` and dequant one selected expert at a time.
+Load a `qwen35` (dense) or `qwen35moe` GGUF. Dense 2-D projection weights and
+the embedding and output head stay as quant bytes (`QuantMatrix`), not F32.
+Small and 1-D tensors materialize to `T` (Float32 by default; F64 cannot hold
+these checkpoints). Routed experts stay mmap'd as `GgufQuantSlice` and dequant
+one selected expert at a time. `tensors.mtp` records the MTP blocks (not run).
 """
 function load_gguf(path::AbstractString; T::Type=Float32, verbose::Bool=false)
     hdr = gguf_header(path)
     spec = spec_from_gguf_kv(hdr.kv)
-    pmap = gguf_param_map(Qwen35MoeAdapter(), spec)
+    pmap = _gguf_param_map(spec)
     info_by = Dict{String, GgufTensorInfo}(info.name => info for info in hdr.tensors)
     required = _required_gguf_names(pmap, spec)
     by = Dict{String, Any}()
@@ -607,6 +713,7 @@ function load_gguf(path::AbstractString; T::Type=Float32, verbose::Bool=false)
         bindings=bound.bindings,
         spec=spec,
         gguf_path=String(path),
+        mtp=_gguf_mtp_record(hdr, spec),
     )
     return (model, tensors, spec)
 end
@@ -733,6 +840,7 @@ export gguf_header,
     gguf_architecture_spec,
     spec_from_gguf_kv,
     load_gguf,
+    QuantMatrix,
     GgufQuantSlice,
     GpuQuantSlice,
     HostOffload,

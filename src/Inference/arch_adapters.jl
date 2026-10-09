@@ -639,6 +639,59 @@ function param_map(::Qwen35MoeAdapter, spec::ArchitectureSpec)
 end
 
 """
+    gguf_param_map(::Qwen35Adapter, spec)
+
+llama.cpp `qwen35` (dense) tensor spellings: the same hybrid mixer names as
+`qwen35moe`, with a dense SwiGLU FFN (`ffn_gate/up/down.weight`) in place of
+the routed experts. The fused Q|gate rows follow `fused_qg_rows`. MTP blocks
+are not part of `spec.num_layers`, so they are never bound here.
+"""
+function gguf_param_map(::Qwen35Adapter, spec::ArchitectureSpec)
+    (q_rows, gate_rows) = fused_qg_rows(spec.n_heads, spec.head_dim)
+    shared = ParamRef[
+        ParamRef(SemanticParamId(ROLE_NORM_PRE_ATTN, 0, :frozen), "attn_norm.weight"),
+        ParamRef(
+            SemanticParamId(ROLE_NORM_POST_ATTN, 0, :frozen),
+            "post_attention_norm.weight",
+        ),
+        ParamRef(SemanticParamId(ROLE_GATE, 0, :projection), "ffn_gate.weight"),
+        ParamRef(SemanticParamId(ROLE_UP, 0, :projection), "ffn_up.weight"),
+        ParamRef(SemanticParamId(ROLE_DOWN, 0, :projection), "ffn_down.weight"),
+    ]
+    full = ParamRef[
+        shared...,
+        ParamRef(SemanticParamId(ROLE_Q, 0, :projection), "attn_q.weight", q_rows),
+        ParamRef(SemanticParamId(ROLE_ATTN_GATE, 0, :projection), "attn_q.weight", gate_rows),
+        ParamRef(SemanticParamId(ROLE_Q_NORM, 0, :frozen), "attn_q_norm.weight"),
+        ParamRef(SemanticParamId(ROLE_K, 0, :projection), "attn_k.weight"),
+        ParamRef(SemanticParamId(ROLE_K_NORM, 0, :frozen), "attn_k_norm.weight"),
+        ParamRef(SemanticParamId(ROLE_V, 0, :projection), "attn_v.weight"),
+        ParamRef(SemanticParamId(ROLE_O, 0, :projection), "attn_output.weight"),
+    ]
+    linear = ParamRef[
+        shared...,
+        ParamRef(SemanticParamId(ROLE_GDN_QKV, 0, :projection), "attn_qkv.weight"),
+        ParamRef(SemanticParamId(ROLE_GDN_Z, 0, :projection), "attn_gate.weight"),
+        ParamRef(SemanticParamId(ROLE_GDN_A, 0, :projection), "ssm_alpha.weight"),
+        ParamRef(SemanticParamId(ROLE_GDN_B, 0, :projection), "ssm_beta.weight"),
+        ParamRef(SemanticParamId(ROLE_GDN_CONV, 0, :projection), "ssm_conv1d.weight"),
+        ParamRef(SemanticParamId(ROLE_GDN_A_LOG, 0, :frozen), "ssm_a"),
+        ParamRef(SemanticParamId(ROLE_GDN_DT_BIAS, 0, :frozen), "ssm_dt.bias"),
+        ParamRef(SemanticParamId(ROLE_GDN_NORM, 0, :frozen), "ssm_norm.weight"),
+        ParamRef(SemanticParamId(ROLE_GDN_O, 0, :projection), "ssm_out.weight"),
+    ]
+    return FamilyParamMap(
+        :qwen3_5,
+        "blk.",
+        full,
+        "token_embd.weight",
+        "output_norm.weight",
+        "output.weight";
+        linear_refs=linear,
+    )
+end
+
+"""
     gguf_param_map(::Qwen35MoeAdapter, spec)
 
 llama.cpp `qwen35moe` tensor spellings. GGUF loader transposes weights into
