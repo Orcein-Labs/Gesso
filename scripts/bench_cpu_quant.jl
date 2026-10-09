@@ -44,10 +44,14 @@ function _bench_weights(ggml_type::Int32, ne0::Int, ne1::Int)
     doff = I._q8k_d_offset(ggml_type)
     w = rand(UInt8, ne1 * nb * bsz)
     for blk in 0:(ne1 * nb - 1)
-        d = Float16(0.01f0 + 0.02f0 * rand(Float32))
-        bits = reinterpret(UInt16, d)
-        w[blk * bsz + doff + 1] = UInt8(bits & 0xff)
-        w[blk * bsz + doff + 2] = UInt8(bits >> 8)
+        dv = 0.01f0 + 0.02f0 * rand(Float32)
+        if ggml_type == I.GGML_TYPE_IQ1_M
+            I._iq1m_write_scale!(w, blk * bsz, dv)   # IQ1_M has no d field
+        else
+            bits = reinterpret(UInt16, Float16(dv))
+            w[blk * bsz + doff + 1] = UInt8(bits & 0xff)
+            w[blk * bsz + doff + 2] = UInt8(bits >> 8)
+        end
     end
     return w
 end
@@ -118,6 +122,7 @@ function main()
     shapes = (("expert 2048x512", 2048, 512), ("expert 512x2048", 512, 2048), ("dense 5120x13824", 5120, 13824))
     formats = (
         ("IQ4_XS", I.GGML_TYPE_IQ4_XS), ("IQ2_XS", I.GGML_TYPE_IQ2_XS), ("IQ3_XXS", I.GGML_TYPE_IQ3_XXS),
+        ("IQ2_S", I.GGML_TYPE_IQ2_S), ("IQ3_S", I.GGML_TYPE_IQ3_S), ("IQ1_M", I.GGML_TYPE_IQ1_M),
         ("Q5_K", I.GGML_TYPE_Q5_K), ("Q6_K", I.GGML_TYPE_Q6_K), ("Q4_K", I.GGML_TYPE_Q4_K),
         ("Q8_0", I.GGML_TYPE_Q8_0), ("Q3_K", I.GGML_TYPE_Q3_K), ("Q2_K", I.GGML_TYPE_Q2_K),
     )

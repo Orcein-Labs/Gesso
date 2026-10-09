@@ -90,6 +90,14 @@ using Gesso: reference_prefill, reference_generate
     # is set), AVX2 bit-exact vs scalar, real Ornith / Qwen3.8-27B tensors (env-gated)
     include("test_quant_cpu_kquants.jl")
 
+    # Native CPU IQ2_S / IQ3_S / IQ1_M dot products: scalar vs F32 dequant,
+    # AVX2 bit-exact vs scalar, real Qwen3.8-27B UD-IQ2_M rows (env-gated)
+    include("test_quant_cpu_iq_s.jl")
+
+    # K-quant and Q8_0 MoE expert GEMV and top-k SwiGLU vs dequant + F32;
+    # real Kolibri-1 Q2_K expert rows (env-gated)
+    include("test_moe_kquant_experts.jl")
+
     # BREADTH-0 Pass C: the tokenizer PROTOCOL — GPT-2 BPE is one
     # implementation, metaspace byte-level BPE is a materially different
     # second one, and both answer the same protocol.
