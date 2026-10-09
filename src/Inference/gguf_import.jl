@@ -813,7 +813,9 @@ function _cpu_moe_topk_swiglu_gguf!(
             # `xf` must not be the name the task body assigns: the serial branch
             # above also assigns `xf`, so the @threads closure would capture that
             # one variable (a Core.Box) and every task would overwrite it.
-            Threads.@threads for k in 1:n_used
+            # :static pins each iteration to one thread, so the threadid-indexed
+            # scratch buffers below cannot be shared by a migrated task.
+            Threads.@threads :static for k in 1:n_used
                 tid = Threads.threadid()
                 e = order[k]
                 w = Float32(logits[e] * invw)
