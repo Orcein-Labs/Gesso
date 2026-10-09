@@ -943,7 +943,7 @@ _host_f32(s::Gesso.Inference.QuantMatrix) = Gesso.Inference._quant_host_f32(s)
 _host_f32(s) = convert(Array{Float32}, s)
 
 function _to_device_cuda(tensors)
-    @info "vram before dense placement" free_mib=div(Int64(CUDA.free_memory()), Int64(1024 * 1024)) dense_budget_mib=div(Gesso.Inference._gpu_budget_bytes(), Int64(1024 * 1024))
+    @debug "vram before dense placement" free_mib=div(Int64(CUDA.free_memory()), Int64(1024 * 1024)) dense_budget_mib=div(Gesso.Inference._gpu_budget_bytes(), Int64(1024 * 1024))
     budget = Gesso.Inference._gpu_budget_bytes()
     wdt = _gpu_weight_eltype()
     used = Int64(0)
@@ -1040,8 +1040,11 @@ function _to_device_cuda(tensors)
 
     # Complete gate/up/down expert triples take the per-expert cache below,
     # never the whole-slab path, so one layer cannot end up mixed.
-    @info "vram after dense placement" free_mib=div(Int64(CUDA.free_memory()), Int64(1024 * 1024))
-    triples = _moe_expert_triples(tensors.blocks)
+    @debug "vram after dense placement" free_mib=div(Int64(CUDA.free_memory()), Int64(1024 * 1024))
+    # Opt-in (GESSO_GPU_EXPERT_CACHE=1) until misses run on the CPU: with
+    # misses uploaded, the cache measured slower than whole-slab placement.
+    use_cache = _expert_cache_enabled()
+    triples = use_cache ? _moe_expert_triples(tensors.blocks) : Any[]
     expert_ids = Set{UInt}()
     for (_, g, u, d) in triples
         union!(expert_ids, (objectid(g), objectid(u), objectid(d)))
@@ -1065,7 +1068,7 @@ function _to_device_cuda(tensors)
         end
     end
 
-    _place_expert_caches!(conv, triples)
+    use_cache && _place_expert_caches!(conv, triples)
 
     _conv_t(t) = begin
         hasproperty(t, :storage) || return t         # mixer tags and other metadata
@@ -1092,7 +1095,7 @@ function _to_device_cuda(tensors)
             host_n += 1
         end
     end
-    @info "expert storage census" cached_projections=cached_n whole_slab_projections=slab_n host_projections=host_n vram_free_mib=div(Int64(CUDA.free_memory()), Int64(1024 * 1024))
+    @debug "expert storage census" cached_projections=cached_n whole_slab_projections=slab_n host_projections=host_n vram_free_mib=div(Int64(CUDA.free_memory()), Int64(1024 * 1024))
     result = (; embedding, blocks, lm_head, final_rms)
     return merge(result, _keep_tensor_meta(tensors))
 end
@@ -1100,6 +1103,8 @@ end
 # --- per-expert device residency (see src/Inference/expert_residency.jl) ----
 
 const _EXPERT_RESERVE_DEFAULT_MIB = 1024
+
+_expert_cache_enabled() = get(ENV, "GESSO_GPU_EXPERT_CACHE", "0") == "1"
 
 # Device bytes for expert slot pools: GESSO_GPU_EXPERT_CACHE_MIB when set (0
 # disables residency, every expert misses), else free device memory now minus
@@ -1120,7 +1125,7 @@ function _expert_cache_budget_bytes()
     CUDA.reclaim()   # return the allocator's cached blocks so the free figure is real
     free = Int64(CUDA.free_memory())
     budget = _expert_budget_from_free(free, reserve)
-    @info "expert cache budget" free_before_reclaim_mib=div(free_raw, mib) free_mib=div(free, mib) reserve_mib=reserve budget_mib=div(budget, mib)
+    @debug "expert cache budget" free_before_reclaim_mib=div(free_raw, mib) free_mib=div(free, mib) reserve_mib=reserve budget_mib=div(budget, mib)
     return budget
 end
 
@@ -1178,7 +1183,7 @@ function _place_expert_caches!(conv, triples; budget::Int64=_expert_cache_budget
         conv[d] = Inf_.CachedExpertBank(cache, 3)
         push!(slots_log, slots)
     end
-    @info "expert cache placed" budget_mib=div(budget, Int64(1024 * 1024)) layers=length(triples) slots=slots_log profile=(isempty(prof_path) ? "none" : prof_path)
+    @debug "expert cache placed" budget_mib=div(budget, Int64(1024 * 1024)) layers=length(triples) slots=slots_log profile=(isempty(prof_path) ? "none" : prof_path)
     return conv
 end
 

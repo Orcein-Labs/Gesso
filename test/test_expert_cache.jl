@@ -201,6 +201,12 @@ else
     end
 
     @testset "device expert cache: budget env and fallbacks" begin
+        withenv("GESSO_GPU_EXPERT_CACHE" => nothing) do
+            @test !ext._expert_cache_enabled()   # opt-in: whole-slab placement is the default
+        end
+        withenv("GESSO_GPU_EXPERT_CACHE" => "1") do
+            @test ext._expert_cache_enabled()
+        end
         withenv("GESSO_GPU_EXPERT_CACHE_MIB" => "0") do
             @test ext._expert_cache_budget_bytes() == 0
         end
