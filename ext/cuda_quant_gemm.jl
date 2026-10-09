@@ -33,6 +33,10 @@ function _cuda_q_tables()
     for g in Inf_.IQ3XXS_GRID, tt in 0:3
         ((g >> (8 * tt)) & 0xff) <= 0x7f || error("IQ3_XXS grid byte above 127 breaks the int8 lane")
     end
+    for i in 0:127
+        Inf_.KSIGNS_IQ2XS[i + 1] == UInt8(i | ((count_ones(i) & 1) << 7)) ||
+            error("ksigns no longer the parity expansion the IQ decoders compute")
+    end
     t = (
         iq2grid=CuArray(Inf_.IQ2XS_GRID),
         ksigns=CuArray(Inf_.KSIGNS_IQ2XS),
@@ -127,13 +131,30 @@ function _cuda_q8_1_quant_cols_kernel!(qx, dx, X, nbk::Int, total::Int)
 end
 
 # --- per-block contributions for the IQ types --------------------------------
+
+# Sign handling without the ksigns and kmask tables. A 7-bit sign index
+# expands to 8 sign bits by adding an even-parity bit 7 (the table check at
+# upload holds ksigns to this). Four sign bits become 0x00/0xff byte lanes: the
+# multiply copies the nibble to shifts 0, 7, 14 and 21, which never overlap, so
+# bit i lands on bit 8i with no carry.
+@inline _iq_signs8(i::UInt32) = (i & 0x7f) | ((UInt32(count_ones(i & 0x7f)) & 0x1) << 7)
+@inline _iq_mask4(s::UInt32) = (((s & 0x0f) * 0x00204081) & 0x01010101) * 0x000000ff
+# dp4a of x with the grid lanes of g negated where the sign bit is set. For a
+# grid byte g in 0..127, int8(g xor 0xff) is -g - 1; the first dp4a adds the 1
+# back on the negated lanes. Integer sums, so the result is exact.
+@inline function _iq_signed_dp4a(g::UInt32, s4::UInt32, x::Int32, acc::Int32)
+    m = _iq_mask4(s4)
+    acc = CUDA.dp4a(reinterpret(Int32, m & 0x01010101), x, acc)
+    return CUDA.dp4a(reinterpret(Int32, g ⊻ m), x, acc)
+end
+
 # `boff` is the byte offset of the superblock, `b` the 32-value block inside the
 # row (its position in the superblock is b & 7), `gb` the activation block.
 
 # IQ2_XS (74 B): f16 d, 32 x u16 (9-bit grid index, 7-bit sign index), 8 scale
 # bytes. Two 4-bit scales per 32-value block: the low nibble covers elements
 # l = 0,1 of the block, the high nibble l = 2,3. Each l covers 8 values taken
-# from one 8-byte grid entry, signed by kmask.
+# from one 8-byte grid entry, signed by bits of the expanded sign index.
 @inline function _eq_iq2xs(Q, boff::Int, b::Int, gb::Int, qx, dx, grid, ksigns, kmask)
     @inbounds begin
         ib32 = b & 7
@@ -144,23 +165,15 @@ end
         s_lo = Int32(0)
         s_hi = Int32(0)
         for l in 0:3
-            qv = _cu_u16a(Q, boff + 2 + (4 * ib32 + l) * 2)
+            qv = UInt32(_cu_u16a(Q, boff + 2 + (4 * ib32 + l) * 2))
             g64 = grid[Int(qv & 0x01ff) + 1]
-            sg = ksigns[Int(qv >> 9) + 1]
-            for h in 0:1
-                word = UInt32(0)
-                for t in 0:3
-                    tt = 4 * h + t
-                    gv = Int32((g64 >> (8 * tt)) & 0xff)
-                    v = (sg & kmask[tt + 1]) != 0x00 ? -gv : gv
-                    word |= UInt32(v & 0xff) << (8 * t)
-                end
-                p = CUDA.dp4a(reinterpret(Int32, word), qx[gb * 8 + 2 * l + h + 1], Int32(0))
-                if 2 * l + h < 4
-                    s_lo += p
-                else
-                    s_hi += p
-                end
+            sg = _iq_signs8(qv >> 9)
+            p = _iq_signed_dp4a(g64 % UInt32, sg, qx[gb * 8 + 2 * l + 1], Int32(0))
+            p = _iq_signed_dp4a(UInt32(g64 >> 32), sg >> 4, qx[gb * 8 + 2 * l + 2], p)
+            if l < 2
+                s_lo += p
+            else
+                s_hi += p
             end
         end
         return dx[gb + 1] * (db0 * Float32(s_lo) + db1 * Float32(s_hi))
@@ -179,18 +192,11 @@ end
         qbase = boff + 2 + 8 * ib32
         isum = Int32(0)
         for l in 0:3
-            sg = ksigns[Int((aux32 >> (7 * l)) & UInt32(127)) + 1]
+            sg = _iq_signs8(aux32 >> (7 * l))
             qq = _cu_u16a(Q, qbase + 2 * l)
             for h in 0:1
                 gv = grid[Int((qq >> (8 * h)) & 0x00ff) + 1]
-                word = UInt32(0)
-                for t in 0:3
-                    tt = 4 * h + t
-                    bt = Int32((gv >> (8 * t)) & 0xff)
-                    v = (sg & kmask[tt + 1]) != 0x00 ? -bt : bt
-                    word |= UInt32(v & 0xff) << (8 * t)
-                end
-                isum = CUDA.dp4a(reinterpret(Int32, word), qx[gb * 8 + 2 * l + h + 1], isum)
+                isum = _iq_signed_dp4a(gv, sg >> (4 * h), qx[gb * 8 + 2 * l + h + 1], isum)
             end
         end
         return dx[gb + 1] * db * Float32(isum)
