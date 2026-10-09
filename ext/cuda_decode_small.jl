@@ -60,7 +60,7 @@ _xwt_mat(a) = reshape(a, 1, length(a))
 function _cuda_xwt!(dst, x, w)
     m, k = size(w)
     m == 0 && return dst
-    @cuda threads = (32, _XWT_KSPLIT) blocks = (cld(m, 32), 1) _cuda_xwt_kernel!(
+    @fastcuda threads = (32, _XWT_KSPLIT) blocks = (cld(m, 32), 1) _cuda_xwt_kernel!(
         _xwt_mat(dst), w, _xwt_mat(dst), w, x, k)
     return dst
 end
@@ -69,7 +69,7 @@ function _cuda_xwt2!(d1, d2, x, w1, w2)
     k = size(w1, 2)
     size(w2, 2) == k || throw(DimensionMismatch("xwt pair: W1 is $(size(w1)), W2 is $(size(w2))"))
     m = max(size(w1, 1), size(w2, 1))
-    @cuda threads = (32, _XWT_KSPLIT) blocks = (cld(m, 32), 2) _cuda_xwt_kernel!(
+    @fastcuda threads = (32, _XWT_KSPLIT) blocks = (cld(m, 32), 2) _cuda_xwt_kernel!(
         _xwt_mat(d1), w1, _xwt_mat(d2), w2, x, k)
     return d1, d2
 end
@@ -97,7 +97,7 @@ end
 function _cuda_combine!(y, D::CuMatrix{Float32}, ws::CuVector{Float32})
     h, n = size(D)
     length(y) == h && length(ws) == n || throw(DimensionMismatch("combine: y $(size(y)), D $(size(D)), ws $(size(ws))"))
-    @cuda threads = 256 blocks = cld(h, 256) _cuda_combine_kernel!(y, D, ws, h, n)
+    @fastcuda threads = 256 blocks = cld(h, 256) _cuda_combine_kernel!(y, D, ws, h, n)
     return y
 end
 
@@ -144,6 +144,6 @@ end
 
 function _cuda_shared_gate1!(y, x, sd, g)
     h = length(x)
-    @cuda threads = _SGATE_THREADS _cuda_shared_gate1_kernel!(y, sd, x, g, h)
+    @fastcuda threads = _SGATE_THREADS _cuda_shared_gate1_kernel!(y, sd, x, g, h)
     return y
 end

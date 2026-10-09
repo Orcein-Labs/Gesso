@@ -273,11 +273,11 @@ function _cuda_dq_matmul_group!(dsts::Tuple, x, ws::Tuple)
     nb = k ÷ 32
     total = n * nb
     qx, dx, sx = _cuda_q8_buffers!(_CUDA_Q8_DENSE, total)
-    @cuda threads = 256 blocks = cld(total, 256) _cuda_q8_1_quant_kernel!(qx, dx, sx, xs, nb, total)
+    @fastcuda threads = 256 blocks = cld(total, 256) _cuda_q8_1_quant_kernel!(qx, dx, sx, xs, nb, total)
     kv = _cuda_q_tables().kv4
     for (dst, w) in zip(dsts, ws)
         q = w.storage
-        @cuda threads = 128 blocks = (cld(q.nrows, 4), n) _cuda_dq_gemv_kernel!(
+        @fastcuda threads = 128 blocks = (cld(q.nrows, 4), n) _cuda_dq_gemv_kernel!(
             dst.storage, q.data, qx, dx, sx, kv, Val{_dq_kind(q.ggml_type)}(), q.nrows, nb, q.row_bytes,
         )
     end

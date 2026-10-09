@@ -80,7 +80,7 @@ function _cuda_embedding_lookup!(dst, table, tokens)
         d = size(dst.storage, 2)                  # 0-based token ids (§LXXV)
         d == 0 && continue
         nthreads = min(256, d)
-        @cuda threads = (nthreads,) blocks = (cld(d, nthreads),) _cuda_embed_kernel!(
+        @fastcuda threads = (nthreads,) blocks = (cld(d, nthreads),) _cuda_embed_kernel!(
             dst.storage, tab, t, tok + 1)
     end
     return dst
@@ -120,7 +120,7 @@ function _cuda_rmsnorm_storage!(dsts::AbstractArray, xs::AbstractArray, scales::
     length(scales) == d ||
         throw(gesso_error(ERR_INVALID_PLAN, "rmsnorm!: scale length $(length(scales)) ≠ feature dim $d"; op = :rmsnorm!))
     if nd == 2 && size(xs, 1) == 1
-        @cuda threads=256 blocks=1 _cuda_rmsnorm_row_kernel!(dsts, xs, scales, eps, d)
+        @fastcuda threads=256 blocks=1 _cuda_rmsnorm_row_kernel!(dsts, xs, scales, eps, d)
         return dsts
     end
     # Retain the legacy mixed-precision normalization to meet its fixed
@@ -137,7 +137,7 @@ function _cuda_rmsnorm_storage!(dsts::AbstractArray, xs::AbstractArray, scales::
         ss = _rmsnorm_sumsq(rows)
         sum!(abs2, ss, x2)
         nthreads = min(256, d)
-        @cuda threads = (nthreads,) blocks = (rows,) _cuda_rmsnorm_apply_kernel!(
+        @fastcuda threads = (nthreads,) blocks = (rows,) _cuda_rmsnorm_apply_kernel!(
             d2, x2, ss, scales, eps, rows, d)
         return dsts
     end
@@ -146,7 +146,7 @@ function _cuda_rmsnorm_storage!(dsts::AbstractArray, xs::AbstractArray, scales::
         rows = size(dsts, 1)
         d == 0 && return dsts
         nthreads = min(256, d)
-        @cuda threads = (nthreads,) blocks = (rows,) _cuda_rmsnorm_apply_kernel!(
+        @fastcuda threads = (nthreads,) blocks = (rows,) _cuda_rmsnorm_apply_kernel!(
             dsts, xs, rms, scales, rows, d)
         return dsts
     end
@@ -309,7 +309,7 @@ function _cuda_rope_storage!(
         nthreads = min(256, seq)
         nblocks = cld(seq, nthreads)
         # 2-D grid: x = sequence tiles, y = head (K rotates its OWN heads)
-        @cuda threads = (nthreads,) blocks = (nblocks, nheads) _cuda_rope_kernel!(
+        @fastcuda threads = (nthreads,) blocks = (nblocks, nheads) _cuda_rope_kernel!(
             x, pos_d, tθ, interleaved, rd, use_inv, freq_d)
     end
     return nothing
@@ -351,7 +351,7 @@ end
 function _cuda_softmax_storage!(scores::AbstractArray, dst::AbstractArray)
     L, K = size(scores)
     L == 0 && return dst
-    @cuda threads = 1 blocks = L _cuda_softmax_kernel!(scores, dst)
+    @fastcuda threads = 1 blocks = L _cuda_softmax_kernel!(scores, dst)
     return dst
 end
 function _cuda_softmax!(dst, scores)
@@ -370,7 +370,7 @@ end
 function _cuda_swiglu!(dst, gate, up)
     n = length(dst.storage)
     n == 0 && return dst
-    @cuda threads = (min(256, n),) blocks = (cld(n, 256),) _cuda_swiglu_kernel!(
+    @fastcuda threads = (min(256, n),) blocks = (cld(n, 256),) _cuda_swiglu_kernel!(
         dst.storage, gate.storage, up.storage)
     return dst
 end
@@ -418,14 +418,19 @@ end
 
 function _cuda_host_offload_embed!(dst, table, tokens)
     Gesso._validate_embedding_inputs(dst, table, tokens)
-    tab = table.storage.data
+    copyto!(dst.storage, _host_embed_rows(table.storage.data, tokens))
+    return dst
+end
+
+# EmbeddingTable.storage is untyped, so the gather runs behind this barrier:
+# inline, every element read boxed and allocated, ~6k allocations per token.
+function _host_embed_rows(tab::AbstractMatrix, tokens)
     d = size(tab, 2)
     host = Matrix{Float32}(undef, length(tokens), d)
     @inbounds for (t, tok) in enumerate(tokens), j in 1:d
         host[t, j] = Float32(tab[tok + 1, j])
     end
-    copyto!(dst.storage, host)
-    return dst
+    return host
 end
 
 function rmsnorm!(
@@ -549,7 +554,7 @@ function _split_heads!(dst::CuArray, src::AbstractArray, n_heads, d_head)
     rows = size(dst, 1)
     rows == 0 && return dst
     nthreads = min(256, rows)
-    @cuda threads = (nthreads,) blocks = (cld(rows, nthreads), n_heads) _cuda_split_kernel!(
+    @fastcuda threads = (nthreads,) blocks = (cld(rows, nthreads), n_heads) _cuda_split_kernel!(
         dst, src, Int(d_head))
     return dst
 end
@@ -569,7 +574,7 @@ function _merge_heads!(dst::CuArray, src::CuArray, n_heads, d_head)
     rows = size(dst, 1)
     rows == 0 && return dst
     nthreads = min(256, rows)
-    @cuda threads = (nthreads,) blocks = (cld(rows, nthreads), n_heads) _cuda_merge_kernel!(
+    @fastcuda threads = (nthreads,) blocks = (cld(rows, nthreads), n_heads) _cuda_merge_kernel!(
         dst, src, Int(d_head))
     return dst
 end
@@ -590,7 +595,7 @@ function _repeat_heads!(dst::CuArray, src::CuArray, group::Int, K::Int)
     K == 0 && return dst
     nkv = size(src, 2)
     nthreads = min(256, K)
-    @cuda threads = (nthreads,) blocks = (cld(K, nthreads), nkv) _cuda_repeat_kernel!(
+    @fastcuda threads = (nthreads,) blocks = (cld(K, nthreads), nkv) _cuda_repeat_kernel!(
         dst, src, group, K)
     return dst
 end
@@ -605,7 +610,7 @@ function _cuda_copy_row_kernel!(dst3, src2, i::Int)
 end
 
 function _copy_row_storage!(dst::CuArray, src::AbstractArray, i::Int)
-    @cuda threads = (1,) blocks = (size(dst, 2), size(dst, 3)) _cuda_copy_row_kernel!(dst, src, i)
+    @fastcuda threads = (1,) blocks = (size(dst, 2), size(dst, 3)) _cuda_copy_row_kernel!(dst, src, i)
     return dst
 end
 
@@ -622,7 +627,7 @@ end
 function _copy_rows_storage!(dest::CuArray, src::CuArray, r1::Int, take::Int)
     take <= 0 && return dest
     nthreads = min(256, take)
-    @cuda threads = (nthreads,) blocks = (cld(take, nthreads), size(dest, 2), size(dest, 3)) _cuda_copy_rows_kernel!(
+    @fastcuda threads = (nthreads,) blocks = (cld(take, nthreads), size(dest, 2), size(dest, 3)) _cuda_copy_rows_kernel!(
         dest, src, r1, take)
     return dest
 end
@@ -639,7 +644,7 @@ end
 function _add_storage!(dst::CuArray, src::CuArray)
     n = length(dst)
     n == 0 && return dst
-    @cuda threads = (min(256, n),) blocks = (cld(n, 256),) _cuda_add_kernel!(dst, src)
+    @fastcuda threads = (min(256, n),) blocks = (cld(n, 256),) _cuda_add_kernel!(dst, src)
     return dst
 end
 
@@ -656,7 +661,7 @@ end
 function _scale_storage!(dst::CuArray, s)
     n = length(dst)
     n == 0 && return dst
-    @cuda threads = (min(256, n),) blocks = (cld(n, 256),) _cuda_scale_kernel!(dst, s)
+    @fastcuda threads = (min(256, n),) blocks = (cld(n, 256),) _cuda_scale_kernel!(dst, s)
     return dst
 end
 
@@ -678,7 +683,7 @@ function _write_hidden_row_storage!(dst::CuArray, src::CuArray, row::Int)
     d = size(dst, 2)
     d == 0 && return dst
     nthreads = min(256, d)
-    @cuda threads = (nthreads,) blocks = (cld(d, nthreads),) _cuda_hidden_row_kernel!(dst, src, row)
+    @fastcuda threads = (nthreads,) blocks = (cld(d, nthreads),) _cuda_hidden_row_kernel!(dst, src, row)
     return dst
 end
 
@@ -844,7 +849,7 @@ function _cuda_f16w_matmul!(dst, x, w)
     size(xs, 2) == k || throw(DimensionMismatch("f16 matmul: x is $(size(xs)), W is $(size(ws))"))
     size(ds) == (n, m) || throw(DimensionMismatch("f16 matmul: dst is $(size(ds)), want ($n, $m)"))
     n == 0 && return dst
-    @cuda threads = (32, _F16W_KSPLIT) blocks = (cld(m, 32), n) _cuda_f16w_kernel!(ds, xs, ws, k, m)
+    @fastcuda threads = (32, _F16W_KSPLIT) blocks = (cld(m, 32), n) _cuda_f16w_kernel!(ds, xs, ws, k, m)
     return dst
 end
 
@@ -1193,9 +1198,44 @@ function _to_device_cuda(tensors)
             host_n += 1
         end
     end
+    _prefault_host_experts!(blocks)
     @debug "expert storage census" cached_projections=cached_n whole_slab_projections=slab_n host_projections=host_n vram_free_mib=div(Int64(CUDA.free_memory()), Int64(1024 * 1024))
     result = (; embedding, blocks, lm_head, final_rms)
     return merge(result, _keep_tensor_meta(tensors))
+end
+
+# Host-resident expert slabs are views into the mmap'd GGUF, mapped but not
+# yet faulted in. The CPU expert path then takes its first-touch page faults in
+# the middle of decode: the first generation's tokens ran 50 to 90 ms instead
+# of 32 while new experts were routed. MADV_POPULATE_READ (Linux 5.14) maps the
+# pages here instead, at load; where it is missing, decode just faults lazily
+# as before.
+const _MADV_POPULATE_READ = Cint(22)
+
+function _prefault_host_experts!(blocks)
+    Sys.islinux() || return
+    slabs = Gesso.Inference.GgufQuantSlice[]
+    for bt in blocks, k in (:wexp_gate, :wexp_up, :wexp_down)
+        haskey(bt, k) || continue
+        s = bt[k].storage
+        s isa Gesso.Inference.GgufQuantSlice && push!(slabs, s)
+    end
+    isempty(slabs) && return
+    page = UInt(ccall(:getpagesize, Cint, ()))
+    failed = Threads.Atomic{Int}(0)
+    Threads.@threads for i in eachindex(slabs)
+        s = slabs[i]
+        GC.@preserve s begin
+            lo = UInt(pointer(s.data)) + UInt(s.offset0)
+            hi = lo + UInt(s.n_exp * s.bytes_per_expert)
+            lo &= ~(page - 1)
+            rc = ccall(:madvise, Cint, (Ptr{Cvoid}, Csize_t, Cint), Ptr{Cvoid}(lo), hi - lo,
+                _MADV_POPULATE_READ)
+            rc == 0 || Threads.atomic_add!(failed, 1)
+        end
+    end
+    failed[] == 0 || @debug "host expert prefault skipped" slabs=length(slabs) failed=failed[]
+    return
 end
 
 # --- per-expert device residency (see src/Inference/expert_residency.jl) ----
@@ -1347,7 +1387,7 @@ end
 function _sigmoid_mul!(::CUDABackend, dst::AbstractArray, src::AbstractArray, gate::AbstractArray)
     n = length(dst)
     n == 0 && return dst
-    @cuda threads = (min(256, n),) blocks = (cld(n, 256),) _cuda_sigmoid_mul_kernel!(dst, src, gate)
+    @fastcuda threads = (min(256, n),) blocks = (cld(n, 256),) _cuda_sigmoid_mul_kernel!(dst, src, gate)
     return dst
 end
 
@@ -1362,7 +1402,7 @@ end
 function _silu_mul!(::CUDABackend, dst::AbstractArray, src::AbstractArray, gate::AbstractArray)
     n = length(dst)
     n == 0 && return dst
-    @cuda threads = (min(256, n),) blocks = (cld(n, 256),) _cuda_silu_mul_kernel!(dst, src, gate)
+    @fastcuda threads = (min(256, n),) blocks = (cld(n, 256),) _cuda_silu_mul_kernel!(dst, src, gate)
     return dst
 end
 
@@ -1387,7 +1427,7 @@ function _gdn_gate_params!(::CUDABackend, g, beta, a, b, A_log, dt_bias)
     seq == 0 && return g, beta
     tx = min(16, seq)
     ty = min(16, nv)
-    @cuda threads = (tx, ty) blocks = (cld(seq, tx), cld(nv, ty)) _cuda_gdn_gates_kernel!(
+    @fastcuda threads = (tx, ty) blocks = (cld(seq, tx), cld(nv, ty)) _cuda_gdn_gates_kernel!(
         g, beta, a, b, A_log, dt_bias)
     return g, beta
 end
@@ -1437,11 +1477,11 @@ function _causal_conv1d_silu!(::CUDABackend, dst, x, weight, conv_state)
     if seq > 0
         tx = min(16, seq)
         ty = min(16, channels)
-        @cuda threads = (tx, ty) blocks = (cld(seq, tx), cld(channels, ty)) _cuda_conv1d_silu_kernel!(
+        @fastcuda threads = (tx, ty) blocks = (cld(seq, tx), cld(channels, ty)) _cuda_conv1d_silu_kernel!(
             dst, x, weight, conv_state, Int(k))
     end
     nthreads = min(256, channels)
-    @cuda threads = (nthreads,) blocks = (cld(channels, nthreads),) _cuda_conv_state_update_kernel!(
+    @fastcuda threads = (nthreads,) blocks = (cld(channels, nthreads),) _cuda_conv_state_update_kernel!(
         conv_state, x, Int(seq), Int(k))
     return dst
 end
@@ -1539,12 +1579,12 @@ function _gated_delta_rule!(
     kn = similar(out, eltype(out), (seq, nv, dk))
     scale = Float32(1) / sqrt(Float32(dk))
     Gesso.Inference.@decode_sub :gdn_qk backend begin
-        @cuda threads = 1 blocks = (seq, nv) _cuda_gdn_qk_prep_kernel!(
+        @fastcuda threads = 1 blocks = (seq, nv) _cuda_gdn_qk_prep_kernel!(
             qn, kn, q, k, Int(nk), Int(group), v_head_tiled, l2norm, scale, Float32(1e-6))
     end
     nthreads = min(256, dv)
     Gesso.Inference.@decode_sub :gdn_recur backend begin
-        @cuda threads = (nthreads,) blocks = (nv,) _cuda_gdn_recurrent_kernel!(
+        @fastcuda threads = (nthreads,) blocks = (nv,) _cuda_gdn_recurrent_kernel!(
             out, qn, kn, v, g, beta, state)
     end
     return out
@@ -1729,14 +1769,14 @@ function Gesso.Inference._gdn_decode_core!(
     T = min(256, nextpow(2, max(32, dv)))
     Y = clamp(256 ÷ nv, 1, dk)
     Gesso.Inference.@decode_sub :gdn_conv backend begin
-        @cuda threads = 256 blocks = cld(conv_dim, 256) _cuda_gdn_conv_decode_kernel!(
+        @fastcuda threads = 256 blocks = cld(conv_dim, 256) _cuda_gdn_conv_decode_kernel!(
             s.conv, conv_state, s.mixed, weight, Int(ksz))
     end
     Gesso.Inference.@decode_sub :gdn_recur backend begin
-        @cuda threads = (nv, Y) blocks = dv shmem = nv * Y * 3 * sizeof(Float32) _cuda_gdn_delta_kernel!(
+        @fastcuda threads = (nv, Y) blocks = dv shmem = nv * Y * 3 * sizeof(Float32) _cuda_gdn_delta_kernel!(
             s.core, s.conv, s.a, s.b, A_log, dt_bias, rec_state,
             Int(nk), Int(div(nv, nk)), mx.v_head_tiled, Int(dk), Int(dv), scale, eps32)
-        @cuda threads = T blocks = nv shmem = T * sizeof(Float32) _cuda_gdn_gnorm_kernel!(
+        @fastcuda threads = T blocks = nv shmem = T * sizeof(Float32) _cuda_gdn_gnorm_kernel!(
             s.merged, s.core, s.z, norm_w, Int(dv), eps32)
     end
     return s
@@ -1887,7 +1927,7 @@ function Gesso.Inference._copy_row!(dst::CuMatrix{Float32}, src::CuMatrix{Float3
     d = size(dst, 2)
     d == 0 && return dst
     nthreads = min(256, d)
-    @cuda threads = nthreads blocks = cld(d, nthreads) _cuda_take_row_kernel!(dst, src, row)
+    @fastcuda threads = nthreads blocks = cld(d, nthreads) _cuda_take_row_kernel!(dst, src, row)
     return dst
 end
 
@@ -1980,8 +2020,8 @@ function Gesso.Inference._greedy_id(logits::CuVector{Float32})
     end
     # ~8 logits per thread; the final pass takes one partial per thread.
     nparts = clamp(cld(n, 8 * _ARGMAX_THREADS), 1, _ARGMAX_THREADS)
-    @cuda threads = _ARGMAX_THREADS blocks = nparts _cuda_argmax_partial_kernel!(b.pv, b.pi, b.pb, logits, n)
-    @cuda threads = _ARGMAX_THREADS blocks = 1 _cuda_argmax_final_kernel!(b.out, b.pv, b.pi, b.pb, nparts)
+    @fastcuda threads = _ARGMAX_THREADS blocks = nparts _cuda_argmax_partial_kernel!(b.pv, b.pi, b.pb, logits, n)
+    @fastcuda threads = _ARGMAX_THREADS blocks = 1 _cuda_argmax_final_kernel!(b.out, b.pv, b.pi, b.pb, nparts)
     copyto!(b.host, b.out)
     id = b.host[1]
     id < 0 && throw(Gesso.Inference._nonfinite_logits())
@@ -2022,7 +2062,7 @@ function _shared_gate_add!(::CUDABackend, y, x, sd, gvec)
     CUDA.CUBLAS.gemv!('N', _cu_scalar(one(eltype(y))), x, g, _cu_scalar(zero(eltype(y))), acc)
     tx = min(16, seq)
     ty = min(16, h)
-    @cuda threads = (tx, ty) blocks = (cld(seq, tx), cld(h, ty)) _cuda_shared_gate_kernel!(
+    @fastcuda threads = (tx, ty) blocks = (cld(seq, tx), cld(h, ty)) _cuda_shared_gate_kernel!(
         y, sd, acc)
     return y
 end
@@ -2368,7 +2408,7 @@ function _moe_topk_device!(backend::CUDABackend, y, x, router, gate, up, down, n
     rt = _moe_route_meta(n_used)
     Gesso.Inference.@decode_stage :moe_router backend begin
         _cuda_router_logits!(logits, x, router)
-        @cuda threads = 256 _moe_route_kernel!(
+        @fastcuda threads = 256 _moe_route_kernel!(
             ws, rt.g, rt.u, rt.d, logits, Int32(n_exp), Int32(n_used),
             Int32(gate.bytes_per_expert), Int32(up.bytes_per_expert), Int32(down.bytes_per_expert),
         )

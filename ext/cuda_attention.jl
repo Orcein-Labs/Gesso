@@ -134,7 +134,7 @@ function _attention_decode_device!(
 )
     K >= 1 || throw(ArgumentError("decode attention needs at least one cache row, got K=$K"))
     shmem = (_ATTN_TILE + 2 * d_head + 33) * sizeof(Float32)
-    @cuda threads = _ATTN_THREADS blocks = n_heads shmem = shmem _cuda_attn_decode_kernel!(
+    @fastcuda threads = _ATTN_THREADS blocks = n_heads shmem = shmem _cuda_attn_decode_kernel!(
         attn, q, kc, vc, group, K, Float32(1 / sqrt(d_head)), d_head,
     )
     return true

@@ -151,6 +151,7 @@ supports(::Type{CUDABackend}, cap::Symbol) = cap in CUDA_SUPPORTED_CAPS
 
 # Phase 4 item B (§LXXVII): the CUDA operator methods on CuArray{Float32}
 # + explicit to_device transfer. Same op names, more-specific methods (§CIX).
+include("cuda_launch.jl")
 include("cuda_ops.jl")
 include("cuda_quant_gemm.jl")
 include("cuda_quant_dense.jl")

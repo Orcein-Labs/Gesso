@@ -308,7 +308,7 @@ function _cuda_launch_qgemv!(
     if ggml_type == I.GGML_TYPE_F32
         nthreads = min(256, ne1)
         nblocks = cld(ne1, nthreads)
-        @cuda threads = nthreads blocks = (nblocks, n_used) _cuda_qgemv_f32_kernel!(
+        @fastcuda threads = nthreads blocks = (nblocks, n_used) _cuda_qgemv_f32_kernel!(
             y, x, q, meta, coloff, ne0, ne1, alpha, beta,
         )
         return y
@@ -329,8 +329,8 @@ function _cuda_launch_qgemv!(
     total = ncols * nbk
     qx, dx, _ = _cuda_q8_buffers!(_CUDA_Q8_EXPERT, total)
     # quantize=false: the caller just quantized this same x into these buffers
-    quantize && @cuda threads = 256 blocks = cld(total, 256) _cuda_q8_1_quant_cols_kernel!(qx, dx, x, nbk, total)
-    @cuda threads = 128 blocks = (cld(ne1, 4), n_used) _cuda_eqgemv_kernel!(
+    quantize && @fastcuda threads = 256 blocks = cld(total, 256) _cuda_q8_1_quant_cols_kernel!(qx, dx, x, nbk, total)
+    @fastcuda threads = 128 blocks = (cld(ne1, 4), n_used) _cuda_eqgemv_kernel!(
         y, q, qx, dx, meta, coloff, ncols == 1, ne1, nbk, bsz, (nbk ÷ 8) * bsz, alpha, beta,
         Val{K}(), grid, tables.kv4, tables.ksigns, tables.kmask,
     )
