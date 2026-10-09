@@ -441,12 +441,8 @@ function _hybrid_linear_block!(
         z = Activation(; shape=(1, value_dim), storage=s.z)
         a = Activation(; shape=(1, nv), storage=s.a)
         b = Activation(; shape=(1, nv), storage=s.b)
-        @decode_sub :gdn_proj cpu begin
-            matmul!(cpu, mixed, normed, bt.wgdn_qkv, wl)
-            matmul!(cpu, z, normed, bt.wgdn_z, wl)
-            matmul!(cpu, a, normed, bt.wgdn_a, wl)
-            matmul!(cpu, b, normed, bt.wgdn_b, wl)
-        end
+        @decode_sub :gdn_proj cpu _dec_matmul_group!(cpu, (mixed, z, a, b), nothing, normed,
+            (bt.wgdn_qkv, bt.wgdn_z, bt.wgdn_a, bt.wgdn_b), wl)
         # conv+SiLU+state, gates, q/k L2norm, delta rule, gated norm: device kernels
         _gdn_decode_core!(cpu, s, bt, spec, eps, conv_state, rec_state)
         @decode_sub :gdn_outproj cpu begin
@@ -594,8 +590,7 @@ function _shared_expert_thunk(cpu, sd, normed2, bt, wl, zeros_like)
         sg = Activation(; shape=(seq, ff), storage=zeros_like((seq, ff)))
         su = Activation(; shape=(seq, ff), storage=zeros_like((seq, ff)))
         sa = Activation(; shape=(seq, ff), storage=zeros_like((seq, ff)))
-        matmul!(cpu, sg, normed2, bt.wshared_gate, wl)
-        matmul!(cpu, su, normed2, bt.wshared_up, wl)
+        _dec_matmul_group!(cpu, (sg, su), nothing, normed2, (bt.wshared_gate, bt.wshared_up), wl)
         swiglu!(cpu, sa, sg, su, wl)
         matmul!(cpu, sd, sa, bt.wshared_down, wl)
         nothing
@@ -1264,13 +1259,21 @@ function reference_generate(
     return ids
 end
 
+# Head buffers for `_last_logits` when the caller passes none: `nothing` means
+# allocate per call. A backend that returns buffers (fields `lastrow`,
+# `final_normed`, `logits`, `xq_dim`) gets back a logits row that the next call
+# overwrites.
+_head_scratch(backend, dim::Int, vocab::Int) = nothing
+
 # tied head over hidden row `row`: returns the (vocab,) logits row. Applies
 # the final RMSNorm first when `tensors` carries one (§LXXVI).
 function _last_logits(model, tensors, h, cpu, wl, vocab, row::Int; eps::Real=1e-6, buf=nothing)
     dim = size(h.storage, 2)
     T = typeof(h.storage)
     # CPU decode passes its scratch: the row, the normed row and the logits
-    # are reused, so the head allocates nothing per token.
+    # are reused, so the head allocates nothing per token. A device backend may
+    # keep its own (`_head_scratch`).
+    buf === nothing && (buf = _head_scratch(cpu, dim, vocab))
     lastrow = if buf === nothing
         Activation(; shape=(1, dim), storage=reshape(h.storage[row, :], (1, dim)))
     else

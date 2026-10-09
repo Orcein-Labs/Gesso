@@ -256,22 +256,42 @@ function _cuda_dq_gemv_kernel!(y, W, qx, dx, sx, kv, ::Val{K}, nrows::Int, nb::I
 end
 
 # dst[t, o] = sum_i x[t, i] * W[o, i] for a native GpuDenseQuant W.
-function _cuda_dq_matmul!(dst, x, w)
-    q = w.storage
+_cuda_dq_matmul!(dst, x, w) = (_cuda_dq_matmul_group!((dst,), x, (w,)); dst)
+
+# The same for several weights reading one `x`: it is quantized once.
+function _cuda_dq_matmul_group!(dsts::Tuple, x, ws::Tuple)
     xs = x.storage
-    ds = dst.storage
     n, k = size(xs, 1), size(xs, 2)
-    k == q.ne0 || throw(DimensionMismatch("dense quant matmul: x is $(size(xs)), W is $(size(q))"))
-    size(ds) == (n, q.nrows) || throw(DimensionMismatch("dense quant matmul: dst is $(size(ds)), want ($n, $(q.nrows))"))
-    n == 0 && return dst
-    _cu_aligned(q.data, 4) || error("dense quant matmul: weight bytes not 4-byte aligned")
+    for (dst, w) in zip(dsts, ws)
+        q = w.storage
+        k == q.ne0 || throw(DimensionMismatch("dense quant matmul: x is $(size(xs)), W is $(size(q))"))
+        size(dst.storage) == (n, q.nrows) ||
+            throw(DimensionMismatch("dense quant matmul: dst is $(size(dst.storage)), want ($n, $(q.nrows))"))
+        _cu_aligned(q.data, 4) || error("dense quant matmul: weight bytes not 4-byte aligned")
+    end
+    n == 0 && return dsts
     nb = k ÷ 32
     total = n * nb
     qx, dx, sx = _cuda_q8_buffers!(_CUDA_Q8_DENSE, total)
     @cuda threads = 256 blocks = cld(total, 256) _cuda_q8_1_quant_kernel!(qx, dx, sx, xs, nb, total)
     kv = _cuda_q_tables().kv4
-    @cuda threads = 128 blocks = (cld(q.nrows, 4), n) _cuda_dq_gemv_kernel!(
-        ds, q.data, qx, dx, sx, kv, Val{_dq_kind(q.ggml_type)}(), q.nrows, nb, q.row_bytes,
-    )
-    return dst
+    for (dst, w) in zip(dsts, ws)
+        q = w.storage
+        @cuda threads = 128 blocks = (cld(q.nrows, 4), n) _cuda_dq_gemv_kernel!(
+            dst.storage, q.data, qx, dx, sx, kv, Val{_dq_kind(q.ggml_type)}(), q.nrows, nb, q.row_bytes,
+        )
+    end
+    return dsts
+end
+
+function Gesso.Inference._matmul_shared_input!(cpu::CUDABackend, dsts::Tuple, x::Activation, ws::Tuple, wl)
+    if length(ws) > 1 && all(w -> w isa ProjectionWeight && w.storage isa GpuDenseQuant, ws)
+        _cuda_device_storage!(:matmul!, x)
+        foreach(d -> _cuda_device_storage!(:matmul!, d), dsts)
+        return _cuda_dq_matmul_group!(dsts, x, ws)
+    end
+    for i in eachindex(dsts)
+        matmul!(cpu, dsts[i], x, ws[i], wl)
+    end
+    return dsts
 end

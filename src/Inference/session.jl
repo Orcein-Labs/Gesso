@@ -442,13 +442,13 @@ end
 # no Random, no Sampler zoo)
 _all_finite(a) = all(isfinite, a)
 
+_nonfinite_logits() = gesso_error(
+    ERR_NUMERICAL_INSTABILITY,
+    "inference: nonfinite logits; no token may be emitted",
+)
+
 function _require_finite_logits(logits)
-    _all_finite(logits) || throw(
-        gesso_error(
-            ERR_NUMERICAL_INSTABILITY,
-            "inference: nonfinite logits; no token may be emitted",
-        ),
-    )
+    _all_finite(logits) || throw(_nonfinite_logits())
     return logits
 end
 _greedy_id(logits_row) = Int(argmax(_require_finite_logits(logits_row))) - 1

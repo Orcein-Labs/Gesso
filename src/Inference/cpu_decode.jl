@@ -148,13 +148,19 @@ end
 # Seq = 1 projections of one input `x` into `dsts`. When every weight has a
 # Q8_K kernel, `x` is quantized once into `xq` and the weights run as one
 # group (`_quant_matmul_group!`). Otherwise, and whenever `xq` is `nothing`
-# (prefill, the reference path), each projection is an ordinary `matmul!`.
+# (prefill, the reference path), the backend runs them as `_matmul_shared_input!`.
 function _dec_matmul_group!(cpu, dsts::Tuple, xq, x::Activation, ws::Tuple, wl)
     if xq !== nothing && all(w -> w.storage isa QuantMatrix && _quant_q8k_kind(w.storage), ws)
         quantize_q8_K!(xq, x.storage)
         _quant_matmul_group!(map(d -> d.storage, dsts), xq, map(w -> w.storage, ws))
         return dsts
     end
+    return _matmul_shared_input!(cpu, dsts, x, ws, wl)
+end
+
+# A device backend may quantize the shared input once for the whole group (the
+# CUDA extension does); here each projection is an ordinary `matmul!`.
+function _matmul_shared_input!(cpu, dsts::Tuple, x::Activation, ws::Tuple, wl)
     for i in eachindex(dsts)
         matmul!(cpu, dsts[i], x, ws[i], wl)
     end

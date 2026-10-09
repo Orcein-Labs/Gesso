@@ -1780,6 +1780,126 @@ function _dev_scratch(key::Symbol, dims::Integer...)
     return buf
 end
 
+# The tied head's row, normed row and logits, reused across tokens.
+Gesso.Inference._head_scratch(::CUDABackend, dim::Int, vocab::Int) = (
+    lastrow=_dev_scratch(:head_row, 1, dim),
+    final_normed=_dev_scratch(:head_normed, 1, dim),
+    logits=_dev_scratch(:head_logits, 1, vocab),
+    xq_dim=nothing,
+)
+
+function _cuda_take_row_kernel!(dst2, src2, row::Int)
+    j = (blockIdx().x - 1) * blockDim().x + threadIdx().x
+    j <= size(dst2, 2) || return
+    dst2[1, j] = src2[row, j]
+    return
+end
+
+function Gesso.Inference._copy_row!(dst::CuMatrix{Float32}, src::CuMatrix{Float32}, row::Int)
+    d = size(dst, 2)
+    d == 0 && return dst
+    nthreads = min(256, d)
+    @cuda threads = nthreads blocks = cld(d, nthreads) _cuda_take_row_kernel!(dst, src, row)
+    return dst
+end
+
+# Greedy id on the device in one pass: the first index of the maximum under
+# `isless` (what host `argmax` returns), or -1 when any logit is non-finite. The
+# generic path ran `all(isfinite, ·)` and `argmax` as two GPUArrays reductions,
+# each allocating its partials and each waiting on the device.
+const _ARGMAX_THREADS = 256
+
+@inline _argmax_better(v, i, bv, bi) = isless(bv, v) || (!isless(v, bv) && i < bi)
+
+# Block tree over (value, index, bad) in shared memory; thread 1 holds the result.
+@inline function _argmax_block_reduce!(sv, si, sb, tid, bv, bi, bad)
+    sv[tid] = bv
+    si[tid] = bi
+    sb[tid] = bad
+    CUDA.sync_threads()
+    stride = _ARGMAX_THREADS >> 1
+    while stride > 0
+        if tid <= stride
+            v, i = sv[tid + stride], si[tid + stride]
+            if _argmax_better(v, i, sv[tid], si[tid])
+                sv[tid] = v
+                si[tid] = i
+            end
+            sb[tid] |= sb[tid + stride]
+        end
+        CUDA.sync_threads()
+        stride >>= 1
+    end
+    return
+end
+
+function _cuda_argmax_partial_kernel!(pv, pi, pb, x, n::Int)
+    tid = Int(threadIdx().x)
+    sv = CUDA.@cuStaticSharedMem(Float32, _ARGMAX_THREADS)
+    si = CUDA.@cuStaticSharedMem(Int32, _ARGMAX_THREADS)
+    sb = CUDA.@cuStaticSharedMem(Int32, _ARGMAX_THREADS)
+    bv, bi, bad = -Inf32, typemax(Int32), Int32(0)
+    i = (Int(blockIdx().x) - 1) * _ARGMAX_THREADS + tid
+    step = _ARGMAX_THREADS * Int(gridDim().x)
+    while i <= n
+        v = x[i]
+        if !isfinite(v)
+            bad = Int32(1)
+        elseif _argmax_better(v, Int32(i), bv, bi)
+            bv, bi = v, Int32(i)
+        end
+        i += step
+    end
+    _argmax_block_reduce!(sv, si, sb, tid, bv, bi, bad)
+    if tid == 1
+        b = Int(blockIdx().x)
+        pv[b] = sv[1]
+        pi[b] = si[1]
+        pb[b] = sb[1]
+    end
+    return
+end
+
+function _cuda_argmax_final_kernel!(out, pv, pi, pb, nparts::Int)
+    tid = Int(threadIdx().x)
+    sv = CUDA.@cuStaticSharedMem(Float32, _ARGMAX_THREADS)
+    si = CUDA.@cuStaticSharedMem(Int32, _ARGMAX_THREADS)
+    sb = CUDA.@cuStaticSharedMem(Int32, _ARGMAX_THREADS)
+    bv, bi, bad = -Inf32, typemax(Int32), Int32(0)
+    if tid <= nparts
+        bv, bi, bad = pv[tid], pi[tid], pb[tid]
+    end
+    _argmax_block_reduce!(sv, si, sb, tid, bv, bi, bad)
+    tid == 1 && (out[1] = sb[1] != 0 ? Int32(-1) : si[1])
+    return
+end
+
+struct ArgmaxBuffers
+    pv::CuVector{Float32}
+    pi::CuVector{Int32}
+    pb::CuVector{Int32}
+    out::CuVector{Int32}
+    host::Vector{Int32}
+end
+const _ARGMAX_BUFS = Dict{Int, ArgmaxBuffers}()
+
+function Gesso.Inference._greedy_id(logits::CuVector{Float32})
+    n = length(logits)
+    0 < n < typemax(Int32) || throw(ArgumentError("greedy id: logits length $n out of range"))
+    b = get!(_ARGMAX_BUFS, Int(CUDA.deviceid(CUDA.device()))) do
+        ArgmaxBuffers(CuVector{Float32}(undef, _ARGMAX_THREADS), CuVector{Int32}(undef, _ARGMAX_THREADS),
+            CuVector{Int32}(undef, _ARGMAX_THREADS), CuVector{Int32}(undef, 1), Vector{Int32}(undef, 1))
+    end
+    # ~8 logits per thread; the final pass takes one partial per thread.
+    nparts = clamp(cld(n, 8 * _ARGMAX_THREADS), 1, _ARGMAX_THREADS)
+    @cuda threads = _ARGMAX_THREADS blocks = nparts _cuda_argmax_partial_kernel!(b.pv, b.pi, b.pb, logits, n)
+    @cuda threads = _ARGMAX_THREADS blocks = 1 _cuda_argmax_final_kernel!(b.out, b.pv, b.pi, b.pb, nparts)
+    copyto!(b.host, b.out)
+    id = b.host[1]
+    id < 0 && throw(Gesso.Inference._nonfinite_logits())
+    return Int(id) - 1
+end
+
 function _fetch_expert!(::CUDABackend, W::CuMatrix{Float32}, bank::CuArray{Float32, 3}, e::Int)
     copyto!(W, view(bank, e, :, :))
     return W
