@@ -198,6 +198,38 @@ end
     @test nbad == 0
 end
 
+# A `@threads :static` loop throws when it runs from two tasks at once or nested
+# inside another threaded loop, so the MoE path must accept both. Every call must
+# still reproduce the serial result bit for bit.
+@testset "GGUF MoE threaded expert path runs concurrently and nested" begin
+    if Threads.nthreads() == 1
+        @test_skip "needs Julia threads > 1 to exercise the threaded expert path"
+        return
+    end
+    seq, h, ff, n_exp, n_used = 8, 8, 4, 3, 2
+    rng = GessoTestHelpers.deterministic_rng(11)
+    x = randn(rng, Float32, seq, h)
+    router = randn(rng, Float32, n_exp, h)
+    gate_s = _pack_expert_slice(randn(rng, Float32, n_exp, ff, h), h, ff)
+    up_s = _pack_expert_slice(randn(rng, Float32, n_exp, ff, h), h, ff)
+    down_s = _pack_expert_slice(randn(rng, Float32, n_exp, h, ff), ff, h)
+    run_once() = begin
+        y = zeros(Float32, seq, h)
+        Gesso.Inference._cpu_moe_topk_swiglu_gguf!(y, x, router, gate_s, up_s, down_s, n_used)
+        y
+    end
+    y_ref = run_once()
+    for _ in 1:10
+        tasks = [Threads.@spawn(run_once()) for _ in 1:8]
+        @test all(y -> y == y_ref, fetch.(tasks))
+        nested = Vector{Matrix{Float32}}(undef, 8)
+        Threads.@threads for i in 1:8
+            nested[i] = run_once()
+        end
+        @test all(y -> y == y_ref, nested)
+    end
+end
+
 @testset "load_gguf 35B (opt-in)" begin
     if get(ENV, "GESSO_LOAD_35B", "") != "1"
         @test_skip "set GESSO_LOAD_35B=1 to materialize non-expert F32 (~9 GiB)"
