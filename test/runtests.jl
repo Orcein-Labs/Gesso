@@ -80,6 +80,10 @@ using Gesso: reference_prefill, reference_generate
     include("test_decode_profile.jl")
     include("test_gguf_import.jl")
 
+    # Native CPU Q8_K x IQ dot products: quantizer vs port, AVX2 bit-exact vs
+    # scalar, GEMV threading invariance, Ornith slices (env-gated)
+    include("test_quant_cpu_simd.jl")
+
     # BREADTH-0 Pass C: the tokenizer PROTOCOL — GPT-2 BPE is one
     # implementation, metaspace byte-level BPE is a materially different
     # second one, and both answer the same protocol.
