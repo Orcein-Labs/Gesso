@@ -1362,6 +1362,7 @@ include("gguf_import.jl")          # qwen35moe GGUF mmap + lazy experts
 include("gguf_quants.jl")          # IQ2_XS / IQ3_XXS / IQ4_XS fused expert GEMV
 include("quant_q8k.jl")            # Q8_K activation quantization (ggml block_q8_K)
 include("quant_cpu_simd.jl")       # native Q8_K x IQ dot products: scalar ref + AVX2
+include("quant_cpu_kquants.jl")    # native Q8_K / Q8_0 x K-quant dot products: scalar ref + AVX2
 include("tokenizer_protocol.jl")   # Pass C: the tokenizer PROTOCOL
 include("import_report.jl")      # Passes I/J: report + generated matrix
 

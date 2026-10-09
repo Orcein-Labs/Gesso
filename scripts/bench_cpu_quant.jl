@@ -1,5 +1,6 @@
-# CPU quantized GEMV throughput: native Q8_K path vs the existing F32 dequant
-# path, plus the host memory-read ceiling.
+# CPU quantized GEMV throughput: native Q8_K / Q8_0 paths vs the existing F32
+# dequant path (IQ formats only; the F32 path has no K-quant kernels), plus the
+# host memory-read ceiling.
 #
 #   julia --project=. -t 18 scripts/bench_cpu_quant.jl
 #   julia --project=. -t 1  scripts/bench_cpu_quant.jl
@@ -39,13 +40,14 @@ end
 
 function _bench_weights(ggml_type::Int32, ne0::Int, ne1::Int)
     bsz = I._iq_block_bytes(ggml_type)
-    nb = div(ne0, I.QK_K)
+    nb = div(ne0, I._q8k_block_values(ggml_type))
+    doff = I._q8k_d_offset(ggml_type)
     w = rand(UInt8, ne1 * nb * bsz)
     for blk in 0:(ne1 * nb - 1)
         d = Float16(0.01f0 + 0.02f0 * rand(Float32))
         bits = reinterpret(UInt16, d)
-        w[blk * bsz + 1] = UInt8(bits & 0xff)
-        w[blk * bsz + 2] = UInt8(bits >> 8)
+        w[blk * bsz + doff + 1] = UInt8(bits & 0xff)
+        w[blk * bsz + doff + 2] = UInt8(bits >> 8)
     end
     return w
 end
@@ -72,8 +74,8 @@ end
 # cache and overstate DRAM streaming.
 const BENCH_WS_BYTES = 256 * 2^20
 
-function _bench_format(name::String, ggml_type::Int32, ne0::Int, ne1::Int, nt::Int)
-    nbytes = ne1 * div(ne0, I.QK_K) * I._iq_block_bytes(ggml_type)
+function _bench_format(name::String, ggml_type::Int32, ne0::Int, ne1::Int, nt::Int; f32_rows::Bool)
+    nbytes = ne1 * I._qrow_bytes(ggml_type, ne0)
     ncopies = max(1, cld(BENCH_WS_BYTES, nbytes))
     Ws = [_bench_weights(ggml_type, ne0, ne1) for _ in 1:ncopies]
     x = rand(Float32, ne0) .- 0.5f0
@@ -85,11 +87,13 @@ function _bench_format(name::String, ggml_type::Int32, ne0::Int, ne1::Int, nt::I
         return Ws[k[]]
     end
 
-    t = _bench_seconds(() -> I._qgemv_bytes!(y, x, next_w(), ggml_type, ne0, ne1, 1.0f0, 0.0f0))
-    push!(rows, ("F32 dequant _qgemv_bytes! (1T)", nbytes / t / 1.0e9))
+    if f32_rows
+        t = _bench_seconds(() -> I._qgemv_bytes!(y, x, next_w(), ggml_type, ne0, ne1, 1.0f0, 0.0f0))
+        push!(rows, ("F32 dequant _qgemv_bytes! (1T)", nbytes / t / 1.0e9))
 
-    t = _bench_seconds(() -> I._qgemv_bytes_threaded!(y, x, next_w(), ggml_type, ne0, ne1, 1.0f0, 0.0f0))
-    push!(rows, ("F32 dequant _qgemv_bytes_threaded! (MT)", nbytes / t / 1.0e9))
+        t = _bench_seconds(() -> I._qgemv_bytes_threaded!(y, x, next_w(), ggml_type, ne0, ne1, 1.0f0, 0.0f0))
+        push!(rows, ("F32 dequant _qgemv_bytes_threaded! (MT)", nbytes / t / 1.0e9))
+    end
 
     t = _bench_seconds(() -> I._qgemv_q8k_f32!(y, x, next_w(), ggml_type, ne0, ne1; simd=false, threaded=false))
     push!(rows, ("Q8_K scalar reference (1T)", nbytes / t / 1.0e9))
@@ -112,11 +116,15 @@ function main()
     println()
 
     shapes = (("expert 2048x512", 2048, 512), ("expert 512x2048", 512, 2048), ("dense 5120x13824", 5120, 13824))
-    formats = (("IQ4_XS", I.GGML_TYPE_IQ4_XS), ("IQ2_XS", I.GGML_TYPE_IQ2_XS), ("IQ3_XXS", I.GGML_TYPE_IQ3_XXS))
+    formats = (
+        ("IQ4_XS", I.GGML_TYPE_IQ4_XS), ("IQ2_XS", I.GGML_TYPE_IQ2_XS), ("IQ3_XXS", I.GGML_TYPE_IQ3_XXS),
+        ("Q5_K", I.GGML_TYPE_Q5_K), ("Q6_K", I.GGML_TYPE_Q6_K), ("Q4_K", I.GGML_TYPE_Q4_K),
+        ("Q8_0", I.GGML_TYPE_Q8_0), ("Q3_K", I.GGML_TYPE_Q3_K), ("Q2_K", I.GGML_TYPE_Q2_K),
+    )
 
     println(rpad("format", 9), rpad("shape (ne0 x ne1)", 22), rpad("weights MB", 12), rpad("path", 42), "GB/s")
     for (fname, ty) in formats, (sname, ne0, ne1) in shapes
-        r = _bench_format(fname, ty, ne0, ne1, nt)
+        r = _bench_format(fname, ty, ne0, ne1, nt; f32_rows=ty in (I.GGML_TYPE_IQ4_XS, I.GGML_TYPE_IQ2_XS, I.GGML_TYPE_IQ3_XXS))
         for (path, gbps) in r.rows
             println(
                 rpad(fname, 9),
