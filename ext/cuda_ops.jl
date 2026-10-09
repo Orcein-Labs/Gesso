@@ -92,7 +92,7 @@ function _cuda_rmsnorm_storage!(dsts::AbstractArray, xs::AbstractArray, scales::
     length(scales) == d ||
         throw(gesso_error(ERR_INVALID_PLAN, "rmsnorm!: scale length $(length(scales)) ≠ feature dim $d"; op = :rmsnorm!))
     if nd == 2 && size(xs, 1) == 1
-        @cuda threads=1 blocks=1 _cuda_rmsnorm_row_kernel!(dsts, xs, scales, eps, d)
+        @cuda threads=256 blocks=1 _cuda_rmsnorm_row_kernel!(dsts, xs, scales, eps, d)
         return dsts
     end
     # Retain the legacy mixed-precision normalization to meet its fixed
@@ -112,15 +112,35 @@ function _cuda_rmsnorm_storage!(dsts::AbstractArray, xs::AbstractArray, scales::
     return dsts
 end
 
-# Ordinary single-row decode normalization without reduction temporaries.
-function _cuda_rmsnorm_row_kernel!(dst, xs, scales, eps, d)
-    acc = Float32(0)
-    for j in 1:d
+# Single-row decode normalization: one block of 256 threads (launch width is
+# fixed at 256 for the shared-memory tree). Each thread sums a strided share of
+# the squares, the block reduces them in shared memory, then every thread
+# scales its share. One launch per call; the earlier single-thread loop walked
+# the feature axis serially in global memory (~1 ms per call at d = 2048).
+function _cuda_rmsnorm_row_kernel!(dst, xs, scales, eps, d::Int)
+    tid = threadIdx().x
+    part = CUDA.@cuStaticSharedMem(Float32, 256)
+    acc = 0.0f0
+    j = tid
+    while j <= d
         acc += abs2(xs[1, j])
+        j += blockDim().x
     end
-    rms = sqrt(Float64(acc) / d + eps)
-    for j in 1:d
+    part[tid] = acc
+    CUDA.sync_threads()
+    stride = 128
+    while stride > 0
+        if tid <= stride
+            part[tid] += part[tid + stride]
+        end
+        CUDA.sync_threads()
+        stride >>= 1
+    end
+    rms = sqrt(Float64(part[1]) / d + eps)
+    j = tid
+    while j <= d
         dst[1, j] = (xs[1, j] / rms) * scales[j]
+        j += blockDim().x
     end
     return
 end
@@ -693,18 +713,41 @@ function _cuda_embed_table_check!(table)
     return _cuda_device_storage!(:embedding_lookup!, table)
 end
 
-# dst[j, o] = Σᵢ x[j, i] · Float32(w[o, i]). One thread per output feature
-# o, one block row per token j. Each thread walks its row of W, and the warp
-# reads adjacent o, so the loads coalesce.
-function _cuda_f16w_kernel!(dst, x, w, k::Int)
-    o = (blockIdx().x - 1) * blockDim().x + threadIdx().x
+# dst[j, o] = Σᵢ x[j, i] · Float32(w[o, i]), W column-major [m, k].
+#
+# Split-K GEMV. A block is 32 lanes (output rows o0+1..o0+32, one warp) by
+# _F16W_KSPLIT warps (k slices), for one token j. Lanes that share a k index
+# read adjacent rows of W, which are adjacent in memory, so each warp load is a
+# contiguous 64-byte span: the column-major layout is already coalesced. The
+# old kernel had one thread per row walking all of k serially (512 threads for
+# m = 512), so decode was latency-bound. The k slices recover parallelism and
+# are summed through shared memory. Any n works (prefill loops tokens via
+# blocks.y), with F32 accumulation.
+const _F16W_KSPLIT = 8
+
+function _cuda_f16w_kernel!(dst, x, w, k::Int, m::Int)
+    lane = threadIdx().x
+    s = threadIdx().y
+    o = (blockIdx().x - 1) * 32 + lane
     j = blockIdx().y
-    o <= size(w, 1) || return
     acc = 0.0f0
-    for i in 1:k
-        acc += Float32(w[o, i]) * x[j, i]
+    if o <= m
+        i = s
+        while i <= k
+            acc += Float32(w[o, i]) * x[j, i]
+            i += _F16W_KSPLIT
+        end
     end
-    dst[j, o] = acc
+    part = CUDA.@cuStaticSharedMem(Float32, (32, 8))
+    part[lane, s] = acc
+    CUDA.sync_threads()
+    if s == 1 && o <= m
+        tot = 0.0f0
+        for q in 1:_F16W_KSPLIT
+            tot += part[lane, q]
+        end
+        dst[j, o] = tot
+    end
     return
 end
 
@@ -717,8 +760,7 @@ function _cuda_f16w_matmul!(dst, x, w)
     size(xs, 2) == k || throw(DimensionMismatch("f16 matmul: x is $(size(xs)), W is $(size(ws))"))
     size(ds) == (n, m) || throw(DimensionMismatch("f16 matmul: dst is $(size(ds)), want ($n, $m)"))
     n == 0 && return dst
-    nthreads = 256
-    @cuda threads = (nthreads,) blocks = (cld(m, nthreads), n) _cuda_f16w_kernel!(ds, xs, ws, k)
+    @cuda threads = (32, _F16W_KSPLIT) blocks = (cld(m, 32), n) _cuda_f16w_kernel!(ds, xs, ws, k, m)
     return dst
 end
 
@@ -1292,11 +1334,27 @@ Gesso.Inference._profile_sync(::CUDABackend) = CUDA.synchronize()
 struct _CUDASync end
 Gesso.Inference._profile_sync(::_CUDASync) = CUDA.synchronize()
 
-# CUDA.zeros with the allocation counted in the decode profile.
-function _moe_zeros(dims::Integer...)
-    Gesso.Inference._profile_count!(:cuda_alloc_calls, 1)
-    Gesso.Inference._profile_count!(:cuda_alloc_bytes, 4 * prod(dims))
-    return CUDA.zeros(Float32, dims...)
+# Decode scratch: one reusable device buffer per (device, call site). A buffer
+# is allocated (zeroed) on first use and again only when the requested shape
+# changes; a reused buffer keeps its old contents, so each call site writes
+# every element it reads. Allocations are counted in the decode profile, so a
+# steady-state token reports zero. Calls are sequential within a decode, so one
+# buffer per key is enough; concurrent decodes on one device would share it.
+struct DeviceScratch
+    bufs::Dict{Tuple{Int, Symbol}, CuArray{Float32}}
+end
+const _DEV_SCRATCH = DeviceScratch(Dict{Tuple{Int, Symbol}, CuArray{Float32}}())
+
+function _dev_scratch(key::Symbol, dims::Integer...)
+    k = (Int(CUDA.deviceid(CUDA.device())), key)
+    buf = get(_DEV_SCRATCH.bufs, k, nothing)
+    if buf === nothing || size(buf) != dims
+        Gesso.Inference._profile_count!(:cuda_alloc_calls, 1)
+        Gesso.Inference._profile_count!(:cuda_alloc_bytes, 4 * prod(dims))
+        buf = CUDA.zeros(Float32, dims...)
+        _DEV_SCRATCH.bufs[k] = buf
+    end
+    return buf
 end
 
 function _fetch_expert!(::CUDABackend, W::CuMatrix{Float32}, bank::CuArray{Float32, 3}, e::Int)
@@ -1361,13 +1419,13 @@ function _moe_topk_swiglu!(
         error("_moe_topk_swiglu!: down $(size(down)) ≠ ($n_exp, $h, $ff)")
 
     Gesso.Inference.@decode_stage :moe_alloc _CUDASync() begin
-        logits = _moe_zeros(seq, n_exp)
+        logits = _dev_scratch(:moe_logits, seq, n_exp)
         fill!(y, zero(eltype(y)))
-        gacc = _moe_zeros(ff)
-        uacc = _moe_zeros(ff)
-        hact = _moe_zeros(ff)
-        yrow = _moe_zeros(h)
-        xt = _moe_zeros(h)
+        gacc = _dev_scratch(:moe_gacc, ff)
+        uacc = _dev_scratch(:moe_uacc, ff)
+        hact = _dev_scratch(:moe_hact, ff)
+        yrow = _dev_scratch(:moe_yrow, h)
+        xt = _dev_scratch(:moe_xt, h)
     end
 
     Gesso.Inference.@decode_stage :moe_router backend begin
@@ -1403,17 +1461,17 @@ function _moe_topk_swiglu!(
         dh = Vector{Float32}(undef, h)
     elseif quant
         Gesso.Inference.@decode_stage :moe_alloc _CUDASync() begin
-            Gbat = _moe_zeros(ff, n_used)
-            Ubat = _moe_zeros(ff, n_used)
-            Hbat = _moe_zeros(ff, n_used)
-            Dbat = _moe_zeros(h, n_used)
-            ws = _moe_zeros(n_used)
+            Gbat = _dev_scratch(:moe_gbat, ff, n_used)
+            Ubat = _dev_scratch(:moe_ubat, ff, n_used)
+            Hbat = _dev_scratch(:moe_hbat, ff, n_used)
+            Dbat = _dev_scratch(:moe_dbat, h, n_used)
+            ws = _dev_scratch(:moe_ws, n_used)
         end
     else
         Gesso.Inference.@decode_stage :moe_alloc _CUDASync() begin
-            Wg = _moe_zeros(ff, h)
-            Wu = _moe_zeros(ff, h)
-            Wd = _moe_zeros(h, ff)
+            Wg = _dev_scratch(:moe_wg, ff, h)
+            Wu = _dev_scratch(:moe_wu, ff, h)
+            Wd = _dev_scratch(:moe_wd, h, ff)
         end
     end
 

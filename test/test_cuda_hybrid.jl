@@ -73,6 +73,40 @@ else
         @test approx_eq(Float64.(Array(dst.storage)), ref; atol=1e-4)
     end
 
+    @testset "cuda F16 matmul: decode row and k/m off the warp grid" begin
+        # n=1 is the decode shape; m=70 spans three 32-row blocks with a
+        # partial last block, and k=300 spans the 8 k-slices unevenly
+        for (m, k, n) in ((70, 300, 1), (513, 2051, 1), (33, 8, 2))
+            W0 = reshape(Float32.(cos.(1:m*k)) ./ 4, m, k)
+            x0 = reshape(Float32.(sin.(1:n*k)), n, k)
+            ref = Float64.(x0) * transpose(Float64.(Float16.(W0)))
+            wF = Gesso.ProjectionWeight(; shape=(m, k), storage=Float16.(CUDA.CuArray{Float32}(W0)))
+            dst = mat(Gesso.Activation, CUDA.zeros(Float32, n, m))
+            x = mat(Gesso.Activation, CuArray{Float32}(x0))
+            Gesso.matmul!(cuda, dst, x, wF, Gesso.DecodeWorkload())
+            @test approx_eq(Float64.(Array(dst.storage)), ref; atol=1e-4)
+        end
+    end
+
+    @testset "cuda rmsnorm! decode row wider than one thread" begin
+        rng = deterministic_rng(11)
+        x0 = randn(rng, 1, 300)
+        s0 = randn(rng, 300)
+        cpu_d = mat(Gesso.Activation, zeros(1, 300))
+        Gesso.rmsnorm!(
+            cpu, cpu_d, mat(Gesso.Activation, x0), mat(Gesso.FrozenParameter, s0), wl,
+        )
+        gpu_d = mat(Gesso.Activation, CUDA.zeros(Float32, 1, 300))
+        Gesso.rmsnorm!(
+            cuda,
+            gpu_d,
+            mat(Gesso.Activation, CuArray{Float32}(x0)),
+            mat(Gesso.FrozenParameter, CuArray{Float32}(s0)),
+            Gesso.DecodeWorkload(),
+        )
+        @test approx_eq(Array(gpu_d.storage), Float32.(cpu_d.storage); atol=1e-4)
+    end
+
     @testset "cuda rope!: inv_freq + rotary_dim match CPU" begin
         q0 = reshape(Float64[i for i in 1:32], (2, 2, 8))
         k0 = reshape(Float64[i for i in 33:64], (2, 2, 8))
