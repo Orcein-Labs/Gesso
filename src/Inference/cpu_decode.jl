@@ -36,9 +36,46 @@ struct CPUDecodeScratch
     beta::Vector{Float32}         # (nv,)
     delta::Matrix{Float32}        # (nv, nslab) per-slab delta / kv_mem buffer
     nslab::Int
+    # Q8_K quantizations of the shared decode inputs, one per input width:
+    # residual stream (dim), attention merged (qdim), GDN merged (value_dim),
+    # FFN hidden (ff). Each is filled once per input and read by every
+    # projection of that input.
+    xq_dim::Q8KVec
+    xq_qdim::Q8KVec
+    xq_vdim::Q8KVec
+    xq_ff::Q8KVec
+    # Decode activations, reused by every token. The residual stream, the
+    # normed inputs, the projection outputs and the attention heads all live
+    # here, so a decode step allocates nothing for them.
+    hp::Matrix{Float32}           # (1, dim) residual stream
+    normed::Matrix{Float32}       # (1, dim)
+    normed2::Matrix{Float32}      # (1, dim)
+    sub::Matrix{Float32}          # (1, dim) sublayer output
+    down::Matrix{Float32}         # (1, dim) FFN output
+    q::Matrix{Float32}            # (1, qdim)
+    gate_attn::Matrix{Float32}    # (1, qdim) attention output gate
+    k::Matrix{Float32}            # (1, kdim)
+    v::Matrix{Float32}            # (1, kdim)
+    qh::Array{Float32,3}          # (1, n_heads, d_head)
+    kh::Array{Float32,3}          # (1, n_kv_heads, d_head)
+    vh::Array{Float32,3}          # (1, n_kv_heads, d_head)
+    attn::Array{Float32,3}        # (1, n_heads, d_head)
+    merged_attn::Matrix{Float32}  # (1, qdim)
+    gate::Matrix{Float32}         # (1, ff)
+    up::Matrix{Float32}           # (1, ff)
+    act::Matrix{Float32}          # (1, ff)
+    probs::Vector{Float32}        # (ctx,) one head's scores, then probabilities
+    pos1::Vector{Int}             # (1,) RoPE position of the decode token
+    logits::Matrix{Float32}       # (1, vocab)
+    lastrow::Matrix{Float32}      # (1, dim) final hidden row before the head
+    final_normed::Matrix{Float32} # (1, dim) final RMSNorm output
 end
 
-function _cpu_decode_scratch(mx, dim::Integer)
+# Sizes come from the model. Attention and FFN widths default to 0 for a
+# model without that layer; `ctx` is the KV capacity (prompt + new tokens).
+function _cpu_decode_scratch(mx, dim::Integer; qdim::Integer=0, ff::Integer=0,
+    kdim::Integer=0, n_heads::Integer=0, n_kv_heads::Integer=0, d_head::Integer=0,
+    vocab::Integer=0, ctx::Integer=0)
     nk, nv = mx.num_key_heads, mx.num_value_heads
     dk, dv = mx.key_head_dim, mx.value_head_dim
     key_dim = nk * dk
@@ -61,7 +98,67 @@ function _cpu_decode_scratch(mx, dim::Integer)
         zeros(Float32, nv),
         zeros(Float32, nv, nslab),
         nslab,
+        Q8KVec(div(Int(dim), QK_K)),
+        Q8KVec(div(max(Int(qdim), 1), QK_K)),
+        Q8KVec(div(value_dim, QK_K)),
+        Q8KVec(div(max(Int(ff), 1), QK_K)),
+        zeros(Float32, 1, dim),
+        zeros(Float32, 1, dim),
+        zeros(Float32, 1, dim),
+        zeros(Float32, 1, dim),
+        zeros(Float32, 1, dim),
+        zeros(Float32, 1, qdim),
+        zeros(Float32, 1, qdim),
+        zeros(Float32, 1, kdim),
+        zeros(Float32, 1, kdim),
+        zeros(Float32, 1, n_heads, d_head),
+        zeros(Float32, 1, n_kv_heads, d_head),
+        zeros(Float32, 1, n_kv_heads, d_head),
+        zeros(Float32, 1, n_heads, d_head),
+        zeros(Float32, 1, qdim),
+        zeros(Float32, 1, ff),
+        zeros(Float32, 1, ff),
+        zeros(Float32, 1, ff),
+        zeros(Float32, ctx),
+        [0],
+        zeros(Float32, 1, vocab),
+        zeros(Float32, 1, dim),
+        zeros(Float32, 1, dim),
     )
+end
+
+# Storage for one decode activation: the scratch buffer when there is one,
+# a fresh zero array otherwise. `Val` makes the field lookup static.
+@inline _decode_buf(::Nothing, ::Val, zl, dims::Tuple) = zl(dims)
+@inline _decode_buf(sc::CPUDecodeScratch, ::Val{N}, zl, dims::Tuple) where {N} = getfield(sc, N)
+
+# RoPE position argument for one decode token: the scratch's one-element
+# vector on the CPU path, a fresh vector otherwise.
+_decode_pos(::Nothing, p::Int) = [p]
+_decode_pos(sc::CPUDecodeScratch, p::Int) = (sc.pos1[1] = p; sc.pos1)
+
+# Row `row` of `src` into the one-row matrix `dst`, without a copied slice.
+function _copy_row!(dst::Matrix{Float32}, src::AbstractMatrix, row::Int)
+    @inbounds for i in axes(dst, 2)
+        dst[1, i] = src[row, i]
+    end
+    return dst
+end
+
+# Seq = 1 projections of one input `x` into `dsts`. When every weight has a
+# Q8_K kernel, `x` is quantized once into `xq` and the weights run as one
+# group (`_quant_matmul_group!`). Otherwise, and whenever `xq` is `nothing`
+# (prefill, the reference path), each projection is an ordinary `matmul!`.
+function _dec_matmul_group!(cpu, dsts::Tuple, xq, x::Activation, ws::Tuple, wl)
+    if xq !== nothing && all(w -> w.storage isa QuantMatrix && _quant_q8k_kind(w.storage), ws)
+        quantize_q8_K!(xq, x.storage)
+        _quant_matmul_group!(map(d -> d.storage, dsts), xq, map(w -> w.storage, ws))
+        return dsts
+    end
+    for i in eachindex(dsts)
+        matmul!(cpu, dsts[i], x, ws[i], wl)
+    end
+    return dsts
 end
 
 # The fast path needs host Float32 state, conv state, and norm/gate parameters.
@@ -71,9 +168,9 @@ function _cpu_gdn_fast_ok(bt, conv_state, rec_state, h)
         conv_state isa Matrix{Float32} &&
         rec_state isa Array{Float32,3} &&
         bt.wgdn_conv.storage isa Array{Float32,3} &&
-        bt.wgdn_A_log.storage isa AbstractVector{Float32} &&
-        bt.wgdn_dt_bias.storage isa AbstractVector{Float32} &&
-        bt.wgdn_norm.storage isa AbstractVector{Float32}
+        bt.wgdn_A_log.storage isa Vector{Float32} &&
+        bt.wgdn_dt_bias.storage isa Vector{Float32} &&
+        bt.wgdn_norm.storage isa Vector{Float32}
 end
 
 # Depthwise causal conv + SiLU for one token, then the conv-state shift.
@@ -149,8 +246,10 @@ function _gdn_decode_cpu!(cpu, h::Activation, normed::Activation, sub::Activatio
     a = Activation(; shape=(1, nv), storage=sc.a)
     b = Activation(; shape=(1, nv), storage=sc.b)
     @decode_sub :gdn_proj cpu begin
-        matmul!(cpu, mixed, normed, bt.wgdn_qkv, wl)
-        matmul!(cpu, z, normed, bt.wgdn_z, wl)
+        # wgdn_a and wgdn_b are dense Float32, so only qkv and z share the
+        # quantized activation. a and b stay on plain matmul!.
+        _dec_matmul_group!(cpu, (mixed, z), sc.xq_dim, normed,
+            (bt.wgdn_qkv, bt.wgdn_z), wl)
         matmul!(cpu, a, normed, bt.wgdn_a, wl)
         matmul!(cpu, b, normed, bt.wgdn_b, wl)
     end
@@ -176,9 +275,9 @@ function _gdn_decode_finish!(cpu, sub::Activation, bt, spec, wl, eps, conv_state
     bv = vec(sc.b)
     # FrozenParameter storage is `Any`; assert the concrete type once so the
     # per-head loops are not dynamically dispatched.
-    A_log = bt.wgdn_A_log.storage::AbstractVector{Float32}
-    dt_bias = bt.wgdn_dt_bias.storage::AbstractVector{Float32}
-    scale_norm = bt.wgdn_norm.storage::AbstractVector{Float32}
+    A_log = bt.wgdn_A_log.storage::Vector{Float32}
+    dt_bias = bt.wgdn_dt_bias.storage::Vector{Float32}
+    scale_norm = bt.wgdn_norm.storage::Vector{Float32}
 
     @decode_sub :gdn_gates cpu begin
         @inbounds for hh in 1:nv
@@ -248,7 +347,55 @@ function _gdn_decode_finish!(cpu, sub::Activation, bt, spec, wl, eps, conv_state
 
     @decode_sub :gdn_outproj cpu begin
         merged_act = Activation(; shape=(1, value_dim), storage=sc.merged)
-        matmul!(cpu, sub, merged_act, bt.wgdn_o, wl)
+        _dec_matmul_group!(cpu, (sub,), sc.xq_vdim, merged_act, (bt.wgdn_o,), wl)
     end
     return sub
+end
+
+# Single-query causal attention over the first `K` cache rows, all query heads,
+# in one pass per head. Query head `hh` reads KV head `div(hh-1, group)+1` in
+# place, so the GQA repeat of the whole cache is never built.
+#
+# The arithmetic is the reference `_attention_heads!` at L = 1, operation for
+# operation: scores accumulate per key over the head dim in order, the softmax
+# is the `_cpu_softmax_storage!` sequence (max, exp, Float64 sum, divide), and
+# values accumulate per output over the keys in order. The outputs are
+# therefore bit-identical to the reference, not just within tolerance.
+function _attention_decode_cpu!(attn, q, kc, vc, probs::Vector{Float32},
+    n_heads::Int, d_head::Int, group::Int, K::Int)
+    fill!(attn, 0.0f0)
+    sqd = sqrt(d_head)
+    @inbounds for hh in 1:n_heads
+        hk = div(hh - 1, group) + 1
+        for u in 1:K
+            probs[u] = 0.0f0
+        end
+        for j in 1:d_head
+            qv = q[1, hh, j]
+            for u in 1:K
+                probs[u] += qv * kc[u, hk, j] / sqd
+            end
+        end
+        row_max = probs[1]
+        for u in 2:K
+            row_max = max(row_max, probs[u])
+        end
+        isfinite(row_max) || throw(
+            gesso_error(ERR_NUMERICAL_INSTABILITY, "softmax!: no finite unmasked maximum"),
+        )
+        acc = 0.0
+        for u in 1:K
+            probs[u] = exp(probs[u] - row_max)
+            acc += probs[u]
+        end
+        for u in 1:K
+            probs[u] /= acc
+        end
+        for j in 1:d_head
+            for u in 1:K
+                attn[1, hh, j] += probs[u] * vc[u, hk, j]
+            end
+        end
+    end
+    return attn
 end

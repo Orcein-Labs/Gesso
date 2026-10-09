@@ -530,17 +530,26 @@ function _hybrid_linear_block!(
     return sub
 end
 
-function _ffn_block!(cpu, down, gate, up, act, normed2, bt, wl, zeros_like)
+# Hidden width of a dense FFN block, 0 for a model without one. Sizes the
+# decode scratch's FFN-hidden quantization.
+function _dense_ffn_hidden(model)
+    ffn = model.blocks[1].ffn
+    return hasproperty(ffn, :hidden) ? Int(ffn.hidden) : 0
+end
+
+# `xq_in` / `xq_ff` are the decode scratch's Q8_K buffers for the residual and
+# FFN-hidden inputs. Prefill passes nothing and keeps the per-weight matmuls.
+function _ffn_block!(cpu, down, gate, up, act, normed2, bt, wl, zeros_like;
+    xq_in=nothing, xq_ff=nothing)
     if haskey(bt, :wrouter)
         return _moe_ffn!(cpu, down, normed2, bt, wl, zeros_like)
     end
     @decode_stage :dense_ffn cpu begin
         @decode_sub :ffn_gateup cpu begin
-            matmul!(cpu, gate, normed2, bt.wgate, wl)
-            matmul!(cpu, up, normed2, bt.wup, wl)
+            _dec_matmul_group!(cpu, (gate, up), xq_in, normed2, (bt.wgate, bt.wup), wl)
         end
         @decode_sub :ffn_act cpu swiglu!(cpu, act, gate, up, wl)
-        @decode_sub :ffn_down cpu matmul!(cpu, down, act, bt.wdown, wl)
+        @decode_sub :ffn_down cpu _dec_matmul_group!(cpu, (down,), xq_ff, act, (bt.wdown,), wl)
     end
     return down
 end
@@ -1071,7 +1080,10 @@ function reference_generate(
     gdn_conv, gdn_rec = _gdn_states(tensors, zeros_like)
     gdn_scratch = _gdn_decode_scratch(zeros_like, tensors)
     spec_mx = haskey(tensors, :spec) && tensors.spec !== nothing ? tensors.spec.mixer : nothing
-    cpu_scratch = on_cpu && spec_mx !== nothing ? _cpu_decode_scratch(spec_mx, dim) : nothing
+    cpu_scratch = on_cpu && spec_mx !== nothing ? _cpu_decode_scratch(
+        spec_mx, dim; qdim=n_heads * d_head, ff=_dense_ffn_hidden(model),
+        kdim=n_kv_heads * d_head, n_heads, n_kv_heads, d_head, vocab, ctx=P + cap,
+    ) : nothing
 
     positions = collect(0:(P-1))
     # BREADTH-0 Pass D — see reference_prefill. `nothing` = unscaled model.
@@ -1173,6 +1185,7 @@ function reference_generate(
         t_head = time_ns()
         logits_row = @decode_stage :lm_head cpu _last_logits(
             model, tensors, h, cpu, wd, vocab, P + steps; eps,
+            buf=cpu_scratch,
         )
         next = @decode_stage :sample cpu _greedy_id(logits_row)            # 0-based id
         head_ms = (time_ns() - t_head) / 1e6
@@ -1226,30 +1239,35 @@ end
 
 # tied head over hidden row `row`: returns the (vocab,) logits row. Applies
 # the final RMSNorm first when `tensors` carries one (§LXXVI).
-function _last_logits(model, tensors, h, cpu, wl, vocab, row::Int; eps::Real=1e-6)
+function _last_logits(model, tensors, h, cpu, wl, vocab, row::Int; eps::Real=1e-6, buf=nothing)
     dim = size(h.storage, 2)
     T = typeof(h.storage)
-    lastrow = Activation(; shape=(1, dim), storage=reshape(h.storage[row, :], (1, dim)))
+    # CPU decode passes its scratch: the row, the normed row and the logits
+    # are reused, so the head allocates nothing per token.
+    lastrow = if buf === nothing
+        Activation(; shape=(1, dim), storage=reshape(h.storage[row, :], (1, dim)))
+    else
+        _copy_row!(buf.lastrow, h.storage, row)
+        Activation(; shape=(1, dim), storage=buf.lastrow)
+    end
     final_rms = haskey(tensors, :final_rms) ? tensors.final_rms : nothing
     if final_rms !== nothing
         normed = Activation(;
             shape=(1, dim),
-            storage=fill!(
-                similar(h.storage, eltype(T), (1, dim)),
-                zero(eltype(h.storage)),
-            ),
+            storage=buf === nothing ?
+                fill!(similar(h.storage, eltype(T), (1, dim)), zero(eltype(h.storage))) :
+                fill!(buf.final_normed, zero(eltype(h.storage))),
         )
         rmsnorm!(cpu, normed, lastrow, final_rms, wl; eps)
         lastrow = normed
     end
     out = Activation(;
         shape=(1, vocab),
-        storage=fill!(
-            similar(h.storage, eltype(T), (1, vocab)),
-            zero(eltype(h.storage)),
-        ),
+        storage=buf === nothing ?
+            fill!(similar(h.storage, eltype(T), (1, vocab)), zero(eltype(h.storage))) :
+            fill!(buf.logits, zero(eltype(h.storage))),
     )
-    matmul!(cpu, out, lastrow, tensors.lm_head, wl)
+    _dec_matmul_group!(cpu, (out,), buf === nothing ? nothing : buf.xq_dim, lastrow, (tensors.lm_head,), wl)
     return vec(out.storage)
 end
 
@@ -1285,35 +1303,40 @@ function _decode_step!(
     kdim = n_kv_heads * d_head
     qdim = n_heads * d_head
     zeros_like = _zeros_like_factory(cpu, tensors)
-    hp = Activation(; shape=(1, dim), storage=zeros_like((1, dim)))
+    xq_dim = cpu_scratch === nothing ? nothing : cpu_scratch.xq_dim
+    xq_qdim = cpu_scratch === nothing ? nothing : cpu_scratch.xq_qdim
+    xq_ff = cpu_scratch === nothing ? nothing : cpu_scratch.xq_ff
+    # CPU decode reads every activation from the preallocated scratch; the
+    # other backends allocate them per call, as before.
+    hp = Activation(; shape=(1, dim), storage=_decode_buf(cpu_scratch, Val(:hp), zeros_like, (1, dim)))
     @decode_stage :embed cpu embedding_lookup!(cpu, hp, tensors.embedding, [tok], wl)
-    normed = Activation(; shape=(1, dim), storage=zeros_like((1, dim)))
-    q = Activation(; shape=(1, qdim), storage=zeros_like((1, qdim)))
-    gate_attn = Activation(; shape=(1, qdim), storage=zeros_like((1, qdim)))
-    k = Activation(; shape=(1, kdim), storage=zeros_like((1, kdim)))
-    v = Activation(; shape=(1, kdim), storage=zeros_like((1, kdim)))
-    qh = Activation(; shape=(1, n_heads, d_head), storage=zeros_like((1, n_heads, d_head)))
+    normed = Activation(; shape=(1, dim), storage=_decode_buf(cpu_scratch, Val(:normed), zeros_like, (1, dim)))
+    q = Activation(; shape=(1, qdim), storage=_decode_buf(cpu_scratch, Val(:q), zeros_like, (1, qdim)))
+    gate_attn = Activation(; shape=(1, qdim), storage=_decode_buf(cpu_scratch, Val(:gate_attn), zeros_like, (1, qdim)))
+    k = Activation(; shape=(1, kdim), storage=_decode_buf(cpu_scratch, Val(:k), zeros_like, (1, kdim)))
+    v = Activation(; shape=(1, kdim), storage=_decode_buf(cpu_scratch, Val(:v), zeros_like, (1, kdim)))
+    qh = Activation(; shape=(1, n_heads, d_head), storage=_decode_buf(cpu_scratch, Val(:qh), zeros_like, (1, n_heads, d_head)))
     kh = Activation(;
         shape=(1, n_kv_heads, d_head),
-        storage=zeros_like((1, n_kv_heads, d_head)),
+        storage=_decode_buf(cpu_scratch, Val(:kh), zeros_like, (1, n_kv_heads, d_head)),
     )
     vh = Activation(;
         shape=(1, n_kv_heads, d_head),
-        storage=zeros_like((1, n_kv_heads, d_head)),
+        storage=_decode_buf(cpu_scratch, Val(:vh), zeros_like, (1, n_kv_heads, d_head)),
     )
-    attn =
-        Activation(; shape=(1, n_heads, d_head), storage=zeros_like((1, n_heads, d_head)))
-    merged = Activation(; shape=(1, qdim), storage=zeros_like((1, qdim)))
-    sub = Activation(; shape=(1, dim), storage=zeros_like((1, dim)))
-    normed2 = Activation(; shape=(1, dim), storage=zeros_like((1, dim)))
+    attn = Activation(; shape=(1, n_heads, d_head), storage=_decode_buf(cpu_scratch, Val(:attn), zeros_like, (1, n_heads, d_head)))
+    merged = Activation(; shape=(1, qdim), storage=_decode_buf(cpu_scratch, Val(:merged_attn), zeros_like, (1, qdim)))
+    sub = Activation(; shape=(1, dim), storage=_decode_buf(cpu_scratch, Val(:sub), zeros_like, (1, dim)))
+    normed2 = Activation(; shape=(1, dim), storage=_decode_buf(cpu_scratch, Val(:normed2), zeros_like, (1, dim)))
     hidden_ffn = model.blocks[1].ffn.hidden
-    gate = Activation(; shape=(1, hidden_ffn), storage=zeros_like((1, hidden_ffn)))
-    up = Activation(; shape=(1, hidden_ffn), storage=zeros_like((1, hidden_ffn)))
-    act = Activation(; shape=(1, hidden_ffn), storage=zeros_like((1, hidden_ffn)))
-    down = Activation(; shape=(1, dim), storage=zeros_like((1, dim)))
+    gate = Activation(; shape=(1, hidden_ffn), storage=_decode_buf(cpu_scratch, Val(:gate), zeros_like, (1, hidden_ffn)))
+    up = Activation(; shape=(1, hidden_ffn), storage=_decode_buf(cpu_scratch, Val(:up), zeros_like, (1, hidden_ffn)))
+    act = Activation(; shape=(1, hidden_ffn), storage=_decode_buf(cpu_scratch, Val(:act), zeros_like, (1, hidden_ffn)))
+    down = Activation(; shape=(1, dim), storage=_decode_buf(cpu_scratch, Val(:down), zeros_like, (1, dim)))
     K = pos0                                    # cache rows now: P + steps
-    scores = TemporaryWorkspace(; shape=(1, K), storage=zeros_like((1, K)))
-    scores_out = TemporaryWorkspace(; shape=(1, K), storage=zeros_like((1, K)))
+    # the reference attention needs (1, K) workspaces; the CPU path does not
+    scores = cpu_scratch === nothing ? TemporaryWorkspace(; shape=(1, K), storage=zeros_like((1, K))) : nothing
+    scores_out = cpu_scratch === nothing ? TemporaryWorkspace(; shape=(1, K), storage=zeros_like((1, K))) : nothing
     _T_GDN_NS[] = 0
     _T_ATTN_NS[] = 0
     _T_FFN_NS[] = 0
@@ -1344,9 +1367,14 @@ function _decode_step!(
         @decode_stage :norm cpu rmsnorm!(cpu, normed, hp, bt.attn_rms, wl; eps)
         @decode_stage :attn_mixer cpu begin
             @decode_sub :attn_proj cpu begin
-                matmul!(cpu, q, normed, bt.wq, wl)
-                matmul!(cpu, k, normed, bt.wk, wl)
-                matmul!(cpu, v, normed, bt.wv, wl)
+                # q, k, v and the attention gate read the same normed row:
+                # one quantization, one threaded pass over all their rows.
+                if haskey(bt, :wattn_gate)
+                    _dec_matmul_group!(cpu, (q, k, v, gate_attn), xq_dim, normed,
+                        (bt.wq, bt.wk, bt.wv, bt.wattn_gate), wl)
+                else
+                    _dec_matmul_group!(cpu, (q, k, v), xq_dim, normed, (bt.wq, bt.wk, bt.wv), wl)
+                end
             end
             @decode_sub :attn_headnorm_rope cpu begin
                 _split_heads!(qh, q, n_heads, d_head)
@@ -1360,7 +1388,7 @@ function _decode_step!(
                     cpu,
                     qh,
                     kh,
-                    [pos0 - 1],
+                    _decode_pos(cpu_scratch, pos0 - 1),
                     wl;
                     theta,
                     inv_freq,
@@ -1370,37 +1398,44 @@ function _decode_step!(
             end
             @decode_sub :attn_kv_append cpu begin
                 # KV APPEND: exactly one row per layer per step, at n_kv_heads
-                kc[bi].storage[pos0, :, :] .= kh.storage[1, :, :]
-                vc[bi].storage[pos0, :, :] .= vh.storage[1, :, :]
+                @views kc[bi].storage[pos0, :, :] .= kh.storage[1, :, :]
+                @views vc[bi].storage[pos0, :, :] .= vh.storage[1, :, :]
             end
-            # the query is the LAST position: it attends to the whole cache —
-            # repeat the CACHE rows per query head (kh above is the single
-            # new row; it was consumed by the append)
-            @decode_sub :attn_kv_append cpu begin
-                kx = _repeat_heads(kc[bi], group)
-                vx = _repeat_heads(vc[bi], group)
+            if cpu_scratch === nothing
+                # the query is the LAST position: it attends to the whole cache —
+                # repeat the CACHE rows per query head (kh above is the single
+                # new row; it was consumed by the append)
+                @decode_sub :attn_kv_append cpu begin
+                    kx = _repeat_heads(kc[bi], group)
+                    vx = _repeat_heads(vc[bi], group)
+                end
+                @decode_sub :attn_core cpu _attention_heads!(
+                    cpu,
+                    attn.storage,
+                    scores,
+                    scores_out,
+                    qh.storage,
+                    kx.storage,
+                    vx.storage,
+                    n_heads,
+                    d_head,
+                    1,
+                    K,
+                    wl,
+                )
+            else
+                # fused: reads the cache rows 1:K in place, no repeat copy
+                @decode_sub :attn_core cpu _attention_decode_cpu!(
+                    attn.storage, qh.storage, kc[bi].storage, vc[bi].storage,
+                    cpu_scratch.probs, n_heads, d_head, group, K,
+                )
             end
-            @decode_sub :attn_core cpu _attention_heads!(
-                cpu,
-                attn.storage,
-                scores,
-                scores_out,
-                qh.storage,
-                kx.storage,
-                vx.storage,
-                n_heads,
-                d_head,
-                1,
-                K,
-                wl,
-            )
             @decode_sub :attn_outproj cpu begin
                 _merge_heads!(merged, attn, n_heads, d_head)
                 if haskey(bt, :wattn_gate)
-                    matmul!(cpu, gate_attn, normed, bt.wattn_gate, wl)
                     _sigmoid_mul!(cpu, merged.storage, merged.storage, gate_attn.storage)
                 end
-                matmul!(cpu, sub, merged, bt.wo, wl)
+                _dec_matmul_group!(cpu, (sub,), xq_qdim, merged, (bt.wo,), wl)
                 hp.storage .+= sub.storage              # residual
             end
         end
@@ -1408,13 +1443,14 @@ function _decode_step!(
         end
         t1 = time_ns()
         @decode_stage :norm cpu rmsnorm!(cpu, normed2, hp, bt.ffn_rms, wl; eps)
-        _ffn_block!(cpu, down, gate, up, act, normed2, bt, wl, zeros_like)
+        _ffn_block!(cpu, down, gate, up, act, normed2, bt, wl, zeros_like;
+            xq_in=xq_dim, xq_ff=xq_ff)
         hp.storage .+= down.storage             # residual
         _T_FFN_NS[] += time_ns() - t1
     end
     # write the new hidden state into its row slot — storage CONTENT, not a
     # field reassignment (Activation is immutable, §CIX)
-    h.storage[pos0, :] .= hp.storage[1, :]
+    @views h.storage[pos0, :] .= hp.storage[1, :]
     return h
 end
 

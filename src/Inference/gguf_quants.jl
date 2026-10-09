@@ -327,6 +327,43 @@ _is_quant_expert_bank(s) = s isa GgufQuantSlice || s isa GpuQuantSlice
 # order. Results are bit-identical for any chunk count.
 const _QGEMV_MIN_ROWS = 8
 
+# Scheduler for the row-chunk loops above. `f(c)` runs chunk c of 1:nc.
+# `@threads` forks and joins on every call. The persistent pool (cpu_pool.jl,
+# `Gesso.Runtime.pool_run!`) keeps its workers, so a call costs a wake-up, not
+# a task spawn. `GESSO_GEMV_POOL` picks the scheduler: `threads`, `pool`, or
+# `auto` (the default). `auto` uses the pool for every call size: timed
+# decode on the 27B measured the pool ahead of `@threads` for the large FFN
+# and projection calls too, and `@threads` allocates per call. The mode is
+# read once per process, not at precompile time.
+const _GEMV_POOL_MODE = Ref{Int8}(-1)
+
+function _gemv_pool_mode()::Int8
+    m = _GEMV_POOL_MODE[]
+    if m < 0
+        s = get(ENV, "GESSO_GEMV_POOL", "auto")
+        m = s == "threads" ? Int8(0) : s == "pool" ? Int8(1) : Int8(2)
+        _GEMV_POOL_MODE[] = m
+    end
+    return m
+end
+
+_gemv_use_pool(work::Int)::Bool = _gemv_pool_mode() != 0
+
+# The pool lives in Gesso.Runtime, which loads after this module. The lookup
+# runs at call time, so there is no load-order dependency.
+_pool_run_chunks!(f, nc::Int) = getproperty(parentmodule(@__MODULE__), :Runtime).pool_run!(f, nc)
+
+function _run_row_chunks!(f, nc::Int, work::Int)
+    if nc > 1 && _gemv_use_pool(work)
+        _pool_run_chunks!(f, nc)
+        return nothing
+    end
+    Threads.@threads for c in 1:nc
+        f(c)
+    end
+    return nothing
+end
+
 function _qrow_bytes(ggml_type::Int32, ne0::Int)
     ggml_type == GGML_TYPE_F32 && return ne0 * 4
     ggml_type == GGML_TYPE_Q8_0 && return div(ne0, 32) * _iq_block_bytes(ggml_type)

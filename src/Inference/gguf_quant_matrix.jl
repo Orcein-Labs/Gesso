@@ -163,3 +163,84 @@ function _quant_embedding_rows!(dst::AbstractMatrix, q::QuantMatrix, tokens)
     end
     return dst
 end
+
+# ---------------------------------------------------------------- shared input
+
+# True when `q` multiplies through the Q8_K integer kernel, so one Q8_K
+# quantization of its input serves every weight that reads that input. Q8_0
+# weights use a Q8_0 activation and fall back to the per-weight path.
+_quant_q8k_kind(q::QuantMatrix) = _quant_q8k_native(q.ggml_type) && q.ggml_type != GGML_TYPE_Q8_0
+
+"""
+    _quant_matmul_group!(dsts, xq, ws; simd) -> dsts
+
+Seq = 1 projections of one shared input. `xq` is the Q8_K quantization of the
+input row (`Q8KVec`, length `ws[m].ne0`), `dsts[m]` a `(1, ws[m].nrows)` Float32
+matrix, and every `ws[m]` a `QuantMatrix` of Q8_K kind (see `_quant_q8k_kind`).
+
+The rows of all weights form one range, split into row chunks that run as a
+single threaded pass. Each output row is the same `_dot_q8k` on the same
+`xq` as `_quant_matmul!` uses for that weight alone, so the outputs are
+bit-identical to separate matmuls for any chunk count.
+"""
+function _quant_matmul_group!(dsts::Tuple, xq::Q8KVec, ws::Tuple; simd::Bool=q8k_simd_enabled())
+    for w in ws
+        _quant_q8k_kind(w) || error("quant group: weight type $(w.ggml_type) has no Q8_K kernel")
+        w.ne0 == length(xq) || error("quant group: x has $(length(xq)) features, weight has $(w.ne0)")
+    end
+    for (d, w) in zip(dsts, ws)
+        size(d) == (1, w.nrows) || error("quant group: dst $(size(d)) ≠ (1, $(w.nrows))")
+    end
+    total = _group_rows(ws)
+    nc = clamp(min(Threads.nthreads(), cld(total, _QGEMV_MIN_ROWS)), 1, total)
+    _run_row_chunks!(_GroupChunk(dsts, ws, xq, total, nc, simd), nc, total * length(xq))
+    return dsts
+end
+
+# One chunk of a group pass, as a callable struct: the pool keeps a reference to
+# it for the call, so it is built once per call and its fields never change.
+struct _GroupChunk{D<:Tuple,W<:Tuple}
+    dsts::D
+    ws::W
+    xq::Q8KVec
+    total::Int
+    nc::Int
+    simd::Bool
+end
+
+function (g::_GroupChunk)(c::Int)
+    g0 = div((c - 1) * g.total, g.nc) + 1
+    g1 = div(c * g.total, g.nc)
+    _group_segments!(g.dsts, g.ws, 0, g0, g1, g.xq, g.simd)
+    return nothing
+end
+
+_group_rows(ws::Tuple) = sum(w -> w.nrows, ws; init=0)
+
+# Walks the weights in order. `base` is the global row offset of the first
+# weight in the tuple, so the chunk's global rows [g0, g1] intersect each
+# weight's own rows [base+1, base+nrows] at most once.
+@inline function _group_segments!(dsts::Tuple, ws::Tuple, base::Int, g0::Int, g1::Int, xq::Q8KVec, simd::Bool)
+    w = first(ws)
+    lo = max(g0, base + 1)
+    hi = min(g1, base + w.nrows)
+    lo <= hi && _gemv_q8k_rows_into!(first(dsts), xq, w, lo - base, hi - base, simd)
+    return _group_segments!(Base.tail(dsts), Base.tail(ws), base + w.nrows, g0, g1, xq, simd)
+end
+@inline _group_segments!(::Tuple{}, ::Tuple{}, ::Int, ::Int, ::Int, ::Q8KVec, ::Bool) = nothing
+
+# Rows j0:j1 of `w` into row 1 of `dst`, written as `alpha * acc + beta * y`
+# with alpha = 1 and beta = 0, the expression `_qgemv_q8k_rows!` evaluates.
+# The weight bytes are read in place at the file offset: no view is built.
+function _gemv_q8k_rows_into!(dst::AbstractMatrix{Float32}, xq::Q8KVec, w::QuantMatrix,
+    j0::Int, j1::Int, simd::Bool)
+    t = w.ggml_type
+    rb = _qrow_bytes(t, w.ne0)
+    data = w.data
+    base = w.offset0
+    @inbounds for j in j0:j1
+        acc = _dot_q8k(t, data, base + (j - 1) * rb, xq, simd)
+        dst[1, j] = 1.0f0 * acc + 0.0f0
+    end
+    return dst
+end

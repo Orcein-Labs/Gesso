@@ -48,7 +48,7 @@ Quantize `x` (finite values, `length(x) == length(y)`) to Q8_K blocks, bit
 for bit as ggml's `quantize_row_q8_K_ref`. For an all-zero block ggml leaves
 `bsums` unset; here they are written as 0, which is the sum of the zero quants.
 """
-function quantize_q8_K!(y::Q8KVec, x::AbstractVector{Float32})
+function quantize_q8_K!(y::Q8KVec, x::AbstractArray{Float32})
     nb = length(y.d)
     length(x) == QK_K * nb ||
         error("quantize_q8_K!: x length $(length(x)) ≠ QK_K * nb = $(QK_K * nb)")

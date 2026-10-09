@@ -596,7 +596,7 @@ function _qgemv_q8k_threaded!(
     _q8k_check_gemv(y, ggml_type, ne0, ne1, q)
     length(xq) == ne0 || error("q8k gemv: xq length $(length(xq)) ≠ ne0 $ne0")
     nc = clamp(nchunks, 1, ne1)
-    Threads.@threads for c in 1:nc
+    _run_row_chunks!(nc, ne1 * ne0) do c
         j0 = div((c - 1) * ne1, nc) + 1
         j1 = div(c * ne1, nc)
         _qgemv_q8k_rows!(y, xq, q, ggml_type, ne0, j0, j1, alpha, beta, simd)
