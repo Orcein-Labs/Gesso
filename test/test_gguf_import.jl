@@ -116,6 +116,30 @@ end
     @test y2 ≈ y_ref atol = 2e-4 rtol = 2e-4
 end
 
+"""
+Packs a dense expert stack `A3[e, :, :]` into a ggml F32 slice with `ne0`
+innermost, so the GGUF path reads the same weights as the dense path.
+"""
+function _pack_expert_slice(A3, ne0, ne1)
+    parts = UInt8[]
+    for e in 1:size(A3, 1)
+        W = A3[e, :, :]
+        g = vec(permutedims(W, (2, 1)))
+        append!(parts, reinterpret(UInt8, g))
+    end
+    return Gesso.GgufQuantSlice(
+        parts,
+        0,
+        Int32(0),
+        size(A3, 1),
+        ne0,
+        ne1,
+        ne0 * ne1 * 4,
+        C_NULL,
+        Int64(1),
+    )
+end
+
 @testset "GGUF MoE BLAS matches dense scalar" begin
     seq, h, ff, n_exp, n_used = 2, 8, 4, 3, 2
     rng = GessoTestHelpers.deterministic_rng(7)
@@ -127,36 +151,51 @@ end
     y_dense = zeros(Float32, seq, h)
     Gesso._cpu_moe_topk_swiglu!(y_dense, x, router, gate3, up3, down3, n_used)
 
-    function pack_slice(A3, ne0, ne1)
-        parts = UInt8[]
-        for e in 1:size(A3, 1)
-            W = A3[e, :, :]
-            g = vec(permutedims(W, (2, 1)))
-            append!(parts, reinterpret(UInt8, g))
-        end
-        Gesso.GgufQuantSlice(
-            parts,
-            0,
-            Int32(0),
-            size(A3, 1),
-            ne0,
-            ne1,
-            ne0 * ne1 * 4,
-            C_NULL,
-            Int64(1),
-        )
-    end
     y_gguf = zeros(Float32, seq, h)
     Gesso.Inference._cpu_moe_topk_swiglu_gguf!(
         y_gguf,
         x,
         router,
-        pack_slice(gate3, h, ff),
-        pack_slice(up3, h, ff),
-        pack_slice(down3, ff, h),
+        _pack_expert_slice(gate3, h, ff),
+        _pack_expert_slice(up3, h, ff),
+        _pack_expert_slice(down3, ff, h),
         n_used,
     )
     @test y_gguf ≈ y_dense rtol = 1e-5 atol = 1e-5
+end
+
+# The threaded expert branch only runs with more than one Julia thread. Its race
+# (a captured variable shared across tasks) fires on well under 1% of calls at
+# 8 threads, so this loops enough calls that the unfixed code fails reliably.
+@testset "GGUF MoE threaded expert path matches dense across calls" begin
+    if Threads.nthreads() == 1
+        @test_skip "needs Julia threads > 1 to exercise the threaded expert path"
+        return
+    end
+    seq, h, ff, n_exp, n_used = 8, 8, 4, 3, 2
+    nbad = 0
+    for rep in 1:5000
+        rng = GessoTestHelpers.deterministic_rng(rep)
+        x = randn(rng, Float32, seq, h)
+        router = randn(rng, Float32, n_exp, h)
+        gate3 = randn(rng, Float32, n_exp, ff, h)
+        up3 = randn(rng, Float32, n_exp, ff, h)
+        down3 = randn(rng, Float32, n_exp, h, ff)
+        y_dense = zeros(Float32, seq, h)
+        Gesso._cpu_moe_topk_swiglu!(y_dense, x, router, gate3, up3, down3, n_used)
+        y_gguf = zeros(Float32, seq, h)
+        Gesso.Inference._cpu_moe_topk_swiglu_gguf!(
+            y_gguf,
+            x,
+            router,
+            _pack_expert_slice(gate3, h, ff),
+            _pack_expert_slice(up3, h, ff),
+            _pack_expert_slice(down3, ff, h),
+            n_used,
+        )
+        nbad += !isapprox(y_gguf, y_dense; rtol=1e-5, atol=1e-5)
+    end
+    @test nbad == 0
 end
 
 @testset "load_gguf 35B (opt-in)" begin
