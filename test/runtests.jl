@@ -79,6 +79,7 @@ using Gesso: reference_prefill, reference_generate
     include("test_moe_routing.jl")
     include("test_decode_profile.jl")
     include("test_gguf_import.jl")
+    include("test_qwen35_dense.jl")
 
     # Native CPU Q8_K x IQ dot products: quantizer vs port, AVX2 bit-exact vs
     # scalar, GEMV threading invariance, Ornith slices (env-gated)

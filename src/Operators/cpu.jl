@@ -29,6 +29,13 @@ using ..Gesso: CPUBackend, gesso_error, ERR_INVALID_PLAN, ERR_NUMERICAL_INSTABIL
 using ..Parameters:
     Activation, EmbeddingTable, FrozenParameter, ProjectionWeight, TemporaryWorkspace
 
+# Quantized GGUF weight storage (`Inference.QuantMatrix`) is defined after this
+# file, so the CPU methods reach it through these hooks. Inference adds the
+# methods; any other storage is "not quantized".
+_is_quant_storage(::Any) = false
+function _quant_matmul! end
+function _quant_embedding_rows! end
+
 function _cpu_storage!(op::Symbol, tensors...)
     for t in tensors
         s=t.storage
@@ -199,6 +206,13 @@ end
 # --- internals (shared by both workload cuts) -------------------------------
 
 function _cpu_embedding_lookup!(dst, table, tokens)
+    if _is_quant_storage(table.storage)
+        _cpu_storage!(:embedding_lookup!, dst)
+        dst.storage === nothing && _unmaterialized(:embedding_lookup!, :dst)
+        _validate_embedding_inputs(dst, table, tokens)
+        _quant_embedding_rows!(dst.storage, table.storage, tokens)
+        return dst
+    end
     _cpu_storage!(:embedding_lookup!, dst, table)
     tstorage, tab = dst.storage, table.storage
     tstorage === nothing && _unmaterialized(:embedding_lookup!, :dst)
@@ -280,6 +294,11 @@ function _cpu_rope!(
 end
 
 function _cpu_matmul!(dst, x, w)
+    if _is_quant_storage(w.storage)
+        _cpu_storage!(:matmul!, dst, x)
+        _quant_matmul!(dst.storage, x.storage, w.storage)
+        return dst
+    end
     _cpu_storage!(:matmul!, dst, x, w)
     # W is (out, in): dst = x * transpose(W)
     mul!(dst.storage, x.storage, transpose(w.storage))
