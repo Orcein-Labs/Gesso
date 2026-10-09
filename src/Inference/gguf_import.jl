@@ -749,12 +749,13 @@ function _cpu_moe_topk_swiglu_gguf!(
     fill!(y, zero(T))
     logits = Vector{T}(undef, n_exp)
     order = Vector{Int}(undef, n_exp)
-    nthr = max(1, Threads.maxthreadid())
-    nwork = Threads.nthreads()
-    gaccs = [Vector{Float32}(undef, ff) for _ in 1:nthr]
-    uaccs = [Vector{Float32}(undef, ff) for _ in 1:nthr]
-    hacts = [Vector{Float32}(undef, ff) for _ in 1:nthr]
-    xbufs = [Vector{Float32}(undef, h) for _ in 1:nthr]
+    # One scratch set per chunk of expert slots, indexed by chunk and not by
+    # threadid(): a chunk is one @threads iteration, so no two tasks share a set.
+    nchunk = min(Threads.nthreads(), n_used)
+    gaccs = [Vector{Float32}(undef, ff) for _ in 1:nchunk]
+    uaccs = [Vector{Float32}(undef, ff) for _ in 1:nchunk]
+    hacts = [Vector{Float32}(undef, ff) for _ in 1:nchunk]
+    xbufs = [Vector{Float32}(undef, h) for _ in 1:nchunk]
     ybufs = [zeros(Float32, h) for _ in 1:n_used]
     for t in 1:seq
         xrow = @view x[t, :]
@@ -787,7 +788,7 @@ function _cpu_moe_topk_swiglu_gguf!(
         invw = one(T) / wsum
         yrow = @view y[t, :]
         fill!(yrow, zero(T))
-        if nwork == 1
+        if nchunk == 1
             xf = xbufs[1]
             @inbounds for i in 1:h
                 xf[i] = Float32(xrow[i])
@@ -810,26 +811,25 @@ function _cpu_moe_topk_swiglu_gguf!(
             @inbounds for i in 1:h
                 xf0[i] = Float32(xrow[i])
             end
-            # `xf` must not be the name the task body assigns: the serial branch
-            # above also assigns `xf`, so the @threads closure would capture that
-            # one variable (a Core.Box) and every task would overwrite it.
-            # :static pins each iteration to one thread, so the threadid-indexed
-            # scratch buffers below cannot be shared by a migrated task.
-            Threads.@threads :static for k in 1:n_used
-                tid = Threads.threadid()
-                e = order[k]
-                w = Float32(logits[e] * invw)
-                xft = xbufs[tid]
-                if tid != 1
-                    copyto!(xft, xf0)
+            # Chunk c owns scratch set c and the expert slots k = c, c+nchunk, ...
+            # Each slot is written by exactly one chunk, and the sum below runs in
+            # k order, so the result does not depend on scheduling. Scratch is
+            # per chunk, not per threadid(), so it needs no :static pinning and
+            # the loop may run nested or from concurrent tasks.
+            Threads.@threads for c in 1:nchunk
+                xft = xbufs[c]
+                c == 1 || copyto!(xft, xf0)
+                for k in c:nchunk:n_used
+                    e = order[k]
+                    w = Float32(logits[e] * invw)
+                    _qgemv_expert!(gaccs[c], xft, gate_s, e)
+                    _qgemv_expert!(uaccs[c], xft, up_s, e)
+                    @inbounds for j in 1:ff
+                        hacts[c][j] = _cpu_silu(gaccs[c][j]) * uaccs[c][j]
+                    end
+                    fill!(ybufs[k], 0)
+                    _qgemv_expert!(ybufs[k], hacts[c], down_s, e; alpha=w, beta=0.0f0)
                 end
-                _qgemv_expert!(gaccs[tid], xft, gate_s, e)
-                _qgemv_expert!(uaccs[tid], xft, up_s, e)
-                @inbounds for j in 1:ff
-                    hacts[tid][j] = _cpu_silu(gaccs[tid][j]) * uaccs[tid][j]
-                end
-                fill!(ybufs[k], 0)
-                _qgemv_expert!(ybufs[k], hacts[tid], down_s, e; alpha=w, beta=0.0f0)
             end
             for k in 1:n_used
                 @inbounds for i in 1:h
