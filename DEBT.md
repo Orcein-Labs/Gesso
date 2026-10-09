@@ -5,10 +5,11 @@ Known debt, newest first. Each entry names its cause and how it gets paid off. S
 
 ## 2026-10-08
 
-- **Model files need a managed NVMe cache.** A DISKGUARD WARN fired after about 25 GB of GGUF
-  copies to `~/.cache/gesso` in one hour. Mmap from a spinning disk is about 5x slower, so
-  benchmarks copy models to NVMe by hand. Pay off: one cache directory with a size budget and
-  LRU eviction, used by the gate and bench scripts. Nothing gets copied ad hoc.
+- **Model files on NVMe have no managed home.** A DISKGUARD WARN fired after about 25 GB of
+  GGUF copies to `~/.cache/gesso` in one hour. The owner wants the models kept on NVMe, so the
+  WARN is accepted. Mmap from a spinning disk is about 5x slower. Pay off: one documented model
+  directory, set by env, that the gate and bench scripts use, so files aren't copied ad hoc.
+  Do not evict models automatically.
 - **Runtime dependency on a local llama.cpp build** (`GESSO_GGML_DIR`, ggml `to_float` via
   `dlopen`). It also reads ggml's type-traits struct at fixed byte offsets, which is ABI-fragile.
   Pay off: native dequantization for every format. Native dot products now cover IQ2_XS,
