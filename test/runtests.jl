@@ -84,6 +84,7 @@ using Gesso: reference_prefill, reference_generate
     # Native CPU Q8_K x IQ dot products: quantizer vs port, AVX2 bit-exact vs
     # scalar, GEMV threading invariance, Ornith slices (env-gated)
     include("test_quant_cpu_simd.jl")
+    include("test_cpu_pool.jl")
 
     # Native CPU K-quant (Q2_K..Q6_K) and Q8_0 dot products: Q8_0 quantizer vs
     # port, F32 dequant references (bit-equal to ggml to_float when GESSO_GGML_DIR
