@@ -20,7 +20,7 @@ using ..Gesso:
     emit!,
     backend_name
 export BatchRequest, BatchResult, run_batch, cancel!
-export pool_run!
+# pool_run! is internal plumbing, reached as Runtime.pool_run!; the exported surface is pinned by test_batch.jl.
 
 include("cpu_pool.jl")
 
