@@ -39,6 +39,7 @@ function Gesso.Inference._check_device_storage(op::Symbol, backend::CUDABackend,
      s isa Gesso.Inference.GgufQuantSlice ||
      s isa Gesso.Inference.GpuQuantSlice) &&
         return nothing
+    s isa CuArray{Float16} && return nothing   # device F16 weight (matmul / table)
     _cuda_device_storage!(op, t)
     return nothing
 end
@@ -295,7 +296,7 @@ function embedding_lookup!(
     _cuda_device_storage!(:embedding_lookup!, dst)
     table.storage isa Gesso.Inference.HostOffload &&
         return _cuda_host_offload_embed!(dst, table, tokens)
-    _cuda_device_storage!(:embedding_lookup!, table)
+    _cuda_embed_table_check!(table)
     return _cuda_embedding_lookup!(dst, table, tokens)
 end
 
@@ -309,7 +310,7 @@ function embedding_lookup!(
     _cuda_device_storage!(:embedding_lookup!, dst)
     table.storage isa Gesso.Inference.HostOffload &&
         return _cuda_host_offload_embed!(dst, table, tokens)
-    _cuda_device_storage!(:embedding_lookup!, table)
+    _cuda_embed_table_check!(table)
     return _cuda_embedding_lookup!(dst, table, tokens)
 end
 
@@ -631,6 +632,7 @@ function matmul!(
 )
     _cuda_device_storage!(:matmul!, dst)
     _cuda_device_storage!(:matmul!, x)
+    w.storage isa CuArray{Float16} && return _cuda_f16w_matmul!(dst, x, w)
     w.storage isa Gesso.Inference.HostOffload &&
         return _cuda_host_offload_matmul!(dst, x, w)
     return _autotune_dispatch!(dst, x, w, _autotune_regime(size(x.storage, 2), size(w.storage, 1)))
@@ -645,6 +647,7 @@ function matmul!(
 )
     _cuda_device_storage!(:matmul!, dst)
     _cuda_device_storage!(:matmul!, x)
+    w.storage isa CuArray{Float16} && return _cuda_f16w_matmul!(dst, x, w)
     w.storage isa Gesso.Inference.HostOffload &&
         return _cuda_host_offload_matmul!(dst, x, w)
     return _autotune_dispatch!(dst, x, w, _autotune_regime(size(x.storage, 2), size(w.storage, 1)))
@@ -661,6 +664,7 @@ function matmul!(
 )
     _cuda_device_storage!(:matmul!, dst)
     _cuda_device_storage!(:matmul!, x)
+    w.storage isa CuArray{Float16} && return _cuda_f16w_matmul!(dst, x, w)
     w.storage isa Gesso.Inference.HostOffload &&
         return _cuda_host_offload_matmul!(dst, x, w)
     return _autotune_dispatch!(dst, x, w, _autotune_regime(size(x.storage, 2), size(w.storage, 1)))
@@ -675,9 +679,47 @@ function matmul!(
 )
     _cuda_device_storage!(:matmul!, dst)
     _cuda_device_storage!(:matmul!, x)
+    w.storage isa CuArray{Float16} && return _cuda_f16w_matmul!(dst, x, w)
     w.storage isa Gesso.Inference.HostOffload &&
         return _cuda_host_offload_matmul!(dst, x, w)
     return _autotune_dispatch!(dst, x, w, _autotune_regime(size(x.storage, 2), size(w.storage, 1)))
+end
+
+# F16 device weights, F32 activations and accumulate. A table with F16 storage
+# is still a device table, so the same device checks apply; only the element
+# type differs.
+function _cuda_embed_table_check!(table)
+    table.storage isa CuArray{Float16} && return table
+    return _cuda_device_storage!(:embedding_lookup!, table)
+end
+
+# dst[j, o] = Σᵢ x[j, i] · Float32(w[o, i]). One thread per output feature
+# o, one block row per token j. Each thread walks its row of W, and the warp
+# reads adjacent o, so the loads coalesce.
+function _cuda_f16w_kernel!(dst, x, w, k::Int)
+    o = (blockIdx().x - 1) * blockDim().x + threadIdx().x
+    j = blockIdx().y
+    o <= size(w, 1) || return
+    acc = 0.0f0
+    for i in 1:k
+        acc += Float32(w[o, i]) * x[j, i]
+    end
+    dst[j, o] = acc
+    return
+end
+
+function _cuda_f16w_matmul!(dst, x, w)
+    ws = w.storage
+    xs = x.storage
+    ds = dst.storage
+    m, k = size(ws)
+    n = size(xs, 1)
+    size(xs, 2) == k || throw(DimensionMismatch("f16 matmul: x is $(size(xs)), W is $(size(ws))"))
+    size(ds) == (n, m) || throw(DimensionMismatch("f16 matmul: dst is $(size(ds)), want ($n, $m)"))
+    n == 0 && return dst
+    nthreads = 256
+    @cuda threads = (nthreads,) blocks = (cld(m, nthreads), n) _cuda_f16w_kernel!(ds, xs, ws, k)
+    return dst
 end
 
 # dst = x * Wᵀ with W host-resident. Used for overflow lm_head / projections
@@ -825,14 +867,41 @@ NEVER mutates the CPU tensors. Tied heads stay tied: `lm_head === embedding`.
 Config-agnostic: geometry is whatever the tensors carry, so Ornith
 256/8, Xing 64/4, and Gemma4 128/8 share this path.
 """
+# Device element type for dense projection and tied-table weights.
+# GESSO_GPU_WEIGHT_DTYPE=f16 (default) stores them as CuArray{Float16} and the
+# matmul accumulates in Float32; f32 keeps the exact F32 device path. Norms,
+# biases and other small parameters stay F32 either way. F16 exists only on
+# the device: the host copy is always F32.
+function _gpu_weight_eltype()
+    raw = lowercase(strip(get(ENV, "GESSO_GPU_WEIGHT_DTYPE", "f16")))
+    raw == "f16" && return Float16
+    raw == "f32" && return Float32
+    throw(ArgumentError("GESSO_GPU_WEIGHT_DTYPE must be f16 or f32, got '$raw'"))
+end
+
+# Matrices below this many elements keep F32 (small routers and gates; their
+# values feed top-k / gating decisions, where rounding is not worth the bytes).
+const _GPU_F16_MIN_ELEMS = 1 << 20
+
+# Upload F32, convert on the device, free the F32 copy. No F16 array is built
+# on the host.
+function _f16_device_copy(s)
+    d = CuArray{Float32}(s)
+    h = Float16.(d)
+    CUDA.unsafe_free!(d)
+    return h
+end
+
 function _to_device_cuda(tensors)
     budget = Gesso.Inference._gpu_budget_bytes()
+    wdt = _gpu_weight_eltype()
     used = Int64(0)
     conv = IdDict{Any, Any}()
     pending = Any[]
     qpending = Any[]
+    f16set = Set{UInt}()
 
-    function consider!(s)
+    function consider!(s; matmul::Bool=false)
         s === nothing && return
         haskey(conv, s) && return
         if s isa CuArray
@@ -847,17 +916,36 @@ function _to_device_cuda(tensors)
             push!(qpending, s)
         else
             push!(pending, s)
+            if matmul && s isa Array && ndims(s) == 2 && length(s) >= _GPU_F16_MIN_ELEMS
+                push!(f16set, objectid(s))
+            end
         end
         return
     end
     function consider_t!(t)
         hasproperty(t, :storage) || return
-        consider!(t.storage)
+        consider!(t.storage;
+            matmul = t isa Gesso.ProjectionWeight || t isa Gesso.EmbeddingTable)
+        return
+    end
+    # Untied embedding: a row-gather table only. It stays on the host, so it
+    # never competes for GPU budget and never has a device copy.
+    function host_table_t!(t)
+        hasproperty(t, :storage) || return
+        s = t.storage
+        (s === nothing || haskey(conv, s)) && return
+        conv[s] = s isa Gesso.Inference.HostOffload ? s :
+            Gesso.Inference.HostOffload(convert(Array{Float32}, s))
         return
     end
 
-    consider_t!(tensors.embedding)
-    tensors.lm_head === tensors.embedding || consider_t!(tensors.lm_head)
+    tied = tensors.lm_head === tensors.embedding
+    if tied
+        consider_t!(tensors.embedding)
+    else
+        host_table_t!(tensors.embedding)
+        consider_t!(tensors.lm_head)
+    end
     for b in tensors.blocks
         for v in values(b)
             consider_t!(v)
@@ -878,7 +966,13 @@ function _to_device_cuda(tensors)
 
     remaining = max(Int64(0), budget - used)
     for s in uniq
-        nbytes = Int64(prod(size(s))) * Int64(sizeof(Float32))
+        n = Int64(prod(size(s)))
+        if wdt === Float16 && objectid(s) in f16set && 2n <= remaining
+            conv[s] = _f16_device_copy(s)
+            remaining -= 2n
+            continue
+        end
+        nbytes = n * Int64(sizeof(Float32))
         if nbytes <= remaining
             conv[s] = CuArray{Float32}(s)
             remaining -= nbytes
