@@ -104,3 +104,55 @@ function dequantize_q8_K(y::Q8KVec)
     end
     return out
 end
+
+# Q8_0 activation quantization (ggml block_q8_0), the int8 side of the Q8_0
+# weight kernel.
+#
+# Port of ggml's quantize_row_q8_0_ref (ggml/src/ggml-quants.c, MIT License,
+# Copyright (c) 2023-2026 The ggml authors). No ggml code is linked or called.
+#   d   one Float32 scale per 32 values, rounded through Float16 as ggml stores
+#       it (ggml: ggml_half d)
+#   qs  32 int8 quants per block (ggml: int8_t qs[32]), rounded half away from
+#       zero as roundf does
+# One ggml block is 2 + 32 = 34 bytes.
+
+"""
+    Q80Vec(nb)
+
+Q8_0 quantized row of `nb` blocks (`32 * nb` values), struct-of-arrays form of
+ggml's `block_q8_0`: `d[i]`, `qs[32(i-1)+1:32i]`.
+"""
+struct Q80Vec
+    d::Vector{Float32}
+    qs::Vector{Int8}
+end
+
+Q80Vec(nb::Integer) = Q80Vec(zeros(Float32, nb), zeros(Int8, 32 * nb))
+
+Base.length(x::Q80Vec) = 32 * length(x.d)
+
+"""
+    quantize_q8_0!(y::Q80Vec, x::AbstractVector{Float32}) -> y
+
+Quantize `x` (finite values, `length(x) == length(y)`) to Q8_0 blocks, as
+ggml's `quantize_row_q8_0_ref`.
+"""
+function quantize_q8_0!(y::Q80Vec, x::AbstractVector{Float32})
+    nb = length(y.d)
+    length(x) == 32 * nb ||
+        error("quantize_q8_0!: x length $(length(x)) ≠ 32 * nb = $(32 * nb)")
+    @inbounds for i in 1:nb
+        xo = (i - 1) * 32
+        amax = 0.0f0
+        for j in 1:32
+            amax = max(amax, abs(x[xo + j]))
+        end
+        d = amax / 127.0f0
+        id = d != 0.0f0 ? 1.0f0 / d : 0.0f0
+        y.d[i] = Float32(Float16(d))
+        for j in 1:32
+            y.qs[xo + j] = Int8(round(x[xo + j] * id, RoundNearestTiesAway))
+        end
+    end
+    return y
+end

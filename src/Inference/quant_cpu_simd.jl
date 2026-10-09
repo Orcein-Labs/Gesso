@@ -493,7 +493,7 @@ Dot product of one weight row (IQ4_XS, IQ2_XS or IQ3_XXS, starting at 0-based
 byte `woff` of `w`) with the Q8_K activation `x`. `simd=true` takes the AVX2
 kernel, `false` the scalar reference. The two agree bit for bit.
 """
-@inline function _dot_q8k(ggml_type::Int32, w::AbstractVector{UInt8}, woff::Int, x::Q8KVec, simd::Bool)::Float32
+@inline function _dot_q8k(ggml_type::Int32, w::AbstractVector{UInt8}, woff::Int, x, simd::Bool)::Float32
     if ggml_type == GGML_TYPE_IQ4_XS
         return simd ? _dot_iq4_xs_q8k_avx2(w, woff, x) : _dot_iq4_xs_q8k_ref(w, woff, x)
     elseif ggml_type == GGML_TYPE_IQ2_XS
@@ -501,12 +501,13 @@ kernel, `false` the scalar reference. The two agree bit for bit.
     elseif ggml_type == GGML_TYPE_IQ3_XXS
         return simd ? _dot_iq3_xxs_q8k_avx2(w, woff, x) : _dot_iq3_xxs_q8k_ref(w, woff, x)
     end
-    error("q8k dot: no Q8_K kernel for ggml type $ggml_type")
+    return _dot_kq(ggml_type, w, woff, x, simd)
 end
 
 function _q8k_check_gemv(y, ggml_type::Int32, ne0::Int, ne1::Int, q)
     _q8k_check_type(ggml_type)
-    ne0 % QK_K == 0 || error("q8k gemv: ne0 $ne0 is not a multiple of QK_K = $QK_K")
+    ne0 % _q8k_block_values(ggml_type) == 0 ||
+        error("q8k gemv: ne0 $ne0 is not a multiple of the block size $(_q8k_block_values(ggml_type))")
     length(y) == ne1 || error("q8k gemv: y length $(length(y)) ≠ ne1 $ne1")
     need = ne1 * _qrow_bytes(ggml_type, ne0)
     length(q) >= need || error("q8k gemv: weight bytes $(length(q)) < required $need")
@@ -514,7 +515,7 @@ function _q8k_check_gemv(y, ggml_type::Int32, ne0::Int, ne1::Int, q)
 end
 
 function _q8k_check_type(ggml_type::Int32)
-    ggml_type in (GGML_TYPE_IQ4_XS, GGML_TYPE_IQ2_XS, GGML_TYPE_IQ3_XXS) ||
+    (ggml_type in (GGML_TYPE_IQ4_XS, GGML_TYPE_IQ2_XS, GGML_TYPE_IQ3_XXS) || _kq_supported(ggml_type)) ||
         error("q8k gemv: unsupported ggml type $ggml_type")
     return nothing
 end
@@ -525,7 +526,7 @@ end
 # beta==0 rule as _qgemv_bytes!.
 function _qgemv_q8k_rows!(
     y::AbstractVector{Float32},
-    xq::Q8KVec,
+    xq,
     q::AbstractVector{UInt8},
     ggml_type::Int32,
     ne0::Int,
@@ -544,7 +545,7 @@ function _qgemv_q8k_rows!(
 end
 
 """
-    _qgemv_q8k!(y, xq::Q8KVec, q, ggml_type, ne0, ne1; alpha, beta, simd) -> y
+    _qgemv_q8k!(y, xq, q, ggml_type, ne0, ne1; alpha, beta, simd) -> y
 
 Single-threaded `y = alpha * W * x + beta * y` for `W` an `(ne1, ne0)` matrix
 of IQ4_XS, IQ2_XS or IQ3_XXS rows (row j at byte `(j-1) * row_bytes`), with `x`
@@ -552,7 +553,7 @@ already quantized to Q8_K.
 """
 function _qgemv_q8k!(
     y::AbstractVector{Float32},
-    xq::Q8KVec,
+    xq,
     q::AbstractVector{UInt8},
     ggml_type::Int32,
     ne0::Int,
@@ -574,7 +575,7 @@ with the same arithmetic, so the result is bit-identical for any chunk count.
 """
 function _qgemv_q8k_threaded!(
     y::AbstractVector{Float32},
-    xq::Q8KVec,
+    xq,
     q::AbstractVector{UInt8},
     ggml_type::Int32,
     ne0::Int,
@@ -613,8 +614,10 @@ function _qgemv_q8k_f32!(
     threaded::Bool=true,
 )
     length(x) == ne0 || error("q8k gemv: x length $(length(x)) ≠ ne0 $ne0")
-    ne0 % QK_K == 0 || error("q8k gemv: ne0 $ne0 is not a multiple of QK_K = $QK_K")
-    xq = quantize_q8_K!(Q8KVec(div(ne0, QK_K)), x)
+    _q8k_check_type(ggml_type)
+    ne0 % _q8k_block_values(ggml_type) == 0 ||
+        error("q8k gemv: ne0 $ne0 is not a multiple of the block size $(_q8k_block_values(ggml_type))")
+    xq = _q8k_quantize_act(ggml_type, x)
     if threaded
         return _qgemv_q8k_threaded!(y, xq, q, ggml_type, ne0, ne1; alpha, beta, simd)
     end

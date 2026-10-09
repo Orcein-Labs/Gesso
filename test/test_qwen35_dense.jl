@@ -263,16 +263,19 @@ end
 @testset "quant matmul matches dequant + F32 (native and fallback)" begin
     _HAS_GGML_QD || return @test_skip "set GESSO_GGML_DIR (libggml to_float)"
     rng = MersenneTwister(7)
-    for t in (_T_IQ4XS, _T_IQ3XXS, _T_Q2K)   # native, native, fallback
+    # IQ4_XS and IQ3_XXS: fused F32-activation GEMV. Q2_K: native Q8_K integer
+    # kernel, so the activations are quantized and the bound is looser.
+    for t in (_T_IQ4XS, _T_IQ3XXS, _T_Q2K)
         q = _quant_fixture(rng, t, 512, 96)
         W = _GI._quant_host_f32(q)
+        tol = t == _T_Q2K ? 2.0e-2 : 1.0e-4
         for seq in (1, 3)
             x = randn(rng, Float32, seq, 512)
             dst = zeros(Float32, seq, 96)
             _GI._quant_matmul!(dst, x, q)
             ref = x * transpose(W)
             scale = maximum(abs, ref)
-            @test maximum(abs, dst .- ref) <= 1.0e-4 * scale
+            @test maximum(abs, dst .- ref) <= tol * scale
         end
     end
 end
@@ -416,7 +419,11 @@ end
         Lq = Gesso.reference_prefill(model_q, tq, prompt; eps=spec_q.rms_norm_eps)
         Lf = Gesso.reference_prefill(model_f, tf, prompt; eps=spec_f.rms_norm_eps)
         @test size(Lq) == (1024, 3)
-        @test maximum(abs, Lq .- Lf) <= 1.0e-3 * maximum(abs, Lf)
+        # Q2_K projections run the native Q8_K integer kernel, which quantizes the
+        # activations (about 1% relative per matrix, measured 1.1% end to end on
+        # this fixture). The IQ projections are still exact to F32 activations, so
+        # the bound covers the Q8_K error, not a gap in the kernels.
+        @test maximum(abs, Lq .- Lf) <= 3.0e-2 * maximum(abs, Lf)
         m2, t2, s2 = Gesso.load_gguf(
             _write_gguf(joinpath(dir, "other.gguf"), _tiny_kv(),
                 _f32_twin(_tiny_dense_tensors(MersenneTwister(4051)))),

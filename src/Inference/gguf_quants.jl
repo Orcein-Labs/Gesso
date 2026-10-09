@@ -8,6 +8,12 @@ const GGML_TYPE_F32 = Int32(0)
 const GGML_TYPE_IQ2_XS = Int32(17)
 const GGML_TYPE_IQ3_XXS = Int32(18)
 const GGML_TYPE_IQ4_XS = Int32(23)
+const GGML_TYPE_Q8_0 = Int32(8)
+const GGML_TYPE_Q2_K = Int32(10)
+const GGML_TYPE_Q3_K = Int32(11)
+const GGML_TYPE_Q4_K = Int32(12)
+const GGML_TYPE_Q5_K = Int32(13)
+const GGML_TYPE_Q6_K = Int32(14)
 
 """
 GPU-resident packed quantized expert bank. `data` is `n_exp * bytes_per_expert`
@@ -37,6 +43,14 @@ function _iq_block_bytes(ggml_type::Int32)
     ggml_type == GGML_TYPE_IQ2_XS && return 74
     ggml_type == GGML_TYPE_IQ3_XXS && return 98
     ggml_type == GGML_TYPE_IQ4_XS && return 136
+    # K-quants and Q8_0 (quant_cpu_kquants.jl). Q8_0 blocks hold 32 values,
+    # not QK_K; _qrow_bytes handles that.
+    ggml_type == GGML_TYPE_Q2_K && return 84
+    ggml_type == GGML_TYPE_Q3_K && return 110
+    ggml_type == GGML_TYPE_Q4_K && return 144
+    ggml_type == GGML_TYPE_Q5_K && return 176
+    ggml_type == GGML_TYPE_Q6_K && return 210
+    ggml_type == GGML_TYPE_Q8_0 && return 34
     error("gguf_quants: no fused GEMV for ggml type $ggml_type")
 end
 
@@ -302,6 +316,7 @@ const _QGEMV_MIN_ROWS = 8
 
 function _qrow_bytes(ggml_type::Int32, ne0::Int)
     ggml_type == GGML_TYPE_F32 && return ne0 * 4
+    ggml_type == GGML_TYPE_Q8_0 && return div(ne0, 32) * _iq_block_bytes(ggml_type)
     return div(ne0, QK_K) * _iq_block_bytes(ggml_type)
 end
 
