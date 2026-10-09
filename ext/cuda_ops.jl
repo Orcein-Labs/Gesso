@@ -37,7 +37,8 @@ function Gesso.Inference._check_device_storage(op::Symbol, backend::CUDABackend,
     s = t.storage
     (s isa Gesso.Inference.HostOffload ||
      s isa Gesso.Inference.GgufQuantSlice ||
-     s isa Gesso.Inference.GpuQuantSlice) &&
+     s isa Gesso.Inference.GpuQuantSlice ||
+     s isa Gesso.Inference.CachedExpertBank) &&
         return nothing
     s isa CuArray{Float16} && return nothing   # device F16 weight (matmul / table)
     _cuda_device_storage!(op, t)

@@ -184,6 +184,12 @@ else
         @test layer.misses == seq
     end
 
+    @testset "device expert cache: accepted by the CUDA storage check" begin
+        conv = cached_run(Int64(n_exp) * slot_bytes, collect(1:n_exp))
+        t = (storage=conv[gate],)
+        @test Gesso.Inference._check_device_storage(:probe, cuda, t) === nothing
+    end
+
     @testset "device expert cache: budget env and fallbacks" begin
         withenv("GESSO_GPU_EXPERT_CACHE_MIB" => "0") do
             @test ext._expert_cache_budget_bytes() == 0
