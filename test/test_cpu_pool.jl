@@ -256,6 +256,28 @@ end
         @test status === :ok
     end
 
+    @testset "holds extend, run jobs, and do not delay stop" begin
+        k = min(_pool_nthreads(), 4)
+        p = _RP._cpu_pool_configure!(k; spin_us=0)
+        _RP.pool_hold!(0)
+        @test p.hot_until[] == 0
+        _RP.pool_hold!(10_000_000_000)
+        far = p.hot_until[]
+        @test far > time_ns()
+        _RP.pool_hold!(1_000)
+        @test p.hot_until[] == far
+        # Held workers are spinning rather than parked; jobs still run once each.
+        sleep(0.01)
+        hits = zeros(Int, 64)
+        _RP.pool_run!(c -> (hits[c] += 1; nothing), 64)
+        @test all(==(1), hits)
+        # A 10 s hold must not keep stop from joining the workers.
+        workers = copy(p.workers)
+        _RP._cpu_pool_stop!(p)
+        status = timedwait(() -> all(istaskdone, workers), 5.0; pollint=0.005)
+        @test status === :ok
+    end
+
     # Restore the default pool for later test files.
     _RP._cpu_pool_configure!(_RP._cpu_pool_participants())
 end

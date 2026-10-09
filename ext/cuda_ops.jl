@@ -1791,6 +1791,12 @@ function _cuda_stream_wait(s::CuStream=CUDA.stream())
     return nothing
 end
 
+# How long the CPU pool stays hot after a host-expert layer. It must cover the
+# GPU work up to the next host-expert layer (about 1 to 2 ms on the 35B); a
+# worker that parks in that gap makes the next layer's experts about twice as
+# slow. See the hold notes in src/Runtime/cpu_pool.jl.
+const _MOE_HOST_HOLD_NS = 5_000_000
+
 # Top-k SwiGLU for one MoE layer whose expert slabs stay mmap'd on the host.
 # The GPU computes the router logits; the CPU routes and runs the experts; the
 # result returns to `y`. Per layer: one D2H wait and one async H2D.
@@ -1836,6 +1842,7 @@ function _moe_topk_host!(backend::CUDABackend, y, x, router, gate, up, down, n_u
             Y[t, i] = b.yrow[i]
         end
     end
+    Gesso.Runtime.pool_hold!(_MOE_HOST_HOLD_NS)
     Gesso.Inference.@decode_stage :moe_h2d backend begin
         Gesso.Inference._profile_copy!(false)
         if y isa DenseCuArray

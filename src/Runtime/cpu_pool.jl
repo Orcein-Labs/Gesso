@@ -21,10 +21,18 @@
 # A worker spins on the generation word for GESSO_CPU_POOL_SPIN_US (default
 # 200) after each job, then parks on a Condition. A parked pool costs no CPU.
 # The spin keeps back-to-back calls off the wake path. The spin is also the
-# most CPU a burst can leave behind: at most workers x spin per burst. The
-# wake cost after a park was measured separately (about the same burst time
-# after 50 ms idle as back-to-back), so the spin is a CPU trade, not a latency
-# fix. The gap between calls in a real decode step is not measured yet.
+# most CPU a burst can leave behind: at most workers x spin per burst.
+#
+# Holds. A caller that knows more work follows shortly can call
+# pool_hold!(ns), and workers keep spinning until that deadline instead of
+# parking. Measured inside a 35B CUDA decode, where host-expert calls are
+# separated by about 1 to 2 ms of GPU work: parked workers woke 115 us late and
+# then ran each chunk about twice as slowly as back-to-back (the core had left
+# its clock and C-state), so a host MoE call took 1701 us. Held through the
+# gap, the same call took 913 us. A synthetic idle loop does not show this
+# (after 50 ms idle the burst time matched back-to-back), so measure in situ.
+# A held worker yields every 50 us, so other tasks on its thread are delayed
+# by at most that much.
 #
 # Concurrency. One top-level call owns the pool at a time. A call made while
 # the pool is owned (nested inside a chunk, or from another task) runs its
@@ -42,6 +50,7 @@ const CPU_POOL_MAX_PARTICIPANTS = 18
 const CPU_POOL_THREADS_ENV = "GESSO_CPU_POOL_THREADS"
 const CPU_POOL_SPIN_ENV = "GESSO_CPU_POOL_SPIN_US"
 const CPU_POOL_DEFAULT_SPIN_US = 200
+const _CPU_POOL_HOLD_YIELD_NS = UInt64(50_000)
 const _CPU_POOL_SYSFS = "/sys/devices/system/cpu"
 const _CPU_POOL_IDX_MASK = UInt64(0xffff_ffff)
 
@@ -57,6 +66,7 @@ mutable struct CPUPool
     const failed::Atomic{Int}
     const busy::Atomic{Int}
     const stop::Atomic{Int}
+    const hot_until::Atomic{UInt64}
     const workers::Vector{Task}
     const warmed::Base.IdSet{Any}
     nchunks::Int
@@ -73,6 +83,7 @@ mutable struct CPUPool
             Atomic{Int}(0),
             Atomic{Int}(0),
             Atomic{Int}(0),
+            Atomic{UInt64}(0),
             Task[],
             Base.IdSet{Any}(),
             0,
@@ -232,13 +243,22 @@ end
 
 # ------------------------------------------------------------ workers
 
-# Blocks until the generation differs from `seen`. Spins for spin_ns first, then
-# parks. Returns false when the pool is stopping.
+# Blocks until the generation differs from `seen`. Spins for spin_ns or until
+# the hold deadline, whichever is later, then parks. Returns false when the
+# pool is stopping.
 function _cpu_pool_wait!(p::CPUPool, seen::UInt64)::Bool
     t0 = time_ns()
+    last_yield = t0
     while (p.ticket[] >> 32) == seen
         p.stop[] == 0 || return false
-        time_ns() - t0 >= p.spin_ns && break
+        now = time_ns()
+        if now - t0 >= p.spin_ns
+            now >= p.hot_until[] && break
+            if now - last_yield >= _CPU_POOL_HOLD_YIELD_NS
+                yield()
+                last_yield = time_ns()
+            end
+        end
         GC.safepoint()
     end
     (p.ticket[] >> 32) == seen || return p.stop[] == 0
@@ -340,6 +360,26 @@ function _cpu_pool_await!(p::CPUPool, n::Int)
     end
     p.job = nothing
     return nothing
+end
+
+"""
+    pool_hold!(ns) -> nothing
+
+Keep the pool's workers spinning for at least `ns` nanoseconds from now
+instead of parking, for a caller that will submit more work after a short gap.
+A later call extends the hold and never shortens it. Starts the pool if it is
+not running.
+"""
+function pool_hold!(ns::Integer)
+    ns > 0 || return nothing
+    p = _cpu_pool()
+    p.participants == 1 && return nothing
+    until = time_ns() + UInt64(ns)
+    while true
+        cur = p.hot_until[]
+        cur >= until && return nothing
+        atomic_cas!(p.hot_until, cur, until) == cur && return nothing
+    end
 end
 
 """
