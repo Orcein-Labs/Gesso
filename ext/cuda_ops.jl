@@ -1245,7 +1245,7 @@ function _cuda_gdn_recurrent_kernel!(out, qn, kn, v, g, beta, state)
 end
 
 function _gated_delta_rule!(
-    ::CUDABackend,
+    backend::CUDABackend,
     out,
     q,
     k,
@@ -1267,12 +1267,175 @@ function _gated_delta_rule!(
     qn = similar(out, eltype(out), (seq, nv, dk))
     kn = similar(out, eltype(out), (seq, nv, dk))
     scale = Float32(1) / sqrt(Float32(dk))
-    @cuda threads = 1 blocks = (seq, nv) _cuda_gdn_qk_prep_kernel!(
-        qn, kn, q, k, Int(nk), Int(group), v_head_tiled, l2norm, scale, Float32(1e-6))
+    Gesso.Inference.@decode_sub :gdn_qk backend begin
+        @cuda threads = 1 blocks = (seq, nv) _cuda_gdn_qk_prep_kernel!(
+            qn, kn, q, k, Int(nk), Int(group), v_head_tiled, l2norm, scale, Float32(1e-6))
+    end
     nthreads = min(256, dv)
-    @cuda threads = (nthreads,) blocks = (nv,) _cuda_gdn_recurrent_kernel!(
-        out, qn, kn, v, g, beta, state)
+    Gesso.Inference.@decode_sub :gdn_recur backend begin
+        @cuda threads = (nthreads,) blocks = (nv,) _cuda_gdn_recurrent_kernel!(
+            out, qn, kn, v, g, beta, state)
+    end
     return out
+end
+
+# --- Qwen3.5 GDN single-token decode (seq = 1), fused ---------------------------
+#
+# Three launches replace the per-head loop of the unfused block (about 190
+# launches and ~13 temporaries per layer):
+#   1. conv1d + SiLU + conv-state shift: one thread per channel.
+#   2. delta rule: one block per value-head column j, one thread per value head.
+#      Thread hh computes its head's gates and q/k L2 norms itself. The state is
+#      [nv, dk, dv] column-major, so the nv threads of a block read consecutive
+#      addresses; a block-per-head layout strides by nv*dk instead.
+#   3. gated RMSNorm times SiLU(z): one block per value head. The norm needs the
+#      whole head, so it cannot be folded into (2) without a cross-block reduce.
+# The rmsnorm, the four projections and the output projection stay in the
+# generic decode code.
+#
+# Layout contract (same as the unfused path): conv_out holds q, k, v, each
+# head-major; value head hh reads K head h = tiled ? (hh-1)%nk+1 : (hh-1)÷group+1;
+# core and merged are head-major with index (hh-1)*dv + j.
+
+Gesso.Inference._gdn_fused_decode(::CUDABackend) = true
+
+# conv1d (kernel k) on one token + SiLU, then the shift of the conv state.
+# Thread c owns channel c alone, so its state column is read before it is
+# overwritten and no other thread touches it.
+function _cuda_gdn_conv_decode_kernel!(conv_out, state, mixed, weight, k::Int)
+    c = (blockIdx().x - 1) * blockDim().x + threadIdx().x
+    channels = size(state, 1)
+    c > channels && return
+    acc = zero(eltype(conv_out))
+    for p in 1:(k - 1)
+        acc += weight[c, 1, p] * state[c, p]
+    end
+    xv = mixed[1, c]
+    acc += weight[c, 1, k] * xv
+    conv_out[1, c] = acc / (one(acc) + exp(-acc))
+    for p in 1:(k - 2)
+        state[c, p] = state[c, p + 1]
+    end
+    state[c, k - 1] = xv
+    return
+end
+
+# Block-wide sum via shared memory; T is a power of two. Every thread gets the
+# total. The leading barrier protects `red` from the previous reduction's reads.
+@inline function _cuda_gdn_block_sum(red, x, tid::Int, T::Int)
+    CUDA.sync_threads()
+    red[tid] = x
+    CUDA.sync_threads()
+    s = T >> 1
+    while s > 0
+        if tid <= s
+            red[tid] += red[tid + s]
+        end
+        CUDA.sync_threads()
+        s >>= 1
+    end
+    return red[1]
+end
+
+# Thread hh is value head hh; block j is state column j of every head.
+function _cuda_gdn_delta_kernel!(
+    core, conv_out, a, b, A_log, dt_bias, state,
+    nk::Int, group::Int, tiled::Bool, dk::Int, dv::Int, scale::Float32, eps::Float32,
+)
+    hh = Int(threadIdx().x)
+    j = Int(blockIdx().x)
+    key_dim = nk * dk
+    h = tiled ? ((hh - 1) % nk) + 1 : ((hh - 1) ÷ group) + 1
+    qoff = (h - 1) * dk
+    koff = key_dim + (h - 1) * dk
+    sq = 0.0f0
+    sk = 0.0f0
+    for i in 1:dk
+        qv = conv_out[1, qoff + i]
+        kv = conv_out[1, koff + i]
+        sq += qv * qv
+        sk += kv * kv
+    end
+    invq = scale / sqrt(sq + eps)
+    invk = 1.0f0 / sqrt(sk + eps)
+
+    bv = b[1, hh]
+    beta = 1.0f0 / (1.0f0 + exp(-bv))
+    av = a[1, hh] + dt_bias[hh]
+    sp = av > 20.0f0 ? av : log1p(exp(av))
+    decay = exp(-exp(A_log[hh]) * sp)
+
+    kv_mem = 0.0f0
+    for i in 1:dk
+        st = state[hh, i, j] * decay
+        state[hh, i, j] = st
+        kv_mem += st * (conv_out[1, koff + i] * invk)
+    end
+    delta = (conv_out[1, 2 * key_dim + (hh - 1) * dv + j] - kv_mem) * beta
+    acc = 0.0f0
+    for i in 1:dk
+        sn = state[hh, i, j] + (conv_out[1, koff + i] * invk) * delta
+        state[hh, i, j] = sn
+        acc += sn * (conv_out[1, qoff + i] * invq)
+    end
+    core[1, (hh - 1) * dv + j] = acc
+    return
+end
+
+# One block per value head: gated RMSNorm of the head's output, times SiLU(z).
+function _cuda_gdn_gnorm_kernel!(merged, core, z, norm_w, dv::Int, eps::Float32)
+    hh = Int(blockIdx().x)
+    tid = Int(threadIdx().x)
+    T = Int(blockDim().x)
+    red = CUDA.CuDynamicSharedArray(Float32, (T,), 0)
+    base = (hh - 1) * dv
+    ss = 0.0f0
+    for j in tid:T:dv
+        c = core[1, base + j]
+        ss += c * c
+    end
+    tot = _cuda_gdn_block_sum(red, ss, tid, T)
+    inv = 1.0f0 / sqrt(tot / dv + eps)
+    for j in tid:T:dv
+        zv = z[1, base + j]
+        merged[1, base + j] = (core[1, base + j] * inv) * norm_w[j] * (zv / (1.0f0 + exp(-zv)))
+    end
+    return
+end
+
+function Gesso.Inference._gdn_decode_core!(
+    backend::CUDABackend, s, bt, spec, eps, conv_state, rec_state,
+)
+    mx = spec.mixer
+    nk, nv = mx.num_key_heads, mx.num_value_heads
+    dk, dv = mx.key_head_dim, mx.value_head_dim
+    ksz = mx.conv_kernel_dim
+    key_dim = nk * dk
+    conv_dim = 2 * key_dim + nv * dv
+    nv % nk == 0 || error("gdn decode: n_v_heads $nv not divisible by n_k_heads $nk")
+    size(rec_state) == (nv, dk, dv) ||
+        error("gdn decode: state $(size(rec_state)) ≠ ($nv, $dk, $dv)")
+    size(conv_state) == (conv_dim, ksz - 1) ||
+        error("gdn decode: conv state $(size(conv_state)) ≠ ($conv_dim, $(ksz - 1))")
+    weight = _cuda_materialize_small(bt.wgdn_conv.storage)
+    A_log = _cuda_materialize_small(bt.wgdn_A_log.storage)
+    dt_bias = _cuda_materialize_small(bt.wgdn_dt_bias.storage)
+    norm_w = _cuda_materialize_small(bt.wgdn_norm.storage)
+    scale = Float32(1) / sqrt(Float32(dk))
+    eps32 = Float32(eps)
+    T = min(256, nextpow(2, max(32, dv)))
+    Gesso.Inference.@decode_sub :gdn_conv backend begin
+        @cuda threads = 256 blocks = cld(conv_dim, 256) _cuda_gdn_conv_decode_kernel!(
+            s.conv, conv_state, s.mixed, weight, Int(ksz))
+    end
+    Gesso.Inference.@decode_sub :gdn_recur backend begin
+        @cuda threads = nv blocks = dv _cuda_gdn_delta_kernel!(
+            s.core, s.conv, s.a, s.b, A_log, dt_bias, rec_state,
+            Int(nk), Int(div(nv, nk)), mx.v_head_tiled, Int(dk), Int(dv), scale, eps32)
+        @cuda threads = T blocks = nv shmem = T * sizeof(Float32) _cuda_gdn_gnorm_kernel!(
+            s.merged, s.core, s.z, norm_w, Int(dv), eps32)
+    end
+    return s
 end
 
 # --- MoE expert offload (config-agnostic) --------------------------------------

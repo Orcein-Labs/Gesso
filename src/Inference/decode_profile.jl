@@ -20,7 +20,16 @@ const DECODE_STAGES = (
     :lm_head, :sample,
 )
 
-const DECODE_SUBSTAGES = (:host_fork_join, :host_critical_path, :host_cpu_work, :upload_gather)
+# GDN mixer sub-stages (inside :gdn_mixer, nested like the host sub-stages).
+const DECODE_GDN_SUBSTAGES = (
+    :gdn_norm, :gdn_proj, :gdn_conv, :gdn_split, :gdn_gates,
+    :gdn_qk, :gdn_recur, :gdn_gnorm, :gdn_outproj,
+)
+
+const DECODE_SUBSTAGES = (
+    :host_fork_join, :host_critical_path, :host_cpu_work, :upload_gather,
+    DECODE_GDN_SUBSTAGES...,
+)
 
 const DECODE_COUNTERS = (
     :expert_h2d_bytes, :cuda_alloc_calls, :cuda_alloc_bytes,
@@ -163,6 +172,31 @@ macro decode_stage(name, backend, ex)
             local r = $(esc(ex))
             _profile_sync(b)
             _profile_add!(p, $(QuoteNode(nm)), Int64(time_ns() - t0))
+            r
+        end
+    end
+end
+
+"""
+    @decode_sub :name backend expr
+
+Like `@decode_stage`, but the time is added to the nested sub-stage `:name`
+(reported beside the table, never summed into it).
+"""
+macro decode_sub(name, backend, ex)
+    nm = name isa QuoteNode ? name.value : name
+    nm isa Symbol || error("@decode_sub: sub-stage name must be a literal symbol, got $name")
+    return quote
+        local p = _PROFILE[]
+        if p === nothing || !p.window
+            $(esc(ex))
+        else
+            local b = $(esc(backend))
+            _profile_sync(b)
+            local t0 = time_ns()
+            local r = $(esc(ex))
+            _profile_sync(b)
+            _profile_sub!($(QuoteNode(nm)), Int64(time_ns() - t0))
             r
         end
     end
