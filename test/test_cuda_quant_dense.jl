@@ -125,6 +125,21 @@ else
         end
     end
 
+    # From GESSO_DQ_GEMM_MIN tokens the prefill dequantizes W to F16 and runs
+    # cuBLAS. Scratch 0 MiB forces one row per chunk, so the chunk offsets into
+    # W and into dst are exercised as well.
+    @testset "GpuDenseQuant: prefill GEMM vs host dequant" begin
+        rng = MersenneTwister(20261009)
+        for kind in (:q5_k, :q6_k, :iq4_xs, :q4_k, :q8_0), mib in ("32", "0")
+            qm = _random_quant_matrix(rng, kind, 37, 512)
+            X = randn(rng, Float32, 40, 512)
+            dev = withenv("GESSO_DQ_GEMM_MIN" => "32", "GESSO_DQ_GEMM_SCRATCH_MIB" => mib) do
+                _device_matmul(qm, X, Gesso.PrefillWorkload())
+            end
+            _check_against_host(qm, X, dev; label="$kind GEMM n=40 scratch=$mib")
+        end
+    end
+
     @testset "GpuDenseQuant: placement switch and budget fallback" begin
         rng = MersenneTwister(3)
         qm = _random_quant_matrix(rng, :q5_k, 1024, 1024)
@@ -177,6 +192,8 @@ else
             @test qm.ggml_type == want
             X = randn(MersenneTwister(11), Float32, 2, qm.ne0)
             _check_against_host(qm, X, _device_matmul(qm, X, Gesso.DecodeWorkload()); label=name)
+            X = randn(MersenneTwister(12), Float32, 64, qm.ne0)
+            _check_against_host(qm, X, _device_matmul(qm, X, Gesso.PrefillWorkload()); label="$name GEMM n=64")
         end
     end
 end

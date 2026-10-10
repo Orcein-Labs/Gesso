@@ -277,36 +277,121 @@ function _cuda_dq_group!(ds::Tuple, xs, qs::Tuple{Vararg{GpuDenseQuant}})
         _cu_aligned(q.data, 4) || error("dense quant matmul: weight bytes not 4-byte aligned")
     end
     n == 0 && return nothing
+    _dq_gemm_ok(ds, n) && return _cuda_dq_gemm_group!(ds, xs, qs, n, k)
     nb = k ÷ 32
     total = n * nb
     qx, dx, sx = _cuda_q8_buffers!(_CUDA_Q8_DENSE, total)
     @fastcuda threads = 256 blocks = cld(total, 256) _cuda_q8_1_quant_kernel!(qx, dx, sx, xs, nb, total)
     kv = _cuda_q_tables().kv4
     for (d, q) in zip(ds, qs)
-        t = q.ggml_type
-        I = Gesso.Inference
-        # One launch per type so each `Val` is a compile-time constant.
-        if t == I.GGML_TYPE_Q5_K
-            _cuda_dq_launch!(Val(:q5_k), d, q, qx, dx, sx, kv, n, nb)
-        elseif t == I.GGML_TYPE_Q6_K
-            _cuda_dq_launch!(Val(:q6_k), d, q, qx, dx, sx, kv, n, nb)
-        elseif t == I.GGML_TYPE_Q4_K
-            _cuda_dq_launch!(Val(:q4_k), d, q, qx, dx, sx, kv, n, nb)
-        elseif t == I.GGML_TYPE_IQ4_XS
-            _cuda_dq_launch!(Val(:iq4_xs), d, q, qx, dx, sx, kv, n, nb)
-        elseif t == I.GGML_TYPE_Q8_0
-            _cuda_dq_launch!(Val(:q8_0), d, q, qx, dx, sx, kv, n, nb)
-        else
-            error("dense quant matmul: unsupported ggml type $t")
-        end
+        _dq_with_kind(_cuda_dq_launch!, q.ggml_type, d, q, qx, dx, sx, kv, n, nb)
     end
     return nothing
+end
+
+# Calls f(Val(kind), args...) so each kernel's `Val` is a compile-time constant.
+@inline function _dq_with_kind(f::F, t::Int32, args...) where {F}
+    I = Gesso.Inference
+    t == I.GGML_TYPE_Q5_K && return f(Val(:q5_k), args...)
+    t == I.GGML_TYPE_Q6_K && return f(Val(:q6_k), args...)
+    t == I.GGML_TYPE_Q4_K && return f(Val(:q4_k), args...)
+    t == I.GGML_TYPE_IQ4_XS && return f(Val(:iq4_xs), args...)
+    t == I.GGML_TYPE_Q8_0 && return f(Val(:q8_0), args...)
+    error("dense quant matmul: unsupported ggml type $t")
 end
 
 @inline function _cuda_dq_launch!(vk::Val, d, q::GpuDenseQuant, qx, dx, sx, kv, n, nb)
     @fastcuda threads = 128 blocks = (cld(q.nrows, 4), n) _cuda_dq_gemv_kernel!(
         d, q.data, qx, dx, sx, kv, vk, q.nrows, nb, q.row_bytes,
     )
+    return nothing
+end
+
+# --- prefill GEMM: dequantize W to F16 once, multiply on the tensor cores ---
+# The GEMV above decodes every weight block once per token, so a 256-token
+# prefill decodes each weight 256 times. From GESSO_DQ_GEMM_MIN tokens on, W is
+# dequantized to F16 in row chunks (scratch capped at GESSO_DQ_GEMM_SCRATCH_MIB)
+# and cuBLAS multiplies it with an F16 copy of x, accumulating in F32. F16 x
+# keeps more bits than the Q8_1 blocks the GEMV reads.
+_dq_gemm_min() = parse(Int, get(ENV, "GESSO_DQ_GEMM_MIN", "32"))
+_dq_gemm_scratch_mib() = parse(Int, get(ENV, "GESSO_DQ_GEMM_SCRATCH_MIB", "32"))
+
+# One-hot activations: virtual token j (0-based) holds 1 at value j of every
+# block, with scale 1 and block sum 1, so `_cuda_dq_block` on token j+1 returns
+# the weight value itself and every type reuses its GEMV decode. Built for the
+# widest k seen; `nbs` is that width in blocks, the token stride.
+mutable struct _DqGemmScratch
+    nbs::Int
+    qx::Union{Nothing,_CuVec{Int32}}
+    dx::Union{Nothing,_CuVec{Float32}}
+    sx::Union{Nothing,_CuVec{Int32}}
+    w16::Union{Nothing,_CuVec{Float16}}
+    x16::Union{Nothing,_CuVec{Float16}}
+end
+
+const _DQ_GEMM = _DqGemmScratch(0, nothing, nothing, nothing, nothing, nothing)
+
+function _dq_onehot!(G::_DqGemmScratch, nb::Int)
+    nb <= G.nbs && return G
+    q = zeros(Int32, 32 * nb * 8)
+    for j in 0:31, b in 0:nb-1
+        q[(j * nb + b) * 8 + j ÷ 4 + 1] = Int32(1) << (8 * (j % 4))
+    end
+    G.qx === nothing || CUDA.unsafe_free!(G.qx)
+    G.dx === nothing || CUDA.unsafe_free!(G.dx)
+    G.sx === nothing || CUDA.unsafe_free!(G.sx)
+    G.qx = CuVector{Int32}(q)
+    G.dx = CUDA.ones(Float32, 32 * nb)
+    G.sx = CuVector{Int32}(ones(Int32, 32 * nb))
+    G.nbs = nb
+    return G
+end
+
+# Rows r0+1 .. r0+rc of W into Wf (k, rc) column-major. One warp per
+# (row, block); lane j writes value j, so a warp stores 64 contiguous bytes.
+function _cuda_dq_f16_kernel!(Wf, W, qx, dx, sx, kv, ::Val{K}, r0::Int, rc::Int, nb::Int, nbs::Int,
+                              row_bytes::Int, k::Int) where {K}
+    g = Int((blockIdx().x - 1) * (blockDim().x ÷ 32) + (threadIdx().x - 1) ÷ 32)
+    lane = Int((threadIdx().x - 1) % 32)
+    r = g ÷ nb
+    b = g % nb
+    r < rc || return
+    v = _cuda_dq_block(Val{K}(), W, (r0 + r) * row_bytes, b, qx, dx, sx, lane + 1, nbs, kv)
+    @inbounds Wf[r * k + 32 * b + lane + 1] = Float16(v)
+    return
+end
+
+@inline function _cuda_dq_f16_launch!(vk::Val, Wf, q::GpuDenseQuant, G::_DqGemmScratch, kv, r0, rc, nb, k)
+    @fastcuda threads = 256 blocks = cld(rc * nb, 8) _cuda_dq_f16_kernel!(
+        Wf, q.data, G.qx, G.dx, G.sx, kv, vk, r0, rc, nb, G.nbs, q.row_bytes, k)
+    return nothing
+end
+
+_dq_gemm_ok(ds::Tuple, n::Int) = n >= _dq_gemm_min() && all(d -> d isa DenseCuArray{Float32}, ds)
+
+function _cuda_dq_gemm_group!(ds::Tuple, xs, qs::Tuple{Vararg{GpuDenseQuant}}, n::Int, k::Int)
+    G = _dq_onehot!(_DQ_GEMM, k ÷ 32)
+    nb = k ÷ 32
+    rc_max = max(1, (_dq_gemm_scratch_mib() << 20) ÷ (2k))
+    rc_max = min(rc_max, maximum(q -> q.nrows, qs))
+    G.w16 = _hotp_dev(G.w16, Float16, k * rc_max)
+    G.x16 = _hotp_dev(G.x16, Float16, n * k)
+    x16 = unsafe_wrap(CuArray, pointer(G.x16), (n, k))
+    x16 .= xs
+    kv = _cuda_q_tables().kv4
+    C = CUDA.CUBLAS
+    for (d, q) in zip(ds, qs)
+        r0 = 0
+        while r0 < q.nrows
+            rc = min(rc_max, q.nrows - r0)
+            Wf = unsafe_wrap(CuArray, pointer(G.w16), (k, rc))
+            _dq_with_kind(_cuda_dq_f16_launch!, q.ggml_type, Wf, q, G, kv, r0, rc, nb, k)
+            Y = unsafe_wrap(CuArray, pointer(d, r0 * n + 1), (n, rc))
+            C.cublasGemmEx(C.handle(), 'N', 'N', n, rc, k, _cu_scalar(one(Float32)), x16, Float16, n,
+                Wf, Float16, k, _cu_scalar(zero(Float32)), Y, Float32, n, C.CUBLAS_COMPUTE_32F, C.CUBLAS_GEMM_DEFAULT)
+            r0 += rc
+        end
+    end
     return nothing
 end
 
