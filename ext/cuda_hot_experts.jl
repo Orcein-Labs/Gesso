@@ -29,9 +29,10 @@
 
 _hot_experts_enabled() = get(ENV, "GESSO_GPU_HOT_EXPERTS", "0") == "1"
 
-# Decode needs about 50 MiB beyond the weights, and a 256-token prefill about
-# 600 MiB at its peak. A prefill that runs out releases the pools (_HotPurge),
-# so the reserve only has to cover decode and short prompts.
+# Decode needs about 50 MiB beyond the weights. A prefill's activations peak
+# near 0.7 MiB per token on Ornith-35B (177 MiB at 256 tokens, 617 at 1024). A
+# prefill that runs out releases pools (_HotPurge), so the reserve only has to
+# cover decode and short prompts.
 const _HOT_RESERVE_DEFAULT_MIB = 384
 
 function _hot_env_int(name, default)
@@ -161,14 +162,42 @@ end
 # fit, costing ~40 tokens of refill, or kept them for long ones that then ran
 # out. _HOT_BUSY covers a layer from its pool allocation to its last launch, so
 # the allocations inside that span cannot free the pool they are about to read.
+#
+# Releasing every pool cost a P1024 prefill 29 of its 30: the layers it had not
+# reached yet then ran their experts on the CPU (~0.32 s each) or re-allocated
+# under _HOT_BUSY, where CUDA's retry escalates to a GC. Layers run in a cycle
+# (prefill, then decode from layer 1 again), so the pool needed furthest ahead
+# belongs to the layer just finished; purge! releases in that order and stops
+# once the prompt's activations fit.
 struct _HotPurge <: CUDA.CUDACore.Reclaimable end
 const _HOT_BUSY = Ref(false)
+const _HOT_NEXT = Ref(1)       # the hot layer the model reaches next
+const _HOT_SEQ = Ref(1)        # rows in the current forward pass
+const _HOT_PURGE_FLOOR = Int64(512) << 20
+const _HOT_ALLOC_MARGIN = Int64(64) << 20
+
+# Entering a hot layer's MoE, and leaving it. Between the two the layer itself
+# is next; afterwards it is the furthest away.
+_hot_enter!(hot::_HotLayer, seq::Int) = (_HOT_NEXT[] = hot.layer; _HOT_SEQ[] = seq; nothing)
+_hot_leave!(hot::_HotLayer) = (_HOT_NEXT[] = hot.layer + 1; nothing)
 
 function CUDA.CUDACore.purge!(::_HotPurge)
     _HOT_BUSY[] && return
-    for hot in values(_HOT)
+    live = [hot for hot in values(_HOT) if hot.pool !== nothing]
+    isempty(live) && return
+    span = maximum(hot -> hot.layer, values(_HOT)) + 1
+    next = _HOT_NEXT[]
+    sort!(live; by=hot -> mod(hot.layer - next, span), rev=true)
+    target = max(_HOT_PURGE_FLOOR, Int64(_HOT_PF_CFG[].headroom) * _HOT_SEQ[])
+    freed = Int64(0)
+    for hot in live
+        freed >= target && break
+        freed += Int64(hot.nslots) * hot.stride
         _hot_release!(hot)
     end
+    # The frees are stream-ordered; without this the retry that follows can
+    # miss them and CUDA climbs to its next rung anyway.
+    CUDA.device_synchronize()
     return
 end
 
@@ -241,6 +270,20 @@ end
 function _hot_alloc!(hot::_HotLayer, g, u, n_used::Int; final::Bool=true)
     hot.pool === nothing || return true
     hot.nslots >= 1 || return false
+    final && _hot_prefill_release!()
+    # A pool that fits by a few MiB still failed to allocate after a trim; the
+    # driver wants room of its own. Only DROP, behind two GCs, then rescued it.
+    bytes = Int64(hot.nslots) * hot.stride + _HOT_ALLOC_MARGIN
+    if CUDA.free_memory() < bytes
+        # This runs under _HOT_BUSY, so CUDA's retry cannot purge and its next
+        # rescue is a full GC (~0.25 s). What blocks the pool is usually CUDA's
+        # own cache, fragmented by the prompt's activations rather than live:
+        # handing it back to the driver frees the same bytes with no GC.
+        CUDA.synchronize()
+        dev = CUDA.device()
+        CUDA.CUDACore.stream_ordered(dev) && CUDA.CUDACore.trim(CUDA.CUDACore.pool_create(dev))
+        !final && CUDA.free_memory() < bytes && return false
+    end
     try
         pool = CuVector{UInt8}(undef, hot.nslots * hot.stride)
         base = pointer(pool)
@@ -518,6 +561,12 @@ end
 # each other and with the CPU. The uploads go in ascending pair count, so the
 # busiest experts are the ones left resident for decode.
 #
+# A layer whose pool a long prompt's activations have purged, with no room to
+# re-allocate it, streams its experts through a small ring shared by all
+# layers (_STREAM slots) instead. It keeps no residents for decode, but its
+# pairs leave the CPU: on a 1024-token prompt the CPU takes ~0.5 s over such a
+# layer, the uploads and GEMVs tens of ms.
+#
 # GESSO_GPU_HOT_PREFILL=0 keeps hot-layer prefill on the CPU. The cost model's
 # rates are tunable: _GBPS (PCIe), _EXPERT_US and _PAIR_US (CPU).
 struct _HotPrefillConfig
@@ -528,19 +577,94 @@ struct _HotPrefillConfig
     upload_s::Float64   # seconds per byte
     cpu_expert_s::Float64
     cpu_pair_s::Float64
+    headroom::Int       # device bytes per prompt token: a re-allocated pool leaves this free, a purge frees at least this
+    stream::Int         # slots in the shared ring of a layer without a pool, 0 none
 end
 
 _hot_prefill_config() = _HotPrefillConfig(
     get(ENV, "GESSO_GPU_HOT_PREFILL", "1") == "1",
-    min(_hot_env_int("GESSO_GPU_HOT_PREFILL_MAX_SEQ", 1024), 65535),
+    min(_hot_env_int("GESSO_GPU_HOT_PREFILL_MAX_SEQ", 4096), 65535),
     max(1, _hot_env_int("GESSO_GPU_HOT_PREFILL_ROUND", 16)),
     clamp(_hot_env_int("GESSO_GPU_HOT_PREFILL_SEG", 1024), 1, 65535),
     1 / (1e9 * _hot_env_float("GESSO_GPU_HOT_PREFILL_GBPS", 6.5)),
     1e-6 * _hot_env_float("GESSO_GPU_HOT_PREFILL_EXPERT_US", 70),
     1e-6 * _hot_env_float("GESSO_GPU_HOT_PREFILL_PAIR_US", 45),
+    1024 * max(0, _hot_env_int("GESSO_GPU_HOT_PREFILL_HEADROOM_KIB", 768)),
+    max(0, _hot_env_int("GESSO_GPU_HOT_PREFILL_STREAM", 32)),
 )
 
-const _HOT_PF_CFG = Ref(_HotPrefillConfig(true, 1024, 16, 1024, 1 / 6.5e9, 70e-6, 45e-6))
+const _HOT_PF_CFG = Ref(_HotPrefillConfig(true, 4096, 16, 1024, 1 / 6.5e9, 70e-6, 45e-6, 768 * 1024, 32))
+
+const _HOT_STREAM = Ref{Union{Nothing,_HotLayer}}(nothing)
+
+# The shared ring dressed as `hot`, empty. Allocated before _HOT_BUSY, so a
+# short device may purge pools for it; nothing when it still does not fit.
+function _hot_stream_layer(hot::_HotLayer, g, u, n_exp::Int, cfg::_HotPrefillConfig)
+    (hot.direct && cfg.stream > 0) || return nothing
+    sl = _HOT_STREAM[]
+    if sl === nothing
+        sl = _HotLayer(0, 0, 0, nothing, nothing, CuPtr{UInt8}(0), Int32[], Int32[], Int[],
+            Float32[], Int[], 0, Int32[], nothing, Int[], Int[], false, true,
+            CuEvent(CUDA.EVENT_DISABLE_TIMING), CuEvent(CUDA.EVENT_DISABLE_TIMING), Int[], UInt8[], 0, 0, 0)
+        _HOT_STREAM[] = sl
+    end
+    need = cfg.stream * hot.stride
+    if sl.pool === nothing || length(sl.pool) < need
+        _hot_stream_release!()
+        try
+            sl.pool = CuVector{UInt8}(undef, need)
+        catch err
+            err isa CUDA.OutOfGPUMemoryError || rethrow()
+            return nothing
+        end
+    end
+    pool = sl.pool
+    base = pointer(pool)
+    n = length(pool)
+    o2 = g.bytes_per_expert
+    o3 = o2 + u.bytes_per_expert
+    sl.views = (pool, unsafe_wrap(CuArray, base + o2, n - o2), unsafe_wrap(CuArray, base + o3, n - o3))
+    sl.base = base
+    sl.layer = hot.layer
+    sl.stride = hot.stride
+    sl.nslots = n ÷ hot.stride
+    fill!(resize!(sl.slot_of, n_exp), 0)
+    fill!(resize!(sl.expert_in, sl.nslots), 0)
+    empty!(sl.free)
+    append!(sl.free, sl.nslots:-1:1)
+    return sl
+end
+
+# Every read and write of the ring is ordered before the main stream's last
+# prefill launch, so a stream-ordered free is safe.
+function _hot_stream_release!()
+    sl = _HOT_STREAM[]
+    (sl === nothing || sl.pool === nothing) && return
+    CUDA.unsafe_free!(sl.pool)
+    sl.pool = nothing
+    sl.views = nothing
+    return
+end
+
+# Decode wants the prefill's device buffers back for its pools: after a
+# 4096-token prompt D alone holds 256 MiB, two pools.
+function _hot_prefill_release!()
+    _hot_stream_release!()
+    P = _HOT_PREFILL
+    for f in (:meta_d, :xt, :g, :u, :a, :d)
+        buf = getfield(P, f)
+        buf === nothing && continue
+        CUDA.unsafe_free!(buf)
+        setfield!(P, f, nothing)
+    end
+    return
+end
+
+# Free device memory plus what CUDA's pool holds that no array uses.
+function _hot_device_avail()
+    CC = CUDA.CUDACore
+    return Int64(CUDA.free_memory()) + max(Int64(0), Int64(CC.cached_memory()) - Int64(CC.used_memory()))
+end
 
 # Grow-only buffers shared by every hot layer. GPU pairs are numbered in round
 # order, expert by expert, token order within an expert; D's column g is pair g.
@@ -614,7 +738,7 @@ end
 function _moe_hot_prefill!(backend, hot::_HotLayer, xd, b, X, Y, gate, up, down,
     seq::Int, n_exp::Int, n_used::Int, s)
     cfg = _HOT_PF_CFG[]
-    (cfg.on && seq <= cfg.max_seq && hot.nslots > 0) || return false
+    (cfg.on && seq <= cfg.max_seq) || return false
     h = size(X, 2)
     ff = gate.ne1
     P = _HOT_PREFILL
@@ -645,11 +769,32 @@ function _moe_hot_prefill!(backend, hot::_HotLayer, xd, b, X, Y, gate, up, down,
     P.d = _hotp_dev(P.d, Float32, h * npairs)
     _cuda_q8_buffers!(_CUDA_Q8_EXPERT, max(seq * (h ÷ 32), min(seg, npairs) * (ff ÷ 32)))
     hot.copying && (_cuda_event_wait(hot.ready); _hot_commit!(hot))
+    # A pool purged earlier in this prompt would be allocated under _HOT_BUSY.
+    # Unless it leaves room for the later layers' activations, they purge it
+    # again before it is read twice, so it is not worth the upload.
+    # A pool that fits on paper can still fail after the trim (fragmentation);
+    # that layer streams too.
+    lay = hot
+    if hot.pool === nothing
+        fits = hot.nslots > 0 &&
+            _hot_device_avail() >= Int64(hot.nslots) * hot.stride + Int64(cfg.headroom) * seq
+        if fits
+            _HOT_BUSY[] = true
+            try
+                fits = _hot_alloc!(hot, gate, up, n_used; final=false)
+            finally
+                _HOT_BUSY[] = false
+            end
+        end
+        if !fits
+            lay = _hot_stream_layer(hot, gate, up, n_exp, cfg)
+            lay === nothing && return false
+        end
+    end
     _HOT_BUSY[] = true
     try
-        _hot_alloc!(hot, gate, up, n_used; final=false) || return false
         Gesso.Inference.@decode_stage :moe_qgemv nothing _hot_prefill_issue!(
-            backend, hot, P, cfg, xd, b, gate, up, down, seq, n_exp, n_used, npairs, s)
+            backend, lay, P, cfg, xd, b, gate, up, down, seq, n_exp, n_used, npairs, s)
     finally
         _HOT_BUSY[] = false
     end

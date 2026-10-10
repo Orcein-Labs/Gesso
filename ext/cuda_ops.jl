@@ -2655,6 +2655,7 @@ function _moe_topk_host!(backend::CUDABackend, y, x, router, gate, up, down, n_u
     end
     s = CUDA.stream()
     hot = _hot_layer(gate)
+    hot !== nothing && _hot_enter!(hot, seq)
     # Pools otherwise leave when memory runs short (_HotPurge).
     hot !== nothing && seq > _HOT_CFG[].keep_seq && _hot_release!(hot)
     batch = seq > 1 && Gesso.Inference._moe_host_batchable(gate, up, down, h, gate.ne1)
@@ -2708,11 +2709,15 @@ function _moe_topk_host!(backend::CUDABackend, y, x, router, gate, up, down, n_u
             if hot !== nothing
                 if seq == 1 && y isa DenseCuArray
                     _HOT_BUSY[] = true
-                    try
+                    done = try
                         _hot_alloc!(hot, gate, up, n_used) &&
-                            return _moe_hot_token!(backend, hot, y, xd, b, gate, up, down, n_used, s)
+                            _moe_hot_token!(backend, hot, y, xd, b, gate, up, down, n_used, s)
                     finally
                         _HOT_BUSY[] = false
+                    end
+                    if done !== false
+                        _hot_leave!(hot)
+                        return done
                     end
                 end
                 _hot_observe!(hot, b.experts, n_used)
@@ -2738,6 +2743,7 @@ function _moe_topk_host!(backend::CUDABackend, y, x, router, gate, up, down, n_u
         Gesso.Inference.@decode_stage :moe_qgemv nothing _hot_prefill_add!(y, seq, h, n_used)
         _HOT_VERIFY[] && _hot_prefill_verify!(y, b, X, gate, up, down, n_exp)
     end
+    hot !== nothing && _hot_leave!(hot)
     return y
 end
 
