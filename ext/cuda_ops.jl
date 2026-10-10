@@ -1794,74 +1794,190 @@ function _cuda_gdn_recurrent_kernel!(out, qn, kn, v, g, beta, state)
     return
 end
 
-# Register-resident variant: eight lanes per value column, each holding dk/8
-# rows of that column's state for the whole prompt, so a token costs a few
-# FMAs and two 8-lane shuffle sums with no block barrier. The shared-memory
-# kernel above stalls twice per token on sync_threads and an unprefetched k/q
-# load, and its separate q/k prep runs one thread per (token, head): together
-# 0.6 s of a 1024-token prefill on Ornith-35B. Here each lane normalizes its
-# own rows of q and k (the norm is one more shuffle sum) and loads token t+1
-# while computing token t. The sums run in a different order from the CPU
-# reference and the kernel above, so results agree to rounding, not bitwise.
-# GESSO_GDN_RECUR_REG=0 restores the shared-memory kernel.
+# Register-resident GDN recurrence, v2: four lanes per value column, each
+# holding dk/4 rows of that column's state for the whole prompt in registers.
+# q, k and v are staged in shared memory in chunks of T tokens, and the next
+# chunk is prefetched into registers while the current one is computed. The
+# q and k l2 norms come from a separate coalesced kernel, not the recurrence.
+# The sums run in a different order from the CPU reference, so results agree
+# to rounding, not bitwise. GESSO_GDN_RECUR_REG=0 restores the shared-memory
+# kernel above.
 _gdn_recur_reg_enabled() = get(ENV, "GESSO_GDN_RECUR_REG", "1") == "1"
 
-const _GDN_LANES = 8
+# One block per (32-token tile, k head), 32 x 8 threads, coalesced along t.
+# The 8 threads of a token split the head's dk columns of k and q.
+function _cuda_gdn_norm_kernel!(invk, invq, q, k, do_l2::Bool, scale::Float32, eps::Float32)
+    seq, dk = size(q, 1), size(q, 3)
+    tx = Int(threadIdx().x)
+    ty = Int(threadIdx().y)
+    t = (Int(blockIdx().x) - 1) * 32 + tx
+    h = Int(blockIdx().y)
+    pk = CuStaticSharedArray(Float32, (32, 8))
+    pq = CuStaticSharedArray(Float32, (32, 8))
+    sk = 0.0f0
+    sq = 0.0f0
+    if t <= seq
+        @inbounds for d in ty:8:dk
+            a = Float32(k[t, h, d])
+            b = Float32(q[t, h, d])
+            sk = fma(a, a, sk)
+            sq = fma(b, b, sq)
+        end
+    end
+    @inbounds pk[tx, ty] = sk
+    @inbounds pq[tx, ty] = sq
+    sync_threads()
+    if ty == 1 && t <= seq
+        a = 0.0f0
+        b = 0.0f0
+        @inbounds for y in 1:8
+            a += pk[tx, y]
+            b += pq[tx, y]
+        end
+        @inbounds invk[t, h] = do_l2 ? 1.0f0 / sqrt(a + eps) : 1.0f0
+        @inbounds invq[t, h] = (do_l2 ? 1.0f0 / sqrt(b + eps) : 1.0f0) * scale
+    end
+    return
+end
 
-@inline function _gdn_sum8(x)
-    x += CUDA.shfl_xor_sync(0xffffffff, x, 4)
-    x += CUDA.shfl_xor_sync(0xffffffff, x, 2)
+# Four accumulators keep four FMA chains in flight to hide add latency.
+@inline function _gdn_dot4(a::NTuple{N,Float32}, b::NTuple{N,Float32}) where {N}
+    s1 = 0.0f0
+    s2 = 0.0f0
+    s3 = 0.0f0
+    s4 = 0.0f0
+    @inbounds for c in 0:4:N-1
+        s1 = fma(a[c+1], b[c+1], s1)
+        s2 = fma(a[c+2], b[c+2], s2)
+        s3 = fma(a[c+3], b[c+3], s3)
+        s4 = fma(a[c+4], b[c+4], s4)
+    end
+    return (s1 + s2) + (s3 + s4)
+end
+
+# Xor 1 and 2 sum the four lanes of one value column.
+@inline function _gdn_sum4(x)
     x += CUDA.shfl_xor_sync(0xffffffff, x, 1)
+    x += CUDA.shfl_xor_sync(0xffffffff, x, 2)
     return x
 end
 
-@inline _gdn_dot(a, b) = reduce(+, map(*, a, b))
+# Top level, not a closure: S is reassigned in the token loop, and a closure
+# capturing it would box S and fail with "unsupported dynamic function invocation".
+@inline _gdn_step(S::NTuple{M,Float32}, kk::NTuple{M,Float32}, coef, decay) where {M} =
+    ntuple(m -> fma(kk[m], coef, S[m] * decay), Val(M))
 
-@inline function _gdn_load_token(q, k, v, g, beta, t, h, hh, j, r, ::Val{R}) where {R}
+# Lane r holds float4 chunks r, r+4, ...; register m is element (m-1) % 4 of
+# chunk (m-1) ÷ 4 within that lane's set, so a lane's state rows are contiguous.
+@inline _gdn_srow(r, m) = 4 * (r + 4 * ((m - 1) >> 2)) + ((m - 1) & 3) + 1
+
+# Chunk loads and stores are top-level for the same reason as _gdn_step: inside
+# a closure the chunk counts are captured fields, so Val(NKQ) is not static.
+@inline function _gdn_v2_load(k, q, v, g, beta, invk, invq, tid, t0, seq, h, hh, j0, dv,
+        ::Val{NT}, ::Val{T}, ::Val{NKQ}, ::Val{NV}) where {NT,T,NKQ,NV}
     @inbounds begin
-        kk = ntuple(m -> Float32(k[t, h, r + _GDN_LANES * (m - 1)]), Val(R))
-        qq = ntuple(m -> Float32(q[t, h, r + _GDN_LANES * (m - 1)]), Val(R))
-        return kk, qq, Float32(v[t, hh, j]), Float32(g[t, hh]), Float32(beta[t, hh])
+        kr = ntuple(i -> (e = tid + NT * (i - 1); t = t0 + e % T + 1;
+            t <= seq ? Float32(k[t, h, e ÷ T + 1]) : 0.0f0), Val(NKQ))
+        qr = ntuple(i -> (e = tid + NT * (i - 1); t = t0 + e % T + 1;
+            t <= seq ? Float32(q[t, h, e ÷ T + 1]) : 0.0f0), Val(NKQ))
+        vr = ntuple(i -> (e = tid + NT * (i - 1); t = t0 + e % T + 1; jj = j0 + e ÷ T + 1;
+            (t <= seq && jj <= dv) ? Float32(v[t, hh, jj]) : 0.0f0), Val(NV))
+        sr = (tid < T && t0 + tid < seq) ?
+            (Float32(g[t0+tid+1, hh]), Float32(beta[t0+tid+1, hh]),
+             invk[t0+tid+1, h], invq[t0+tid+1, h]) :
+            (0.0f0, 0.0f0, 0.0f0, 0.0f0)
     end
+    return kr, qr, vr, sr
 end
 
-function _cuda_gdn_recur_reg_kernel!(out, q, k, v, g, beta, state, nk::Int, group::Int,
-    tiled::Bool, do_l2::Bool, scale::Float32, eps::Float32, ::Val{R}) where {R}
+@inline function _gdn_v2_store(ks, qs, vs, sm, kr, qr, vr, sr, tid,
+        ::Val{NT}, ::Val{T}, ::Val{KP}, ::Val{COLS}) where {NT,T,KP,COLS}
+    @inbounds begin
+        for i in 1:length(kr)
+            e = tid + NT * (i - 1)
+            o = (e % T) * KP + e ÷ T + 1
+            ks[o] = kr[i]
+            qs[o] = qr[i]
+        end
+        for i in 1:length(vr)
+            e = tid + NT * (i - 1)
+            vs[(e % T) * COLS + e ÷ T + 1] = vr[i]
+        end
+        if tid < T
+            for c in 1:4
+                sm[tid+1, c] = sr[c]
+            end
+        end
+    end
+    return
+end
+
+function _cuda_gdn_recur_reg_kernel!(out, q, k, v, g, beta, invk, invq, state,
+        nk::Int, group::Int, tiled::Bool, ::Val{COLS}, ::Val{T}, ::Val{DK}) where {COLS,T,DK}
+    NT = 4 * COLS
+    M = DK ÷ 4
+    # padded to KP so each row is 16-byte aligned and the transposed stores
+    # spread across banks
+    KP = DK + 4
+    NKQ = (T * DK) ÷ NT
+    NV = (T * COLS) ÷ NT
     seq = size(out, 1)
     dv = size(state, 3)
-    lane = Int(threadIdx().x) - 1
-    r = (lane % _GDN_LANES) + 1
+    tid = Int(threadIdx().x) - 1
+    cl = tid >> 2
+    r = tid & 3
     hh = Int(blockIdx().y)
-    j = (Int(blockIdx().x) - 1) * (Int(blockDim().x) ÷ _GDN_LANES) + lane ÷ _GDN_LANES + 1
+    j0 = (Int(blockIdx().x) - 1) * COLS
+    j = j0 + cl + 1
     live = j <= dv
     # a dead column still joins every shuffle, so it reads column 1 and never writes
     jr = live ? j : 1
     h = tiled ? ((hh - 1) % nk) + 1 : ((hh - 1) ÷ group) + 1
+    ks = CuStaticSharedArray(Float32, T * KP)
+    qs = CuStaticSharedArray(Float32, T * KP)
+    vs = CuStaticSharedArray(Float32, T * COLS)
+    os = CuStaticSharedArray(Float32, T * COLS)
+    sm = CuStaticSharedArray(Float32, (T, 4))
     @inbounds begin
-        S = ntuple(m -> Float32(state[hh, r + _GDN_LANES * (m - 1), jr]), Val(R))
-        nxt = _gdn_load_token(q, k, v, g, beta, 1, h, hh, jr, r, Val(R))
-        for t in 1:seq
-            kk, qq, vt, gt, bt = nxt
-            t < seq && (nxt = _gdn_load_token(q, k, v, g, beta, t + 1, h, hh, jr, r, Val(R)))
-            if do_l2
-                invk = 1.0f0 / sqrt(_gdn_sum8(_gdn_dot(kk, kk)) + eps)
-                invq = 1.0f0 / sqrt(_gdn_sum8(_gdn_dot(qq, qq)) + eps)
-                kk = map(x -> x * invk, kk)
-                sq = invq * scale
-                qq = map(x -> x * sq, qq)
-            else
-                qq = map(x -> x * scale, qq)
+        S = ntuple(m -> Float32(state[hh, _gdn_srow(r, m), jr]), Val(M))
+        LA = (Val(NT), Val(T), Val(NKQ), Val(NV))
+        SA = (Val(NT), Val(T), Val(KP), Val(COLS))
+        kr, qr, vr, sr = _gdn_v2_load(k, q, v, g, beta, invk, invq, tid, 0, seq, h, hh, j0, dv, LA...)
+        _gdn_v2_store(ks, qs, vs, sm, kr, qr, vr, sr, tid, SA...)
+        sync_threads()
+        nch = cld(seq, T)
+        for c in 0:nch-1
+            t0 = c * T
+            pk, pq, pv, ps = _gdn_v2_load(k, q, v, g, beta, invk, invq, tid, t0 + T, seq, h, hh, j0, dv, LA...)
+            nt = min(T, seq - t0)
+            for tt in 0:nt-1
+                b = tt * KP
+                kk = ntuple(m -> ks[b + _gdn_srow(r, m)], Val(M))
+                decay = exp(sm[tt+1, 1])
+                ik = sm[tt+1, 3]
+                sk = _gdn_sum4(_gdn_dot4(S, kk))
+                delta = (vs[tt*COLS+cl+1] - decay * sk * ik) * sm[tt+1, 2]
+                coef = delta * ik
+                S = _gdn_step(S, kk, coef, decay)
+                qq = ntuple(m -> qs[b + _gdn_srow(r, m)], Val(M))
+                acc = _gdn_sum4(_gdn_dot4(S, qq)) * sm[tt+1, 4]
+                r == 0 && (os[tt*COLS+cl+1] = acc)
             end
-            decay = exp(gt)
-            S = map(x -> x * decay, S)
-            delta = (vt - _gdn_sum8(_gdn_dot(S, kk))) * bt
-            S = map((x, kx) -> x + kx * delta, S, kk)
-            acc = _gdn_sum8(_gdn_dot(S, qq))
-            (live && r == 1) && (out[t, hh, j] = acc)
+            # ends this chunk's reads of ks/qs/vs/sm before the prefetch overwrites them
+            sync_threads()
+            for i in 1:NV
+                e = tid + NT * (i - 1)
+                t = t0 + e % T + 1
+                jj = j0 + e ÷ T + 1
+                (t <= seq && jj <= dv) && (out[t, hh, jj] = os[(e % T) * COLS + e ÷ T + 1])
+            end
+            c + 1 < nch && _gdn_v2_store(ks, qs, vs, sm, pk, pq, pv, ps, tid, SA...)
+            # publishes the prefetched chunk to the whole block
+            sync_threads()
         end
         if live
-            for m in 1:R
-                state[hh, r + _GDN_LANES * (m - 1), j] = S[m]
+            for m in 1:M
+                state[hh, _gdn_srow(r, m), j] = S[m]
             end
         end
     end
@@ -1889,15 +2005,24 @@ function _gated_delta_rule!(
         error("gated_delta_rule: state $(size(state)) ≠ ($nv, $dk, $dv)")
     seq == 0 && return out
     scale = Float32(1) / sqrt(Float32(dk))
-    # dk/8 registers per lane; past 16 the tuple maps near Julia's 31-element
-    # limit, beyond which they allocate and the kernel no longer compiles
-    if _gdn_recur_reg_enabled() && dk % _GDN_LANES == 0 && dk <= 16 * _GDN_LANES
-        cols = 16
-        Gesso.Inference.@decode_sub :gdn_recur backend begin
-            @fastcuda threads = cols * _GDN_LANES blocks = (cld(dv, cols), nv) _cuda_gdn_recur_reg_kernel!(
-                out, q, k, v, g, beta, state, Int(nk), Int(group), v_head_tiled, l2norm, scale,
-                Float32(1e-6), Val(dk ÷ _GDN_LANES))
+    # dk/4 state values per lane in registers; float4 chunks split evenly over
+    # the four lanes and dot4 needs a multiple of 4, hence dk % 16. The cap is
+    # where the prototype was checked and timed (32 values per lane).
+    if _gdn_recur_reg_enabled() && dk % 16 == 0 && dk <= 128
+        cols = 32
+        invk = similar(out, Float32, (seq, Int(nk)))
+        invq = similar(out, Float32, (seq, Int(nk)))
+        Gesso.Inference.@decode_sub :gdn_qk backend begin
+            @fastcuda threads = (32, 8) blocks = (cld(seq, 32), Int(nk)) _cuda_gdn_norm_kernel!(
+                invk, invq, q, k, l2norm, scale, Float32(1e-6))
         end
+        Gesso.Inference.@decode_sub :gdn_recur backend begin
+            @fastcuda threads = 4 * cols blocks = (cld(dv, cols), nv) _cuda_gdn_recur_reg_kernel!(
+                out, q, k, v, g, beta, invk, invq, state, Int(nk), Int(group), v_head_tiled,
+                Val(cols), Val(8), Val(dk))
+        end
+        CUDA.unsafe_free!(invk)
+        CUDA.unsafe_free!(invq)
         return out
     end
     qn = similar(out, eltype(out), (seq, nv, dk))
