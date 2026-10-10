@@ -50,6 +50,8 @@ import Gesso.Inference:
     _merge_heads!,
     _repeat_heads!,
     _add_storage!,
+    _add_rmsnorm!,
+    _kv_append_storage!,
     _scale_storage!,
     _zero_tail_storage!,
     _write_hidden_row_storage!,

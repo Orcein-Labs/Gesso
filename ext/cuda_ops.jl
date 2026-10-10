@@ -192,6 +192,65 @@ function _cuda_rmsnorm_row_kernel!(dst, xs, scales, eps, d::Int)
     return
 end
 
+# The row kernel above with the residual add folded into its first pass.
+# Each thread stores `h + src` and reads back only the columns it wrote, so
+# the sum and the norm are the same bits as the add followed by the norm.
+function _cuda_add_rmsnorm_row_kernel!(dst, hs, src, scales, eps, d::Int)
+    tid = threadIdx().x
+    part = CUDA.@cuStaticSharedMem(Float32, 256)
+    acc = 0.0f0
+    j = tid
+    while j <= d
+        x = hs[1, j] + src[j]
+        hs[1, j] = x
+        acc += abs2(x)
+        j += blockDim().x
+    end
+    part[tid] = acc
+    CUDA.sync_threads()
+    stride = 128
+    while stride > 0
+        if tid <= stride
+            part[tid] += part[tid + stride]
+        end
+        CUDA.sync_threads()
+        stride >>= 1
+    end
+    rms = sqrt(Float64(part[1]) / d + eps)
+    j = tid
+    while j <= d
+        dst[1, j] = (hs[1, j] / rms) * scales[j]
+        j += blockDim().x
+    end
+    return
+end
+
+function _add_rmsnorm!(
+    be::CUDABackend,
+    dst::Activation,
+    h::Activation,
+    src::CuArray,
+    scale::FrozenParameter,
+    wl::DecodeWorkload;
+    eps::Real = 1e-6,
+)
+    hs = h.storage
+    ds = dst.storage
+    if hs isa CuArray && ds isa CuArray && ndims(hs) == 2 && size(hs, 1) == 1 && length(src) == length(hs)
+        ss = _cuda_materialize_small(scale.storage)
+        d = size(hs, 2)
+        native_eps = eltype(hs)(eps)
+        isfinite(native_eps) && native_eps > 0 || throw(gesso_error(ERR_INVALID_PLAN,
+            "rmsnorm!: eps must be representable, finite and positive in storage dtype"))
+        length(ss) == d ||
+            throw(gesso_error(ERR_INVALID_PLAN, "rmsnorm!: scale length $(length(ss)) ≠ feature dim $d"; op = :rmsnorm!))
+        @fastcuda threads=256 blocks=1 _cuda_add_rmsnorm_row_kernel!(ds, hs, src, ss, eps, d)
+        return dst
+    end
+    _add_storage!(hs, src)
+    return rmsnorm!(be, dst, h, scale, wl; eps)
+end
+
 # ONE BLOCK PER ROW, one thread per feature. `sum(abs2, xs; dims=ndims(xs))`
 # reduces the FEATURE axis, so `rms` is (rows, 1) and is read as `rms[r, 1]`;
 # the scale is reshaped to trailing 1s so it broadcasts along the LAST axis,
@@ -628,6 +687,24 @@ end
 function _copy_row_storage!(dst::CuArray, src::AbstractArray, i::Int)
     @fastcuda threads = (1,) blocks = (size(dst, 2), size(dst, 3)) _cuda_copy_row_kernel!(dst, src, i)
     return dst
+end
+
+# decode's K and V row append at 1-based cache row `row`: one block per KV
+# head, threads stride the head's features
+function _cuda_kv_append_kernel!(kc, vc, kh, vh, row::Int)
+    h = blockIdx().x
+    f = threadIdx().x
+    while f <= size(kc, 3)
+        kc[row, h, f] = kh[1, h, f]
+        vc[row, h, f] = vh[1, h, f]
+        f += blockDim().x
+    end
+    return
+end
+
+function _kv_append_storage!(kc::CuArray, vc::CuArray, kh::CuArray, vh::CuArray, row::Int)
+    @fastcuda threads = (min(256, size(kc, 3)),) blocks = (size(kc, 2),) _cuda_kv_append_kernel!(kc, vc, kh, vh, row)
+    return nothing
 end
 
 # `take` token-rows from a page's origin into dest at 1-based row `r1`

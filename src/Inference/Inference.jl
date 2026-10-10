@@ -974,6 +974,22 @@ _add_storage!(dst_storage::AbstractArray, src_storage::AbstractArray) =
 
 _scale_storage!(dst_storage::AbstractArray, s) = (@views dst_storage ./= s)
 
+# A residual add whose sum feeds straight into the next norm. A device
+# backend can do the add in the norm's first pass and drop a launch; this
+# body is the add followed by the norm.
+function _add_rmsnorm!(backend, dst, h, src_storage, scale, wl; eps)
+    _add_storage!(h.storage, src_storage)
+    return rmsnorm!(backend, dst, h, scale, wl; eps)
+end
+
+# Decode appends one K row and one V row per attention layer. Both are in
+# one seam so a device backend can write them with a single launch.
+function _kv_append_storage!(kc::AbstractArray, vc::AbstractArray, kh::AbstractArray, vh::AbstractArray, row::Int)
+    @views kc[row, :, :] .= kh[1, :, :]
+    @views vc[row, :, :] .= vh[1, :, :]
+    return nothing
+end
+
 # zero a TAIL of a buffer in place. `fill!` on a view is a single kernel and
 # allocates 144 B where the `.=` broadcast allocated 2,112 B (measured on the
 # RTX 5060, 2026-10-04), with identical results.
@@ -1387,7 +1403,7 @@ function _decode_step!(
                 gdn_scratch=gdn_scratch,
                 cpu_scratch=cpu_scratch,
             )
-            hp.storage .+= sub.storage
+            # the residual add of `sub` happens in the FFN norm below
             _T_GDN_NS[] += time_ns() - t0
         else
         t0 = time_ns()
@@ -1425,8 +1441,7 @@ function _decode_step!(
             end
             @decode_sub :attn_kv_append cpu begin
                 # KV APPEND: exactly one row per layer per step, at n_kv_heads
-                @views kc[bi].storage[pos0, :, :] .= kh.storage[1, :, :]
-                @views vc[bi].storage[pos0, :, :] .= vh.storage[1, :, :]
+                _kv_append_storage!(kc[bi].storage, vc[bi].storage, kh.storage, vh.storage, pos0)
             end
             if cpu_scratch === nothing
                 # the query is the LAST position: it attends to the whole cache.
@@ -1475,21 +1490,21 @@ function _decode_step!(
                     _sigmoid_mul!(cpu, merged.storage, merged.storage, gate_attn.storage)
                 end
                 _dec_matmul_group!(cpu, (sub,), xq_qdim, merged, (bt.wo,), wl)
-                hp.storage .+= sub.storage              # residual
             end
         end
         _T_ATTN_NS[] += time_ns() - t0
         end
         t1 = time_ns()
-        @decode_stage :norm cpu rmsnorm!(cpu, normed2, hp, bt.ffn_rms, wl; eps)
+        # both mixers leave their output in `sub`: residual add, then norm
+        @decode_stage :norm cpu _add_rmsnorm!(cpu, normed2, hp, sub.storage, bt.ffn_rms, wl; eps)
         _ffn_block!(cpu, down, gate, up, act, normed2, bt, wl, zeros_like;
             xq_in=xq_dim, xq_ff=xq_ff)
-        hp.storage .+= down.storage             # residual
+        _add_storage!(hp.storage, down.storage)  # residual
         _T_FFN_NS[] += time_ns() - t1
     end
     # write the new hidden state into its row slot — storage CONTENT, not a
     # field reassignment (Activation is immutable, §CIX)
-    @views h.storage[pos0, :] .= hp.storage[1, :]
+    _write_hidden_row_storage!(h.storage, hp.storage, pos0)
     return h
 end
 
