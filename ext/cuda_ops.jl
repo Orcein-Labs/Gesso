@@ -1753,6 +1753,9 @@ end
 
 Gesso.Inference._gdn_fused_decode(::CUDABackend) = true
 
+# Stream-ordered: kernels already queued on this task's stream still see it.
+Gesso.Inference._release_storage!(x::CuArray) = (CUDA.unsafe_free!(x); nothing)
+
 # conv1d (kernel k) on one token + SiLU, then the shift of the conv state.
 # Thread c owns channel c alone, so its state column is read before it is
 # overwritten and no other thread touches it.
@@ -2265,6 +2268,9 @@ mutable struct _MoeHostXfer
     order::Vector{Int}
     experts::Vector{Int}
     wbuf::Vector{Float32}
+    E::Matrix{Int}
+    W::Matrix{Float32}
+    live::Vector{Bool}
 end
 
 const _MOE_HOST_XFER = Ref{Union{Nothing,_MoeHostXfer}}(nothing)
@@ -2284,7 +2290,9 @@ function _moe_host_xfer(seq::Int, n_exp::Int, h::Int, n_used::Int)
         CUDA.pin(yy)
         b = _MoeHostXfer(cap, n_exp, h, lg, xx, yy, Vector{Float32}(undef, h),
             Vector{Float32}(undef, h), Vector{Int}(undef, n_exp),
-            Vector{Int}(undef, n_used), Vector{Float32}(undef, n_used))
+            Vector{Int}(undef, n_used), Vector{Float32}(undef, n_used),
+            Matrix{Int}(undef, n_used, cap), Matrix{Float32}(undef, n_used, cap),
+            Vector{Bool}(undef, cap))
         _MOE_HOST_XFER[] = b
     end
     return b
@@ -2362,30 +2370,34 @@ function _moe_topk_host!(backend::CUDABackend, y, x, router, gate, up, down, n_u
     L = unsafe_wrap(Array, pointer(b.logits), (seq, n_exp))
     X = unsafe_wrap(Array, pointer(b.x), (seq, h))
     Y = unsafe_wrap(Array, pointer(b.y), (seq, h))
-    for t in 1:seq
-        wsum = Gesso.Inference.@decode_stage :moe_router nothing _moe_route_row!(
-            b.order, b.experts, b.wbuf, view(L, t, :), n_exp, n_used,
-        )
-        if !(wsum > 0)
+    if seq > 1 && Gesso.Inference._moe_host_batchable(gate, up, down, h, gate.ne1)
+        _moe_host_prefill_layer!(b, L, X, Y, hot, gate, up, down, seq, n_exp, n_used)
+    else
+        for t in 1:seq
+            wsum = Gesso.Inference.@decode_stage :moe_router nothing _moe_route_row!(
+                b.order, b.experts, b.wbuf, view(L, t, :), n_exp, n_used,
+            )
+            if !(wsum > 0)
+                @inbounds for i in 1:h
+                    Y[t, i] = 0.0f0
+                end
+                continue
+            end
             @inbounds for i in 1:h
-                Y[t, i] = 0.0f0
+                b.xrow[i] = X[t, i]
             end
-            continue
-        end
-        @inbounds for i in 1:h
-            b.xrow[i] = X[t, i]
-        end
-        if hot !== nothing
-            if seq == 1 && y isa DenseCuArray && _hot_alloc!(hot, gate, up, n_used)
-                return _moe_hot_token!(backend, hot, y, xd, b, gate, up, down, n_used, s)
+            if hot !== nothing
+                if seq == 1 && y isa DenseCuArray && _hot_alloc!(hot, gate, up, n_used)
+                    return _moe_hot_token!(backend, hot, y, xd, b, gate, up, down, n_used, s)
+                end
+                _hot_observe!(hot, b.experts, n_used)
             end
-            _hot_observe!(hot, b.experts, n_used)
-        end
-        Gesso.Inference.@decode_stage :moe_host nothing Gesso.Inference._moe_host_experts_auto!(
-            b.yrow, b.xrow, b.experts, b.wbuf, n_used, gate, up, down,
-        )
-        @inbounds for i in 1:h
-            Y[t, i] = b.yrow[i]
+            Gesso.Inference.@decode_stage :moe_host nothing Gesso.Inference._moe_host_experts_auto!(
+                b.yrow, b.xrow, b.experts, b.wbuf, n_used, gate, up, down,
+            )
+            @inbounds for i in 1:h
+                Y[t, i] = b.yrow[i]
+            end
         end
     end
     Gesso.Runtime.pool_hold!(_MOE_HOST_HOLD_NS)
@@ -2398,6 +2410,25 @@ function _moe_topk_host!(backend::CUDABackend, y, x, router, gate, up, down, n_u
         end
     end
     return y
+end
+
+# A prompt's tokens through one host layer: route every token, then run the
+# experts grouped by expert so each weight row leaves DRAM once per layer
+# instead of once per token that picked it. Bit-identical to the token loop.
+function _moe_host_prefill_layer!(b::_MoeHostXfer, L, X, Y, hot, gate, up, down,
+    seq::Int, n_exp::Int, n_used::Int)
+    for t in 1:seq
+        ex = view(b.E, :, t)
+        wsum = Gesso.Inference.@decode_stage :moe_router nothing _moe_route_row!(
+            b.order, ex, view(b.W, :, t), view(L, t, :), n_exp, n_used,
+        )
+        b.live[t] = wsum > 0
+        b.live[t] && hot !== nothing && _hot_observe!(hot, ex, n_used)
+    end
+    Gesso.Inference.@decode_stage :moe_host nothing Gesso.Inference._moe_host_prefill!(
+        Y, X, b.E, b.W, b.live, n_exp, gate, up, down,
+    )
+    return nothing
 end
 
 # Device routing for decode on device-resident banks. Routing on the host meant

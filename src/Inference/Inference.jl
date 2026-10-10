@@ -849,6 +849,33 @@ function _zeros_like_factory(backend, tensors)
     return _fallback_zeros_factory(backend)
 end
 
+# Returns `x`'s memory now instead of at its finalizer. Host arrays leave it to
+# the GC; the device extension frees.
+_release_storage!(x) = nothing
+
+# A zeros factory that remembers what it handed out so `_arena_release!` can
+# free all of it at once. Prefill and generation state go through one: the
+# host side of a generation allocates too little to trigger a Julia GC, so
+# device garbage left to finalizers piles up until an allocation fails, and
+# CUDA's retry then runs a full collection (hundreds of ms) mid-decode.
+struct _ZerosArena{F}
+    zeros_like::F
+    held::Vector{Any}
+end
+_ZerosArena(zeros_like) = _ZerosArena(zeros_like, Any[])
+
+function (a::_ZerosArena)(dims::Tuple{Vararg{Int}})
+    x = a.zeros_like(dims)
+    push!(a.held, x)
+    return x
+end
+
+function _arena_release!(a::_ZerosArena)
+    foreach(_release_storage!, a.held)
+    empty!(a.held)
+    return nothing
+end
+
 _fallback_zeros_factory(::CPUBackend) = (dims::Tuple{Vararg{Int}}) -> zeros(Float32, dims)
 function _fallback_zeros_factory(backend)
     error(
@@ -1066,7 +1093,9 @@ function reference_generate(
     cap = max(max_new_tokens, 0)
     vocab = size(tensors.embedding.storage, 1)
     on_cpu = backend_name(cpu) === :cpu
-    zeros_like = _zeros_like_factory(cpu, tensors)
+    zeros_like = _ZerosArena(_zeros_like_factory(cpu, tensors))
+    # a prefill block's temporaries, dead once the block returns
+    block_tmp = _ZerosArena(zeros_like.zeros_like)
 
     # per-layer KV caches: preallocated (P + cap) rows, filled progressively
     # (the cache is runtime state, not a weight — no fixture-walk entries)
@@ -1145,7 +1174,7 @@ function reference_generate(
                 tensors.spec,
                 wp,
                 eps,
-                zeros_like;
+                block_tmp;
                 conv_state=gdn_conv[bi],
                 rec_state=gdn_rec[bi],
             )
@@ -1194,6 +1223,7 @@ function reference_generate(
             P,
             wp,
         )
+        kx === kh || (_release_storage!(kx.storage); _release_storage!(vx.storage))
 
         _merge_heads!(merged, attn, n_heads, d_head)
         if haskey(bt, :wattn_gate)
@@ -1204,8 +1234,9 @@ function reference_generate(
         hp.storage .+= sub.storage
         end
         rmsnorm!(cpu, normed2, hp, bt.ffn_rms, wp; eps)
-        _ffn_block!(cpu, down, gate, up, act, normed2, bt, wp, zeros_like)
+        _ffn_block!(cpu, down, gate, up, act, normed2, bt, wp, block_tmp)
         hp.storage .+= down.storage
+        _arena_release!(block_tmp)
     end
 
     ids = collect(prompt)
@@ -1272,6 +1303,7 @@ function reference_generate(
     end
 
     info isa Ref{Any} && (info[] = (kv_len=P + steps, steps=steps))
+    _arena_release!(zeros_like)
     return ids
 end
 

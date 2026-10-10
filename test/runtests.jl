@@ -103,6 +103,9 @@ using Gesso: reference_prefill, reference_generate
     # vs the per-expert path; red control on permuted routing weights
     include("test_moe_host_batched.jl")
 
+    # Token-batched host MoE prefill vs the token loop it replaces, bit for bit
+    include("test_moe_host_prefill.jl")
+
     # BREADTH-0 Pass C: the tokenizer PROTOCOL — GPT-2 BPE is one
     # implementation, metaspace byte-level BPE is a materially different
     # second one, and both answer the same protocol.
