@@ -1794,6 +1794,80 @@ function _cuda_gdn_recurrent_kernel!(out, qn, kn, v, g, beta, state)
     return
 end
 
+# Register-resident variant: eight lanes per value column, each holding dk/8
+# rows of that column's state for the whole prompt, so a token costs a few
+# FMAs and two 8-lane shuffle sums with no block barrier. The shared-memory
+# kernel above stalls twice per token on sync_threads and an unprefetched k/q
+# load, and its separate q/k prep runs one thread per (token, head): together
+# 0.6 s of a 1024-token prefill on Ornith-35B. Here each lane normalizes its
+# own rows of q and k (the norm is one more shuffle sum) and loads token t+1
+# while computing token t. The sums run in a different order from the CPU
+# reference and the kernel above, so results agree to rounding, not bitwise.
+# GESSO_GDN_RECUR_REG=0 restores the shared-memory kernel.
+_gdn_recur_reg_enabled() = get(ENV, "GESSO_GDN_RECUR_REG", "1") == "1"
+
+const _GDN_LANES = 8
+
+@inline function _gdn_sum8(x)
+    x += CUDA.shfl_xor_sync(0xffffffff, x, 4)
+    x += CUDA.shfl_xor_sync(0xffffffff, x, 2)
+    x += CUDA.shfl_xor_sync(0xffffffff, x, 1)
+    return x
+end
+
+@inline _gdn_dot(a, b) = reduce(+, map(*, a, b))
+
+@inline function _gdn_load_token(q, k, v, g, beta, t, h, hh, j, r, ::Val{R}) where {R}
+    @inbounds begin
+        kk = ntuple(m -> Float32(k[t, h, r + _GDN_LANES * (m - 1)]), Val(R))
+        qq = ntuple(m -> Float32(q[t, h, r + _GDN_LANES * (m - 1)]), Val(R))
+        return kk, qq, Float32(v[t, hh, j]), Float32(g[t, hh]), Float32(beta[t, hh])
+    end
+end
+
+function _cuda_gdn_recur_reg_kernel!(out, q, k, v, g, beta, state, nk::Int, group::Int,
+    tiled::Bool, do_l2::Bool, scale::Float32, eps::Float32, ::Val{R}) where {R}
+    seq = size(out, 1)
+    dv = size(state, 3)
+    lane = Int(threadIdx().x) - 1
+    r = (lane % _GDN_LANES) + 1
+    hh = Int(blockIdx().y)
+    j = (Int(blockIdx().x) - 1) * (Int(blockDim().x) ÷ _GDN_LANES) + lane ÷ _GDN_LANES + 1
+    live = j <= dv
+    # a dead column still joins every shuffle, so it reads column 1 and never writes
+    jr = live ? j : 1
+    h = tiled ? ((hh - 1) % nk) + 1 : ((hh - 1) ÷ group) + 1
+    @inbounds begin
+        S = ntuple(m -> Float32(state[hh, r + _GDN_LANES * (m - 1), jr]), Val(R))
+        nxt = _gdn_load_token(q, k, v, g, beta, 1, h, hh, jr, r, Val(R))
+        for t in 1:seq
+            kk, qq, vt, gt, bt = nxt
+            t < seq && (nxt = _gdn_load_token(q, k, v, g, beta, t + 1, h, hh, jr, r, Val(R)))
+            if do_l2
+                invk = 1.0f0 / sqrt(_gdn_sum8(_gdn_dot(kk, kk)) + eps)
+                invq = 1.0f0 / sqrt(_gdn_sum8(_gdn_dot(qq, qq)) + eps)
+                kk = map(x -> x * invk, kk)
+                sq = invq * scale
+                qq = map(x -> x * sq, qq)
+            else
+                qq = map(x -> x * scale, qq)
+            end
+            decay = exp(gt)
+            S = map(x -> x * decay, S)
+            delta = (vt - _gdn_sum8(_gdn_dot(S, kk))) * bt
+            S = map((x, kx) -> x + kx * delta, S, kk)
+            acc = _gdn_sum8(_gdn_dot(S, qq))
+            (live && r == 1) && (out[t, hh, j] = acc)
+        end
+        if live
+            for m in 1:R
+                state[hh, r + _GDN_LANES * (m - 1), j] = S[m]
+            end
+        end
+    end
+    return
+end
+
 function _gated_delta_rule!(
     backend::CUDABackend,
     out,
@@ -1814,9 +1888,20 @@ function _gated_delta_rule!(
     size(state) == (nv, dk, dv) ||
         error("gated_delta_rule: state $(size(state)) ≠ ($nv, $dk, $dv)")
     seq == 0 && return out
+    scale = Float32(1) / sqrt(Float32(dk))
+    # dk/8 registers per lane; past 16 the tuple maps near Julia's 31-element
+    # limit, beyond which they allocate and the kernel no longer compiles
+    if _gdn_recur_reg_enabled() && dk % _GDN_LANES == 0 && dk <= 16 * _GDN_LANES
+        cols = 16
+        Gesso.Inference.@decode_sub :gdn_recur backend begin
+            @fastcuda threads = cols * _GDN_LANES blocks = (cld(dv, cols), nv) _cuda_gdn_recur_reg_kernel!(
+                out, q, k, v, g, beta, state, Int(nk), Int(group), v_head_tiled, l2norm, scale,
+                Float32(1e-6), Val(dk ÷ _GDN_LANES))
+        end
+        return out
+    end
     qn = similar(out, eltype(out), (seq, nv, dk))
     kn = similar(out, eltype(out), (seq, nv, dk))
-    scale = Float32(1) / sqrt(Float32(dk))
     Gesso.Inference.@decode_sub :gdn_qk backend begin
         @fastcuda threads = 1 blocks = (seq, nv) _cuda_gdn_qk_prep_kernel!(
             qn, kn, q, k, Int(nk), Int(group), v_head_tiled, l2norm, scale, Float32(1e-6))

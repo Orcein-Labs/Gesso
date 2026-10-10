@@ -263,6 +263,37 @@ else
         end
     end
 
+    # dv = 24 leaves half of the register kernel's second 16-column block dead,
+    # and a non-zero carried state catches a kernel that ignores it
+    @testset "cuda gated_delta_rule register and shared-memory kernels match CPU" begin
+        rng = deterministic_rng(12)
+        seq, nk, nv, dk, dv = 37, 4, 8, 16, 24
+        q = randn(rng, seq, nk, dk)
+        k = randn(rng, seq, nk, dk)
+        v = randn(rng, seq, nv, dv)
+        g = -rand(rng, seq, nv)
+        beta = rand(rng, seq, nv)
+        st0 = 0.1 .* randn(rng, nv, dk, dv)
+        for reg in ("1", "0"), tiled in (false, true), l2 in (true, false)
+            out_c = zeros(seq, nv, dv)
+            st_c = copy(st0)
+            Inf_._gated_delta_rule!(
+                cpu, out_c, q, k, v, g, beta, st_c; l2norm=l2, v_head_tiled=tiled,
+            )
+            out_g = CUDA.zeros(Float32, seq, nv, dv)
+            st_g = CuArray{Float32}(st0)
+            withenv("GESSO_GDN_RECUR_REG" => reg) do
+                Inf_._gated_delta_rule!(
+                    cuda, out_g, CuArray{Float32}(q), CuArray{Float32}(k), CuArray{Float32}(v),
+                    CuArray{Float32}(g), CuArray{Float32}(beta), st_g;
+                    l2norm=l2, v_head_tiled=tiled,
+                )
+            end
+            @test approx_eq(Array(out_g), Float32.(out_c); atol=1e-3)
+            @test approx_eq(Array(st_g), Float32.(st_c); atol=2e-3)
+        end
+    end
+
     @testset "Qwen3.5-0.8B CUDA Hello ID-gate" begin
         dir = get(ENV, "GESSO_QWEN35_08B_DIR", "")
         cfg = joinpath(dir, "config.json")
