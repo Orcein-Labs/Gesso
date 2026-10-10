@@ -62,6 +62,7 @@ import Gesso.Inference:
     _sigmoid_mul!,
     _silu_mul!,
     _gdn_gate_params!,
+    _gdn_gnorm_merge!,
     _moe_topk_swiglu!,
     _fetch_expert!,
     _shared_gate_add!,

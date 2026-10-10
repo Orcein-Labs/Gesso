@@ -1605,6 +1605,41 @@ function _gdn_gate_params!(::CUDABackend, g, beta, a, b, A_log, dt_bias)
     return g, beta
 end
 
+# One thread per token and a block column per head: consecutive threads read
+# consecutive tokens, so every core/z/merged access is coalesced, and a head's
+# dv values stay in one thread so no block reduction is needed. Replaces about
+# 5 launches per head per layer (57 ms of a 35B P256 prefill).
+# GESSO_GDN_PREFILL_GNORM=0 runs the per-head loop again.
+function _cuda_gdn_gnorm_prefill_kernel!(merged, core, z, norm_w, dv::Int, eps::Float32)
+    t = Int((blockIdx().x - 1) * blockDim().x + threadIdx().x)
+    hh = Int(blockIdx().y)
+    t <= size(core, 1) || return
+    ss = 0.0f0
+    for j in 1:dv
+        c = core[t, hh, j]
+        ss += c * c
+    end
+    inv = 1.0f0 / sqrt(ss / dv + eps)
+    base = (hh - 1) * dv
+    for j in 1:dv
+        zv = z[t, base + j]
+        merged[t, base + j] = (core[t, hh, j] * inv) * norm_w[j] * (zv / (1.0f0 + exp(-zv)))
+    end
+    return
+end
+
+function _gdn_gnorm_merge!(::CUDABackend, merged::CuArray{Float32, 2}, core::CuArray{Float32, 3},
+                           z::CuArray{Float32, 2}, scale, eps)
+    get(ENV, "GESSO_GDN_PREFILL_GNORM", "1") == "1" || return false
+    seq, nv, dv = size(core)
+    seq == 0 && return true
+    norm_w = _cuda_materialize_small(scale.storage)
+    tx = min(128, seq)
+    @fastcuda threads = tx blocks = (cld(seq, tx), nv) _cuda_gdn_gnorm_prefill_kernel!(
+        merged, core, z, norm_w, dv, Float32(eps))
+    return true
+end
+
 function _cuda_conv1d_silu_kernel!(dst, x, weight, conv_state, k::Int)
     t = (blockIdx().x - 1) * blockDim().x + threadIdx().x
     c = (blockIdx().y - 1) * blockDim().y + threadIdx().y

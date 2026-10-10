@@ -181,6 +181,27 @@ else
         @test approx_eq(Array(beta_g), Float32.(beta_c); atol=1e-3)
     end
 
+    @testset "cuda prefill gated norm writes merged heads" begin
+        rng = deterministic_rng(11)
+        seq, nv, dv = 5, 3, 8
+        core = randn(rng, Float32, seq, nv, dv)
+        z = randn(rng, Float32, seq, nv * dv)
+        w = randn(rng, Float32, dv)
+        eps = 1f-6
+        ref = zeros(Float32, seq, nv * dv)
+        for t in 1:seq, hh in 1:nv
+            inv = 1 / sqrt(sum(abs2, core[t, hh, :]) / dv + eps)
+            for j in 1:dv
+                zv = z[t, (hh - 1) * dv + j]
+                ref[t, (hh - 1) * dv + j] = core[t, hh, j] * inv * w[j] * zv / (1 + exp(-zv))
+            end
+        end
+        @test !Inf_._gdn_gnorm_merge!(cpu, zeros(Float32, seq, nv * dv), core, z, (; storage=w), eps)
+        merged = CUDA.zeros(Float32, seq, nv * dv)
+        @test Inf_._gdn_gnorm_merge!(cuda, merged, CuArray(core), CuArray(z), (; storage=CuArray(w)), eps)
+        @test approx_eq(Array(merged), ref; atol=1e-5)
+    end
+
     @testset "cuda causal_conv1d_silu matches CPU and keeps decode state" begin
         rng = deterministic_rng(7)
         seq, channels, k = 4, 6, 4

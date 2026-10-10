@@ -368,6 +368,11 @@ function _silu_mul!(backend, dst, src, gate)
     return dst
 end
 
+# Fused gated RMSNorm * silu(z) of every value head, written straight into the
+# merged (seq, value_dim) layout. Returns false when the backend has none and
+# the per-head loop must run instead.
+_gdn_gnorm_merge!(backend, merged, core, z, scale, eps) = false
+
 function _gdn_gate_params!(backend, g, beta, a, b, A_log, dt_bias)
     seq, nv = size(beta)
     @inbounds for t in 1:seq, hh in 1:nv
@@ -508,23 +513,25 @@ function _hybrid_linear_block!(
         v_head_tiled=mx.v_head_tiled,
     )
 
-    z_h = zeros_like((seq, nv, dv))
-    _split_heads!(z_h, z.storage, nv, dv)
-    nrm = zeros_like((seq, dv))
-    xh = zeros_like((seq, dv))
-    scale = bt.wgdn_norm
-    @decode_sub :gdn_gnorm cpu for hh in 1:nv
-        xh .= view(core, :, hh, :)
-        xh_act = Activation(; shape=(seq, dv), storage=xh)
-        nrm_act = Activation(; shape=(seq, dv), storage=nrm)
-        rmsnorm!(cpu, nrm_act, xh_act, scale, wl; eps)
-        xh .= view(z_h, :, hh, :)
-        _silu_mul!(cpu, nrm, nrm, xh)
-        @views core[:, hh, :] .= nrm
+    merged = zeros_like((seq, value_dim))
+    @decode_sub :gdn_gnorm cpu if !_gdn_gnorm_merge!(cpu, merged, core, z.storage, bt.wgdn_norm, eps)
+        z_h = zeros_like((seq, nv, dv))
+        _split_heads!(z_h, z.storage, nv, dv)
+        nrm = zeros_like((seq, dv))
+        xh = zeros_like((seq, dv))
+        scale = bt.wgdn_norm
+        for hh in 1:nv
+            xh .= view(core, :, hh, :)
+            xh_act = Activation(; shape=(seq, dv), storage=xh)
+            nrm_act = Activation(; shape=(seq, dv), storage=nrm)
+            rmsnorm!(cpu, nrm_act, xh_act, scale, wl; eps)
+            xh .= view(z_h, :, hh, :)
+            _silu_mul!(cpu, nrm, nrm, xh)
+            @views core[:, hh, :] .= nrm
+        end
+        _merge_heads!(merged, core, nv, dv)
     end
     @decode_sub :gdn_outproj cpu begin
-        merged = zeros_like((seq, value_dim))
-        _merge_heads!(merged, core, nv, dv)
         merged_act = Activation(; shape=(seq, value_dim), storage=merged)
         matmul!(cpu, sub, merged_act, bt.wgdn_o, wl)
     end
