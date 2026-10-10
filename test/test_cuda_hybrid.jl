@@ -263,18 +263,23 @@ else
         end
     end
 
-    # dv = 24 leaves half of the register kernel's second 16-column block dead,
-    # and a non-zero carried state catches a kernel that ignores it
+    # dv = 24 and 40 leave part of the register kernel's 32-column block dead,
+    # seq not a multiple of 8 exercises the partial last chunk, dk = 128 is the
+    # production head size at 32 state registers per lane, and a non-zero
+    # carried state catches a kernel that ignores it. Without l2norm, unit-scale
+    # keys have |k|^2 ~ dk and the delta rule diverges to ~1e6, where Float32
+    # rounding alone fails the tolerance, so those keys are shrunk to |k| ~ 1.
     @testset "cuda gated_delta_rule register and shared-memory kernels match CPU" begin
         rng = deterministic_rng(12)
-        seq, nk, nv, dk, dv = 37, 4, 8, 16, 24
-        q = randn(rng, seq, nk, dk)
-        k = randn(rng, seq, nk, dk)
-        v = randn(rng, seq, nv, dv)
-        g = -rand(rng, seq, nv)
-        beta = rand(rng, seq, nv)
-        st0 = 0.1 .* randn(rng, nv, dk, dv)
-        for reg in ("1", "0"), tiled in (false, true), l2 in (true, false)
+        for (seq, nk, nv, dk, dv) in ((37, 4, 8, 16, 24), (19, 2, 4, 128, 40)),
+                reg in ("1", "0"), tiled in (false, true), l2 in (true, false)
+            sc = l2 ? 1.0 : 1 / sqrt(dk)
+            q = sc .* randn(rng, seq, nk, dk)
+            k = sc .* randn(rng, seq, nk, dk)
+            v = randn(rng, seq, nv, dv)
+            g = -rand(rng, seq, nv)
+            beta = rand(rng, seq, nv)
+            st0 = 0.1 .* randn(rng, nv, dk, dv)
             out_c = zeros(seq, nv, dv)
             st_c = copy(st0)
             Inf_._gated_delta_rule!(
