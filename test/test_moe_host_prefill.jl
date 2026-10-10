@@ -101,5 +101,21 @@ end
         println("moe prefill ", label, " red_control_permuted_weights_rel_rms=", ctrl)
         @test ctrl > 1.0e-2
         @test Ybad[[1:3; 5:seq], :] == Y[[1:3; 5:seq], :]
+
+        # A hot layer splits the experts between the host and the GPU. Each
+        # side's partial sum skips the other's experts, so the two partials add
+        # to the full result up to the order of the additions.
+        cpu = [isodd(e) for e in 1:nexp]
+        Ya = fill(NaN32, seq, h)
+        Yb = fill(NaN32, seq, h)
+        _MKE._moe_host_prefill!(Ya, X, E, W, live, nexp, gate_s, up_s, down_s; cpu=cpu)
+        _MKE._moe_host_prefill!(Yb, X, E, W, live, nexp, gate_s, up_s, down_s; cpu=[!c for c in cpu])
+        split = _mhb_relrms(Ya .+ Yb, Y)
+        println("moe prefill ", label, " cpu_mask_split_rel_rms=", split)
+        @test split < 1.0e-5
+        @test _mhb_relrms(Ya, Y) > 1.0e-2
+        Ynone = fill(NaN32, seq, h)
+        _MKE._moe_host_prefill!(Ynone, X, E, W, live, nexp, gate_s, up_s, down_s; cpu=fill(false, nexp))
+        @test all(iszero, Ynone)
     end
 end

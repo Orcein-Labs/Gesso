@@ -223,11 +223,13 @@ end
 
 # --- expert MMVQ kernel: one warp per output row, four rows per block --------
 # grid = (rows/4, n_used). Launch i reads expert slab meta[i] and writes column
-# meta[coloff + i] of y; the activation column is shared when x has one column.
+# meta[coloff + i] of y. It reads the same column of x, or column
+# meta[xcoloff + i] when xcoloff > 0, which lets a prompt's (token, expert)
+# pairs each read their token's activation. When x has one column it is shared.
 
 function _cuda_eqgemv_kernel!(
-    y, Q, qx, dx, meta, coloff::Int, xshared::Bool, nrows::Int, nbk::Int, bsz::Int, row_bytes::Int,
-    alpha::Float32, beta::Float32, ::Val{K}, grid, kv, ksigns, kmask,
+    y, Q, qx, dx, meta, coloff::Int, xcoloff::Int, xshared::Bool, nrows::Int, nbk::Int, bsz::Int,
+    row_bytes::Int, alpha::Float32, beta::Float32, ::Val{K}, grid, kv, ksigns, kmask,
 ) where {K}
     lane = Int((threadIdx().x - 1) % 32)
     row = Int((blockIdx().x - 1) * 4 + (threadIdx().x - 1) ÷ 32 + 1)
@@ -235,7 +237,8 @@ function _cuda_eqgemv_kernel!(
     row > nrows && return
     @inbounds begin
         k = Int(meta[coloff + i])
-        gbase = (xshared ? 0 : (k - 1) * nbk)
+        xk = xcoloff > 0 ? Int(meta[xcoloff + i]) : k
+        gbase = (xshared ? 0 : (xk - 1) * nbk)
         rowoff = Int(meta[i]) + (row - 1) * row_bytes
         acc = 0.0f0
         b = lane
@@ -311,9 +314,11 @@ function _cuda_launch_qgemv!(
     alpha::Float32,
     beta::Float32;
     quantize::Bool=true,
+    xcoloff::Int=0,
 )
     I = Gesso.Inference
     if ggml_type == I.GGML_TYPE_F32
+        xcoloff == 0 || error("cuda qgemv: F32 experts take no activation-column table")
         nthreads = min(256, ne1)
         nblocks = cld(ne1, nthreads)
         @fastcuda threads = nthreads blocks = (nblocks, n_used) _cuda_qgemv_f32_kernel!(
@@ -332,7 +337,7 @@ function _cuda_launch_qgemv!(
     # quantize=false: the caller just quantized this same x into these buffers
     quantize && @fastcuda threads = 256 blocks = cld(total, 256) _cuda_q8_1_quant_cols_kernel!(qx, dx, x, nbk, total)
     # One launch per type so each `Val` is a compile-time constant.
-    args = (y, q, qx, dx, meta, coloff, ncols == 1, ne1, nbk, alpha, beta, n_used, tables)
+    args = (y, q, qx, dx, meta, coloff, xcoloff, ncols == 1, ne1, nbk, alpha, beta, n_used, tables)
     if ggml_type == I.GGML_TYPE_IQ2_XS
         _cuda_eqgemv_launch!(Val(:iq2_xs), 74, tables.iq2grid, args...)
     elseif ggml_type == I.GGML_TYPE_IQ3_XXS
@@ -343,10 +348,10 @@ function _cuda_launch_qgemv!(
     return y
 end
 
-@inline function _cuda_eqgemv_launch!(vk::Val, bsz, grid, y, q, qx, dx, meta, coloff, onecol,
-                                      ne1, nbk, alpha, beta, n_used, tables)
+@inline function _cuda_eqgemv_launch!(vk::Val, bsz, grid, y, q, qx, dx, meta, coloff, xcoloff,
+                                      onecol, ne1, nbk, alpha, beta, n_used, tables)
     @fastcuda threads = 128 blocks = (cld(ne1, 4), n_used) _cuda_eqgemv_kernel!(
-        y, q, qx, dx, meta, coloff, onecol, ne1, nbk, bsz, (nbk ÷ 8) * bsz, alpha, beta,
+        y, q, qx, dx, meta, coloff, xcoloff, onecol, ne1, nbk, bsz, (nbk ÷ 8) * bsz, alpha, beta,
         vk, grid, tables.kv4, tables.ksigns, tables.kmask,
     )
     return nothing

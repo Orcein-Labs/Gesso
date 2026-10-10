@@ -236,6 +236,48 @@ else
         end
     end
 
+    @testset "cuda qgemv activation-column table gathers each pair's token" begin
+        # Hot-layer prefill runs (token, expert) pairs in one launch, each pair
+        # reading its token's column of x. Activations quantize per column in
+        # 32-value blocks, so a pair must match a one-column launch bit for bit.
+        ext = Base.get_extension(Gesso, :GessoCUDAExt)
+        gguf = get(ENV, "GESSO_ORNITH35_GGUF", "")
+        if isfile(gguf)
+            rng = deterministic_rng(57)
+            hdr = Gesso.gguf_header(gguf)
+            einfo = only(t for t in hdr.tensors if t.name == "blk.0.ffn_gate_exps.weight")
+            live = Gesso.Inference._expert_slice(hdr, einfo)
+            nb = live.bytes_per_expert
+            q = CuArray{UInt8}(vcat((Vector{UInt8}(Inf_._quant_expert_bytes(live, e)) for e in 1:3)...))
+            ne0, ne1 = live.ne0, live.ne1
+            seq = 4
+            x = CuArray(randn(rng, Float32, ne0, seq))
+            experts = [2, 1, 3, 2, 1]
+            tokens = [3, 1, 2, 4, 3]
+            n = length(experts)
+            meta = CuArray(Int32[(experts .- 1) .* nb; 1:n; tokens])
+            y = CUDA.fill(NaN32, ne1, n)
+            ext._cuda_launch_qgemv!(y, x, q, live.ggml_type, meta, n, n, ne0, ne1, 1.0f0, 0.0f0; xcoloff=2n)
+            ref = similar(Array(y))
+            for i in 1:n
+                yi = CUDA.fill(NaN32, ne1, 1)
+                mi = CuArray(Int32[(experts[i] - 1) * nb, 1])
+                ext._cuda_launch_qgemv!(yi, x[:, tokens[i]:tokens[i]], q, live.ggml_type, mi, 1, 1, ne0, ne1,
+                    1.0f0, 0.0f0)
+                ref[:, i] .= vec(Array(yi))
+            end
+            @test Array(y) == ref
+            # red control: without the table, pair i reads column i
+            y0 = CUDA.fill(NaN32, ne1, n)
+            x5 = CuArray(hcat(Array(x), randn(rng, Float32, ne0)))
+            ext._cuda_launch_qgemv!(y0, x5, q, live.ggml_type, meta, n, n, ne0, ne1, 1.0f0, 0.0f0)
+            @test Array(y0)[:, 4] == ref[:, 4]
+            @test Array(y0)[:, 1] != ref[:, 1]
+        else
+            _skip("Ornith 35B GGUF not on disk — qgemv activation-column table skipped")
+        end
+    end
+
     @testset "cuda MoE GgufQuantSlice F32 pack matches dense" begin
         rng = deterministic_rng(21)
         seq, h, ff, n_exp, n_used = 2, 8, 4, 6, 2

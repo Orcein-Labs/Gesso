@@ -291,13 +291,17 @@ function _moe_prefill_scratch(h::Int, ff::Int, seq::Int, n_used::Int, n_exp::Int
     return s
 end
 
+# `cpu` empty means every expert; otherwise only experts with cpu[e] take pairs.
+@inline _moe_on_cpu(cpu::Vector{Bool}, e::Int) = isempty(cpu) || @inbounds cpu[e]
+
 function _moe_prefill_group!(s::MoePrefillScratch, experts::AbstractMatrix{Int},
-    live::AbstractVector{Bool}, seq::Int, n_used::Int, n_exp::Int)
+    live::AbstractVector{Bool}, seq::Int, n_used::Int, n_exp::Int, cpu::Vector{Bool}=Bool[])
     fill!(s.cnt, 0)
     @inbounds for t in 1:seq
         live[t] || continue
         for k in 1:n_used
-            s.cnt[experts[k, t]] += 1
+            e = experts[k, t]
+            _moe_on_cpu(cpu, e) && (s.cnt[e] += 1)
         end
     end
     s.start[1] = 1
@@ -309,6 +313,7 @@ function _moe_prefill_group!(s::MoePrefillScratch, experts::AbstractMatrix{Int},
         live[t] || continue
         for k in 1:n_used
             e = experts[k, t]
+            _moe_on_cpu(cpu, e) || continue
             s.pairs[s.start[e] + s.cnt[e]] = (t - 1) * n_used + k
             s.cnt[e] += 1
         end
@@ -460,7 +465,9 @@ end
 struct _MoePrefillCombine
     s::MoePrefillScratch
     Y::Matrix{Float32}           # seq x h
+    experts::Matrix{Int}
     weights::Matrix{Float32}     # n_used x seq
+    cpu::Vector{Bool}
     live::Vector{Bool}
     seq::Int
     n_used::Int
@@ -477,6 +484,7 @@ function (g::_MoePrefillCombine)(c::Int)
         end
         g.live[t] || continue
         for k in 1:g.n_used
+            _moe_on_cpu(g.cpu, g.experts[k, t]) || continue
             w = g.weights[k, t]
             p = (t - 1) * g.n_used + k
             for i in 1:s.h
@@ -488,16 +496,18 @@ function (g::_MoePrefillCombine)(c::Int)
 end
 
 """
-    _moe_host_prefill!(Y, X, experts, weights, live, gate_s, up_s, down_s) -> Y
+    _moe_host_prefill!(Y, X, experts, weights, live, gate_s, up_s, down_s; cpu=Bool[]) -> Y
 
 Top-k SwiGLU for `seq` tokens on the host. `X` and `Y` are `seq x h`;
 `experts` and `weights` are `n_used x seq` as `_moe_route_row!` fills them;
 tokens with `live[t] == false` get a zero row. Callers check
-`_moe_host_batchable` first.
+`_moe_host_batchable` first. A non-empty `cpu` (length `n_exp`) limits the sum
+to the experts it marks, so `Y` holds the host's partial sum and the GPU adds
+the rest.
 """
 function _moe_host_prefill!(Y::Matrix{Float32}, X::Matrix{Float32}, experts::Matrix{Int},
     weights::Matrix{Float32}, live::Vector{Bool}, n_exp::Int,
-    gate_s::GgufQuantSlice, up_s::GgufQuantSlice, down_s::GgufQuantSlice)
+    gate_s::GgufQuantSlice, up_s::GgufQuantSlice, down_s::GgufQuantSlice; cpu::Vector{Bool}=Bool[])
     seq, h = size(X)
     n_used = size(experts, 1)
     ff = gate_s.ne1
@@ -509,7 +519,7 @@ function _moe_host_prefill!(Y::Matrix{Float32}, X::Matrix{Float32}, experts::Mat
     xrow = [Vector{Float32}(undef, h) for _ in 1:tnc]
     _run_row_chunks!(_MoePrefillQuantX(X, xrow, s.xq, live, seq, tnc), tnc, seq * h)
 
-    _moe_prefill_group!(s, experts, live, seq, n_used, n_exp)
+    _moe_prefill_group!(s, experts, live, seq, n_used, n_exp, cpu)
     np = s.start[n_exp + 1] - 1
     if np > 0
         tot = _moe_prefill_cost!(s, 2ff)
@@ -521,6 +531,6 @@ function _moe_host_prefill!(Y::Matrix{Float32}, X::Matrix{Float32}, experts::Mat
         nc = clamp(nt, 1, tot)
         _run_row_chunks!(_MoePrefillDown(s, down_s, nc, simd), nc, tot * ff)
     end
-    _run_row_chunks!(_MoePrefillCombine(s, Y, weights, live, seq, n_used, tnc), tnc, seq * h)
+    _run_row_chunks!(_MoePrefillCombine(s, Y, experts, weights, cpu, live, seq, n_used, tnc), tnc, seq * h)
     return Y
 end

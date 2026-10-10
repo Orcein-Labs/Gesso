@@ -2417,8 +2417,10 @@ function _moe_topk_host!(backend::CUDABackend, y, x, router, gate, up, down, n_u
     L = unsafe_wrap(Array, pointer(b.logits), (seq, n_exp))
     X = unsafe_wrap(Array, pointer(b.x), (seq, h))
     Y = unsafe_wrap(Array, pointer(b.y), (seq, h))
+    gpu_add = false
     if seq > 1 && Gesso.Inference._moe_host_batchable(gate, up, down, h, gate.ne1)
-        _moe_host_prefill_layer!(b, L, X, Y, hot, gate, up, down, seq, n_exp, n_used)
+        gpu_add = _moe_host_prefill_layer!(backend, b, L, X, Y, y, xd, hot, gate, up, down,
+            seq, n_exp, n_used, s)
     else
         for t in 1:seq
             wsum = Gesso.Inference.@decode_stage :moe_router nothing _moe_route_row!(
@@ -2462,14 +2464,20 @@ function _moe_topk_host!(backend::CUDABackend, y, x, router, gate, up, down, n_u
             copyto!(y, Y)
         end
     end
+    if gpu_add
+        Gesso.Inference.@decode_stage :moe_qgemv nothing _hot_prefill_add!(y, seq, h, n_used)
+        _HOT_VERIFY[] && _hot_prefill_verify!(y, b, X, gate, up, down, n_exp)
+    end
     return y
 end
 
 # A prompt's tokens through one host layer: route every token, then run the
 # experts grouped by expert so each weight row leaves DRAM once per layer
-# instead of once per token that picked it. Bit-identical to the token loop.
-function _moe_host_prefill_layer!(b::_MoeHostXfer, L, X, Y, hot, gate, up, down,
-    seq::Int, n_exp::Int, n_used::Int)
+# instead of once per token that picked it. Bit-identical to the token loop
+# unless the layer is hot, when the GPU takes part of the pairs and the result
+# is true: Y then holds the CPU's partial sum and the caller adds the GPU's.
+function _moe_host_prefill_layer!(backend, b::_MoeHostXfer, L, X, Y, y, xd, hot, gate, up, down,
+    seq::Int, n_exp::Int, n_used::Int, s)
     for t in 1:seq
         ex = view(b.E, :, t)
         wsum = Gesso.Inference.@decode_stage :moe_router nothing _moe_route_row!(
@@ -2478,10 +2486,13 @@ function _moe_host_prefill_layer!(b::_MoeHostXfer, L, X, Y, hot, gate, up, down,
         b.live[t] = wsum > 0
         b.live[t] && hot !== nothing && _hot_observe!(hot, ex, n_used)
     end
+    hot !== nothing && y isa DenseCuArray &&
+        _moe_hot_prefill!(backend, hot, xd, b, X, Y, gate, up, down, seq, n_exp, n_used, s) &&
+        return true
     Gesso.Inference.@decode_stage :moe_host nothing Gesso.Inference._moe_host_prefill!(
         Y, X, b.E, b.W, b.live, n_exp, gate, up, down,
     )
-    return nothing
+    return false
 end
 
 # Device routing for decode on device-resident banks. Routing on the host meant
