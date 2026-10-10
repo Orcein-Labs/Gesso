@@ -1678,36 +1678,67 @@ function _cuda_gdn_qk_prep_kernel!(
     return
 end
 
+# One block per (value head, tile of value columns), one thread per column.
+# The block's state tile lives in shared memory for the whole prompt, and
+# token t's k and q are staged once per block and read as broadcasts. Global
+# state in [nv, dk, dv] order puts neighbouring columns nv*dk apart, so a
+# per-token pass over it never coalesced; that pass was 9 ms of every prefill
+# token on Ornith-35B. Each column runs the same arithmetic in the same order as the
+# untiled kernel it replaced, so the tile width does not change the result.
+const _GDN_RECUR_TILE = 32
+
 function _cuda_gdn_recurrent_kernel!(out, qn, kn, v, g, beta, state)
-    hh = Int(blockIdx().x)
-    nv = size(state, 1)
+    T = eltype(state)
     dk = size(state, 2)
     dv = size(state, 3)
     seq = size(out, 1)
-    hh > nv && return
-    j = Int(threadIdx().x)
-    while j <= dv
-        for t in 1:seq
-            decay = exp(g[t, hh])
-            bt = beta[t, hh]
+    hh = Int(blockIdx().y)
+    jl = Int(threadIdx().x)
+    tj = Int(blockDim().x)
+    j = (Int(blockIdx().x) - 1) * tj + jl
+    st = CUDA.CuDynamicSharedArray(T, (tj, dk))
+    kq = CUDA.CuDynamicSharedArray(T, (dk, 2), tj * dk * sizeof(T))
+    live = j <= dv
+    @inbounds begin
+        if live
             for i in 1:dk
-                state[hh, i, j] *= decay
+                st[jl, i] = state[hh, i, j]
             end
-            kv_mem = zero(eltype(state))
-            for i in 1:dk
-                kv_mem += state[hh, i, j] * kn[t, hh, i]
-            end
-            delta = (v[t, hh, j] - kv_mem) * bt
-            for i in 1:dk
-                state[hh, i, j] += kn[t, hh, i] * delta
-            end
-            acc = zero(eltype(out))
-            for i in 1:dk
-                acc += state[hh, i, j] * qn[t, hh, i]
-            end
-            out[t, hh, j] = acc
         end
-        j += Int(blockDim().x)
+        for t in 1:seq
+            # the previous token's k/q reads finish before the overwrite
+            CUDA.sync_threads()
+            i = jl
+            while i <= dk
+                kq[i, 1] = kn[t, hh, i]
+                kq[i, 2] = qn[t, hh, i]
+                i += tj
+            end
+            CUDA.sync_threads()
+            if live
+                decay = exp(g[t, hh])
+                bt = beta[t, hh]
+                kv_mem = zero(T)
+                for i in 1:dk
+                    sv = st[jl, i] * decay
+                    st[jl, i] = sv
+                    kv_mem += sv * kq[i, 1]
+                end
+                delta = (v[t, hh, j] - kv_mem) * bt
+                acc = zero(eltype(out))
+                for i in 1:dk
+                    sv = st[jl, i] + kq[i, 1] * delta
+                    st[jl, i] = sv
+                    acc += sv * kq[i, 2]
+                end
+                out[t, hh, j] = acc
+            end
+        end
+        if live
+            for i in 1:dk
+                state[hh, i, j] = st[jl, i]
+            end
+        end
     end
     return
 end
@@ -1739,9 +1770,10 @@ function _gated_delta_rule!(
         @fastcuda threads = 1 blocks = (seq, nv) _cuda_gdn_qk_prep_kernel!(
             qn, kn, q, k, Int(nk), Int(group), v_head_tiled, l2norm, scale, Float32(1e-6))
     end
-    nthreads = min(256, dv)
+    tj = min(_GDN_RECUR_TILE, dv)
+    shmem = (tj + 2) * dk * sizeof(eltype(state))
     Gesso.Inference.@decode_sub :gdn_recur backend begin
-        @fastcuda threads = (nthreads,) blocks = (nv,) _cuda_gdn_recurrent_kernel!(
+        @fastcuda threads = (tj,) blocks = (cld(dv, tj), nv) shmem = shmem _cuda_gdn_recurrent_kernel!(
             out, qn, kn, v, g, beta, state)
     end
     CUDA.unsafe_free!(qn)
