@@ -1,4 +1,4 @@
-# 35B CUDA decode: parity with llama.cpp, then hot experts
+# 35B CUDA: decode parity with llama.cpp, hot experts, then prefill
 
     Document class:     findings (one day's campaign)
     Date:               2026-10-09
@@ -134,6 +134,63 @@ MARGIN 1.
   is bit-identical. Prefill runs at about 22-25 ms/token for P=41-1024, which
   is still slow (see next levers).
 
+## Prefill (lane m, 22ebc45 -> ca67e01)
+
+Prompt processing went from below decode speed to above llama.cpp at 256
+tokens. Hot+pin configuration throughout. llama.cpp's reference is pp256
+238.98 and pp1024 386.00 tok/s.
+
+| tip | what | P256 tok/s (before -> after) |
+|---|---|---|
+| 22ebc45 | GDN recurrence tiled over value columns in shared memory | 48.5 -> 60.8 |
+| 77fb404, 873bf22 | hot host layers' prefill partly on the GPU; all tokens batched on device-resident MoE layers | 62 -> 172 |
+| 16f93c5 | dense prefill GEMM: weights dequantized to F16, then cuBLAS | 98 -> 218 |
+| 35cec30 | prefill MoE routing on the GPU in one batched kernel | 210.8 -> 220.7 |
+| 98628e6 | each layer's expert slabs placed on the device whole or not at all | 220.7 -> 278.7 |
+| 75a6783 | GDN gated norm fused into one kernel | 258.8 -> 282.7 |
+| ca67e01 | GEMM weights dequantized directly, not through a one-hot GEMV | 282.7 -> 403.8 |
+
+Each before/after pair was measured back to back. The baselines drift
+between sessions, so pairs don't chain exactly. At ca67e01: P64 381.6,
+P256 403.8, P1024 328.7 tok/s.
+
+- **The GEMM is more accurate than the GEMV it replaced.** Against a Float64
+  host dequant, the F16 GEMM's RMS relative error is 1.4e-4 to 3.7e-4 per
+  tensor kind. The Q8_1-activation GEMV's is 4.7e-3 to 1.9e-2. On real text
+  the two agree on 37 of the first 40 greedy tokens. The split is the GEMV's
+  rounding.
+- **The one-hot dequant was most of the GEMM.** The first F16 tile ran the
+  decode GEMV against one-hot activations, so it read every weight block
+  once for each output group. A direct kernel uses one warp per (row,
+  256-value superblock) and decodes each byte once. Per tensor at P256: Q5_K
+  qkv 3.0 -> 0.26 ms, z 1.13 -> 0.067 ms, Q8_0 shared down 0.148 -> 0.009 ms.
+  The whole qkv GEMM went from 2.6 to 0.5 ms. Output equals the old tile up to
+  the sign of zero on Q6_K.
+- **Hot experts make greedy output depend on history. This is not a race.**
+  Hits run the GPU kernels (q8_1 activations) and misses run the CPU ones
+  (Q8_K), and residency follows the routing history. So a prompt can decode
+  differently after a different earlier prompt. The evidence:
+  - With hot experts off, the top-2 logit gaps are bitwise identical after
+    every history tried.
+  - With hot experts on and `CUDA_LAUNCH_BLOCKING=1`, the dependence remains.
+  - The model amplifies rounding through its routing choices: with hot experts
+    off, swapping the fused gnorm (relative error 1.9e-7) for the per-head
+    loop already moves the first logit gap by 0.1.
+- **Ops.** A crashed test run left a 7.8 GB systemd core dump and tripped the
+  disk guard. The local job wrapper now runs with `ulimit -c 0`.
+
+Profile at P256, ca67e01 (profiled wall 688 ms, stages serialized):
+
+| stage | ms |
+|---|---|
+| moe_host (CPU experts on hot host layers) | 165.9 |
+| gdn recurrence | 122.9 |
+| moe_qgemv (device experts, per-token GEMV) | 117.2 |
+| gdn qk + proj + outproj | 47.6 |
+| shared expert | 16.7 |
+| router | 14.3 |
+| moe_h2d | 10.3 |
+
 ## Where the time goes now
 
 Profiling syncs every stage, so these stage times are serialized: they add to
@@ -155,8 +212,13 @@ and serial host work per hybrid layer.
 
 ## Next levers, ranked
 
-0. **Prefill.** It runs at 21-25 ms/token, close to the decode rate, so
-   batching barely helps it yet. Where its time goes has not been profiled.
+0. **Prefill past P256.** P256 beats llama.cpp, but P1024 (328.7) still
+   trails 386. Three levers:
+   - device experts as a grouped GEMM over each expert's tokens instead of a
+     per-token GEMV (moe_qgemv, 117 ms at P256);
+   - a chunked GDN recurrence on tensor cores instead of the sequential scan
+     (123 ms);
+   - fewer CPU experts on hot host layers (166 ms).
 1. **Four DIMM channels.** About 4x the DRAM bandwidth for every miss and
    every swap. No code needed.
 2. **The GPU floor.** Fuse gdn, attention and the shared expert. Cut the
