@@ -2682,6 +2682,197 @@ function _moe_topk_device!(backend::CUDABackend, y, x, router, gate, up, down, n
     return y
 end
 
+# Prefill on a device-resident MoE layer. The token loop below spends about
+# 230 us per token per layer on the Ornith-35B, almost all of it host launch
+# and metadata traffic. Here the host routes every token once, then each slab
+# runs as one launch over all (token, expert) pairs sorted by expert, so an
+# expert's weights stay in L2 across the tokens that picked it. Each pair goes
+# through the same kernels as the token loop and the combine sums a token's
+# experts in k order, so the result matches the loop bit for bit.
+# GESSO_MOE_DEVICE_PREFILL=0 restores the token loop.
+_moe_device_prefill_enabled() = get(ENV, "GESSO_MOE_DEVICE_PREFILL", "1") == "1"
+
+# Tokens per launch group. Bounds the D buffer at h * chunk * n_used floats.
+_moe_device_prefill_chunk() = parse(Int, get(ENV, "GESSO_MOE_DEVICE_PREFILL_CHUNK", "512"))
+
+const _MOE_PAIR_SEG = 1024
+
+mutable struct _MoePairBatch
+    meta_h::Vector{Int32}    # pinned: per chunk, per launch [up off; down off; gate off; columns; tokens], then the combine table
+    meta_d::Union{Nothing,_CuVec{Int32}}
+    xt::Union{Nothing,_CuVec{Float32}}
+    g::Union{Nothing,_CuVec{Float32}}
+    u::Union{Nothing,_CuVec{Float32}}
+    a::Union{Nothing,_CuVec{Float32}}
+    d::Union{Nothing,_CuVec{Float32}}
+    cnt::Vector{Int}
+    first::Vector{Int}
+    fill::Vector{Int}
+end
+
+const _MOE_PAIR_BATCH = _MoePairBatch(Int32[], nothing, nothing, nothing, nothing, nothing, nothing,
+    Int[], Int[], Int[])
+
+function _moe_device_prefill_ok(y, x, router, gate, up, down, n_used::Int)
+    G = Gesso.Inference.GpuQuantSlice
+    I = Gesso.Inference
+    _moe_device_prefill_enabled() && size(x, 1) > 1 || return false
+    (x isa DenseCuArray && y isa DenseCuArray) || return false
+    (gate isa G && up isa G && down isa G) || return false
+    (gate.data isa CuVector && up.data isa CuVector && down.data isa CuVector) || return false
+    for sl in (gate, up, down)
+        sl.ggml_type in (I.GGML_TYPE_IQ2_XS, I.GGML_TYPE_IQ3_XXS, I.GGML_TYPE_IQ4_XS) || return false
+        sl.n_exp * sl.bytes_per_expert <= typemax(Int32) || return false
+    end
+    # up reuses the q8_1 activations gate quantized
+    return up.ne0 == gate.ne0
+end
+
+function _moe_pair_combine_kernel!(y, D, meta, gpoff::Int, woff::Int, n_used::Int, h::Int, t0::Int)
+    i = (Int(blockIdx().x) - 1) * Int(blockDim().x) + Int(threadIdx().x)
+    t = Int(blockIdx().y)
+    i <= h || return
+    base = (t - 1) * n_used
+    acc = 0.0f0
+    @inbounds for k in 1:n_used
+        g = Int(meta[gpoff + base + k])
+        g > 0 && (acc += D[i, g] * reinterpret(Float32, meta[woff + base + k]))
+    end
+    @inbounds y[t0 + t, i] = acc
+    return
+end
+
+function _moe_topk_device_prefill!(backend::CUDABackend, y, x, router, gate, up, down, n_used::Int)
+    seq, h = size(x)
+    n_exp = size(router, 1)
+    ff = size(gate, 2)
+    tc = min(seq, max(1, _moe_device_prefill_chunk()))
+    seg = _MOE_PAIR_SEG
+    s = CUDA.stream()
+    b = _moe_host_xfer(seq, n_exp, h, n_used)
+    B = _MOE_PAIR_BATCH
+    logits = _dev_scratch(:moe_logits, seq, n_exp)
+    Gesso.Inference.@decode_stage :moe_router backend begin
+        rd = router isa CuArray ? router : CuArray{Float32}(Gesso.Inference._offload_host_array(router))
+        _cuda_router_logits!(logits, x, rd)
+        Gesso.Inference._profile_copy!(true)
+        unsafe_copyto!(pointer(b.logits), pointer(logits), seq * n_exp; async=true, stream=s)
+        copied = _moe_host_event()
+        CUDA.record(copied, s)
+        _cuda_event_wait(copied)
+    end
+    # The stream has drained up to the copy, so nothing queued still reads the
+    # buffers that grow below, or the pinned metadata the previous layer sent.
+    np_max = min(seg, tc * n_used)
+    nmeta = 7 * seq * n_used
+    Gesso.Inference.@decode_stage :moe_alloc nothing begin
+        if length(B.meta_h) < nmeta
+            B.meta_h = Vector{Int32}(undef, 2nmeta)
+            CUDA.pin(B.meta_h)
+        end
+        B.meta_d = _hotp_dev(B.meta_d, Int32, nmeta)
+        B.xt = _hotp_dev(B.xt, Float32, h * seq)
+        B.g = _hotp_dev(B.g, Float32, ff * np_max)
+        B.u = _hotp_dev(B.u, Float32, ff * np_max)
+        B.a = _hotp_dev(B.a, Float32, ff * np_max)
+        B.d = _hotp_dev(B.d, Float32, h * tc * n_used)
+        _cuda_q8_buffers!(_CUDA_Q8_EXPERT, max(tc * (h ÷ 32), np_max * (ff ÷ 32)))
+    end
+
+    L = unsafe_wrap(Array, pointer(b.logits), (seq, n_exp))
+    Gesso.Inference.@decode_stage :moe_router nothing for t in 1:seq
+        wsum = _moe_route_row!(b.order, view(b.E, :, t), view(b.W, :, t), view(L, t, :), n_exp, n_used)
+        b.live[t] = wsum > 0
+    end
+
+    xt = unsafe_wrap(CuArray, pointer(B.xt), (h, seq))
+    permutedims!(xt, x, (2, 1))
+    meta = B.meta_h
+    cnt = resize!(B.cnt, n_exp)
+    pfirst = resize!(B.first, n_exp)
+    fillc = resize!(B.fill, n_exp)
+    bg = gate.bytes_per_expert
+    bu = up.bytes_per_expert
+    bd = down.bytes_per_expert
+    mo = 0
+    GC.@preserve meta for t0 in 1:tc:seq
+        t1 = min(seq, t0 + tc - 1)
+        nt = t1 - t0 + 1
+        fill!(cnt, 0)
+        @inbounds for t in t0:t1
+            b.live[t] || continue
+            for k in 1:n_used
+                cnt[b.E[k, t]] += 1
+            end
+        end
+        g = 1
+        @inbounds for e in 1:n_exp
+            pfirst[e] = g
+            fillc[e] = 0
+            g += cnt[e]
+        end
+        np = g - 1
+        gpoff = mo + 5np
+        woff = gpoff + nt * n_used
+        @inbounds for t in t0:t1, k in 1:n_used
+            i = (t - t0) * n_used + k
+            meta[woff + i] = reinterpret(Int32, b.W[k, t])
+            if b.live[t]
+                e = b.E[k, t]
+                gi = pfirst[e] + fillc[e]
+                fillc[e] += 1
+                meta[gpoff + i] = Int32(gi)
+                # the launch holding pair gi starts at pair a and has n pairs
+                a = ((gi - 1) ÷ seg) * seg + 1
+                n = min(seg, np - a + 1)
+                m0 = mo + 5(a - 1)
+                l = gi - a + 1
+                e0 = e - 1
+                meta[m0 + l] = Int32(e0 * bu)
+                meta[m0 + n + l] = Int32(e0 * bd)
+                meta[m0 + 2n + l] = Int32(e0 * bg)
+                meta[m0 + 3n + l] = Int32(l)
+                meta[m0 + 4n + l] = Int32(t - t0 + 1)
+            else
+                meta[gpoff + i] = 0
+            end
+        end
+        nm = woff + nt * n_used - mo
+        unsafe_copyto!(pointer(B.meta_d, mo + 1), pointer(meta, mo + 1), nm; async=true, stream=s)
+        xc = unsafe_wrap(CuArray, pointer(B.xt, (t0 - 1) * h + 1), (h, nt))
+        Gesso.Inference.@decode_stage :moe_qgemv backend begin
+            a = 1
+            while a <= np
+                n = min(seg, np - a + 1)
+                m0 = mo + 5(a - 1)
+                # One block of 5n per launch, ordered so every slab's table
+                # starts at its own offsets and reads the shared columns at
+                # positive distances.
+                mu = unsafe_wrap(CuArray, pointer(B.meta_d, m0 + 1), 5n)
+                md = unsafe_wrap(CuArray, pointer(B.meta_d, m0 + n + 1), 4n)
+                mg = unsafe_wrap(CuArray, pointer(B.meta_d, m0 + 2n + 1), 3n)
+                G = unsafe_wrap(CuArray, pointer(B.g), (ff, n))
+                U = unsafe_wrap(CuArray, pointer(B.u), (ff, n))
+                A = unsafe_wrap(CuArray, pointer(B.a), (ff, n))
+                D = unsafe_wrap(CuArray, pointer(B.d, (a - 1) * h + 1), (h, n))
+                _cuda_launch_qgemv!(G, xc, gate.data, gate.ggml_type, mg, n, n, gate.ne0, gate.ne1,
+                    1.0f0, 0.0f0; xcoloff=2n)
+                _cuda_launch_qgemv!(U, xc, up.data, up.ggml_type, mu, 3n, n, up.ne0, up.ne1,
+                    1.0f0, 0.0f0; quantize=false, xcoloff=4n)
+                _silu_mul!(backend, A, U, G)
+                _cuda_launch_qgemv!(D, A, down.data, down.ggml_type, md, 2n, n, down.ne0, down.ne1,
+                    1.0f0, 0.0f0)
+                a += n
+            end
+            Dall = unsafe_wrap(CuArray, pointer(B.d), (h, max(np, 1)))
+            @fastcuda threads = 256 blocks = (cld(h, 256), nt) _moe_pair_combine_kernel!(
+                y, Dall, B.meta_d, gpoff, woff, n_used, h, t0 - 1)
+        end
+        mo += nm
+    end
+    return y
+end
+
 function _moe_topk_swiglu!(
     backend::CUDABackend,
     y::AbstractMatrix,
@@ -2722,6 +2913,9 @@ function _moe_topk_swiglu!(
     overlap === nothing || overlap()
     if _moe_device_route_ok(y, x, router, gate, up, down, n_used)
         return _moe_topk_device!(backend, y, x, router, gate, up, down, n_used)
+    end
+    if _moe_device_prefill_ok(y, x, router, gate, up, down, n_used)
+        return _moe_topk_device_prefill!(backend, y, x, router, gate, up, down, n_used)
     end
 
     Gesso.Inference.@decode_stage :moe_alloc _CUDASync() begin

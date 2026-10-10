@@ -405,6 +405,62 @@ else
         end
     end
 
+    @testset "cuda device MoE prefill matches the token loop bit for bit" begin
+        # A resident layer's prefill runs each slab as one launch over every
+        # (token, expert) pair; the token loop it replaces is the reference.
+        ext = Base.get_extension(Gesso, :GessoCUDAExt)
+        gguf = get(ENV, "GESSO_ORNITH35_GGUF", "")
+        if isfile(gguf)
+            rng = deterministic_rng(73)
+            hdr = Gesso.gguf_header(gguf)
+            n_exp, n_used = 16, 8
+            function resident(name)
+                info = only(t for t in hdr.tensors if t.name == name)
+                sl = Gesso.Inference._expert_slice(hdr, info)
+                data = CuArray{UInt8}(vcat((Vector{UInt8}(Inf_._quant_expert_bytes(sl, e)) for e in 1:n_exp)...))
+                return Gesso.GpuQuantSlice(data, sl.ggml_type, n_exp, sl.ne0, sl.ne1, sl.bytes_per_expert, sl.blck_size)
+            end
+            gs = resident("blk.0.ffn_gate_exps.weight")
+            us = resident("blk.0.ffn_up_exps.weight")
+            ds = resident("blk.0.ffn_down_exps.weight")
+            h = gs.ne0
+            router = CuArray(0.05f0 .* randn(rng, Float32, n_exp, h))
+            prefill(y, x, chunk) = withenv("GESSO_MOE_DEVICE_PREFILL_CHUNK" => chunk) do
+                Inf_._moe_topk_swiglu!(cuda, y, x, router, gs, us, ds, n_used)
+            end
+            # chunk 16 over 37 tokens leaves a short last chunk; chunk 1 gives
+            # one-column launches
+            for (seq, chunk) in ((37, "16"), (5, "512"), (3, "1"))
+                x = CuArray(randn(rng, Float32, seq, h))
+                y_loop = CUDA.fill(NaN32, seq, h)
+                withenv("GESSO_MOE_DEVICE_PREFILL" => "0") do
+                    Inf_._moe_topk_swiglu!(cuda, y_loop, x, router, gs, us, ds, n_used)
+                end
+                y_pf = CUDA.fill(NaN32, seq, h)
+                # the loop reference would pass this comparison too, so check
+                # the batched path is the one that filled y_pf
+                ext._MOE_PAIR_BATCH.meta_d = nothing
+                prefill(y_pf, x, chunk)
+                @test ext._MOE_PAIR_BATCH.meta_d !== nothing
+                @test ext._moe_device_prefill_ok(y_pf, x, router, gs, us, ds, n_used)
+                @test Array(y_pf) == Array(y_loop)
+            end
+            # red control: changing one token's activation moves its row alone
+            seq = 9
+            xh = randn(rng, Float32, seq, h)
+            y1 = CUDA.fill(NaN32, seq, h)
+            prefill(y1, CuArray(xh), "4")
+            xh[4, :] .= randn(rng, Float32, h)
+            y2 = CUDA.fill(NaN32, seq, h)
+            prefill(y2, CuArray(xh), "4")
+            a1, a2 = Array(y1), Array(y2)
+            @test a1[[1:3; 5:seq], :] == a2[[1:3; 5:seq], :]
+            @test a1[4, :] != a2[4, :]
+        else
+            _skip("Ornith 35B GGUF not on disk — device MoE prefill skipped")
+        end
+    end
+
     @testset "cuda synthetic MoE block greedy ids match CPU F32" begin
         h, nh, nkv, hd, vocab = 8, 2, 2, 4, 16
         n_exp, k, ff = 4, 2, 8
