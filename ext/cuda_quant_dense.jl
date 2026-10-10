@@ -316,61 +316,111 @@ end
 _dq_gemm_min() = parse(Int, get(ENV, "GESSO_DQ_GEMM_MIN", "32"))
 _dq_gemm_scratch_mib() = parse(Int, get(ENV, "GESSO_DQ_GEMM_SCRATCH_MIB", "32"))
 
-# One-hot activations: virtual token j (0-based) holds 1 at value j of every
-# block, with scale 1 and block sum 1, so `_cuda_dq_block` on token j+1 returns
-# the weight value itself and every type reuses its GEMV decode. Built for the
-# widest k seen; `nbs` is that width in blocks, the token stride.
 mutable struct _DqGemmScratch
-    nbs::Int
-    qx::Union{Nothing,_CuVec{Int32}}
-    dx::Union{Nothing,_CuVec{Float32}}
-    sx::Union{Nothing,_CuVec{Int32}}
     w16::Union{Nothing,_CuVec{Float16}}
     x16::Union{Nothing,_CuVec{Float16}}
 end
 
-const _DQ_GEMM = _DqGemmScratch(0, nothing, nothing, nothing, nothing, nothing)
+const _DQ_GEMM = _DqGemmScratch(nothing, nothing)
 
-function _dq_onehot!(G::_DqGemmScratch, nb::Int)
-    nb <= G.nbs && return G
-    q = zeros(Int32, 32 * nb * 8)
-    for j in 0:31, b in 0:nb-1
-        q[(j * nb + b) * 8 + j ÷ 4 + 1] = Int32(1) << (8 * (j % 4))
+# --- direct F16 dequant: value 32m+L of superblock sb, lane L ---------------
+# Each lane reads its own quant byte, so a warp's loads of one sub-block are
+# coalesced; scales are warp-uniform broadcasts. The arithmetic matches the
+# GEMV decode with a unit activation, so Wf equals what the GEMV multiplies
+# (up to the sign of zero).
+@inline function _dq_scmin(W, sbase::Int, s::Int)
+    @inbounds if s < 4
+        return Float32(W[sbase + s + 1] & 0x3f), Float32(W[sbase + s + 5] & 0x3f)
+    else
+        return Float32((W[sbase + s + 5] & 0x0f) | ((W[sbase + s - 3] >> 6) << 4)),
+               Float32((W[sbase + s + 5] >> 4) | ((W[sbase + s + 1] >> 6) << 4))
     end
-    G.qx === nothing || CUDA.unsafe_free!(G.qx)
-    G.dx === nothing || CUDA.unsafe_free!(G.dx)
-    G.sx === nothing || CUDA.unsafe_free!(G.sx)
-    G.qx = CuVector{Int32}(q)
-    G.dx = CUDA.ones(Float32, 32 * nb)
-    G.sx = CuVector{Int32}(ones(Int32, 32 * nb))
-    G.nbs = nb
-    return G
+end
+
+@inline function _dq_kq45_value(W, boff::Int, has_qh::Bool, m::Int, L::Int)
+    @inbounds begin
+        dd = _cu_u32a(W, boff)
+        d = Float32(reinterpret(Float16, UInt16(dd & 0xffff)))
+        dmin = Float32(reinterpret(Float16, UInt16(dd >> 16)))
+        sc, mn = _dq_scmin(W, boff + 4, m)
+        q = (W[boff + (has_qh ? 48 : 16) + 32 * (m >> 1) + L + 1] >> (4 * (m & 1))) & 0x0f
+        if has_qh
+            q |= ((W[boff + 16 + L + 1] >> m) & 0x01) << 4
+        end
+        return d * sc * Float32(q) - dmin * mn
+    end
+end
+
+@inline _dq_value(::Val{:q4_k}, W, rowoff::Int, sb::Int, m::Int, L::Int, kv) =
+    _dq_kq45_value(W, rowoff + sb * 144, false, m, L)
+@inline _dq_value(::Val{:q5_k}, W, rowoff::Int, sb::Int, m::Int, L::Int, kv) =
+    _dq_kq45_value(W, rowoff + sb * 176, true, m, L)
+
+# Q6_K value 128h + 32g + l: ql nibble (g>>1) of byte 64h + 32(g&1) + l, qh
+# bits 2g of byte 128 + 32h + l, scale 8h + 2g + l÷16.
+@inline function _dq_value(::Val{:q6_k}, W, rowoff::Int, sb::Int, m::Int, L::Int, kv)
+    @inbounds begin
+        boff = rowoff + sb * 210
+        h = m >> 2
+        g = m & 3
+        lo = (W[boff + 64 * h + 32 * (g & 1) + L + 1] >> (4 * (g >> 1))) & 0x0f
+        hi = (W[boff + 128 + 32 * h + L + 1] >> (2 * g)) & 0x03
+        q = Int32(lo | (hi << 4)) - Int32(32)
+        sc = Float32(reinterpret(Int8, W[boff + 192 + 8 * h + 2 * g + (L >> 4) + 1]))
+        return _cu_f16a(W, boff + 208) * (sc * Float32(q))
+    end
+end
+
+@inline function _dq_value(::Val{:iq4_xs}, W, rowoff::Int, sb::Int, m::Int, L::Int, kv)
+    @inbounds begin
+        boff = rowoff + sb * 136
+        d = _cu_f16a(W, boff)
+        scales_h = _cu_u16a(W, boff + 2)
+        sl = W[boff + 4 + (m >> 1) + 1]
+        ls = Int((sl >> (4 * (m & 1))) & 0x0f) | (Int((scales_h >> (2 * m)) & 0x03) << 4)
+        dl = d * Float32(ls - 32)
+        nib = (W[boff + 8 + 16 * m + (L & 15) + 1] >> (4 * (L >> 4))) & 0x0f
+        return dl * Float32(reinterpret(Int8, reinterpret(UInt8, kv[Int(nib) + 1])))
+    end
+end
+
+# Q8_0 has 32-value blocks; "superblock" sb is blocks 8sb .. 8sb+7.
+@inline function _dq_value(::Val{:q8_0}, W, rowoff::Int, sb::Int, m::Int, L::Int, kv)
+    @inbounds begin
+        off = rowoff + (8 * sb + m) * 34
+        return _cu_f16a(W, off) * Float32(reinterpret(Int8, W[off + 2 + L + 1]))
+    end
 end
 
 # Rows r0+1 .. r0+rc of W into Wf (k, rc) column-major. One warp per
-# (row, block); lane j writes value j, so a warp stores 64 contiguous bytes.
-function _cuda_dq_f16_kernel!(Wf, W, qx, dx, sx, kv, ::Val{K}, r0::Int, rc::Int, nb::Int, nbs::Int,
+# (row, 256 values); each store writes 64 contiguous bytes.
+function _cuda_dq_f16_kernel!(Wf, W, kv, ::Val{K}, r0::Int, rc::Int, nb::Int, nsb::Int,
                               row_bytes::Int, k::Int) where {K}
     g = Int((blockIdx().x - 1) * (blockDim().x ÷ 32) + (threadIdx().x - 1) ÷ 32)
-    lane = Int((threadIdx().x - 1) % 32)
-    r = g ÷ nb
-    b = g % nb
+    L = Int((threadIdx().x - 1) % 32)
+    r = g ÷ nsb
+    sb = g % nsb
     r < rc || return
-    v = _cuda_dq_block(Val{K}(), W, (r0 + r) * row_bytes, b, qx, dx, sx, lane + 1, nbs, kv)
-    @inbounds Wf[r * k + 32 * b + lane + 1] = Float16(v)
+    rowoff = (r0 + r) * row_bytes
+    base = r * k + 256 * sb + L + 1
+    for m in 0:7
+        8 * sb + m < nb || break
+        @inbounds Wf[base + 32 * m] = Float16(_dq_value(Val{K}(), W, rowoff, sb, m, L, kv))
+    end
     return
 end
 
-@inline function _cuda_dq_f16_launch!(vk::Val, Wf, q::GpuDenseQuant, G::_DqGemmScratch, kv, r0, rc, nb, k)
-    @fastcuda threads = 256 blocks = cld(rc * nb, 8) _cuda_dq_f16_kernel!(
-        Wf, q.data, G.qx, G.dx, G.sx, kv, vk, r0, rc, nb, G.nbs, q.row_bytes, k)
+@inline function _cuda_dq_f16_launch!(vk::Val, Wf, q::GpuDenseQuant, kv, r0, rc, nb, k)
+    nsb = cld(nb, 8)
+    @fastcuda threads = 256 blocks = cld(rc * nsb, 8) _cuda_dq_f16_kernel!(
+        Wf, q.data, kv, vk, r0, rc, nb, nsb, q.row_bytes, k)
     return nothing
 end
 
 _dq_gemm_ok(ds::Tuple, n::Int) = n >= _dq_gemm_min() && all(d -> d isa DenseCuArray{Float32}, ds)
 
 function _cuda_dq_gemm_group!(ds::Tuple, xs, qs::Tuple{Vararg{GpuDenseQuant}}, n::Int, k::Int)
-    G = _dq_onehot!(_DQ_GEMM, k ÷ 32)
+    G = _DQ_GEMM
     nb = k ÷ 32
     rc_max = max(1, (_dq_gemm_scratch_mib() << 20) ÷ (2k))
     rc_max = min(rc_max, maximum(q -> q.nrows, qs))
@@ -385,7 +435,7 @@ function _cuda_dq_gemm_group!(ds::Tuple, xs, qs::Tuple{Vararg{GpuDenseQuant}}, n
         while r0 < q.nrows
             rc = min(rc_max, q.nrows - r0)
             Wf = unsafe_wrap(CuArray, pointer(G.w16), (k, rc))
-            _dq_with_kind(_cuda_dq_f16_launch!, q.ggml_type, Wf, q, G, kv, r0, rc, nb, k)
+            _dq_with_kind(_cuda_dq_f16_launch!, q.ggml_type, Wf, q, kv, r0, rc, nb, k)
             Y = unsafe_wrap(CuArray, pointer(d, r0 * n + 1), (n, rc))
             C.cublasGemmEx(C.handle(), 'N', 'N', n, rc, k, _cu_scalar(one(Float32)), x16, Float16, n,
                 Wf, Float16, k, _cu_scalar(zero(Float32)), Y, Float32, n, C.CUBLAS_COMPUTE_32F, C.CUBLAS_GEMM_DEFAULT)

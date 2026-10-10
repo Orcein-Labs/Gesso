@@ -138,6 +138,12 @@ else
             end
             _check_against_host(qm, X, dev; label="$kind GEMM n=40 scratch=$mib")
         end
+        # Q8_0 rows need not fill whole 256-value groups; the dequant warp
+        # stops at the row's last block.
+        qm = _random_quant_matrix(rng, :q8_0, 37, 96)
+        X = randn(rng, Float32, 40, 96)
+        dev = withenv(() -> _device_matmul(qm, X, Gesso.PrefillWorkload()), "GESSO_DQ_GEMM_MIN" => "32")
+        _check_against_host(qm, X, dev; label="q8_0 GEMM n=40 k=96")
     end
 
     @testset "GpuDenseQuant: placement switch and budget fallback" begin
