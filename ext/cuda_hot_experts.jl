@@ -30,8 +30,8 @@
 _hot_experts_enabled() = get(ENV, "GESSO_GPU_HOT_EXPERTS", "0") == "1"
 
 # Decode needs about 50 MiB beyond the weights, and a 256-token prefill about
-# 600 MiB at its peak. Prefills longer than the keep threshold release the
-# pools, so the reserve only has to cover short prompts.
+# 600 MiB at its peak. A prefill that runs out releases the pools (_HotPurge),
+# so the reserve only has to cover decode and short prompts.
 const _HOT_RESERVE_DEFAULT_MIB = 384
 
 function _hot_env_int(name, default)
@@ -64,14 +64,14 @@ end
 struct _HotConfig
     decay::Float32     # per-token decay of the pick counts
     fill::Int          # copies a layer may start per token
-    keep_seq::Int      # longest prefill that keeps the pools resident
+    keep_seq::Int      # longest prefill that keeps the pools; default: until memory runs out
     margin::Float32    # score lead a miss needs over the coldest resident
 end
 
 _hot_config() = _HotConfig(
     Float32(_hot_env_float("GESSO_GPU_HOT_DECAY", 0.99)),
     max(1, _hot_env_int("GESSO_GPU_HOT_FILL", 2)),
-    _hot_env_int("GESSO_GPU_HOT_PREFILL_KEEP", 32),
+    _hot_env_int("GESSO_GPU_HOT_PREFILL_KEEP", typemax(Int)),
     Float32(_hot_env_float("GESSO_GPU_HOT_MARGIN", 1.0)),
 )
 
@@ -108,7 +108,7 @@ mutable struct _HotLayer
 end
 
 const _HOT = IdDict{Any,_HotLayer}()
-const _HOT_CFG = Ref(_HotConfig(0.99f0, 2, 32, 1.0f0))
+const _HOT_CFG = Ref(_HotConfig(0.99f0, 2, typemax(Int), 1.0f0))
 const _HOT_COPY_STREAM = Ref{Union{Nothing,CuStream}}(nothing)
 const _HOT_MISS_E = Int[]
 const _HOT_MISS_W = Float32[]
@@ -150,6 +150,25 @@ function _hot_release!(hot::_HotLayer)
     CUDA.unsafe_free!(hot.pool)
     hot.pool = nothing
     hot.views = nothing
+    return
+end
+
+# The pools take nearly all free VRAM, so a long prompt's activations do not fit
+# beside them. CUDA's allocator calls purge! when an allocation fails, before it
+# escalates to a full GC, so the pools go only when memory is actually short and
+# the next decode token refills them from the scores the prefill has warmed. A
+# fixed prompt-length threshold either dropped the pools for short prompts that
+# fit, costing ~40 tokens of refill, or kept them for long ones that then ran
+# out. _HOT_BUSY covers a layer from its pool allocation to its last launch, so
+# the allocations inside that span cannot free the pool they are about to read.
+struct _HotPurge <: CUDA.CUDACore.Reclaimable end
+const _HOT_BUSY = Ref(false)
+
+function CUDA.CUDACore.purge!(::_HotPurge)
+    _HOT_BUSY[] && return
+    for hot in values(_HOT)
+        _hot_release!(hot)
+    end
     return
 end
 
@@ -401,9 +420,14 @@ end
 # token's picks are known: lands finished copies and starts the next ones.
 function _hot_prefetch!(hot::_HotLayer, g, u, d)
     hot.pool === nothing && return
-    _hot_commit!(hot)
-    _hot_plan!(hot, hot.last, length(hot.last))
-    _hot_issue!(hot, g, u, d)
+    _HOT_BUSY[] = true
+    try
+        _hot_commit!(hot)
+        _hot_plan!(hot, hot.last, length(hot.last))
+        _hot_issue!(hot, g, u, d)
+    finally
+        _HOT_BUSY[] = false
+    end
     return
 end
 

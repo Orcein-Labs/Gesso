@@ -480,9 +480,14 @@ function _hybrid_linear_block!(
     k = zeros_like((seq, nk, dk))
     v = zeros_like((seq, nv, dv))
     @decode_sub :gdn_split cpu begin
-        _split_heads!(q, view(conv_out, :, 1:key_dim), nk, dk)
-        _split_heads!(k, view(conv_out, :, (key_dim+1):(2*key_dim)), nk, dk)
-        _split_heads!(v, view(conv_out, :, (2*key_dim+1):conv_dim), nv, dv)
+        # contiguous column views of a device array keep their own reference
+        # to its memory; drop them so the block arena can free conv_out
+        cols = (view(conv_out, :, 1:key_dim), view(conv_out, :, (key_dim+1):(2*key_dim)),
+            view(conv_out, :, (2*key_dim+1):conv_dim))
+        _split_heads!(q, cols[1], nk, dk)
+        _split_heads!(k, cols[2], nk, dk)
+        _split_heads!(v, cols[3], nv, dv)
+        foreach(_release_storage!, cols)
     end
 
     g = zeros_like((seq, nv))
@@ -509,11 +514,11 @@ function _hybrid_linear_block!(
     xh = zeros_like((seq, dv))
     scale = bt.wgdn_norm
     @decode_sub :gdn_gnorm cpu for hh in 1:nv
-        @views xh[:, :] .= core[:, hh, :]
+        xh .= view(core, :, hh, :)
         xh_act = Activation(; shape=(seq, dv), storage=xh)
         nrm_act = Activation(; shape=(seq, dv), storage=nrm)
         rmsnorm!(cpu, nrm_act, xh_act, scale, wl; eps)
-        @views xh[:, :] .= z_h[:, hh, :]
+        xh .= view(z_h, :, hh, :)
         _silu_mul!(cpu, nrm, nrm, xh)
         @views core[:, hh, :] .= nrm
     end

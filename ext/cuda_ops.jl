@@ -114,6 +114,12 @@ function _rmsnorm_sumsq(rows::Int)
     get!(() -> CUDA.zeros(Float32, rows, 1), _RMSNORM_SUMSQ, (CUDA.context(), rows))
 end
 
+# A reshape or contiguous view of a CuArray holds its own reference to the
+# parent's memory, so a prefill temporary that was reshaped stays allocated
+# after its owner frees it, until the GC finalizes the derived array. Drop the
+# derived reference as soon as its last kernel is queued.
+_drop_derived!(a, parent) = (a === parent || CUDA.unsafe_free!(a); nothing)
+
 function _cuda_rmsnorm_storage!(dsts::AbstractArray, xs::AbstractArray, scales::AbstractArray, eps)
     native_eps=eltype(xs)(eps)
     isfinite(native_eps) && native_eps>0 || throw(gesso_error(ERR_INVALID_PLAN,
@@ -140,13 +146,16 @@ function _cuda_rmsnorm_storage!(dsts::AbstractArray, xs::AbstractArray, scales::
         if d <= 256 && rows <= 8192
             @fastcuda threads = 32cld(d, 32) blocks = rows _cuda_rmsnorm_rows_kernel!(
                 d2, x2, scales, eps, d)
-            return dsts
+        else
+            ss = _rmsnorm_sumsq(rows)
+            sum!(abs2, ss, x2)
+            nthreads = min(256, d)
+            @fastcuda threads = (nthreads,) blocks = (rows,) _cuda_rmsnorm_apply_kernel!(
+                d2, x2, ss, scales, eps, rows, d)
+            rows > 256 && CUDA.unsafe_free!(ss)
         end
-        ss = _rmsnorm_sumsq(rows)
-        sum!(abs2, ss, x2)
-        nthreads = min(256, d)
-        @fastcuda threads = (nthreads,) blocks = (rows,) _cuda_rmsnorm_apply_kernel!(
-            d2, x2, ss, scales, eps, rows, d)
+        _drop_derived!(x2, xs)
+        _drop_derived!(d2, dsts)
         return dsts
     end
     rms = sqrt.(sum(abs2, xs; dims = nd) ./ d .+ eps)
@@ -420,6 +429,7 @@ function _cuda_rope_storage!(
         @fastcuda threads = (nthreads,) blocks = (nblocks, nheads) _cuda_rope_kernel!(
             x, pos_d, tθ, interleaved, rd, use_inv, freq_d)
     end
+    pos_d isa CuArray && CUDA.unsafe_free!(pos_d)
     return nothing
 end
 
@@ -539,7 +549,11 @@ function _cuda_host_quant_embed!(dst, table, tokens)
     q = table.storage
     host = Matrix{Float32}(undef, length(tokens), q.ne0)
     Gesso.Inference._quant_embedding_rows!(host, q, tokens)
-    copyto!(dst.storage, host)
+    # prefill writes through a row view of h, and copyto! into a view stages
+    # the host rows in a device array it leaves to the GC
+    staged = CuArray(host)
+    copyto!(dst.storage, staged)
+    CUDA.unsafe_free!(staged)
     return dst
 end
 
@@ -1730,6 +1744,8 @@ function _gated_delta_rule!(
         @fastcuda threads = (nthreads,) blocks = (nv,) _cuda_gdn_recurrent_kernel!(
             out, qn, kn, v, g, beta, state)
     end
+    CUDA.unsafe_free!(qn)
+    CUDA.unsafe_free!(kn)
     return out
 end
 
@@ -2343,8 +2359,7 @@ function _moe_topk_host!(backend::CUDABackend, y, x, router, gate, up, down, n_u
     end
     s = CUDA.stream()
     hot = _hot_layer(gate)
-    # A long prompt needs the pool memory for its activations; the pools
-    # refill at the next decode token from scores this prefill has warmed.
+    # Pools otherwise leave when memory runs short (_HotPurge).
     hot !== nothing && seq > _HOT_CFG[].keep_seq && _hot_release!(hot)
     Gesso.Inference.@decode_stage :moe_router backend begin
         rd = router isa CuArray ? router : CuArray{Float32}(Gesso.Inference._offload_host_array(router))
@@ -2387,8 +2402,14 @@ function _moe_topk_host!(backend::CUDABackend, y, x, router, gate, up, down, n_u
                 b.xrow[i] = X[t, i]
             end
             if hot !== nothing
-                if seq == 1 && y isa DenseCuArray && _hot_alloc!(hot, gate, up, n_used)
-                    return _moe_hot_token!(backend, hot, y, xd, b, gate, up, down, n_used, s)
+                if seq == 1 && y isa DenseCuArray
+                    _HOT_BUSY[] = true
+                    try
+                        _hot_alloc!(hot, gate, up, n_used) &&
+                            return _moe_hot_token!(backend, hot, y, xd, b, gate, up, down, n_used, s)
+                    finally
+                        _HOT_BUSY[] = false
+                    end
                 end
                 _hot_observe!(hot, b.experts, n_used)
             end

@@ -189,6 +189,7 @@ function __init__()
     # CUDA.jl reads the variable on its first allocation; a user's own setting wins.
     haskey(ENV, "JULIA_CUDA_GC_EARLY") || (ENV["JULIA_CUDA_GC_EARLY"] = "false")
     Core.eval(Gesso, :(const CUDABackend = $CUDABackend))
+    CUDA.CUDACore.register_reclaimable!(_HotPurge())
     _autotune_register!()   # §LXXXII: backend extensions register candidates (runtime state)
     if isdefined(Gesso, :to_device)
         Core.eval(
