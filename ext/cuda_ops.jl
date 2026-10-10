@@ -137,6 +137,11 @@ function _cuda_rmsnorm_storage!(dsts::AbstractArray, xs::AbstractArray, scales::
         rows = length(xs) ÷ d
         x2 = reshape(xs, rows, d)
         d2 = reshape(dsts, rows, d)
+        if d <= 256 && rows <= 8192
+            @fastcuda threads = 32cld(d, 32) blocks = rows _cuda_rmsnorm_rows_kernel!(
+                d2, x2, scales, eps, d)
+            return dsts
+        end
         ss = _rmsnorm_sumsq(rows)
         sum!(abs2, ss, x2)
         nthreads = min(256, d)
@@ -157,6 +162,47 @@ function _cuda_rmsnorm_storage!(dsts::AbstractArray, xs::AbstractArray, scales::
     stail = reshape(scales, (ntuple(_ -> 1, nd - 1)..., d))
     dsts .= (xs ./ rms) .* stail
     return dsts
+end
+
+@inline function _warp_sum_f32(v::Float32)
+    off = 0x00000001
+    while off < 0x00000020
+        v += CUDA.shfl_down_sync(0xffffffff, v, off)
+        off <<= 1
+    end
+    return v
+end
+
+# Sum of squares and apply in one launch, one block per row. The reduction
+# reproduces the order of CUDACore's single-block shuffle mapreduce, which
+# sum!(abs2, ss, x2) takes when threads = nextwarp(d) and the row count sits
+# below its serial-kernel threshold, so the result is bit-identical to the
+# two-launch path (checked over seven shapes x 20 magnitudes). That path also
+# queries occupancy on every call; this one is a plain launch.
+function _cuda_rmsnorm_rows_kernel!(dst2, xs2, scales, eps, d::Int)
+    r = blockIdx().x
+    t = Int(threadIdx().x)
+    sh = CUDA.CuStaticSharedArray(Float32, 33)
+    v = 0.0f0
+    @inbounds begin
+        j = t
+        while j <= d
+            v += abs2(xs2[r, j])
+            j += blockDim().x
+        end
+        wid, lane = fldmod1(t, 32)
+        v = _warp_sum_f32(v)
+        lane == 1 && (sh[wid] = v)
+        CUDA.sync_threads()
+        v = t <= fld1(Int(blockDim().x), 32) ? sh[lane] : 0.0f0
+        if wid == 1
+            v = _warp_sum_f32(v)
+            t == 1 && (sh[33] = v)
+        end
+        CUDA.sync_threads()
+    end
+    _cuda_rmsnorm_apply_row!(dst2, xs2, Float64(sqrt(sh[33] / d + eps)), scales, r, d)
+    return
 end
 
 # Single-row decode normalization: one block of 256 threads (launch width is
@@ -1999,6 +2045,11 @@ function _dev_scratch(key::Symbol, dims::Integer...)
     if buf === nothing || size(buf) != dims
         Gesso.Inference._profile_count!(:cuda_alloc_calls, 1)
         Gesso.Inference._profile_count!(:cuda_alloc_bytes, 4 * prod(dims))
+        # Every prefill/decode switch reshapes each key. Left to the GC, the
+        # old buffers fill the device until an allocation fails, and the
+        # retry runs a full collection (300+ ms on the model's heap). The free
+        # is stream-ordered, so kernels already queued on it still finish.
+        buf === nothing || CUDA.unsafe_free!(buf)
         buf = CUDA.zeros(Float32, dims...)
         _DEV_SCRATCH.bufs[k] = buf
     end
