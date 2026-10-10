@@ -2319,6 +2319,7 @@ mutable struct _MoeHostXfer
     E::Matrix{Int}
     W::Matrix{Float32}
     live::Vector{Bool}
+    route::Vector{Int32}
 end
 
 const _MOE_HOST_XFER = Ref{Union{Nothing,_MoeHostXfer}}(nothing)
@@ -2333,14 +2334,16 @@ function _moe_host_xfer(seq::Int, n_exp::Int, h::Int, n_used::Int)
         lg = Vector{Float32}(undef, cap * n_exp)
         xx = Vector{Float32}(undef, cap * h)
         yy = Vector{Float32}(undef, cap * h)
+        rt = Vector{Int32}(undef, cap * (2n_used + 1))
         CUDA.pin(lg)
         CUDA.pin(xx)
         CUDA.pin(yy)
+        CUDA.pin(rt)
         b = _MoeHostXfer(cap, n_exp, h, lg, xx, yy, Vector{Float32}(undef, h),
             Vector{Float32}(undef, h), Vector{Int}(undef, n_exp),
             Vector{Int}(undef, n_used), Vector{Float32}(undef, n_used),
             Matrix{Int}(undef, n_used, cap), Matrix{Float32}(undef, n_used, cap),
-            Vector{Bool}(undef, cap))
+            Vector{Bool}(undef, cap), rt)
         _MOE_HOST_XFER[] = b
     end
     return b
@@ -2393,11 +2396,17 @@ function _moe_topk_host!(backend::CUDABackend, y, x, router, gate, up, down, n_u
     hot = _hot_layer(gate)
     # Pools otherwise leave when memory runs short (_HotPurge).
     hot !== nothing && seq > _HOT_CFG[].keep_seq && _hot_release!(hot)
+    batch = seq > 1 && Gesso.Inference._moe_host_batchable(gate, up, down, h, gate.ne1)
+    routed = batch && _moe_prefill_route_ok(n_exp, n_used)
     Gesso.Inference.@decode_stage :moe_router backend begin
         rd = router isa CuArray ? router : CuArray{Float32}(Gesso.Inference._offload_host_array(router))
         _cuda_router_logits!(logits, x, rd)
         Gesso.Inference._profile_copy!(true)
-        unsafe_copyto!(pointer(b.logits), pointer(logits), seq * n_exp; async=true, stream=s)
+        if routed
+            _moe_route_rows_launch!(b, logits, seq, n_exp, n_used, s)
+        else
+            unsafe_copyto!(pointer(b.logits), pointer(logits), seq * n_exp; async=true, stream=s)
+        end
         unsafe_copyto!(pointer(b.x), pointer(xd), seq * h; async=true, stream=s)
     end
     # Work queued behind the copies runs on the GPU while the CPU runs the
@@ -2418,8 +2427,8 @@ function _moe_topk_host!(backend::CUDABackend, y, x, router, gate, up, down, n_u
     X = unsafe_wrap(Array, pointer(b.x), (seq, h))
     Y = unsafe_wrap(Array, pointer(b.y), (seq, h))
     gpu_add = false
-    if seq > 1 && Gesso.Inference._moe_host_batchable(gate, up, down, h, gate.ne1)
-        gpu_add = _moe_host_prefill_layer!(backend, b, L, X, Y, y, xd, hot, gate, up, down,
+    if batch
+        gpu_add = _moe_host_prefill_layer!(backend, b, routed, L, X, Y, y, xd, hot, gate, up, down,
             seq, n_exp, n_used, s)
     else
         for t in 1:seq
@@ -2476,14 +2485,19 @@ end
 # instead of once per token that picked it. Bit-identical to the token loop
 # unless the layer is hot, when the GPU takes part of the pairs and the result
 # is true: Y then holds the CPU's partial sum and the caller adds the GPU's.
-function _moe_host_prefill_layer!(backend, b::_MoeHostXfer, L, X, Y, y, xd, hot, gate, up, down,
+function _moe_host_prefill_layer!(backend, b::_MoeHostXfer, routed::Bool, L, X, Y, y, xd, hot, gate, up, down,
     seq::Int, n_exp::Int, n_used::Int, s)
+    if routed
+        Gesso.Inference.@decode_stage :moe_router nothing _moe_route_rows_unpack!(b, seq, n_used)
+    end
     for t in 1:seq
         ex = view(b.E, :, t)
-        wsum = Gesso.Inference.@decode_stage :moe_router nothing _moe_route_row!(
-            b.order, ex, view(b.W, :, t), view(L, t, :), n_exp, n_used,
-        )
-        b.live[t] = wsum > 0
+        if !routed
+            wsum = Gesso.Inference.@decode_stage :moe_router nothing _moe_route_row!(
+                b.order, ex, view(b.W, :, t), view(L, t, :), n_exp, n_used,
+            )
+            b.live[t] = wsum > 0
+        end
         b.live[t] && hot !== nothing && _hot_observe!(hot, ex, n_used)
     end
     hot !== nothing && y isa DenseCuArray &&
@@ -2526,21 +2540,17 @@ end
 # an exhaustive check over every non-positive Float32 down to -110 found no
 # mismatch. The top-k takes n_used argmax rounds keyed on (probability
 # descending, index ascending), the same strict order the host partial sort
-# uses. Taken experts drop to -1, below any probability.
-function _moe_route_kernel!(ws, mg, mu, md, logits, n_exp::Int32, n_used::Int32,
-                            bpe_g::Int32, bpe_u::Int32, bpe_d::Int32)
+# uses. Taken experts drop to -1, below any probability. Row t of `logits`
+# leaves its top k in si (expert) and sv (probability), best first. Needs a
+# 256-thread block.
+@inline function _moe_route_block!(p, bv, bi, sv, si, logits, t::Int, n_exp::Int32, n_used::Int32)
     tid = threadIdx().x
     nt = blockDim().x
-    p = CUDA.@cuStaticSharedMem(Float32, _MOE_ROUTE_MAX_EXP)
-    bv = CUDA.@cuStaticSharedMem(Float32, 256)
-    bi = CUDA.@cuStaticSharedMem(Int32, 256)
-    sv = CUDA.@cuStaticSharedMem(Float32, _MOE_ROUTE_MAX_USED)
-    si = CUDA.@cuStaticSharedMem(Int32, _MOE_ROUTE_MAX_USED)
     @inbounds begin
         m = typemin(Float32)
         e = tid
         while e <= n_exp
-            v = logits[1, e]
+            v = logits[t, e]
             p[e] = v
             v > m && (m = v)
             e += nt
@@ -2614,7 +2624,26 @@ function _moe_route_kernel!(ws, mg, mu, md, logits, n_exp::Int32, n_used::Int32,
             end
             CUDA.sync_threads()
         end
-        if tid == 1
+    end
+    return nothing
+end
+
+macro _moe_route_shared()
+    return esc(quote
+        p = CUDA.@cuStaticSharedMem(Float32, _MOE_ROUTE_MAX_EXP)
+        bv = CUDA.@cuStaticSharedMem(Float32, 256)
+        bi = CUDA.@cuStaticSharedMem(Int32, 256)
+        sv = CUDA.@cuStaticSharedMem(Float32, _MOE_ROUTE_MAX_USED)
+        si = CUDA.@cuStaticSharedMem(Int32, _MOE_ROUTE_MAX_USED)
+    end)
+end
+
+function _moe_route_kernel!(ws, mg, mu, md, logits, n_exp::Int32, n_used::Int32,
+                            bpe_g::Int32, bpe_u::Int32, bpe_d::Int32)
+    @_moe_route_shared
+    _moe_route_block!(p, bv, bi, sv, si, logits, 1, n_exp, n_used)
+    @inbounds begin
+        if threadIdx().x == 1
             wsum = 0.0f0
             for k in 1:n_used
                 wsum += sv[k]
@@ -2633,6 +2662,61 @@ function _moe_route_kernel!(ws, mg, mu, md, logits, n_exp::Int32, n_used::Int32,
         end
     end
     return
+end
+
+# Prefill routing: block t routes token t into column t of R as
+# [experts; weight bits; wsum bits], the same values _moe_route_row! leaves in
+# E, W and its return. The host spent about 5 us of exp and sort per token per
+# layer on this (170 to 340 ms of a P256 prefill on the Ornith-35B), and the
+# table is a sixteenth the size of the logits it replaces on the bus.
+# GESSO_MOE_PREFILL_ROUTE=0 routes on the host again.
+function _moe_route_rows_kernel!(R, logits, n_exp::Int32, n_used::Int32)
+    @_moe_route_shared
+    t = Int(blockIdx().x)
+    _moe_route_block!(p, bv, bi, sv, si, logits, t, n_exp, n_used)
+    @inbounds if threadIdx().x == 1
+        wsum = 0.0f0
+        for k in 1:n_used
+            wsum += sv[k]
+        end
+        invw = wsum > 0 ? 1.0f0 / wsum : 0.0f0
+        for k in 1:n_used
+            R[k, t] = si[k]
+            R[n_used + k, t] = reinterpret(Int32, sv[k] * invw)
+        end
+        R[2n_used + 1, t] = reinterpret(Int32, wsum)
+    end
+    return
+end
+
+_moe_prefill_route_ok(n_exp::Int, n_used::Int) = get(ENV, "GESSO_MOE_PREFILL_ROUTE", "1") == "1" &&
+    n_exp <= _MOE_ROUTE_MAX_EXP && n_used <= _MOE_ROUTE_MAX_USED
+
+const _MOE_ROUTE_ROWS = Ref{Union{Nothing,_CuVec{Int32}}}(nothing)
+
+# Queues the route table and its copy into b.route on stream s.
+function _moe_route_rows_launch!(b::_MoeHostXfer, logits, seq::Int, n_exp::Int, n_used::Int, s)
+    w = 2n_used + 1
+    R = _MOE_ROUTE_ROWS[] = _hotp_dev(_MOE_ROUTE_ROWS[], Int32, w * seq)
+    Rm = unsafe_wrap(CuArray, pointer(R), (w, seq))
+    @fastcuda threads = 256 blocks = seq _moe_route_rows_kernel!(Rm, logits, Int32(n_exp), Int32(n_used))
+    unsafe_copyto!(pointer(b.route), pointer(R), w * seq; async=true, stream=s)
+    return nothing
+end
+
+# After the copy lands: the table into b.E, b.W and b.live.
+function _moe_route_rows_unpack!(b::_MoeHostXfer, seq::Int, n_used::Int)
+    w = 2n_used + 1
+    R = b.route
+    @inbounds for t in 1:seq
+        o = (t - 1) * w
+        for k in 1:n_used
+            b.E[k, t] = R[o + k]
+            b.W[k, t] = reinterpret(Float32, R[o + n_used + k])
+        end
+        b.live[t] = reinterpret(Float32, R[o + w]) > 0
+    end
+    return nothing
 end
 
 function _moe_device_route_ok(y, x, router, gate, up, down, n_used::Int)
@@ -2752,11 +2836,16 @@ function _moe_topk_device_prefill!(backend::CUDABackend, y, x, router, gate, up,
     b = _moe_host_xfer(seq, n_exp, h, n_used)
     B = _MOE_PAIR_BATCH
     logits = _dev_scratch(:moe_logits, seq, n_exp)
+    routed = _moe_prefill_route_ok(n_exp, n_used)
     Gesso.Inference.@decode_stage :moe_router backend begin
         rd = router isa CuArray ? router : CuArray{Float32}(Gesso.Inference._offload_host_array(router))
         _cuda_router_logits!(logits, x, rd)
         Gesso.Inference._profile_copy!(true)
-        unsafe_copyto!(pointer(b.logits), pointer(logits), seq * n_exp; async=true, stream=s)
+        if routed
+            _moe_route_rows_launch!(b, logits, seq, n_exp, n_used, s)
+        else
+            unsafe_copyto!(pointer(b.logits), pointer(logits), seq * n_exp; async=true, stream=s)
+        end
         copied = _moe_host_event()
         CUDA.record(copied, s)
         _cuda_event_wait(copied)
@@ -2779,10 +2868,14 @@ function _moe_topk_device_prefill!(backend::CUDABackend, y, x, router, gate, up,
         _cuda_q8_buffers!(_CUDA_Q8_EXPERT, max(tc * (h ÷ 32), np_max * (ff ÷ 32)))
     end
 
-    L = unsafe_wrap(Array, pointer(b.logits), (seq, n_exp))
-    Gesso.Inference.@decode_stage :moe_router nothing for t in 1:seq
-        wsum = _moe_route_row!(b.order, view(b.E, :, t), view(b.W, :, t), view(L, t, :), n_exp, n_used)
-        b.live[t] = wsum > 0
+    if routed
+        Gesso.Inference.@decode_stage :moe_router nothing _moe_route_rows_unpack!(b, seq, n_used)
+    else
+        L = unsafe_wrap(Array, pointer(b.logits), (seq, n_exp))
+        Gesso.Inference.@decode_stage :moe_router nothing for t in 1:seq
+            wsum = _moe_route_row!(b.order, view(b.E, :, t), view(b.W, :, t), view(L, t, :), n_exp, n_used)
+            b.live[t] = wsum > 0
+        end
     end
 
     xt = unsafe_wrap(CuArray, pointer(B.xt), (h, seq))

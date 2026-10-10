@@ -357,6 +357,30 @@ else
         end
     end
 
+    @testset "cuda prefill route table matches the host route bit for bit" begin
+        ext = Base.get_extension(Gesso, :GessoCUDAExt)
+        rng = deterministic_rng(43)
+        for (n_exp, n_used, seq) in ((256, 8, 37), (64, 6, 5), (256, 8, 300))
+            L = randn(rng, Float32, seq, n_exp) .* 4
+            # quantized rows tie often; equal logits must keep the lower index
+            L[1:2:end, :] .= Float32.(rand(rng, -3:3, length(1:2:seq), n_exp))
+            L[2, :] .= 0
+            b = ext._moe_host_xfer(seq, n_exp, 8, n_used)
+            ext._moe_route_rows_launch!(b, CuArray(L), seq, n_exp, n_used, CUDA.stream())
+            CUDA.synchronize()
+            ext._moe_route_rows_unpack!(b, seq, n_used)
+            order = collect(1:n_exp)
+            experts = zeros(Int, n_used)
+            wbuf = zeros(Float32, n_used)
+            ok = true
+            for r in 1:seq
+                wsum = ext._moe_route_row!(order, experts, wbuf, L[r, :], n_exp, n_used)
+                ok &= b.E[:, r] == experts && b.W[:, r] == wbuf && b.live[r] == (wsum > 0)
+            end
+            @test ok
+        end
+    end
+
     @testset "cuda device MoE route matches the host route bit for bit" begin
         ext = Base.get_extension(Gesso, :GessoCUDAExt)
         rng = deterministic_rng(41)
