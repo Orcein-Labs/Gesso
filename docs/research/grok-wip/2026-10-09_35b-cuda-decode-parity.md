@@ -18,6 +18,7 @@
 | e46b4e3 | zero-alloc raw launches, typed caches | 47.53 tok/s, ids ok | | 366/366 |
 | 46c94b2 | fused add+rmsnorm, KV append, qk-norm rows | 49.10 tok/s, ids ok | p9419 15.97 ms | |
 | 7f279eb | prefill temporaries freed, pools purged on pressure | 45.95 tok/s, ids ok (host swapping) | p9419 15.23 ms, p1000 16.51 ms, 0 GCs | 590/590 |
+| 16709c2 | prefill streaming ring, prefill buffers released before decode | 44.8 tok/s, ids ok | | 653/653 |
 
 The gate is a short cold run and moves about +-2 tok/s between runs. The
 medians come from `bench_ab`: six warm 32-token generations per prompt.
@@ -190,6 +191,50 @@ Profile at P256, ca67e01 (profiled wall 688 ms, stages serialized):
 | shared expert | 16.7 |
 | router | 14.3 |
 | moe_h2d | 10.3 |
+
+### Streaming ring (16709c2)
+
+A long prompt's activations purge the hot-expert pools in VRAM. A layer whose
+pool was purged and could not be re-allocated fell back to the whole CPU MoE
+path. That path costs about 60 us per pair, so each such layer added about
+0.5 s at P1024 and about 1 s at P2048. A decode-time OOM had a second effect:
+it set a layer's slot count to 0 permanently, so that layer never used the
+GPU in prefill again.
+
+The fix is a streaming ring. Layers without a usable pool stream their experts
+through one small ring of device slots shared by all layers. The default is 32
+slots, about 1.4 MB each (`GESSO_GPU_HOT_PREFILL_STREAM`). The ring reuses the
+issue path that resident pools use. It double-buffers its uploads against the
+GEMVs, so one expert's copy overlaps the previous expert's compute.
+
+Decode now frees the prefill's grow-only device buffers and the ring before it
+re-allocates a pool. The order matters: after a 4096-token prompt the D buffer
+alone is 256 MiB, about two pools, so keeping it would starve the refill.
+Layers with 0 slots stream too. The default `GESSO_GPU_HOT_PREFILL_MAX_SEQ`
+rises from 1024 to 4096.
+
+Results, 35B Q2_K_XL, hot+pin configuration (`GESSO_GPU_HOT_EXPERTS=1
+GESSO_GPU_HOT_PIN=1 GESSO_GPU_HOT_RESERVE_MIB=512 GESSO_GPU_BUDGET_MIB=4096`):
+
+| P | before (full-CPU fallbacks) | after (tok/s) | llama.cpp |
+|---|---|---|---|
+| 512 | n/a | 414 | - |
+| 1024 | 324 (2 full-CPU layers) | 437 | 386 |
+| 2048 | ~310 | 433 | - |
+| 4096 | ~300 | 385 | - |
+
+Full-CPU layers after the change: 0 at every length. GC time: 0. The verify
+pass (GPU vs CPU per layer) has a max relative error of 2.7e-2 and a median of
+2.3e-2. No layer exceeds 0.05.
+
+Decode gate after the change: 44.8 tok/s, ids ok. The 7f279eb row was 45.95,
+and the gate moves about +-2 between runs, so the gap is inside that spread.
+Targeted CUDA tests: 653/653.
+
+Open: the pools drop to 0 during a 4096-token prompt. Decode refills them over
+the next generations. Warm decode measured 50-52 tok/s after the sweep.
+Prompts over 4096 still take the CPU path. MoE token chunking would lift that
+limit.
 
 ## Where the time goes now
 
