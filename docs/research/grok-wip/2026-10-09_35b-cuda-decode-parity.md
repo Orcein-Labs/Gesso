@@ -2,7 +2,7 @@
 
     Document class:     findings (one day's campaign)
     Date:               2026-10-09
-    Branch:             grok-wip (fast-forwarded to 58af083; lane-l/opus-int same tip)
+    Branch:             grok-wip (fast-forwarded to 7f279eb; lane-l/opus-int same tip)
     Model:              Ornith-1.5-35B-A3B Q2_K_XL (GGUF via GESSO_ORNITH35_GGUF)
     Target:             llama.cpp tg64 32.80 tok/s (30.5 ms/token), --n-cpu-moe 24
     Acceptance:         scripts/gate_35b.jl cuda (exact ids) + targeted CUDA tests
@@ -14,6 +14,14 @@
 | 8b32b3f | start of day | 7.7-7.9 tok/s | | |
 | db466e1 | parity: cached launches, prefault | 36.64 tok/s, ids ok | 27.3-28.6 ms | 366/366 |
 | 58af083 | + hot experts, pinned (opt-in) | 39.9 tok/s, ids ok | best 18.7-19.1 ms, typical 20-26 ms | 366/366 |
+| a136560 | hot config retuned (budget 4096, reserve 512) | 42.4 tok/s, ids ok | | |
+| e46b4e3 | zero-alloc raw launches, typed caches | 47.53 tok/s, ids ok | | 366/366 |
+| 46c94b2 | fused add+rmsnorm, KV append, qk-norm rows | 49.10 tok/s, ids ok | p9419 15.97 ms | |
+| 7f279eb | prefill temporaries freed, pools purged on pressure | 45.95 tok/s, ids ok (host swapping) | p9419 15.23 ms, p1000 16.51 ms, 0 GCs | 590/590 |
+
+The gate is a short cold run and moves about +-2 tok/s between runs. The
+medians come from `bench_ab`: six warm 32-token generations per prompt.
+From 46c94b2 on, every row uses the hot+pin configuration.
 
 On this box Gesso is faster than llama.cpp on the 35B with the default
 settings: 27-29 ms/token against llama.cpp's 30.5 ms.
@@ -94,6 +102,38 @@ The gate's 9 ids still match.
 The recommended opt-in configuration is HOT=1, PIN=1, BUDGET 3072-4096,
 MARGIN 1.
 
+## Host overhead and the GC (lane m, 46c94b2 -> 7f279eb)
+
+- **Launch cost.** `@fastcuda` launches now go through
+  `unchecked_cuLaunchKernel` with reused argument buffers. Struct fields use the
+  concrete `CuArray{T,1,DeviceMemory}`: a `CuVector{T}` field is abstract and
+  cost a dynamic dispatch per launch. CPU allocations per token fell from 15.2k
+  to 7.9k. Fused add+rmsnorm, KV append and qk-norm rows kernels removed most
+  of the remaining GPUArrays broadcasts.
+- **Every full GC was CUDA's allocation retry.** A trace of CUDACore's
+  `reclaim_step` showed each 270-790 ms full GC coming from `_hot_alloc!`
+  refilling a pool that the prefill had released. Prefill temporaries were
+  left to the GC, and host allocations were too small to trigger one, so
+  device garbage built up until an allocation failed.
+- **Freeing the owner is not enough.** A reshape or contiguous view of a
+  CuArray is a derived CuArray that holds its own reference to the parent's
+  memory. `unsafe_free!(parent)` only drops one reference, so the memory stays
+  until the derived array's finalizer runs. A 41-token prompt leaked about
+  80 MiB per generation this way. The fix frees the derived array too, as soon
+  as its last kernel is queued (`unsafe_free!` is stream-ordered). This covers
+  the rmsnorm reshapes, the GDN column views, the rope positions, the embed
+  staging and the gated-delta q/k normals. The live device delta after p1000
+  x32 fell from 78.6 MiB to 0.1 MiB.
+- **Pools are released on memory pressure, not on prefill length.**
+  `_HotPurge <: CUDACore.Reclaimable` releases the pools at the PURGE step of
+  the allocation retry, before any GC. It is a no-op while a hot token or a
+  prefetch is running. A 41-token prompt used to drop all 29 pools and spend
+  about 40 tokens refilling them. It now keeps them, and a P=1024 prefill keeps
+  them too.
+- **Batched host prefill.** Prefill tokens are grouped by expert. The output
+  is bit-identical. Prefill runs at about 22-25 ms/token for P=41-1024, which
+  is still slow (see next levers).
+
 ## Where the time goes now
 
 Profiling syncs every stage, so these stage times are serialized: they add to
@@ -115,6 +155,8 @@ and serial host work per hybrid layer.
 
 ## Next levers, ranked
 
+0. **Prefill.** It runs at 21-25 ms/token, close to the decode rate, so
+   batching barely helps it yet. Where its time goes has not been profiled.
 1. **Four DIMM channels.** About 4x the DRAM bandwidth for every miss and
    every swap. No code needed.
 2. **The GPU floor.** Fuse gdn, attention and the shared expert. Cut the
