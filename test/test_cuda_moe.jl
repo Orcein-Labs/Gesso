@@ -61,6 +61,25 @@ else
         @test gpu0.embedding.storage isa Gesso.HostOffload
     end
 
+    @testset "cuda to_device places an expert triple whole or not at all" begin
+        # 392 KiB slabs: two fit a 1 MiB budget, three do not.
+        mk() = _pack_f32_slice(ones(Float32, 2, 224, 224), 224, 224)
+        emb = Gesso.EmbeddingTable(; shape=(4, 2), storage=ones(Float32, 4, 2))
+        ew(s) = Gesso.ExpertWeight(; shape=size(s), storage=s)
+        bt = (; mixer=:full_attention, n_expert_used=2,
+            wexp_gate=ew(mk()), wexp_up=ew(mk()), wexp_down=ew(mk()))
+        ts = (; embedding=emb, blocks=[bt], lm_head=emb)
+        slabs(g) = map(k -> g.blocks[1][k].storage, (:wexp_gate, :wexp_up, :wexp_down))
+        g1 = withenv("GESSO_GPU_BUDGET_MIB" => "1") do
+            Gesso.to_device(cuda, ts)
+        end
+        @test all(x -> x isa Gesso.GgufQuantSlice, slabs(g1))
+        g2 = withenv("GESSO_GPU_BUDGET_MIB" => "2") do
+            Gesso.to_device(cuda, ts)
+        end
+        @test all(x -> x isa Gesso.GpuQuantSlice, slabs(g2))
+    end
+
     @testset "cuda to_device wraps overflow as HostOffload, small-first" begin
         small = ones(Float32, 8, 8)            # 256 B
         large = ones(Float32, 1024, 1024)      # 4 MiB

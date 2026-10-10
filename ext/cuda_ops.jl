@@ -1303,27 +1303,43 @@ function _to_device_cuda(tensors)
     # Opt-in (GESSO_GPU_EXPERT_CACHE=1) until misses run on the CPU: with
     # misses uploaded, the cache measured slower than whole-slab placement.
     use_cache = _expert_cache_enabled()
-    triples = use_cache ? _moe_expert_triples(tensors.blocks) : Any[]
+    all_triples = _moe_expert_triples(tensors.blocks)
+    triples = use_cache ? all_triples : Any[]
     expert_ids = Set{UInt}()
     for (_, g, u, d) in triples
         union!(expert_ids, (objectid(g), objectid(u), objectid(d)))
+    end
+    # A layer's gate/up/down slabs go up together or not at all. A layer left
+    # half on the device matches neither the host-expert path nor the device
+    # prefill path and falls to the per-token upload loop: one such layer at
+    # the 35B's 4 GiB budget cost ~370 ms of a 256-token prefill.
+    group_of = Dict{UInt, Any}()
+    for (_, g, u, d) in all_triples
+        for x in (g, u, d)
+            group_of[objectid(x)] = (g, u, d)
+        end
     end
     qseen = Set{UInt}()
     for s in qpending
         id = objectid(s)
         id in qseen && continue
-        push!(qseen, id)
         if id in expert_ids
+            push!(qseen, id)
             conv[s] = s
             continue
         end
-        nbytes = Gesso.Inference._quant_nbytes(s)
-        if nbytes <= remaining && nbytes > 0
-            packed = Gesso.Inference.packed_quant_bytes(s)
-            conv[s] = Gesso.Inference.gpu_quant_slice(s, CuArray{UInt8}(packed))
+        grp = get(group_of, id, (s,))
+        foreach(x -> push!(qseen, objectid(x)), grp)
+        sizes = map(Gesso.Inference._quant_nbytes, grp)
+        nbytes = sum(sizes)
+        if nbytes <= remaining && all(>(0), sizes)
+            for x in grp
+                packed = Gesso.Inference.packed_quant_bytes(x)
+                conv[x] = Gesso.Inference.gpu_quant_slice(x, CuArray{UInt8}(packed))
+            end
             remaining -= nbytes
         else
-            conv[s] = s
+            foreach(x -> conv[x] = x, grp)
         end
     end
 
