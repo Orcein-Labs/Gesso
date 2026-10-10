@@ -52,7 +52,7 @@ end
 end
 
 @testset "Qwen3.5-0.8B local snapshot materializes" begin
-    dir = joinpath(@__DIR__, "..", "snapshots", "Qwen3.5-0.8B")
+    dir = get(ENV, "GESSO_QWEN35_08B_DIR", joinpath(@__DIR__, "..", "snapshots", "Qwen3.5-0.8B"))
     cfg = joinpath(dir, "config.json")
     if !isfile(cfg)
         @info "skip 0.8B snapshot: $dir missing"
@@ -104,4 +104,12 @@ end
     @test ids[1] == 9419
     @test ids[2] == 11
     @test ids[2:9] == [11, 271, 40, 1044, 3133, 440, 264, 12654]
+
+    # Prefill in passes carries KV and GDN state: 300 tokens as 128+128+44
+    # continue exactly like one pass.
+    prompt = [(i * 7919) % 50000 + 100 for i in 1:300]
+    gen(c) = withenv("GESSO_PREFILL_CHUNK" => c) do
+        Gesso.reference_generate(model, tensors, prompt; max_new_tokens=6, eps=spec.rms_norm_eps)
+    end
+    @test gen("128") == gen("0")
 end

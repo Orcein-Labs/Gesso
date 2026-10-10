@@ -888,6 +888,16 @@ function _arena_release!(a::_ZerosArena)
     return nothing
 end
 
+# Prompt tokens per prefill pass. A pass's activations grow with its length
+# (~0.75 MiB a token on the 35B MoE), so an unbounded pass over a long prompt
+# runs an 8 GB device out of memory next to the resident weights; passes carry
+# the KV cache and the GDN states. GESSO_PREFILL_CHUNK=0 is one pass.
+function _prefill_chunk(P::Int)
+    raw = get(ENV, "GESSO_PREFILL_CHUNK", "1024")
+    c = something(tryparse(Int, raw), 1024)
+    return c <= 0 ? P : min(c, P)
+end
+
 _fallback_zeros_factory(::CPUBackend) = (dims::Tuple{Vararg{Int}}) -> zeros(Float32, dims)
 function _fallback_zeros_factory(backend)
     error(
@@ -1111,51 +1121,28 @@ function reference_generate(
 
     # per-layer KV caches: preallocated (P + cap) rows, filled progressively
     # (the cache is runtime state, not a weight — no fixture-walk entries)
+    # (linear-attention blocks keep no cache: a zero-row placeholder)
+    kv_rows(bt) = _block_mixer(bt) === :linear_attention ? 0 : P + cap
     kc = [
         Activation(;
-            shape=(P + cap, n_kv_heads, d_head),
-            storage=zeros_like((P + cap, n_kv_heads, d_head)),
-        ) for _ in 1:length(model.blocks)
+            shape=(kv_rows(bt), n_kv_heads, d_head),
+            storage=zeros_like((kv_rows(bt), n_kv_heads, d_head)),
+        ) for bt in tensors.blocks
     ]
     vc = [
         Activation(;
-            shape=(P + cap, n_kv_heads, d_head),
-            storage=zeros_like((P + cap, n_kv_heads, d_head)),
-        ) for _ in 1:length(model.blocks)
+            shape=(kv_rows(bt), n_kv_heads, d_head),
+            storage=zeros_like((kv_rows(bt), n_kv_heads, d_head)),
+        ) for bt in tensors.blocks
     ]
 
     # hidden states: (P + cap, dim) — prefill fills rows 1..P, each decode
     # step writes its single new row in place (Activation fields are
     # immutable, §CIX; storage CONTENT is what the interpreter owns)
     h = Activation(; shape=(P + cap, dim), storage=zeros_like((P + cap, dim)))
-    normed = Activation(; shape=(P, dim), storage=zeros_like((P, dim)))
     kdim = n_kv_heads * d_head
     qdim = n_heads * d_head
-    q = Activation(; shape=(P, qdim), storage=zeros_like((P, qdim)))
-    gate_attn = Activation(; shape=(P, qdim), storage=zeros_like((P, qdim)))
-    k = Activation(; shape=(P, kdim), storage=zeros_like((P, kdim)))
-    v = Activation(; shape=(P, kdim), storage=zeros_like((P, kdim)))
-    qh = Activation(; shape=(P, n_heads, d_head), storage=zeros_like((P, n_heads, d_head)))
-    kh = Activation(;
-        shape=(P, n_kv_heads, d_head),
-        storage=zeros_like((P, n_kv_heads, d_head)),
-    )
-    vh = Activation(;
-        shape=(P, n_kv_heads, d_head),
-        storage=zeros_like((P, n_kv_heads, d_head)),
-    )
-    attn =
-        Activation(; shape=(P, n_heads, d_head), storage=zeros_like((P, n_heads, d_head)))
-    merged = Activation(; shape=(P, qdim), storage=zeros_like((P, qdim)))
-    sub = Activation(; shape=(P, dim), storage=zeros_like((P, dim)))
-    normed2 = Activation(; shape=(P, dim), storage=zeros_like((P, dim)))
     hidden_ffn = model.blocks[1].ffn.hidden
-    gate = Activation(; shape=(P, hidden_ffn), storage=zeros_like((P, hidden_ffn)))
-    up = Activation(; shape=(P, hidden_ffn), storage=zeros_like((P, hidden_ffn)))
-    act = Activation(; shape=(P, hidden_ffn), storage=zeros_like((P, hidden_ffn)))
-    down = Activation(; shape=(P, dim), storage=zeros_like((P, dim)))
-    scores = TemporaryWorkspace(; shape=(P, P), storage=zeros_like((P, P)))
-    scores_out = TemporaryWorkspace(; shape=(P, P), storage=zeros_like((P, P)))
     gdn_conv, gdn_rec = _gdn_states(tensors, zeros_like)
     gdn_scratch = _gdn_decode_scratch(zeros_like, tensors)
     spec_mx = haskey(tensors, :spec) && tensors.spec !== nothing ? tensors.spec.mixer : nothing
@@ -1164,91 +1151,125 @@ function reference_generate(
         kdim=n_kv_heads * d_head, n_heads, n_kv_heads, d_head, vocab, ctx=P + cap,
     ) : nothing
 
-    positions = collect(0:(P-1))
     # BREADTH-0 Pass D — see reference_prefill. `nothing` = unscaled model.
     inv_freq = tensors_rope_inv_freq(tensors, d_head; theta)
     t_prefill = time_ns()
-    # the prefill phase works on rows 1..P of h through a VIEW (Activation
-    # storage is untyped by design; scratch stays exactly (P, …)-shaped so
-    # softmax never sees padded zero columns — they would poison the
-    # denominators). Residuals broadcast through the view, in place.
-    hp = Activation(; shape=(P, dim), storage=@view h.storage[1:P, :])
-    embedding_lookup!(cpu, hp, tensors.embedding, prompt, wp)
-    for (bi, blk) in enumerate(model.blocks)
-        bt = tensors.blocks[bi]
-        if _block_mixer(bt) === :linear_attention
-            _hybrid_linear_block!(
-                cpu,
-                hp,
-                normed,
-                sub,
-                bt,
-                tensors.spec,
-                wp,
-                eps,
-                block_tmp;
-                conv_state=gdn_conv[bi],
-                rec_state=gdn_rec[bi],
-            )
-            hp.storage .+= sub.storage
-        else
-        rmsnorm!(cpu, normed, hp, bt.attn_rms, wp; eps)
-        matmul!(cpu, q, normed, bt.wq, wp)
-        matmul!(cpu, k, normed, bt.wk, wp)
-        matmul!(cpu, v, normed, bt.wv, wp)
-        _split_heads!(qh, q, n_heads, d_head)
-        _split_heads!(kh, k, n_kv_heads, d_head)
-        _split_heads!(vh, v, n_kv_heads, d_head)
-        if haskey(bt, :wq_norm)
-            rmsnorm!(cpu, qh, qh, bt.wq_norm, wp; eps)
-            rmsnorm!(cpu, kh, kh, bt.wk_norm, wp; eps)
-        end
-        rope!(
-            cpu,
-            qh,
-            kh,
-            positions,
-            wp;
-            theta,
-            inv_freq,
-            interleaved=_tensors_rope_interleaved(tensors),
-            rotary_dim,
-        )
-        # KV APPEND: the prefill's post-rope K/V become cache rows 1..P,
-        # stored at n_kv_heads (GQA caches the small side, §LXXVI)
-        kc[bi].storage[1:P, :, :] .= kh.storage
-        vc[bi].storage[1:P, :, :] .= vh.storage
-        # repeat KV heads for the contraction only (identity when MHA)
-        kx = _repeat_heads(kh, group)
-        vx = _repeat_heads(vh, group)
-        _attention_heads!(
-            cpu,
-            attn.storage,
-            scores,
-            scores_out,
-            qh.storage,
-            kx.storage,
-            vx.storage,
-            n_heads,
-            d_head,
-            P,
-            P,
-            wp,
-        )
-        kx === kh || (_release_storage!(kx.storage); _release_storage!(vx.storage))
+    chunk = _prefill_chunk(P)
+    # a pass's scratch, freed before the next pass and before decode
+    pass_tmp = _ZerosArena(zeros_like.zeros_like)
+    for s0 in 1:chunk:P
+        s1 = min(s0 + chunk - 1, P)
+        n = s1 - s0 + 1
+        K = s1                                   # keys: every cached row so far
+        positions = collect((s0-1):(s1-1))
+        tmp = pass_tmp
+        normed = Activation(; shape=(n, dim), storage=tmp((n, dim)))
+        q = Activation(; shape=(n, qdim), storage=tmp((n, qdim)))
+        gate_attn = Activation(; shape=(n, qdim), storage=tmp((n, qdim)))
+        k = Activation(; shape=(n, kdim), storage=tmp((n, kdim)))
+        v = Activation(; shape=(n, kdim), storage=tmp((n, kdim)))
+        qh = Activation(; shape=(n, n_heads, d_head), storage=tmp((n, n_heads, d_head)))
+        kh = Activation(; shape=(n, n_kv_heads, d_head), storage=tmp((n, n_kv_heads, d_head)))
+        vh = Activation(; shape=(n, n_kv_heads, d_head), storage=tmp((n, n_kv_heads, d_head)))
+        attn = Activation(; shape=(n, n_heads, d_head), storage=tmp((n, n_heads, d_head)))
+        merged = Activation(; shape=(n, qdim), storage=tmp((n, qdim)))
+        sub = Activation(; shape=(n, dim), storage=tmp((n, dim)))
+        normed2 = Activation(; shape=(n, dim), storage=tmp((n, dim)))
+        gate = Activation(; shape=(n, hidden_ffn), storage=tmp((n, hidden_ffn)))
+        up = Activation(; shape=(n, hidden_ffn), storage=tmp((n, hidden_ffn)))
+        act = Activation(; shape=(n, hidden_ffn), storage=tmp((n, hidden_ffn)))
+        down = Activation(; shape=(n, dim), storage=tmp((n, dim)))
+        # (n, K): each query row masks the keys after its own position, the
+        # softmax's K - L offset
+        scores = TemporaryWorkspace(; shape=(n, K), storage=tmp((n, K)))
+        scores_out = TemporaryWorkspace(; shape=(n, K), storage=tmp((n, K)))
+        # the pass works on rows s0..s1 of h through a VIEW (Activation
+        # storage is untyped by design; scratch stays exactly (n, …)-shaped so
+        # softmax never sees padded zero columns — they would poison the
+        # denominators). Residuals broadcast through the view, in place.
+        hp = Activation(; shape=(n, dim), storage=@view h.storage[s0:s1, :])
+        embedding_lookup!(cpu, hp, tensors.embedding, prompt[s0:s1], wp)
+        for (bi, blk) in enumerate(model.blocks)
+            bt = tensors.blocks[bi]
+            if _block_mixer(bt) === :linear_attention
+                _hybrid_linear_block!(
+                    cpu,
+                    hp,
+                    normed,
+                    sub,
+                    bt,
+                    tensors.spec,
+                    wp,
+                    eps,
+                    block_tmp;
+                    conv_state=gdn_conv[bi],
+                    rec_state=gdn_rec[bi],
+                )
+                hp.storage .+= sub.storage
+            else
+                rmsnorm!(cpu, normed, hp, bt.attn_rms, wp; eps)
+                matmul!(cpu, q, normed, bt.wq, wp)
+                matmul!(cpu, k, normed, bt.wk, wp)
+                matmul!(cpu, v, normed, bt.wv, wp)
+                _split_heads!(qh, q, n_heads, d_head)
+                _split_heads!(kh, k, n_kv_heads, d_head)
+                _split_heads!(vh, v, n_kv_heads, d_head)
+                if haskey(bt, :wq_norm)
+                    rmsnorm!(cpu, qh, qh, bt.wq_norm, wp; eps)
+                    rmsnorm!(cpu, kh, kh, bt.wk_norm, wp; eps)
+                end
+                rope!(
+                    cpu,
+                    qh,
+                    kh,
+                    positions,
+                    wp;
+                    theta,
+                    inv_freq,
+                    interleaved=_tensors_rope_interleaved(tensors),
+                    rotary_dim,
+                )
+                # KV APPEND: the pass's post-rope K/V become cache rows s0..s1,
+                # stored at n_kv_heads (GQA caches the small side, §LXXVI)
+                kc[bi].storage[s0:s1, :, :] .= kh.storage
+                vc[bi].storage[s0:s1, :, :] .= vh.storage
+                # a later pass attends the cached rows before it as well
+                ks, vs = s0 == 1 ? (kh, vh) : (
+                    Activation(; shape=(K, n_kv_heads, d_head), storage=@view kc[bi].storage[1:K, :, :]),
+                    Activation(; shape=(K, n_kv_heads, d_head), storage=@view vc[bi].storage[1:K, :, :]))
+                # repeat KV heads for the contraction only (identity when MHA)
+                kx = _repeat_heads(ks, group)
+                vx = _repeat_heads(vs, group)
+                _attention_heads!(
+                    cpu,
+                    attn.storage,
+                    scores,
+                    scores_out,
+                    qh.storage,
+                    kx.storage,
+                    vx.storage,
+                    n_heads,
+                    d_head,
+                    n,
+                    K,
+                    wp,
+                )
+                kx === ks || (_release_storage!(kx.storage); _release_storage!(vx.storage))
 
-        _merge_heads!(merged, attn, n_heads, d_head)
-        if haskey(bt, :wattn_gate)
-            matmul!(cpu, gate_attn, normed, bt.wattn_gate, wp)
-            _sigmoid_mul!(cpu, merged.storage, merged.storage, gate_attn.storage)
+                _merge_heads!(merged, attn, n_heads, d_head)
+                if haskey(bt, :wattn_gate)
+                    matmul!(cpu, gate_attn, normed, bt.wattn_gate, wp)
+                    _sigmoid_mul!(cpu, merged.storage, merged.storage, gate_attn.storage)
+                end
+                matmul!(cpu, sub, merged, bt.wo, wp)
+                hp.storage .+= sub.storage
+            end
+            rmsnorm!(cpu, normed2, hp, bt.ffn_rms, wp; eps)
+            _ffn_block!(cpu, down, gate, up, act, normed2, bt, wp, block_tmp)
+            hp.storage .+= down.storage
+            _arena_release!(block_tmp)
         end
-        matmul!(cpu, sub, merged, bt.wo, wp)
-        hp.storage .+= sub.storage
-        end
-        rmsnorm!(cpu, normed2, hp, bt.ffn_rms, wp; eps)
-        _ffn_block!(cpu, down, gate, up, act, normed2, bt, wp, block_tmp)
-        hp.storage .+= down.storage
-        _arena_release!(block_tmp)
+        _arena_release!(pass_tmp)
     end
 
     ids = collect(prompt)

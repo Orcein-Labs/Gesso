@@ -325,5 +325,11 @@ else
         )
         @test ids[1] == 9419
         @test ids[2:9] == [11, 271, 40, 1044, 3133, 440, 264, 12654]
+
+        prompt = [(i * 7919) % 50000 + 100 for i in 1:300]
+        gen(c) = withenv("GESSO_PREFILL_CHUNK" => c) do
+            Gesso.reference_generate(model, gpu, prompt; max_new_tokens=6, eps=spec.rms_norm_eps, backend=cuda)
+        end
+        @test gen("128") == gen("0")
     end
 end
