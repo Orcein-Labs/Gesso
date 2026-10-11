@@ -16,9 +16,9 @@ function _refused(f)
     end
 end
 
-# toy2 with block 1 turned into a Gated DeltaNet block, so the recurrent state
-# and the snapshot take part in the round trip.
-function _hybrid_toy_tensors(ts; seed=41)
+# Turns block `idx` into a Gated DeltaNet block, so the recurrent state and the
+# snapshot take part in the round trip. Other blocks keep their attention.
+function _with_gdn_block(ts, idx::Int; seed=41)
     rng = deterministic_rng(seed)
     dim = ts.model.embedding.dim
     d_head = div(dim, ts.model.blocks[1].attention.n_heads)
@@ -40,8 +40,37 @@ function _hybrid_toy_tensors(ts; seed=41)
         wgdn_dt_bias=Gesso.FrozenParameter(; shape=(nv,), storage=f(nv)),
         wgdn_norm=Gesso.FrozenParameter(; shape=(dv,), storage=ones(Float64, dv) .+ f(dv)),
     )
-    blocks = (merge(ts.blocks[1], gdn), ts.blocks[2:end]...)
+    blocks = ntuple(i -> i == idx ? merge(ts.blocks[i], gdn) : ts.blocks[i], length(ts.blocks))
     return merge(ts, (; blocks, spec=(; head_dim=d_head, mixer=mx)))
+end
+
+_hybrid_toy_tensors(ts; seed=41) = _with_gdn_block(ts, 1; seed)
+
+# dim 64 over two heads gives d_head 32, the smallest head dim the q8 and q4h
+# KV formats accept. The weights come from the test RNG, not a fixture.
+function _wide_toy_tensors(; seed=53, dim=64, n_heads=2, hidden=64, vocab=32, scale=1.0)
+    rng = deterministic_rng(seed)
+    f(dims...) = scale .* randn(rng, dims...)
+    model = Gesso.Model(;
+        vocab_size=vocab,
+        embedding=Gesso.Embedding(; dim),
+        blocks=ntuple(_ -> Gesso.Block(Gesso.Attention(; n_heads), Gesso.SwiGLU(; hidden)), 2),
+    )
+    embedding = Gesso.EmbeddingTable(; shape=(vocab, dim), storage=f(vocab, dim))
+    blocks = map(model.blocks) do _
+        (
+            wq=Gesso.ProjectionWeight(; shape=(dim, dim), storage=f(dim, dim)),
+            wk=Gesso.ProjectionWeight(; shape=(dim, dim), storage=f(dim, dim)),
+            wv=Gesso.ProjectionWeight(; shape=(dim, dim), storage=f(dim, dim)),
+            wo=Gesso.ProjectionWeight(; shape=(dim, dim), storage=f(dim, dim)),
+            wgate=Gesso.ProjectionWeight(; shape=(hidden, dim), storage=f(hidden, dim)),
+            wup=Gesso.ProjectionWeight(; shape=(hidden, dim), storage=f(hidden, dim)),
+            wdown=Gesso.ProjectionWeight(; shape=(dim, hidden), storage=f(dim, hidden)),
+            attn_rms=Gesso.FrozenParameter(; shape=(dim,), storage=ones(Float64, dim) .+ f(dim)),
+            ffn_rms=Gesso.FrozenParameter(; shape=(dim,), storage=ones(Float64, dim) .+ f(dim)),
+        )
+    end
+    return (; model, embedding, blocks, lm_head=embedding)
 end
 
 # Turn one runs live and is parked; turn two runs on the live state, on the
@@ -121,6 +150,51 @@ end
         @test _refused() do
             withenv("GESSO_KV_FORMAT" => "f16") do
                 load_state(path, ts.model, ts)
+            end
+        end
+    end
+end
+
+# The format is set through the environment because reference_generate takes
+# no kv_format keyword. withenv restores it, so later testsets see the default.
+@testset "save_state/load_state: quantized KV formats round trip" begin
+    ts = _wide_toy_tensors()
+    for fmt in ("q8", "q4h")
+        withenv("GESSO_KV_FORMAT" => fmt) do
+            @test Gesso.Inference._kv_format() === Symbol(fmt)
+            r = _park_and_resume(ts, g1 -> [g1; 1])
+            # a constant continuation would match under any cache contents
+            @test length(unique(r.gA)) > 2
+            @test r.gB == r.gA
+            @test r.gB == r.cold
+            @test r.reusedB == r.reusedA == length(r.g1) - 1
+        end
+    end
+end
+
+@testset "save_state/load_state: attention block beside a GDN block" begin
+    ts = _with_gdn_block(_wide_toy_tensors(), 2)
+    V = size(ts.embedding.storage, 1)
+    # reuse stops at the prompt, so block 1's cache rows and block 2's snapshot
+    # both have to come back for the continuation to match
+    r = _park_and_resume(ts, g1 -> [_IO_PROMPT; mod(g1[5] + 1, V)])
+    @test length(unique(r.gA)) > 2
+    @test r.gB == r.gA
+    @test r.gB == r.cold
+    @test r.reusedB == r.reusedA == length(_IO_PROMPT)
+end
+
+@testset "model fingerprint is stable under generation" begin
+    fp = Gesso.Inference._model_fingerprint
+    for ts in (_wide_toy_tensors(), _with_gdn_block(_wide_toy_tensors(), 2))
+        before = fp(ts)
+        for _ in 1:2
+            st = GenerateState(64)
+            try
+                reference_generate(ts.model, ts, _IO_PROMPT; max_new_tokens=3, state=st)
+                @test fp(ts) == before
+            finally
+                close(st)
             end
         end
     end
