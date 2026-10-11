@@ -58,6 +58,7 @@ export Embedding, RMSNorm, RoPE, Attention, SwiGLU, Block, Model
 using .Inference:
     reference_prefill,
     reference_generate,
+    GenerateState,
     load_llama_config,
     config_to_model,
     load_safetensors,
@@ -128,6 +129,7 @@ using .Inference:
     vocab_size
 export reference_prefill,
     reference_generate,
+    GenerateState,
     load_llama_config,
     config_to_model,
     load_safetensors,

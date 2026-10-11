@@ -71,3 +71,34 @@ end
         @test argmax(@view L_full[:, t-1]) - 1 == g[t]
     end
 end
+
+@testset "generate: a state carries the cache to the next call" begin
+    ts = toy2_tensors()
+    st = GenerateState(32)
+    info = Ref{Any}(nothing)
+    g1 = reference_generate(ts.model, ts, PROMPT; max_new_tokens=3, state=st, info=info)
+    @test g1 == reference_generate(ts.model, ts, PROMPT; max_new_tokens=3)
+    @test info[].reused == 0
+
+    # the next turn: everything so far plus new tokens. The last sampled token
+    # was never fed, so the state holds all but it.
+    p2 = vcat(g1, [3, 4])
+    g2 = reference_generate(ts.model, ts, p2; max_new_tokens=3, state=st, info=info)
+    @test info[].reused == length(g1) - 1
+    @test g2 == reference_generate(ts.model, ts, p2; max_new_tokens=3)
+
+    # a regenerate rewinds an attention-only cache to the prompt's last token
+    @test reference_generate(ts.model, ts, p2; max_new_tokens=3, state=st, info=info) == g2
+    @test info[].reused == length(p2) - 1
+
+    # a prompt that diverges at its first token starts over
+    p3 = [3, 1, 4]
+    @test reference_generate(ts.model, ts, p3; max_new_tokens=2, state=st, info=info) ==
+          reference_generate(ts.model, ts, p3; max_new_tokens=2)
+    @test info[].reused == 0
+
+    @test_throws Gesso.GessoError reference_generate(ts.model, ts, PROMPT; max_new_tokens=40, state=st)
+    close(st)
+    @test reference_generate(ts.model, ts, PROMPT; max_new_tokens=3, state=st) == g1
+    close(st)
+end

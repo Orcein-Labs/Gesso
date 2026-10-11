@@ -331,5 +331,23 @@ else
             Gesso.reference_generate(model, gpu, prompt; max_new_tokens=6, eps=spec.rms_norm_eps, backend=cuda)
         end
         @test gen("128") == gen("0")
+
+        # A state resumes a hybrid model at the end of what it holds, and a regenerate
+        # restores the GDN snapshot taken where the last prefill ended.
+        st = Gesso.GenerateState(400)
+        info = Ref{Any}(nothing)
+        fresh(p) = Gesso.reference_generate(model, gpu, p; max_new_tokens=6, eps=spec.rms_norm_eps, backend=cuda)
+        turn(p) = Gesso.reference_generate(model, gpu, p; max_new_tokens=6, eps=spec.rms_norm_eps, backend=cuda, state=st, info=info)
+        a = turn(prompt[1:200])
+        @test a == fresh(prompt[1:200])
+        p2 = vcat(a, prompt[201:300])
+        b = turn(p2)
+        @test info[].reused == length(a) - 1
+        @test b == fresh(p2)
+        @test turn(p2) == b
+        @test info[].reused == length(p2)
+        @test turn(prompt[1:150]) == fresh(prompt[1:150])
+        @test info[].reused == 0
+        close(st)
     end
 end

@@ -108,6 +108,7 @@ _block_mixer(bt) = haskey(bt, :mixer) ? bt.mixer : :full_attention
 
 include("decode_profile.jl")       # GESSO_PROFILE=1 decode stage profiler
 include("kv_format.jl")            # GESSO_KV_FORMAT cache storage: f32, f16, q8, q4h
+include("generate_state.jl")       # KV and GDN state carried between generate calls
 
 const _T_GDN_NS = Ref(Int64(0))
 const _T_ATTN_NS = Ref(Int64(0))
@@ -1092,9 +1093,14 @@ and attends over the whole cache; the prompt is NEVER re-prefilled.
 Returns the full 0-based id sequence (prompt + new tokens). Stops at EOS
 (token 2) or `max_new_tokens`, whichever comes first.
 
-`info`: pass a `Ref{NamedTuple}` to receive `(kv_len, steps)` — the
+`info`: pass a `Ref{NamedTuple}` to receive `(kv_len, steps, reused)` — the
 diagnostic channel the KV-length invariant is tested through. KV length
-equals prefix length: `kv_len == length(prompt) + steps`.
+equals prefix length: `kv_len == length(prompt) + steps`. `reused` is the
+count of prompt tokens a `state` already held, which were not prefilled.
+
+`state`: a `GenerateState` that keeps the KV cache and GDN states after the
+call. Pass the whole conversation as `prompt` each turn; only the tokens past
+what the state holds are prefilled. Without one, buffers live for the call.
 
 Phase 3 (§LXXVI item A): `eps` / `theta` thread through as in
 `reference_prefill`; `tensors.final_rms` (when present) is applied before
@@ -1113,6 +1119,7 @@ function reference_generate(
     info=nothing,
     eps::Real=1e-6,
     theta=nothing,
+    state::Union{Nothing,GenerateState}=nothing,
 )
     isempty(prompt) && error("reference_generate: prompt is empty")
     theta=_resolved_rope_theta(tensors, theta)
@@ -1133,19 +1140,28 @@ function reference_generate(
     cap = max(max_new_tokens, 0)
     vocab = size(tensors.embedding.storage, 1)
     on_cpu = backend_name(cpu) === :cpu
-    zeros_like = _ZerosArena(_zeros_like_factory(cpu, tensors))
+    kv_fmt = _kv_format(_kv_default_format(backend_name(cpu), d_head))
+    st = state === nothing ? GenerateState(P + cap) : state
+    key = (objectid(tensors.embedding.storage), backend_name(cpu), kv_fmt)
+    st.key === nothing || st.key == key || throw(gesso_error(ERR_INVALID_PLAN,
+        "reference_generate: state was built for another model, backend or KV format"))
+    P + cap <= st.ctx || throw(gesso_error(ERR_INVALID_PLAN,
+        "reference_generate: prompt $P + max_new_tokens $cap exceed the state's ctx $(st.ctx)"))
+    fresh = st.arena === nothing
+    fresh && (st.arena = _ZerosArena(_zeros_like_factory(cpu, tensors)))
+    zeros_like = st.arena
     # a prefill block's temporaries, dead once the block returns
     block_tmp = _ZerosArena(zeros_like.zeros_like)
     # a pass's scratch, freed before the next pass and before decode
     pass_tmp = _ZerosArena(zeros_like.zeros_like)
+    ok = false
     try
 
-        # per-layer KV caches: preallocated (P + cap) rows, filled progressively
+        # per-layer KV caches: preallocated ctx rows, filled progressively
         # (the cache is runtime state, not a weight — no fixture-walk entries)
         # (linear-attention blocks keep no cache: a zero-row placeholder)
-        kv_rows(bt) = _block_mixer(bt) === :linear_attention ? 0 : P + cap
-        kv_fmt = _kv_format(_kv_default_format(backend_name(cpu), d_head))
-        kv_like = zeros_like((0, 0, 0))
+        kv_rows(bt) = _block_mixer(bt) === :linear_attention ? 0 : st.ctx
+        kv_like = fresh ? zeros_like((0, 0, 0)) : nothing
         function kv_cache(bt)
             rows = kv_rows(bt)
             (kv_fmt === :f32 || rows == 0) && return zeros_like((rows, n_kv_heads, d_head))
@@ -1156,36 +1172,43 @@ function reference_generate(
             push!(zeros_like.held, x)
             return x
         end
-        kc = [
-            Activation(; shape=(kv_rows(bt), n_kv_heads, d_head), storage=kv_cache(bt))
-            for bt in tensors.blocks
-        ]
-        vc = [
-            Activation(; shape=(kv_rows(bt), n_kv_heads, d_head), storage=kv_cache(bt))
-            for bt in tensors.blocks
-        ]
-
-        # the newest hidden row: the head reads it and each decode step
-        # overwrites it in place (Activation fields are immutable, §CIX; storage
-        # CONTENT is what the interpreter owns). No row before it is read again,
-        # and keeping them all was 8 KiB a token, 256 MiB at 32k on the 35B.
-        h = Activation(; shape=(1, dim), storage=zeros_like((1, dim)))
+        if fresh
+            st.key = key
+            st.kc = [
+                Activation(; shape=(kv_rows(bt), n_kv_heads, d_head), storage=kv_cache(bt))
+                for bt in tensors.blocks
+            ]
+            st.vc = [
+                Activation(; shape=(kv_rows(bt), n_kv_heads, d_head), storage=kv_cache(bt))
+                for bt in tensors.blocks
+            ]
+            # the newest hidden row: the head reads it and each decode step
+            # overwrites it in place (Activation fields are immutable, §CIX;
+            # storage CONTENT is what the interpreter owns). No row before it is
+            # read again, and keeping them all was 8 KiB a token, 256 MiB at 32k
+            # on the 35B.
+            st.h = Activation(; shape=(1, dim), storage=zeros_like((1, dim)))
+            st.gdn_conv, st.gdn_rec = _gdn_states(tensors, zeros_like)
+            st.gdn_scratch = _gdn_decode_scratch(zeros_like, tensors)
+            mx = haskey(tensors, :spec) && tensors.spec !== nothing ? tensors.spec.mixer : nothing
+            st.cpu_scratch = on_cpu && mx !== nothing ? _cpu_decode_scratch(
+                mx, dim; qdim=n_heads * d_head, ff=_dense_ffn_hidden(model),
+                kdim=n_kv_heads * d_head, n_heads, n_kv_heads, d_head, vocab, ctx=st.ctx,
+            ) : nothing
+        end
+        kc, vc, h = st.kc, st.vc, st.h
+        gdn_conv, gdn_rec, gdn_scratch, cpu_scratch = st.gdn_conv, st.gdn_rec, st.gdn_scratch, st.cpu_scratch
         kdim = n_kv_heads * d_head
         qdim = n_heads * d_head
         hidden_ffn = model.blocks[1].ffn.hidden
-        gdn_conv, gdn_rec = _gdn_states(tensors, zeros_like)
-        gdn_scratch = _gdn_decode_scratch(zeros_like, tensors)
-        spec_mx = haskey(tensors, :spec) && tensors.spec !== nothing ? tensors.spec.mixer : nothing
-        cpu_scratch = on_cpu && spec_mx !== nothing ? _cpu_decode_scratch(
-            spec_mx, dim; qdim=n_heads * d_head, ff=_dense_ffn_hidden(model),
-            kdim=n_kv_heads * d_head, n_heads, n_kv_heads, d_head, vocab, ctx=P + cap,
-        ) : nothing
+        hybrid = any(bt -> _block_mixer(bt) === :linear_attention, tensors.blocks)
+        n0 = _generate_resume!(st, prompt, hybrid)
 
         # BREADTH-0 Pass D — see reference_prefill. `nothing` = unscaled model.
         inv_freq = tensors_rope_inv_freq(tensors, d_head; theta)
         t_prefill = time_ns()
         chunk = _prefill_chunk(P)
-        s1 = 0
+        s1 = n0
         while s1 < P
             s0 = s1 + 1
             s1 += _prefill_pass_rows(cpu, P - s1, s1, chunk, qdim, group)
@@ -1312,6 +1335,8 @@ function reference_generate(
             _arena_release!(pass_tmp)
         end
         _prefill_end!(cpu)
+        append!(st.ids, @view prompt[(n0 + 1):P])
+        hybrid && state !== nothing && _generate_snapshot!(st, P)
 
         ids = collect(prompt)
         steps = 0
@@ -1368,6 +1393,7 @@ function reference_generate(
                 cpu_scratch,
                 hrow=1,
             )
+            push!(st.ids, next)
             _profile_token_end(tok_t0, true)
             if timing
                 println(
@@ -1377,14 +1403,15 @@ function reference_generate(
             end
         end
 
-        info isa Ref{Any} && (info[] = (kv_len=P + steps, steps=steps))
+        info isa Ref{Any} && (info[] = (kv_len=P + steps, steps=steps, reused=n0))
+        ok = true
         return ids
     finally
         # a generation that fails returns its device memory too; left to the GC,
         # the next long prompt runs out next to it
         _arena_release!(pass_tmp)
         _arena_release!(block_tmp)
-        _arena_release!(zeros_like)
+        state === nothing ? close(st) : ok || _generate_invalidate!(st)
     end
 end
 
@@ -1625,7 +1652,7 @@ function _decode_step!(
     return h
 end
 
-export reference_generate
+export reference_generate, GenerateState
 
 # Phase 3 (§LXXVI item B): Llama-family checkpoint import — config,
 # safetensors reader, name map. Transport, not architecture (§VIII).
