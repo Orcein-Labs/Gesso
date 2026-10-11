@@ -1114,6 +1114,10 @@ last one returned. Any other return value, `nothing` included, continues.
 returned like EOS. The defaults (`on_token=nothing`, `stop_ids=()`) leave the
 output and the state unchanged.
 
+`eos_ids`: the ids that end generation. The default is the toy contract's
+EOS (id 2). A real vocabulary must pass its own: in a GPT-2 byte-level vocab,
+id 2 is `#`, and generation would end at the first markdown heading.
+
 An early stop, from either hook, takes the EOS path: the stopping id is in the
 returned ids but its K/V rows are not written. The state holds every id before
 it, so the next call on the same conversation prefills just that one id.
@@ -1138,6 +1142,7 @@ function reference_generate(
     state::Union{Nothing,GenerateState}=nothing,
     on_token=nothing,
     stop_ids=(),
+    eos_ids=(TOY_EOS,),
 )
     isempty(prompt) && error("reference_generate: prompt is empty")
     theta=_resolved_rope_theta(tensors, theta)
@@ -1383,7 +1388,7 @@ function reference_generate(
                 println("gesso_timing token=$(steps) id=$(next) head_ms=$(round(head_ms; digits=1))")
                 flush(stdout)
             end
-            stop = next == TOY_EOS || steps >= cap || next in stop_ids
+            stop = steps >= cap || next in eos_ids || next in stop_ids
             if on_token !== nothing && on_token(next) === false
                 stop = true
             end

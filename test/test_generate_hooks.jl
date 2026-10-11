@@ -66,6 +66,21 @@ end
         stop_ids=(-1,)) == full
 end
 
+# The default EOS is the toy contract's id 2. A real vocabulary passes its own,
+# because id 2 is an ordinary token there (`#` in GPT-2 byte-level vocabs).
+@testset "hooks: eos_ids replaces the toy EOS" begin
+    ts = toy2_tensors()
+    P = length(HOOK_PROMPT)
+    full = reference_generate(ts.model, ts, HOOK_PROMPT; max_new_tokens=6)
+    gen = full[(P + 1):end]
+    @test !(2 in gen)
+    k = findfirst(i -> !(gen[i] in gen[1:(i - 1)]), eachindex(gen))
+    @test reference_generate(ts.model, ts, HOOK_PROMPT; max_new_tokens=6,
+        eos_ids=(gen[k],)) == full[1:(P + k)]
+    @test reference_generate(ts.model, ts, HOOK_PROMPT; max_new_tokens=6,
+        eos_ids=()) == full
+end
+
 @testset "hooks: a state reused after an early stop equals a fresh run" begin
     ts = toy2_tensors()
     P = length(HOOK_PROMPT)
