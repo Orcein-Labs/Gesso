@@ -9,8 +9,9 @@
 # Matmul dispatch (CPU, correctness first):
 #   * native formats in `_qgemv_bytes!` (IQ2_XS, IQ3_XXS, IQ4_XS): the fused
 #     quant GEMV, no dequant buffer;
-#   * K-quants Q2_K..Q6_K and Q8_0: native integer kernels against Q8_K/Q8_0
-#     activations (`_qgemv_q8k_f32!`, quant_cpu_kquants.jl);
+#   * K-quants Q2_K..Q6_K, Q8_0, and IQ2_XXS / IQ2_S / IQ3_S / IQ1_S / IQ1_M:
+#     native integer kernels against Q8_K/Q8_0 activations (`_qgemv_q8k_f32!`,
+#     quant_cpu_kquants.jl and quant_cpu_iq_s.jl);
 #   * every other format: FALLBACK. Rows are dequantized per call through the
 #     existing ggml `to_float` path (`_dequant_f32`), in bounded row chunks,
 #     then multiplied in F32. This is a temporary correctness bridge. It is

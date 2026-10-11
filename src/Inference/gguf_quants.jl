@@ -1,14 +1,16 @@
 # Quantized expert GEMV for the live GGUF types: the fused F32 dequant-dot for
 # IQ2_XS / IQ3_XXS / IQ4_XS and packed F32, and the native Q8_K / Q8_0 integer
-# kernels for K-quants, Q8_0, IQ2_S, IQ3_S and IQ1_M. CPU fused dequant-dot
+# kernels for K-quants, Q8_0, IQ2_XXS, IQ2_S, IQ3_S, IQ1_S and IQ1_M. CPU fused dequant-dot
 # matches ggml `to_float` then a column dot; the CUDA lowering lives in
 # ext/cuda_quant_gemm.jl.
 
 include("gguf_quant_tables.jl")
 
 const GGML_TYPE_F32 = Int32(0)
+const GGML_TYPE_IQ2_XXS = Int32(16)
 const GGML_TYPE_IQ2_XS = Int32(17)
 const GGML_TYPE_IQ3_XXS = Int32(18)
+const GGML_TYPE_IQ1_S = Int32(19)
 const GGML_TYPE_IQ3_S = Int32(21)
 const GGML_TYPE_IQ2_S = Int32(22)
 const GGML_TYPE_IQ4_XS = Int32(23)
@@ -45,9 +47,11 @@ Base.sizeof(s::GpuQuantSlice) = sizeof(s.data)
 _is_host_float_storage(::GpuQuantSlice) = true
 
 function _iq_block_bytes(ggml_type::Int32)
+    ggml_type == GGML_TYPE_IQ2_XXS && return 66
     ggml_type == GGML_TYPE_IQ2_XS && return 74
     ggml_type == GGML_TYPE_IQ3_XXS && return 98
     ggml_type == GGML_TYPE_IQ4_XS && return 136
+    ggml_type == GGML_TYPE_IQ1_S && return 50
     ggml_type == GGML_TYPE_IQ2_S && return 82
     ggml_type == GGML_TYPE_IQ3_S && return 110
     ggml_type == GGML_TYPE_IQ1_M && return 56
@@ -284,7 +288,7 @@ function _qgemv_bytes!(
     elseif ggml_type == GGML_TYPE_IQ4_XS
         return _qgemv_iq4_xs!(y, x, q, ne0, ne1, alpha, beta)
     elseif _q8k_supported_type(ggml_type)
-        # K-quants, Q8_0 and the IQ2_S / IQ3_S / IQ1_M formats: the native
+        # K-quants, Q8_0 and the IQ2_XXS / IQ2_S / IQ3_S / IQ1_S / IQ1_M formats: the native
         # integer kernels against a Q8_K (Q8_0) quantization of x. Single
         # threaded, since _qgemv_bytes! is already the body of a chunk task.
         return _qgemv_q8k_f32!(y, x, q, ggml_type, ne0, ne1; alpha, beta, threaded=false)

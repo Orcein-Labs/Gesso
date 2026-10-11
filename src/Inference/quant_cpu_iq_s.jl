@@ -1,13 +1,15 @@
-# Native CPU quantized dot products for IQ2_S, IQ3_S and IQ1_M against Q8_K
-# activations, plus the F32 dequant references the kernels are checked against.
+# Native CPU quantized dot products for IQ2_XXS, IQ2_S, IQ3_S, IQ1_S and IQ1_M
+# against Q8_K activations, plus the F32 dequant references the kernels are
+# checked against.
 # Plugs into the GEMV and dispatch in quant_cpu_simd.jl (_dot_q8k).
 #
 # Attribution: the scalar references are Julia ports of ggml's generic CPU
-# kernels ggml_vec_dot_iq2_s_q8_K_generic, ggml_vec_dot_iq3_s_q8_K_generic and
+# kernels ggml_vec_dot_iq2_xxs_q8_K_generic, ggml_vec_dot_iq2_s_q8_K_generic,
+# ggml_vec_dot_iq3_s_q8_K_generic, ggml_vec_dot_iq1_s_q8_K_generic and
 # ggml_vec_dot_iq1_m_q8_K_generic (ggml/src/ggml-cpu/quants.c). The F32
-# references are ports of dequantize_row_iq2_s, dequantize_row_iq3_s and
-# dequantize_row_iq1_m (ggml/src/ggml-quants.c). The grids are in
-# quant_iq_s_tables.jl. ggml is MIT licensed, Copyright (c) 2023-2026 The ggml
+# references are ports of dequantize_row_iq2_xxs, dequantize_row_iq2_s,
+# dequantize_row_iq3_s, dequantize_row_iq1_s and dequantize_row_iq1_m
+# (ggml/src/ggml-quants.c). The grids are in quant_iq_s_tables.jl. ggml is MIT licensed, Copyright (c) 2023-2026 The ggml
 # authors. No ggml code is linked or called.
 #
 # Float order: as in quant_cpu_simd.jl, the integer sub-block sums are exact,
@@ -21,6 +23,12 @@
 #   IQ1_M  (56 B)  qs[32] @0, qh[16] @32, scales[8] @48. There is no separate d:
 #                  the f16 super-scale is four 4-bit nibbles, nibble k being the
 #                  top nibble of the 16-bit word scales[2k..2k+1].
+#   IQ2_XXS (66 B) d f16 @0, then 8 groups of 8 bytes at 2+8g: a u32 of four
+#                  grid bytes, and a u32 of four 7-bit sign indices with the
+#                  4-bit scale in its top nibble.
+#   IQ1_S  (50 B)  d f16 @0, qs[32] @2, qh[8] as u16 @34. Sub-block s has a
+#                  3-bit scale (bits 12-14), a delta sign (bit 15), and 3 grid
+#                  high bits per group (bits 3l..3l+2).
 
 include("quant_iq_s_tables.jl")
 
@@ -180,6 +188,71 @@ function _dot_iq1m_q8k_ref(w::AbstractVector{UInt8}, woff::Int, x::Q8KVec)::Floa
             sumi2 += sum2a * ls1 + sum2b * ls2
         end
         sumf += dy * (Float32(sumi1) + 0.125f0 * Float32(sumi2))
+    end
+    return sumf
+end
+
+# Port of ggml_vec_dot_iq2_xxs_q8_K_generic. Each 32-value group has one scale
+# (top nibble of its second u32) shared by its four 8-value grid entries.
+function _dot_iq2xxs_q8k_ref(w::AbstractVector{UInt8}, woff::Int, x::Q8KVec)::Float32
+    nb = length(x.d)
+    sumf = 0.0f0
+    @inbounds for ib in 0:(nb - 1)
+        b = woff + ib * 66
+        d = _ld_f16(w, b) * x.d[ib + 1]
+        bsum = Int32(0)
+        for ib32 in 0:7
+            q = b + 2 + 8 * ib32
+            aux = _ld_u32(w, q + 4)
+            ls = Int32(2 * Int(aux >> 28) + 1)
+            ao = ib * QK_K + 32 * ib32
+            sumi = Int32(0)
+            for l in 0:3
+                grid = IQ2XXS_GRID[Int(_ld_u8(w, q + l)) + 1]
+                signs = KSIGNS_IQ2XS[Int((aux >> (7 * l)) & 0x7f) + 1]
+                for j in 0:7
+                    g = Int32((grid >> (8 * j)) & 0xff)
+                    sg = (signs & KMASK_IQ2XS[j + 1]) != 0x00 ? Int32(-1) : Int32(1)
+                    sumi += g * Int32(x.qs[ao + 8 * l + j + 1]) * sg
+                end
+            end
+            bsum += sumi * ls
+        end
+        sumf += d * Float32(bsum)
+    end
+    return 0.125f0 * sumf
+end
+
+# Port of ggml_vec_dot_iq1_s_q8_K_generic. The delta term uses the Q8_K bsums:
+# bsums holds the sum of each 16 quants, so a 32-value sub-block is two entries.
+# The super-scale is applied after the integer sums, as in the generic kernel.
+function _dot_iq1s_q8k_ref(w::AbstractVector{UInt8}, woff::Int, x::Q8KVec)::Float32
+    nb = length(x.d)
+    sumf = 0.0f0
+    @inbounds for ib in 0:(nb - 1)
+        b = woff + ib * 50
+        d = _ld_f16(w, b) * x.d[ib + 1]
+        sumi = Int32(0)
+        sumi1 = Int32(0)
+        bo = 16 * ib
+        for s in 0:7
+            qh = Int(_ld_u16(w, b + 34 + 2 * s))
+            ls = Int32(2 * ((qh >> 12) & 7) + 1)
+            delta = (qh & 0x8000) != 0 ? Int32(-1) : Int32(1)
+            lsum = Int32(0)
+            ao = ib * QK_K + 32 * s
+            for l in 0:3
+                idx = Int(_ld_u8(w, b + 2 + 4 * s + l)) | (((qh >> (3 * l)) & 7) << 8)
+                grid = IQ1S_GRID[idx + 1]
+                for j in 0:7
+                    gv = Int32(reinterpret(Int8, UInt8((grid >> (8 * j)) & 0xff)))
+                    lsum += gv * Int32(x.qs[ao + 8 * l + j + 1])
+                end
+            end
+            sumi += ls * lsum
+            sumi1 += ls * delta * (Int32(x.bsums[bo + 2 * s + 1]) + Int32(x.bsums[bo + 2 * s + 2]))
+        end
+        sumf += d * (Float32(sumi) + 0.125f0 * Float32(sumi1))
     end
     return sumf
 end
@@ -382,6 +455,94 @@ end
     return sumf
 end
 
+@noinline function _dot_iq2xxs_q8k_avx2(w::AbstractVector{UInt8}, woff::Int, x::Q8KVec)::Float32
+    nb = length(x.d)
+    _q8k_check_row(w, woff, 66 * nb)
+    sumf = 0.0f0
+    nb == 0 && return sumf
+    GC.@preserve w x begin
+        pw = pointer(w, woff + 1)
+        pq = pointer(x.qs)
+        pg = pointer(IQ2XXS_GRID)
+        ps = pointer(_IQ_SIGN8_TAB)
+        @inbounds for ib in 0:(nb - 1)
+            b = pw + 66 * ib
+            d = _iq_f16_at(b) * x.d[ib + 1]
+            acc = _IQ_ACC_ZERO
+            for ib32 in 0:7
+                # low 32 bits: four grid bytes; high 32 bits: four 7-bit sign
+                # indices (bits 0-6, 7-13, ...) and the scale nibble (bits 28-31)
+                qw = ltoh(unsafe_load(Ptr{UInt64}(b + 2 + 8 * ib32)))
+                ls = Int32(2 * Int((qw >> 60) & 0xf) + 1)
+                g = (
+                    VecElement(unsafe_load(pg, Int(qw & 0xff) + 1)),
+                    VecElement(unsafe_load(pg, Int((qw >> 8) & 0xff) + 1)),
+                    VecElement(unsafe_load(pg, Int((qw >> 16) & 0xff) + 1)),
+                    VecElement(unsafe_load(pg, Int((qw >> 24) & 0xff) + 1)),
+                )
+                s = (
+                    VecElement(unsafe_load(ps, Int((qw >> 32) & 0x7f) + 1)),
+                    VecElement(unsafe_load(ps, Int((qw >> 39) & 0x7f) + 1)),
+                    VecElement(unsafe_load(ps, Int((qw >> 46) & 0x7f) + 1)),
+                    VecElement(unsafe_load(ps, Int((qw >> 53) & 0x7f) + 1)),
+                )
+                acc = _iq2_sub_acc(acc, g, s, pq + (ib * QK_K + 32 * ib32), ls, ls)
+            end
+            sumf += d * Float32(_iq_hsum8(acc))
+        end
+    end
+    return 0.125f0 * sumf
+end
+
+@noinline function _dot_iq1s_q8k_avx2(w::AbstractVector{UInt8}, woff::Int, x::Q8KVec)::Float32
+    nb = length(x.d)
+    _q8k_check_row(w, woff, 50 * nb)
+    sumf = 0.0f0
+    nb == 0 && return sumf
+    GC.@preserve w x begin
+        pw = pointer(w, woff + 1)
+        pq = pointer(x.qs)
+        pg = pointer(IQ1S_GRID)
+        @inbounds for ib in 0:(nb - 1)
+            b = pw + 50 * ib
+            d = _iq_f16_at(b) * x.d[ib + 1]
+            acc = _IQ1M_ACC_ZERO
+            for s in 0:7
+                qh = Int(ltoh(unsafe_load(Ptr{UInt16}(b + 34 + 2 * s))))
+                ls = Int32(2 * ((qh >> 12) & 7) + 1)
+                ld = (qh & 0x8000) != 0 ? -ls : ls
+                qb = b + 2 + 4 * s
+                i0 = Int(unsafe_load(qb)) | ((qh & 7) << 8)
+                i1 = Int(unsafe_load(qb + 1)) | (((qh >> 3) & 7) << 8)
+                i2 = Int(unsafe_load(qb + 2)) | (((qh >> 6) & 7) << 8)
+                i3 = Int(unsafe_load(qb + 3)) | (((qh >> 9) & 7) << 8)
+                g = (
+                    VecElement(unsafe_load(pg, i0 + 1)),
+                    VecElement(unsafe_load(pg, i1 + 1)),
+                    VecElement(unsafe_load(pg, i2 + 1)),
+                    VecElement(unsafe_load(pg, i3 + 1)),
+                )
+                # lanes 1-8 weight the grid dots by ls, lanes 9-16 the quant sums by ls * delta
+                wt = (
+                    VecElement(ls), VecElement(ls), VecElement(ls), VecElement(ls),
+                    VecElement(ls), VecElement(ls), VecElement(ls), VecElement(ls),
+                    VecElement(ld), VecElement(ld), VecElement(ld), VecElement(ld),
+                    VecElement(ld), VecElement(ld), VecElement(ld), VecElement(ld),
+                )
+                acc = _iq1m_sub_acc(acc, g, pq + (ib * QK_K + 32 * s), wt)
+            end
+            sumi = Int32(0)
+            sumi1 = Int32(0)
+            for l in 1:8
+                sumi += acc[l].value
+                sumi1 += acc[l + 8].value
+            end
+            sumf += d * (Float32(sumi) + 0.125f0 * Float32(sumi1))
+        end
+    end
+    return sumf
+end
+
 # ------------------------------------------------------------- F32 dequant
 
 # Ports of dequantize_row_iq2_s / _iq3_s / _iq1_m: one row of ne0 values
@@ -393,7 +554,40 @@ function _iqs_dequant_row!(out::AbstractVector{Float32}, w::AbstractVector{UInt8
     nb = div(ne0, QK_K)
     @inbounds for ib in 0:(nb - 1)
         y = ib * QK_K
-        if ggml_type == GGML_TYPE_IQ2_S
+        if ggml_type == GGML_TYPE_IQ2_XXS
+            b = woff + ib * 66
+            d = _ld_f16(w, b)
+            for ib32 in 0:7
+                q = b + 2 + 8 * ib32
+                aux = _ld_u32(w, q + 4)
+                db = d * (0.5f0 + Float32(aux >> 28)) * 0.25f0
+                for l in 0:3
+                    grid = IQ2XXS_GRID[Int(_ld_u8(w, q + l)) + 1]
+                    signs = KSIGNS_IQ2XS[Int((aux >> (7 * l)) & 0x7f) + 1]
+                    for j in 0:7
+                        g = Float32((grid >> (8 * j)) & 0xff)
+                        sgn = (signs & KMASK_IQ2XS[j + 1]) != 0x00 ? -1.0f0 : 1.0f0
+                        out[y + 32 * ib32 + 8 * l + j + 1] = db * g * sgn
+                    end
+                end
+            end
+        elseif ggml_type == GGML_TYPE_IQ1_S
+            b = woff + ib * 50
+            d = _ld_f16(w, b)
+            for s in 0:7
+                qh = Int(_ld_u16(w, b + 34 + 2 * s))
+                dl = d * Float32(2 * ((qh >> 12) & 7) + 1)
+                delta = (qh & 0x8000) != 0 ? -0.125f0 : 0.125f0
+                for l in 0:3
+                    idx = Int(_ld_u8(w, b + 2 + 4 * s + l)) | (((qh >> (3 * l)) & 7) << 8)
+                    grid = IQ1S_GRID[idx + 1]
+                    for j in 0:7
+                        gv = Float32(reinterpret(Int8, UInt8((grid >> (8 * j)) & 0xff)))
+                        out[y + 32 * s + 8 * l + j + 1] = dl * (gv + delta)
+                    end
+                end
+            end
+        elseif ggml_type == GGML_TYPE_IQ2_S
             b = woff + ib * 82
             d = _ld_f16(w, b)
             for ib32 in 0:7
@@ -468,10 +662,16 @@ end
 
 # ------------------------------------------------------------- dispatch helpers
 
-_q8k_iq_s_type(t::Int32) = t == GGML_TYPE_IQ2_S || t == GGML_TYPE_IQ3_S || t == GGML_TYPE_IQ1_M
+_q8k_iq_s_type(t::Int32) =
+    t == GGML_TYPE_IQ2_XXS || t == GGML_TYPE_IQ2_S || t == GGML_TYPE_IQ3_S ||
+    t == GGML_TYPE_IQ1_S || t == GGML_TYPE_IQ1_M
 
 @inline function _dot_iq_s_q8k(ggml_type::Int32, w::AbstractVector{UInt8}, woff::Int, x::Q8KVec, simd::Bool)::Float32
-    if ggml_type == GGML_TYPE_IQ2_S
+    if ggml_type == GGML_TYPE_IQ2_XXS
+        return simd ? _dot_iq2xxs_q8k_avx2(w, woff, x) : _dot_iq2xxs_q8k_ref(w, woff, x)
+    elseif ggml_type == GGML_TYPE_IQ1_S
+        return simd ? _dot_iq1s_q8k_avx2(w, woff, x) : _dot_iq1s_q8k_ref(w, woff, x)
+    elseif ggml_type == GGML_TYPE_IQ2_S
         return simd ? _dot_iq2s_q8k_avx2(w, woff, x) : _dot_iq2s_q8k_ref(w, woff, x)
     elseif ggml_type == GGML_TYPE_IQ3_S
         return simd ? _dot_iq3s_q8k_avx2(w, woff, x) : _dot_iq3s_q8k_ref(w, woff, x)

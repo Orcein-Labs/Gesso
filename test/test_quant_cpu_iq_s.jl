@@ -1,12 +1,16 @@
-# Native CPU IQ2_S, IQ3_S and IQ1_M dot products (src/Inference/quant_cpu_iq_s.jl):
+# Native CPU IQ2_XXS, IQ2_S, IQ3_S, IQ1_S and IQ1_M dot products
+# (src/Inference/quant_cpu_iq_s.jl):
 #   * grid tables: sizes, value ranges the AVX2 saturation argument relies on
 #   * scalar references against the F32 dequant references (ports of
 #     dequantize_row_*), at tolerance
 #   * AVX2 kernels bit-exact against the scalar references on random blocks and
 #     on edge fields
+#   * F32 dequant of IQ2_XXS and IQ1_S bit-equal to ggml's to_float (env
+#     GESSO_GGML_DIR; skipped if libggml-base.so is absent)
 #   * zero allocations per dot; GEMV threading does not change any bit
-#   * real tensors from the Qwen3.8-27B UD-IQ2_M GGUF (env
-#     GESSO_QWEN38_27B_IQ2M_GGUF; skipped if unset). Header and rows only.
+#   * real tensors: the Qwen3.8-27B UD-IQ2_M GGUF (env GESSO_QWEN38_27B_IQ2M_GGUF)
+#     for IQ2_S/IQ3_S/IQ1_M, and the Saluki 27B GGUF (env GESSO_SALUKI_GGUF) for
+#     IQ2_XXS/IQ1_S. Each is skipped if its env var is unset. Header and rows only.
 
 using Random: Xoshiro
 using Test: AbstractTestSet, Broken, get_testset, record
@@ -21,6 +25,19 @@ end
 
 const _IQS = Gesso.Inference
 const _IQS_TYPES = (
+    ("IQ2_XXS", _IQS.GGML_TYPE_IQ2_XXS),
+    ("IQ2_S", _IQS.GGML_TYPE_IQ2_S),
+    ("IQ3_S", _IQS.GGML_TYPE_IQ3_S),
+    ("IQ1_S", _IQS.GGML_TYPE_IQ1_S),
+    ("IQ1_M", _IQS.GGML_TYPE_IQ1_M),
+)
+# The two formats added for the Saluki GGUF (IQ2_XXS and IQ1_S).
+const _IQS_NEW_TYPES = (
+    ("IQ2_XXS", _IQS.GGML_TYPE_IQ2_XXS),
+    ("IQ1_S", _IQS.GGML_TYPE_IQ1_S),
+)
+# Formats present in the Qwen3.8-27B UD-IQ2_M file.
+const _IQS_QWEN_TYPES = (
     ("IQ2_S", _IQS.GGML_TYPE_IQ2_S),
     ("IQ3_S", _IQS.GGML_TYPE_IQ3_S),
     ("IQ1_M", _IQS.GGML_TYPE_IQ1_M),
@@ -63,7 +80,11 @@ function _iqs_ref_abs(ggml_type::Int32, w, woff::Int, ne0::Int, xq)
     return sum(abs.(Float64.(wdq) .* Float64.(xd)))
 end
 
-@testset "IQ2_S / IQ3_S / IQ1_M block sizes" begin
+@testset "IQ2_XXS / IQ2_S / IQ3_S / IQ1_S / IQ1_M block sizes" begin
+    @test _IQS._iq_block_bytes(_IQS.GGML_TYPE_IQ2_XXS) == 66
+    @test _IQS._iq_block_bytes(_IQS.GGML_TYPE_IQ1_S) == 50
+    @test _IQS._qrow_bytes(_IQS.GGML_TYPE_IQ2_XXS, 512) == 2 * 66
+    @test _IQS._qrow_bytes(_IQS.GGML_TYPE_IQ1_S, 512) == 2 * 50
     @test _IQS._iq_block_bytes(_IQS.GGML_TYPE_IQ2_S) == 2 + 64 + 8 + 8
     @test _IQS._iq_block_bytes(_IQS.GGML_TYPE_IQ3_S) == 2 + 64 + 8 + 32 + 4
     @test _IQS._iq_block_bytes(_IQS.GGML_TYPE_IQ1_M) == 32 + 16 + 8
@@ -71,11 +92,13 @@ end
 end
 
 @testset "grid tables: sizes and value ranges" begin
+    @test length(_IQS.IQ2XXS_GRID) == 256
     @test length(_IQS.IQ2S_GRID) == 1024
     @test length(_IQS.IQ3S_GRID) == 512
     @test length(_IQS.IQ1S_GRID) == 2048
     # The AVX2 pmaddubsw step cannot saturate when grid bytes are at most 127
     # (two products of grid byte times Q8_K quant fit in int16).
+    @test maximum(UInt8((g >> (8 * j)) & 0xff) for g in _IQS.IQ2XXS_GRID for j in 0:7) <= 43
     @test maximum(UInt8((g >> (8 * j)) & 0xff) for g in _IQS.IQ2S_GRID for j in 0:7) <= 43
     @test maximum(UInt8((g >> (8 * j)) & 0xff) for g in _IQS.IQ3S_GRID for j in 0:3) <= 15
     # IQ1_M / IQ1_S grid values are the signed set {-1, 0, +1}
@@ -120,6 +143,41 @@ end
         tabs = Float64[_iqs_ref_abs(ty, W, (j - 1) * rb, 256 * nb, xq) for j in 1:nrow]
         @testset "$name" begin
             @test all(abs.(ys .- yref) .<= 1.0e-5 .* tabs)
+        end
+    end
+end
+
+# Independent oracle: ggml's own to_float (libggml-base.so, via GESSO_GGML_DIR).
+# Random rows plus an all-ones-field row with d = 1.0, so the sign and grid
+# paths are both exercised at full magnitude.
+@testset "F32 dequant of IQ2_XXS / IQ1_S bit-equal to ggml to_float" begin
+    ggml_dir = get(ENV, "GESSO_GGML_DIR", "")
+    if !isfile(joinpath(ggml_dir, "libggml-base.so"))
+        _skip("set GESSO_GGML_DIR to a directory with libggml-base.so — IQ2_XXS/IQ1_S dequant vs ggml to_float skipped")
+    else
+        rng = Xoshiro(29)
+        for (name, ty) in _IQS_NEW_TYPES
+            nb = 3
+            ne0 = 256 * nb
+            rb = _IQS._qrow_bytes(ty, ne0)
+            W = _iqs_random_rows(rng, ty, 2, nb)
+            bsz = _IQS._iq_block_bytes(ty)
+            sat = fill(0xff, 2 * rb)
+            for ib in 0:(2 * nb - 1)
+                sat[ib * bsz + 1] = 0x00     # d = 1.0 (f16 0x3c00) for every block
+                sat[ib * bsz + 2] = 0x3c
+            end
+            for (kind, data) in (("random", W), ("saturated", sat))
+                for j in 1:2
+                    mine = Vector{Float32}(undef, ne0)
+                    _IQS._iqs_dequant_row!(mine, data, (j - 1) * rb, ty, ne0)
+                    row = data[((j - 1) * rb + 1):(j * rb)]
+                    ggml = _IQS._dequant_f32(row, 0, ty, ne0)
+                    @testset "$name $kind row $j" begin
+                        @test reinterpret.(UInt32, mine) == reinterpret.(UInt32, ggml)
+                    end
+                end
+            end
         end
     end
 end
@@ -280,54 +338,67 @@ end
     end
 end
 
-# Real rows from the Qwen3.8-27B UD-IQ2_M file, one tensor per format. Reads the
-# header and 16 rows of each tensor; the model is never loaded.
+# Real rows from one GGUF, one tensor per format in `types`, found by ggml type
+# id. Reads the header and up to 16 rows of each tensor; the model is never loaded.
+function _iqs_real_tensor_check(path::AbstractString, types, seed::Int)
+    hdr = _IQS.gguf_header(path)
+    rng = Xoshiro(seed)
+    for (name, ty) in types
+        idx = findfirst(t -> t.ggml_type == ty, hdr.tensors)
+        if idx === nothing
+            _skip("no $name tensor in $(basename(path))")
+            continue
+        end
+        info = hdr.tensors[idx]
+        ne0, ne1 = info.dims[1], info.dims[2]
+        rb = _IQS._qrow_bytes(ty, ne0)
+        base = Int(hdr.data_start) + Int(info.offset)
+        rows = unique(round.(Int, range(1, ne1; length=min(16, ne1))))
+        x = randn(rng, Float32, ne0)
+        xq = _IQS.quantize_q8_K!(_IQS.Q8KVec(div(ne0, 256)), x)
+        err2 = 0.0
+        sig2 = 0.0
+        nmis = 0
+        for j in rows
+            off = base + (j - 1) * rb
+            ys = _IQS._dot_q8k(ty, hdr.data, off, xq, false)
+            ya = _IQS._dot_q8k(ty, hdr.data, off, xq, true)
+            nmis += reinterpret(UInt32, ys) != reinterpret(UInt32, ya)
+            wdq = zeros(Float32, ne0)
+            _IQS._iqs_dequant_row!(wdq, hdr.data, off, ty, ne0)
+            yexact = sum(Float64.(wdq) .* Float64.(x))
+            ydeq = _iqs_ref_dot(ty, hdr.data, off, ne0, xq)
+            # float rounding scales with the sum of the term magnitudes, not with the result
+            tabs = sum(abs.(Float64.(wdq) .* Float64.(_IQS.dequantize_q8_K(xq))))
+            @test abs(Float64(ys) - ydeq) <= 1.0e-5 * tabs
+            err2 += (Float64(ys) - yexact)^2
+            sig2 += yexact^2
+        end
+        relrms = sqrt(err2 / sig2)
+        println(
+            "real ", basename(path), " ", info.name, " type=", name, " ne0=", ne0, " ne1=", ne1,
+            " rows=", length(rows), " rel_rms_err_vs_f32=", relrms,
+            " avx2_eq_scalar=", nmis == 0,
+        )
+        @test nmis == 0
+        @test relrms <= 2.0e-2
+    end
+end
+
 @testset "real tensors: IQ2_S / IQ3_S / IQ1_M vs F32 reference" begin
     path = get(ENV, "GESSO_QWEN38_27B_IQ2M_GGUF", "")
     if !isfile(path)
         _skip("set GESSO_QWEN38_27B_IQ2M_GGUF to the Qwen3.8-27B UD-IQ2_M GGUF — real IQ2_S/IQ3_S/IQ1_M rows skipped")
     else
-        hdr = _IQS.gguf_header(path)
-        rng = Xoshiro(27)
-        for (name, ty) in _IQS_TYPES
-            idx = findfirst(t -> t.ggml_type == ty, hdr.tensors)
-            if idx === nothing
-                _skip("no $name tensor in $(basename(path))")
-                continue
-            end
-            info = hdr.tensors[idx]
-            ne0, ne1 = info.dims[1], info.dims[2]
-            rb = _IQS._qrow_bytes(ty, ne0)
-            base = Int(hdr.data_start) + Int(info.offset)
-            rows = unique(round.(Int, range(1, ne1; length=min(16, ne1))))
-            x = randn(rng, Float32, ne0)
-            xq = _IQS.quantize_q8_K!(_IQS.Q8KVec(div(ne0, 256)), x)
-            err2 = 0.0
-            sig2 = 0.0
-            nmis = 0
-            for j in rows
-                off = base + (j - 1) * rb
-                ys = _IQS._dot_q8k(ty, hdr.data, off, xq, false)
-                ya = _IQS._dot_q8k(ty, hdr.data, off, xq, true)
-                nmis += reinterpret(UInt32, ys) != reinterpret(UInt32, ya)
-                wdq = zeros(Float32, ne0)
-                _IQS._iqs_dequant_row!(wdq, hdr.data, off, ty, ne0)
-                yexact = sum(Float64.(wdq) .* Float64.(x))
-                ydeq = _iqs_ref_dot(ty, hdr.data, off, ne0, xq)
-                # float rounding scales with the sum of the term magnitudes, not with the result
-                tabs = sum(abs.(Float64.(wdq) .* Float64.(_IQS.dequantize_q8_K(xq))))
-                @test abs(Float64(ys) - ydeq) <= 1.0e-5 * tabs
-                err2 += (Float64(ys) - yexact)^2
-                sig2 += yexact^2
-            end
-            relrms = sqrt(err2 / sig2)
-            println(
-                "real ", basename(path), " ", info.name, " type=", name, " ne0=", ne0, " ne1=", ne1,
-                " rows=", length(rows), " rel_rms_err_vs_f32=", relrms,
-                " avx2_eq_scalar=", nmis == 0,
-            )
-            @test nmis == 0
-            @test relrms <= 2.0e-2
-        end
+        _iqs_real_tensor_check(path, _IQS_QWEN_TYPES, 27)
+    end
+end
+
+@testset "real tensors: Saluki IQ2_XXS / IQ1_S vs F32 reference" begin
+    path = get(ENV, "GESSO_SALUKI_GGUF", "")
+    if !isfile(path)
+        _skip("set GESSO_SALUKI_GGUF to the Saluki 27B GGUF — real IQ2_XXS/IQ1_S rows skipped")
+    else
+        _iqs_real_tensor_check(path, _IQS_NEW_TYPES, 30)
     end
 end

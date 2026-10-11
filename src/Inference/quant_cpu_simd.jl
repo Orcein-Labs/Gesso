@@ -1,6 +1,7 @@
 # Native CPU quantized dot products: Q8_K activations against IQ4_XS, IQ2_XS,
-# IQ3_XXS weight rows, plus the GEMV built on them. IQ2_S, IQ3_S and IQ1_M
-# are in quant_cpu_iq_s.jl (included at the end of this file), and the K-quants
+# IQ3_XXS weight rows, plus the GEMV built on them. IQ2_XXS, IQ2_S, IQ3_S,
+# IQ1_S and IQ1_M are in quant_cpu_iq_s.jl (included at the end of this file),
+# and the K-quants
 # in quant_cpu_kquants.jl.
 #
 # Attribution: the scalar references are Julia ports of ggml's generic CPU
@@ -632,6 +633,6 @@ function _qgemv_q8k_f32!(
     return _qgemv_q8k!(y, xq, q, ggml_type, ne0, ne1; alpha, beta, simd)
 end
 
-# IQ2_S, IQ3_S and IQ1_M kernels. They use the AVX2 primitives above and are
-# dispatched from _dot_q8k.
+# IQ2_XXS, IQ2_S, IQ3_S, IQ1_S and IQ1_M kernels. They use the AVX2 primitives
+# above and are dispatched from _dot_q8k.
 include("quant_cpu_iq_s.jl")
