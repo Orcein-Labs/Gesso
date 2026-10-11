@@ -1141,7 +1141,7 @@ end
     to_device(::CUDABackend, tensors) -> tensors'
 
 Copy `Array` storage to `CuArray{Float32}` until `GESSO_GPU_BUDGET_MIB`
-(default 6144) is exhausted, smallest first. Overflow becomes `HostOffload`
+(default 4800) is exhausted, smallest first. Overflow becomes `HostOffload`
 (explicit host residency — a forgotten raw Array still fails the CUDA
 check). Remaining budget then uploads `GgufQuantSlice` expert slabs as
 `GpuQuantSlice` (quantized bytes, no F32 dump). Slabs that still do not

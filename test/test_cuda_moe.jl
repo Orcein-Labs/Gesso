@@ -565,13 +565,17 @@ else
         ids_cpu = Gesso.reference_generate(
             model, tensors, [1]; max_new_tokens=3, eps=spec.rms_norm_eps,
         )
-        gpu = Gesso.to_device(cuda, tensors)
+        # Exact id equality with the CPU path assumes no hot-expert pool, which
+        # is on by default now.
+        gpu = withenv("GESSO_GPU_HOT_EXPERTS" => "0") do
+            Gesso.to_device(cuda, tensors)
+        end
         ids_gpu = Gesso.reference_generate(
             model, gpu, [1]; max_new_tokens=3, eps=spec.rms_norm_eps, backend=cuda,
         )
         @test ids_gpu == ids_cpu
 
-        gpu_off = withenv("GESSO_GPU_BUDGET_MIB" => "0") do
+        gpu_off = withenv("GESSO_GPU_BUDGET_MIB" => "0", "GESSO_GPU_HOT_EXPERTS" => "0") do
             Gesso.to_device(cuda, tensors)
         end
         @test gpu_off.embedding.storage isa Gesso.HostOffload

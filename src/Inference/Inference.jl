@@ -822,13 +822,14 @@ _merge_heads!(dst::Activation, src::Activation, n_heads, d_head) =
     _gpu_budget_bytes() -> Int64
 
 Device-resident weight budget for `to_device`. `GESSO_GPU_BUDGET_MIB`
-(default 6144) is the 8 GB 5060 with headroom for activations, KV, and
-the active-expert scratch. Float32 weights fill the budget first;
-remaining bytes upload `GgufQuantSlice` expert slabs as `GpuQuantSlice`.
+(default 4800) leaves an 8 GB card room for 1024-row prefill passes and the
+hot-expert pool. Larger budgets leave the pass sizer only 128-row passes.
+Float32 weights fill the budget first; remaining bytes upload
+`GgufQuantSlice` expert slabs as `GpuQuantSlice`.
 """
 function _gpu_budget_bytes()
-    raw = get(ENV, "GESSO_GPU_BUDGET_MIB", "6144")
-    mib = something(tryparse(Int, raw), 6144)
+    raw = get(ENV, "GESSO_GPU_BUDGET_MIB", "4800")
+    mib = something(tryparse(Int, raw), 4800)
     return Int64(max(0, mib)) * Int64(1024 * 1024)
 end
 

@@ -1,4 +1,4 @@
-# Hot host experts in VRAM (GESSO_GPU_HOT_EXPERTS=1).
+# Hot host experts in VRAM (on by default; GESSO_GPU_HOT_EXPERTS=0 disables).
 #
 # MoE layers whose expert slabs stay on the host run their experts on the CPU.
 # On Ornith-35B that is about 16 ms of a 28 ms token, and it is bound by the
@@ -18,22 +18,21 @@
 # waits on that layer's router logits, so the staging memcpy fills time the
 # host would otherwise spend idle.
 #
-# With GESSO_GPU_HOT_PIN=1 each hot layer's slabs move into page-locked
-# anonymous memory (a file mmap cannot be registered with the driver). A swap
-# is then three async DMA copies with no host memcpy. On a single-channel host
+# By default each hot layer's slabs move into page-locked anonymous memory
+# (GESSO_GPU_HOT_PIN=0 opts out; a file mmap cannot be registered with the
+# driver). A swap is then three async DMA copies with no host memcpy. On a
+# single-channel host
 # the staged copy read and wrote each expert through DRAM before the DMA read
 # it a third time, while the CPU experts competed for the same bus.
 #
 # Hits use the GPU kernels (q8_1 activations) and misses the CPU ones (Q8_K),
 # so the output rounds differently from the all-CPU path.
 
-_hot_experts_enabled() = get(ENV, "GESSO_GPU_HOT_EXPERTS", "0") == "1"
+_hot_experts_enabled() = get(ENV, "GESSO_GPU_HOT_EXPERTS", "1") == "1"
 
-# Decode needs about 50 MiB beyond the weights. A prefill's activations peak
-# near 0.7 MiB per token on Ornith-35B (177 MiB at 256 tokens, 617 at 1024). A
-# prefill that runs out releases pools (_HotPurge), so the reserve only has to
-# cover decode and short prompts.
-const _HOT_RESERVE_DEFAULT_MIB = 384
+# Left free on the card for the desktop or compositor. Prefill passes are
+# sized against it at each pass.
+const _HOT_RESERVE_DEFAULT_MIB = 1024
 
 function _hot_env_int(name, default)
     raw = strip(get(ENV, name, ""))
@@ -234,7 +233,7 @@ function _hot_register!(blocks)
     triples = filter(t -> _hot_supported(t[2], t[3], t[4]), _moe_expert_triples(blocks))
     isempty(triples) && return
     per_layer = div(_hot_budget_bytes(), Int64(length(triples)))
-    pin = get(ENV, "GESSO_GPU_HOT_PIN", "0") == "1"
+    pin = get(ENV, "GESSO_GPU_HOT_PIN", "1") == "1"
     slots = Int[]
     for (li, g, u, d) in triples
         stride = g.bytes_per_expert + u.bytes_per_expert + d.bytes_per_expert
