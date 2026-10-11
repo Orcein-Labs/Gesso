@@ -1098,7 +1098,7 @@ and attends over the whole cache; the prompt is NEVER re-prefilled.
 Returns the full 0-based id sequence (prompt + new tokens). Stops at EOS
 (token 2) or `max_new_tokens`, whichever comes first.
 
-`info`: pass a `Ref{NamedTuple}` to receive `(kv_len, steps, reused)` — the
+`info`: pass a `Ref{Any}` to receive `(kv_len, steps, reused)` — the
 diagnostic channel the KV-length invariant is tested through. KV length
 equals prefix length: `kv_len == length(prompt) + steps`. `reused` is the
 count of prompt tokens a `state` already held, which were not prefilled.
@@ -1153,6 +1153,7 @@ function reference_generate(
     P + cap <= st.ctx || throw(gesso_error(ERR_INVALID_PLAN,
         "reference_generate: prompt $P + max_new_tokens $cap exceed the state's ctx $(st.ctx)"))
     fresh = st.arena === nothing
+    fresh && state !== nothing && _bind_state!(st, tensors, kv_fmt)
     fresh && (st.arena = _ZerosArena(_zeros_like_factory(cpu, tensors)))
     zeros_like = st.arena
     # a prefill block's temporaries, dead once the block returns
@@ -1202,6 +1203,7 @@ function reference_generate(
                 mx, dim; qdim=n_heads * d_head, ff=_dense_ffn_hidden(model),
                 kdim=n_kv_heads * d_head, n_heads, n_kv_heads, d_head, vocab, ctx=st.ctx,
             ) : nothing
+            st.pending === nothing || _restore_pending!(st)
         end
         kc, vc, h = st.kc, st.vc, st.h
         gdn_conv, gdn_rec, gdn_scratch, cpu_scratch = st.gdn_conv, st.gdn_rec, st.gdn_scratch, st.cpu_scratch
@@ -1659,7 +1661,7 @@ function _decode_step!(
     return h
 end
 
-export reference_generate, GenerateState
+export reference_generate, GenerateState, save_state, load_state
 
 # Phase 3 (§LXXVI item B): Llama-family checkpoint import — config,
 # safetensors reader, name map. Transport, not architecture (§VIII).
