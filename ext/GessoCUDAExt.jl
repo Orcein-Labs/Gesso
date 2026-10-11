@@ -161,6 +161,7 @@ include("cuda_quant_gemm.jl")
 include("cuda_quant_dense.jl")
 include("cuda_decode_small.jl")
 include("cuda_hot_experts.jl")
+include("cuda_kv_format.jl")
 include("cuda_attention.jl")
 
 # Bind the backend into the package's namespace: after this ext triggers,

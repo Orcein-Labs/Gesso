@@ -107,6 +107,7 @@ copies host memory, and host Array storage under a non-CPU backend is
 _block_mixer(bt) = haskey(bt, :mixer) ? bt.mixer : :full_attention
 
 include("decode_profile.jl")       # GESSO_PROFILE=1 decode stage profiler
+include("kv_format.jl")            # GESSO_KV_FORMAT cache storage: f32, f16, q8, q4h
 
 const _T_GDN_NS = Ref(Int64(0))
 const _T_ATTN_NS = Ref(Int64(0))
@@ -1143,17 +1144,25 @@ function reference_generate(
         # (the cache is runtime state, not a weight — no fixture-walk entries)
         # (linear-attention blocks keep no cache: a zero-row placeholder)
         kv_rows(bt) = _block_mixer(bt) === :linear_attention ? 0 : P + cap
+        kv_fmt = _kv_format()
+        kv_like = zeros_like((0, 0, 0))
+        function kv_cache(bt)
+            rows = kv_rows(bt)
+            (kv_fmt === :f32 || rows == 0) && return zeros_like((rows, n_kv_heads, d_head))
+            # storage rows padded to a multiple of 4: the CUDA decode reads 4
+            # consecutive rows per load and needs every column 4-row aligned.
+            # Readers take K rows explicitly, so the tail rows stay unread.
+            x = _kv_alloc(kv_fmt, kv_like, cld(rows, 4) * 4, n_kv_heads, d_head)
+            push!(zeros_like.held, x)
+            return x
+        end
         kc = [
-            Activation(;
-                shape=(kv_rows(bt), n_kv_heads, d_head),
-                storage=zeros_like((kv_rows(bt), n_kv_heads, d_head)),
-            ) for bt in tensors.blocks
+            Activation(; shape=(kv_rows(bt), n_kv_heads, d_head), storage=kv_cache(bt))
+            for bt in tensors.blocks
         ]
         vc = [
-            Activation(;
-                shape=(kv_rows(bt), n_kv_heads, d_head),
-                storage=zeros_like((kv_rows(bt), n_kv_heads, d_head)),
-            ) for bt in tensors.blocks
+            Activation(; shape=(kv_rows(bt), n_kv_heads, d_head), storage=kv_cache(bt))
+            for bt in tensors.blocks
         ]
 
         # the newest hidden row: the head reads it and each decode step
@@ -1249,12 +1258,16 @@ function reference_generate(
                     )
                     # KV APPEND: the pass's post-rope K/V become cache rows s0..s1,
                     # stored at n_kv_heads (GQA caches the small side, §LXXVI)
-                    kc[bi].storage[s0:s1, :, :] .= kh.storage
-                    vc[bi].storage[s0:s1, :, :] .= vh.storage
-                    # a later pass attends the cached rows before it as well
-                    ks, vs = s0 == 1 ? (kh, vh) : (
+                    _kv_write_rows!(kc[bi].storage, kh.storage, s0)
+                    _kv_write_rows!(vc[bi].storage, vh.storage, s0)
+                    # a later pass attends the cached rows before it as well. A
+                    # cache in another format is read back on the first pass too,
+                    # so prefill attends the same keys decode will.
+                    ks, vs = s0 == 1 && kv_fmt === :f32 ? (kh, vh) : (
                         Activation(; shape=(K, n_kv_heads, d_head), storage=@view kc[bi].storage[1:K, :, :]),
                         Activation(; shape=(K, n_kv_heads, d_head), storage=@view vc[bi].storage[1:K, :, :]))
+                    kv_rot = _kv_rotated(kc[bi].storage)
+                    kv_rot && _kv_rotate!(qh.storage, true)
                     if !_attention_prefill_device!(cpu, attn.storage, qh.storage,
                         ks.storage, vs.storage, n_heads, d_head, group, n, K)
                         if scores === nothing
@@ -1280,6 +1293,7 @@ function reference_generate(
                         )
                         kx === ks || (_release_storage!(kx.storage); _release_storage!(vx.storage))
                     end
+                    kv_rot && _kv_rotate!(attn.storage, false)
 
                     _merge_heads!(merged, attn, n_heads, d_head)
                     if haskey(bt, :wattn_gate)
@@ -1543,6 +1557,8 @@ function _decode_step!(
                 # KV APPEND: exactly one row per layer per step, at n_kv_heads
                 _kv_append_storage!(kc[bi].storage, vc[bi].storage, kh.storage, vh.storage, pos0)
             end
+            kv_rot = _kv_rotated(kc[bi].storage)
+            kv_rot && _kv_rotate!(qh.storage, true)
             if cpu_scratch === nothing
                 # the query is the LAST position: it attends to the whole cache.
                 # A device backend that fuses the decode attention reads the
@@ -1584,6 +1600,7 @@ function _decode_step!(
                     cpu_scratch.probs, n_heads, d_head, group, K,
                 )
             end
+            kv_rot && _kv_rotate!(attn.storage, false)
             @decode_sub :attn_outproj cpu begin
                 _merge_heads!(merged, attn, n_heads, d_head)
                 if haskey(bt, :wattn_gate)

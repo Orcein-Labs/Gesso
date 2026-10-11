@@ -521,3 +521,30 @@ Steps 2–3 are first-semantic-win candidates in the Phase 7 class
        distributions in receipts.
     6. Wire KV pipelines into the Phase 10 planner vocabulary (§5) and
        the North Star search machinery as its second client (§7.2).
+
+---
+
+## 13. FIRST DATA (2026-10-11, 35B on an 8 GB card, ahead of Phases 5/10)
+
+Layer 5 (precision) landed early, as a single per-run format rather than a
+searched pipeline. The long-prompt OOM on the 35B forced it.
+`GESSO_KV_FORMAT` picks one of f32, f16, q8 or q4h for the whole cache.
+q4h is a signed Walsh-Hadamard rotation plus Lloyd-Max 4-bit levels. The
+rotation is orthonormal, so the query takes the same rotation and RoPE
+stays as it is (§5.2). The measurements, kernels and memory table are in
+`grok-wip/2026-10-09_35b-cuda-decode-parity.md`, "Quantized KV".
+
+What the ladder gets from it:
+
+- **Rung 3 only.** Teacher-forced greedy, 32 steps, real text. KL(f32 || fmt)
+  is measured against an f32-vs-f32 control of 4.1e-3, which is run-to-run
+  GPU nondeterminism. At P=2048, f16 and q8 sit at 1.4-1.9x the control and
+  q4h at 4.4-5.2x. At P=8192 the control itself ran out of memory, so those
+  rows have no floor. This is the KIVI/KVQuant prior from §9.5 step 5:
+  8-bit is safe, 4-bit is marginal.
+- **Rung 4 is still undefined** (§12 action 1). q4h stays opt-in until it is.
+  A KL ratio is not a task score.
+- **Cost honesty (§5.3).** Encoding runs inside the cache write and hasn't
+  been timed on its own. The reader was the real cost: the first quantized
+  decode kernel ran 4-8x slower than f32 at long K until it loaded 4 rows of
+  codes per instruction. Measure the reader, not just the bytes.

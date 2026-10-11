@@ -332,11 +332,105 @@ per-head kernel.
   short-prompt baseline from 37 to 45 tok/s. Fix
   `GESSO_GPU_HOT_EXPERTS_MIB` when comparing.
 
-Open: 16k and 32k prompts still run out of device memory. The F32 KV cache
-is 40 KiB a token over the 10 attention layers: 640 MiB at 16k, 1.25 GiB at
-32k. That's a large share of the ~1 GiB not taken by weights and pools,
-but what else fills the device at 16k hasn't been measured. That
-measurement comes before F16/Q8 KV.
+### Quantized KV (lane m, 5af6b9d -> next commit)
+
+16k and 32k prompts ran out of device memory. A probe after load shows
+weights at 6097 MiB, with 860 MiB available once the pools are reclaimed.
+The F32 KV cache is 40 KiB a token over the 10 attention layers, which is
+640 MiB at 16k, so F32 fails at 16384 and passes at 12288.
+
+`GESSO_KV_FORMAT` now picks the cache format for a run. f32 stays the
+default.
+
+| format | storage | KiB/token | 16k | 32k |
+|---|---|---|---|---|
+| f32 | Float32 | 40 | 640 MiB, OOM | 1.25 GiB |
+| f16 | Float16 | 20 | 320 MiB | 640 MiB, OOM |
+| q8 | Int8, Float16 absmax per 32 | 10.6 | 170 MiB | 340 MiB |
+| q4h | 4-bit Lloyd-Max on a Hadamard-rotated row, Float16 RMS per 32 | 5.6 | 90 MiB | 180 MiB |
+
+q8 and q4h complete prefill and decode at 16k, 24k and 32k.
+
+q4h rotates each K and V row by a signed Walsh-Hadamard transform before
+quantizing. That spreads outlier channels, so each block is close to
+Gaussian. The rotation is orthonormal, so the query takes the same rotation
+and the attention output is unrotated once per head. RoPE is untouched.
+
+**Drift.** Teacher-forced: f32 generates 32 greedy tokens from a real-text
+prompt (tokenized with the GGUF's own BPE), then each format replays the
+same ids, so the logits compare step by step. The control is f32 against
+f32. Its KL is GPU run-to-run nondeterminism, the floor any format is
+measured against.
+
+| P | format | top-1 | KL mean | KL max |
+|---|---|---|---|---|
+| 2048 | f32 (control) | 30/32 | 4.1e-3 | 2.0e-2 |
+| 2048 | f16 | 30/32 | 6.1-6.3e-3 | 2.7e-2 |
+| 2048 | q8 | 30-31/32 | 5.7-7.8e-3 | 2.6-4.9e-2 |
+| 2048 | q4h | 29/32 | 1.8-2.1e-2 | 1.9-2.3e-1 |
+| 8192 | f16 | 28/32 | 1.4e-2 | 6.7e-2 |
+| 8192 | q8 | 31/32 | 1.3e-2 | 7.3e-2 |
+| 8192 | q4h | 28/32 | 5.7e-2 | 4.5e-1 |
+
+The ranges span two runs. At P=8192 the f32 control replay itself ran out
+of memory, so those rows have no floor. q8 matches f16 at both lengths, and
+f16 is llama.cpp's default cache type. q4h sits at about 4-5x the floor. No
+task-level score exists yet, so q4h stays opt-in.
+
+**The decode kernel.** The split-K kernel's generic tile loader reads one
+element per thread through `getindex`. For a quantized cache that means a
+code load, a scale load and a decode per element, so the first q8 decode
+ran 4-8x slower than f32 at long K. The loader now has a specialized method
+per format. Each thread loads 4 consecutive rows of a column in one
+instruction: UInt32 of codes plus one UInt64 for the 4 Float16 scales (q8),
+UInt32 for 4 rows × 2 dims (q4h), or UInt64 (f16). Every load is issued
+before any store. A tile's 32 dims are exactly one scale block. The cache
+allocates its rows padded to a multiple of 4, so every column is 4-row
+aligned. Readers take K explicitly, so the tail rows are never read.
+Unaligned caches fall back to the generic loader.
+
+One layer, split-K, microseconds. The generic number is the same kernel on
+an unaligned cache. The maximum difference between fast and generic is 0:
+
+| K | f32 | f16 (generic) | q8 (generic) | q4h (generic) |
+|---|---|---|---|---|
+| 4096 | 97 | 89 (96) | 97 (373) | 107 (450) |
+| 16384 | 469 | 318 (518) | 293 (2259) | 324 (1159) |
+| 32768 | 783 | 595 (916) | 618 (2472) | 641 (2383) |
+
+At small K the quantized formats cost about 28 us more per call than f16,
+in both paths. That is launch overhead, about 0.3 ms a token. Not fixed.
+
+**Decode by format.** One generation of 65 tokens per row, per-token
+timing over tokens 2-64, `GESSO_GPU_HOT_EXPERTS_MIB=480` with pinning, ms
+per token (tok/s):
+
+| prompt | f32 | f16 | q8 | q4h |
+|---|---|---|---|---|
+| P1 | 21.9 (45.7) | 20.9 (47.9) | 20.0 (49.9) | 20.5 (48.9) |
+| P8192 | 25.3 (39.6) | 22.9 (43.7) | 22.0 (45.5) | 21.2 (47.1) |
+| P16384 | OOM | 26.7 (37.4) | 24.1 (41.6) | 23.6 (42.4) |
+| P32768 | OOM | OOM | 29.3 (34.2) | 29.5 (33.9) |
+
+The same table before the loader change, from an earlier process, had q8
+at 25.9 / 32.2 / 40.4 ms (P1 / P8192 / P16384), slower than f32 at 8k. That
+process's f32 P1 control read 24.4 ms against 21.9 here, so about 10% of
+the gap is run conditions. The rest is the loader. q8 at 32k decodes faster
+than llama.cpp's short-context 32.8 tok/s. Prefill at 32k takes 100-130 s.
+
+Gate after the change: 56.8 tok/s, ids ok. Targeted CUDA tests
+(import_llama, kv_format, cuda_attention_decode, ops, quant_dense, hybrid,
+moe, inference): 996/996. The fused-decode oracle now covers an aligned
+cache, an aligned cache with a partial last row group, and an unaligned
+cache, for f16, q8 and q4h.
+
+**Measurement caveat.** One gate run read 41.5 tok/s with this code. At the
+time the host had 18 GB of swap in use and kswapd0 at 99%, so the CPU
+expert path was taking page faults. The rerun with swap settled read 56.8.
+Check host memory before reading a gate drop as a regression. Separately,
+the synced decode profile serializes the hot-pool copies, so its attn stage
+can't be used to attribute attention time with hot pools on. Use the
+microbenchmark.
 
 ## Where the time goes now
 
@@ -377,12 +471,19 @@ and serial host work per hybrid layer.
    remove the syncs and allow device-only tokens and CUDA graphs. But PCIe
    (6.5 GB/s) is under half of DRAM (14 GB/s), so this only pays at high hit
    rates. Not built.
+5. **Long context.** q8 is at the f16 drift level and decodes faster than
+   f32 at every length, so it is the candidate default cache. Past 32k, the
+   limits are prefill time (130 s at 32k, quadratic attention) and the
+   ~860 MiB headroom. The next steps are a task-level quality check before
+   q4h goes beyond opt-in, and compaction or subquad attention for prefill.
 
 ## Reproduce
 
     GESSO_ORNITH35_GGUF=<gguf> julia --project=benchmark -t 16 scripts/gate_35b.jl cuda
     GESSO_GPU_HOT_EXPERTS=1 GESSO_GPU_HOT_PIN=1 GESSO_GPU_BUDGET_MIB=4096 \
       GESSO_ORNITH35_GGUF=<gguf> julia --project=benchmark -t 16 scripts/gate_35b.jl cuda
+
+Any run takes `GESSO_KV_FORMAT=f32|f16|q8|q4h` for the KV cache format.
 
 Raw logs (per-run medians, hit rates, profiles) stay in local scratch. They
 are not committed.

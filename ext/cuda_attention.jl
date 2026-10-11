@@ -135,8 +135,8 @@ function _attention_decode_device!(
     ::CUDABackend,
     attn::CuArray,
     q::CuArray,
-    kc::CuArray,
-    vc::CuArray,
+    kc::_CuKV,
+    vc::_CuKV,
     n_heads::Int,
     d_head::Int,
     group::Int,
@@ -184,12 +184,12 @@ end
 # bank conflicts). Every load of the thread's share is issued before the
 # first store: one at a time, each waited out its own DRAM latency.
 @inline function _attn_tile_load!(sh, to::Int, src, t0::Int, hk::Int, j0::Int, n::Int, W::Int, tid::Int,
-    ::Val{C}, ::Val{R}) where {C,R}
+    ::Val{C}, ::Val{R}, ::Val) where {C,R}
     vals = ntuple(Val(R)) do r
         x = tid - 1 + (r - 1) * _ATTN_THREADS
         jj = x ÷ C
         i = x - jj * C
-        (i < n && jj < W) ? @inbounds(src[t0 + i + 1, hk, j0 + jj + 1]) : 0.0f0
+        (i < n && jj < W) ? Float32(@inbounds(src[t0 + i + 1, hk, j0 + jj + 1])) : 0.0f0
     end
     for r in 1:R
         x = tid - 1 + (r - 1) * _ATTN_THREADS
@@ -200,7 +200,124 @@ end
     return
 end
 
-function _cuda_attn_split_kernel!(op, ml, q, kc, vc, K::Int, scale::Float32, d::Int, ::Val{G}, ::Val{C}) where {G,C}
+# The f16 and quantized caches load a 4-row group per thread instead of one
+# element: the generic path above dequantized each element on its own, 4x the
+# loads and a scale fetch per value, and read q8 at 13 GB/s and q4h at 7 against
+# 150+ for f32. A column's 4 consecutive rows are adjacent in memory (rows %
+# 4 == 0 and t0 % 4 == 0 keep the group aligned), so one load fetches them.
+# A tile's 32 dims are one scale block, so a thread's 4 row scales are one
+# 8-byte load per tile. Units are (row group, column) with the group fastest:
+# a warp reads contiguous runs of the column, and a thread's group stays put
+# across its units because 256 is a multiple of C ÷ 4.
+@inline _attn_vload(::Type{T}, a, lin::Int, ::Val{A}) where {T,A} =
+    unsafe_load(reinterpret(Core.LLVMPtr{T,1}, pointer(a, lin)), 1, Val(A))
+
+@inline _attn_f16_bits(w::UInt64, k::Int) = Float32(reinterpret(Float16, (w >> (16 * k)) % UInt16))
+
+@inline function _attn_tile_store4!(sh, to::Int, i0::Int, jj::Int, n::Int, v::NTuple{4,Float32})
+    for k in 0:3
+        i = i0 + k
+        @inbounds sh[to + i * (_ATTN_SPLIT_W + 1) + jj + 1] = i < n ? v[k + 1] : 0.0f0
+    end
+    return
+end
+
+# select chain, not a tuple index: a dynamic index into _Q4_LEVELS can spill
+# the table to local memory
+@inline function _attn_q4_level(c::UInt32)
+    m = c & 0x07
+    a = m < 0x04 ?
+        (m < 0x02 ? (m == 0x00 ? _Q4_LEVELS[1] : _Q4_LEVELS[2]) : (m == 0x02 ? _Q4_LEVELS[3] : _Q4_LEVELS[4])) :
+        (m < 0x06 ? (m == 0x04 ? _Q4_LEVELS[5] : _Q4_LEVELS[6]) : (m == 0x06 ? _Q4_LEVELS[7] : _Q4_LEVELS[8]))
+    return c >= 0x08 ? -a : a
+end
+
+@inline function _attn_tile_scales(scales, t0::Int, i0::Int, hk::Int, j0::Int, n::Int)
+    rows, nkv = size(scales, 1), size(scales, 2)
+    i0 < n || return (0.0f0, 0.0f0, 0.0f0, 0.0f0)
+    w = _attn_vload(UInt64, scales, t0 + i0 + (hk - 1) * rows + (j0 >> 5) * rows * nkv + 1, Val(8))
+    return ntuple(k -> _attn_f16_bits(w, k - 1), Val(4))
+end
+
+@inline function _attn_tile_load!(sh, to::Int, src::QuantKV{:q8,<:CuDeviceArray}, t0::Int, hk::Int, j0::Int,
+    n::Int, W::Int, tid::Int, ::Val{C}, ::Val, ::Val{true}) where {C}
+    CG = C ÷ 4
+    NR = CG * _ATTN_SPLIT_W ÷ _ATTN_THREADS
+    codes = src.codes
+    rows, nkv = size(codes, 1), size(codes, 2)
+    i0 = 4 * ((tid - 1) % CG)
+    sc = _attn_tile_scales(src.scales, t0, i0, hk, j0, n)
+    base = t0 + i0 + (hk - 1) * rows + 1
+    ws = ntuple(Val(NR)) do r
+        jj = (tid - 1 + (r - 1) * _ATTN_THREADS) ÷ CG
+        i0 < n ? _attn_vload(UInt32, codes, base + (j0 + jj) * rows * nkv, Val(4)) : UInt32(0)
+    end
+    for r in 1:NR
+        jj = (tid - 1 + (r - 1) * _ATTN_THREADS) ÷ CG
+        w = ws[r]
+        v = ntuple(k -> Float32(reinterpret(Int8, (w >> (8 * (k - 1))) % UInt8)) * sc[k], Val(4))
+        _attn_tile_store4!(sh, to, i0, jj, n, v)
+    end
+    return
+end
+
+# a byte holds channels 2b-1 (low nibble) and 2b, so a UInt32 is 4 rows x 2
+# dims and a tile is half the units of q8: at C = 32 half the threads idle
+@inline function _attn_tile_load!(sh, to::Int, src::QuantKV{:q4h,<:CuDeviceArray}, t0::Int, hk::Int, j0::Int,
+    n::Int, W::Int, tid::Int, ::Val{C}, ::Val, ::Val{true}) where {C}
+    CG = C ÷ 4
+    NU = CG * (_ATTN_SPLIT_W ÷ 2)
+    NR = cld(NU, _ATTN_THREADS)
+    codes = src.codes
+    rows, nkv = size(codes, 1), size(codes, 2)
+    i0 = 4 * ((tid - 1) % CG)
+    sc = _attn_tile_scales(src.scales, t0, i0, hk, j0, n)
+    base = t0 + i0 + (hk - 1) * rows + 1
+    ws = ntuple(Val(NR)) do r
+        u = tid - 1 + (r - 1) * _ATTN_THREADS
+        jb = u ÷ CG
+        (u < NU && i0 < n) ? _attn_vload(UInt32, codes, base + ((j0 >> 1) + jb) * rows * nkv, Val(4)) : UInt32(0)
+    end
+    for r in 1:NR
+        u = tid - 1 + (r - 1) * _ATTN_THREADS
+        u < NU || continue
+        jb = u ÷ CG
+        w = ws[r]
+        lo = ntuple(k -> _attn_q4_level((w >> (8 * (k - 1))) & 0x0f) * sc[k], Val(4))
+        hi = ntuple(k -> _attn_q4_level((w >> (8 * (k - 1) + 4)) & 0x0f) * sc[k], Val(4))
+        _attn_tile_store4!(sh, to, i0, 2 * jb, n, lo)
+        _attn_tile_store4!(sh, to, i0, 2 * jb + 1, n, hi)
+    end
+    return
+end
+
+@inline function _attn_tile_load!(sh, to::Int, src::CuDeviceArray{Float16,3}, t0::Int, hk::Int, j0::Int,
+    n::Int, W::Int, tid::Int, ::Val{C}, ::Val, ::Val{true}) where {C}
+    CG = C ÷ 4
+    NR = CG * _ATTN_SPLIT_W ÷ _ATTN_THREADS
+    rows, nkv = size(src, 1), size(src, 2)
+    i0 = 4 * ((tid - 1) % CG)
+    base = t0 + i0 + (hk - 1) * rows + 1
+    ws = ntuple(Val(NR)) do r
+        jj = (tid - 1 + (r - 1) * _ATTN_THREADS) ÷ CG
+        (i0 < n && jj < W) ? _attn_vload(UInt64, src, base + (j0 + jj) * rows * nkv, Val(8)) : UInt64(0)
+    end
+    for r in 1:NR
+        jj = (tid - 1 + (r - 1) * _ATTN_THREADS) ÷ CG
+        jj < W || continue
+        w = ws[r]
+        _attn_tile_store4!(sh, to, i0, jj, n, ntuple(k -> _attn_f16_bits(w, k - 1), Val(4)))
+    end
+    return
+end
+
+# whether a cache takes the 4-row loads; f32 keeps the generic path
+_attn_vec4(::Any) = false
+_attn_vec4(x::QuantKV{<:Any,<:CuArray}) = size(x, 1) % 4 == 0
+_attn_vec4(x::CuArray{Float16,3}) = size(x, 1) % 4 == 0
+
+function _cuda_attn_split_kernel!(op, ml, q, kc, vc, K::Int, scale::Float32, d::Int, ::Val{G}, ::Val{C},
+    ::Val{V}) where {G,C,V}
     R = C * _ATTN_SPLIT_W ÷ _ATTN_THREADS
     WP = _ATTN_SPLIT_W + 1
     # shared layout: q [d, G] | scores, then probs [C, G] | tile [W+1, C]
@@ -231,7 +348,7 @@ function _cuda_attn_split_kernel!(op, ml, q, kc, vc, K::Int, scale::Float32, d::
         for j0 in 0:_ATTN_SPLIT_W:(d - 1)
             W = min(_ATTN_SPLIT_W, d - j0)
             CUDA.sync_threads()
-            _attn_tile_load!(sh, to, kc, t0, hk, j0, n, W, tid, Val(C), Val(R))
+            _attn_tile_load!(sh, to, kc, t0, hk, j0, n, W, tid, Val(C), Val(R), Val(V))
             CUDA.sync_threads()
             for x in tid:nt:(G * C)
                 g0 = (x - 1) ÷ C
@@ -269,7 +386,7 @@ function _cuda_attn_split_kernel!(op, ml, q, kc, vc, K::Int, scale::Float32, d::
         for j0 in 0:_ATTN_SPLIT_W:(d - 1)
             W = min(_ATTN_SPLIT_W, d - j0)
             CUDA.sync_threads()
-            _attn_tile_load!(sh, to, vc, t0, hk, j0, n, W, tid, Val(C), Val(R))
+            _attn_tile_load!(sh, to, vc, t0, hk, j0, n, W, tid, Val(C), Val(R), Val(V))
             CUDA.sync_threads()
             for x in tid:nt:(G * _ATTN_SPLIT_W)
                 g0 = (x - 1) ÷ _ATTN_SPLIT_W
@@ -333,7 +450,7 @@ function _attn_split_launch!(attn, q, kc, vc, n_kv::Int, d::Int, K::Int, scale::
     sc.ml = _attn_split_buf(sc.ml, 2 * nh * S)
     shmem = (G * d + G * C + (_ATTN_SPLIT_W + 1) * C) * sizeof(Float32)
     @fastcuda threads = _ATTN_THREADS blocks = (n_kv, S) shmem = shmem _cuda_attn_split_kernel!(
-        sc.o, sc.ml, q, kc, vc, K, scale, d, Val(G), Val(C),
+        sc.o, sc.ml, q, kc, vc, K, scale, d, Val(G), Val(C), Val(_attn_vec4(kc) && _attn_vec4(vc)),
     )
     @fastcuda threads = _ATTN_THREADS blocks = nh shmem = (S + 34) * sizeof(Float32) _cuda_attn_combine_kernel!(
         attn, sc.o, sc.ml, S, d, nh,
@@ -356,7 +473,7 @@ _attn_prefill_tile(L::Int, K::Int) =
 # into the running max m and sum l, and rescales the row's accumulated output
 # by exp(m_old - m_new) before the tile's P*V lands on it. The first tile has
 # no accumulator yet: its GEMM writes with beta = 0.
-function _cuda_attn_pf_tile_kernel!(St, m, l, attn, hh::Int, h_l::Int, Tn::Int, lim0::Int, first::Bool, d::Int)
+function _cuda_attn_pf_tile_kernel!(St, m, l, attn, hh::Int, g::Int, Tn::Int, lim0::Int, first::Bool, d::Int)
     sh = CUDA.@cuStaticSharedMem(Float32, 33)
     tid = Int(threadIdx().x)
     nt = Int(blockDim().x)
@@ -371,7 +488,7 @@ function _cuda_attn_pf_tile_kernel!(St, m, l, attn, hh::Int, h_l::Int, Tn::Int, 
     tmax = _attn_block_reduce(max, lmax, -Inf32, sh, 0, tid, nw)
     # key 1 is in the first tile and visible to every row, so m is finite
     # from then on and a fully masked later tile leaves it alone
-    mo = first ? -Inf32 : m[i]
+    mo = first ? -Inf32 : m[i, g]
     mn = max(mo, tmax)
     lsum = 0.0f0
     for j in tid:nt:Tn
@@ -387,8 +504,8 @@ function _cuda_attn_pf_tile_kernel!(St, m, l, attn, hh::Int, h_l::Int, Tn::Int, 
         end
     end
     if tid == 1
-        l[i, h_l] = first ? tsum : l[i, h_l] * alpha + tsum
-        m[i] = mn
+        l[i, hh] = first ? tsum : l[i, hh] * alpha + tsum
+        m[i, g] = mn
     end
     return
 end
@@ -409,25 +526,30 @@ function _attention_prefill_device!(
 )
     L == 0 && return true
     T = _attn_prefill_tile(L, K)
+    # A cache in another format (f16, quantized) is converted a key tile at a
+    # time into dense scratch, once per KV head and shared by its group.
+    dense = k isa StridedCuArray{Float32} && v isa StridedCuArray{Float32}
     St = CuArray{Float32}(undef, T, L)
-    m = CuArray{Float32}(undef, L)
+    m = CuArray{Float32}(undef, L, group)
     l = CuArray{Float32}(undef, L, n_heads)
+    Kt = dense ? St : CuArray{Float32}(undef, T, d_head)
+    Vt = dense ? St : CuArray{Float32}(undef, T, d_head)
     try
         scale = _cu_scalar(Float32(1 / sqrt(d_head)))
         one_, zero_ = _cu_scalar(1.0f0), _cu_scalar(0.0f0)
-        for hh in 1:n_heads
-            hk = div(hh - 1, group) + 1
-            qh = view(q, :, hh, :)
-            oh = view(attn, :, hh, :)
-            for t0 in 0:T:(K - 1)
-                Tn = min(T, K - t0)
-                rows = (t0 + 1):(t0 + Tn)
-                S = view(St, 1:Tn, :)
-                _blas_gemm!('N', 'T', scale, view(k, rows, hk, :), qh, zero_, S)
+        for hk in 1:(n_heads ÷ group), t0 in 0:T:(K - 1)
+            Tn = min(T, K - t0)
+            rows = (t0 + 1):(t0 + Tn)
+            kt = dense ? view(k, rows, hk, :) : _kv_load_tile!(Kt, k, t0, hk, Tn)
+            vt = dense ? view(v, rows, hk, :) : _kv_load_tile!(Vt, v, t0, hk, Tn)
+            S = view(St, 1:Tn, :)
+            for g in 1:group
+                hh = (hk - 1) * group + g
+                _blas_gemm!('N', 'T', scale, kt, view(q, :, hh, :), zero_, S)
                 @fastcuda threads = _ATTN_THREADS blocks = L _cuda_attn_pf_tile_kernel!(
-                    St, m, l, attn, hh, hh, Tn, K - L - t0, t0 == 0, d_head,
+                    St, m, l, attn, hh, g, Tn, K - L - t0, t0 == 0, d_head,
                 )
-                _blas_gemm!('T', 'N', one_, S, view(v, rows, hk, :), t0 == 0 ? zero_ : one_, oh)
+                _blas_gemm!('T', 'N', one_, S, vt, t0 == 0 ? zero_ : one_, view(attn, :, hh, :))
             end
         end
         @fastcuda threads = min(_ATTN_THREADS, d_head) blocks = (L, n_heads) _cuda_attn_pf_norm_kernel!(attn, l, d_head)
@@ -435,6 +557,7 @@ function _attention_prefill_device!(
         CUDA.unsafe_free!(St)
         CUDA.unsafe_free!(m)
         CUDA.unsafe_free!(l)
+        dense || (CUDA.unsafe_free!(Kt); CUDA.unsafe_free!(Vt))
     end
     return true
 end

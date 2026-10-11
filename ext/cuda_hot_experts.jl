@@ -714,12 +714,16 @@ end
 # estimate, ~0.75 MiB on the 35B MoE) and the attention's key-tile scores.
 # Attention reads the KV heads in place and tiles the keys
 # (_attention_prefill_device!), so nothing grows with K past the tile. The
+# dense dequant GEMM's scratch is freed at every prefill's end and regrown by
+# the next (a fixed weight tile plus the pass's Float16 activations); P16384
+# ran out of memory on that regrowth while the estimate said it fit. The
 # margin is the shared ring and the driver's room to place the rest.
 const _PREFILL_PASS_MARGIN = Int64(160) << 20
 const _PREFILL_PASS_STEP = 128
 
 _prefill_pass_bytes(n::Int, K::Int, qdim::Int, group::Int) =
-    Int64(_HOT_PF_CFG[].headroom) * n + 4 * Int64(n) * _attn_prefill_tile(n, K)
+    Int64(_HOT_PF_CFG[].headroom) * n + 4 * Int64(n) * _attn_prefill_tile(n, K) +
+    (Int64(_dq_gemm_scratch_mib()) << 20) + 2 * Int64(n) * qdim
 
 # P4096 in passes of 1024 ran out of memory next to hot+pin pools; a fixed
 # smaller chunk costs short prompts throughput they could have had. The pass
