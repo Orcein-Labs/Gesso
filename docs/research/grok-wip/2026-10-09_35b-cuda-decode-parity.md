@@ -342,8 +342,9 @@ The F32 KV cache is 40 KiB a token over the 10 attention layers, which is
 `GESSO_KV_FORMAT` now picks the cache format for a run. Unset, it is q8
 on CUDA and f32 on CPU (f2bcfda). With the variable unset, P16384 decodes
 at 22.99 ms/token where f32 runs out of memory. The decode gate with q8
-passes with exact ids at 61.1 tok/s. This covers `reference_generate`
-only: `Session` keeps K and V in f32 pages in `PagedKVManager`.
+passes with exact ids at 61.1 tok/s. `reference_generate` is the only
+path that runs the 35B: `Session` validates for dense FFN blocks and
+rejects it.
 
 | format | storage | KiB/token | 16k | 32k |
 |---|---|---|---|---|
@@ -475,8 +476,9 @@ and serial host work per hybrid layer.
    (6.5 GB/s) is under half of DRAM (14 GB/s), so this only pays at high hit
    rates. Not built.
 5. **Long context.** q8 is at the f16 drift level and decodes faster than
-   f32 at every length, so it is now the CUDA default cache. `Session` does
-   not use it yet; its paged manager needs quantized pages. Past 32k, the
+   f32 at every length, so it is now the CUDA default cache. For multi-turn
+   use the bigger cost is that `reference_generate` keeps no KV between
+   calls: every turn re-prefills the whole prompt. Past 32k, the
    limits are prefill time (130 s at 32k, quadratic attention) and the
    ~860 MiB headroom. The next steps are a task-level quality check before
    q4h goes beyond opt-in, and compaction or subquad attention for prefill.
