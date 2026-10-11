@@ -1683,6 +1683,10 @@ include("gpt2_tokenizer.jl")
 # where it was (regression law §XIII) and the generic doorway sits beside it.
 # The generic path is what new families use; `load_llama` still works.
 include("architecture_spec.jl")      # Pass A/F: canonical description + capabilities
+include("context_budget.jl")       # KV bytes per token, ceilings, compaction policy (CPU only)
+export kv_bytes_per_token, memory_ceiling_tokens, CostModel, prefill_seconds,
+    decode_seconds, ContextBudget, latency_ceiling_tokens, CompactionPolicy,
+    CompactionTracker, reset!, decide_compaction
 include("semantic_params.jl")        # Pass B/E: canonical parameter identity
 include("arch_adapters.jl")          # Pass A/B: the family boundary
 include("materialize_architecture.jl") # Pass B/E: the generic binder
