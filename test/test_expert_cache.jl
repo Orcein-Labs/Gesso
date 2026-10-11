@@ -116,11 +116,15 @@ else
         y_cpu, x, router, A_g, A_u, A_d, n_used,
     )
 
-    # uncached reference: plain host GgufQuantSlice banks, the existing quant path
+    # uncached reference: plain host GgufQuantSlice banks, the existing quant path.
+    # Host banks otherwise run the MoE on the CPU, whose rounding differs from the
+    # device kernels by an ulp and would void the exact comparisons below.
     y_ref = CUDA.zeros(Float32, seq, h)
-    Gesso.Inference._moe_topk_swiglu!(
-        cuda, y_ref, CuArray{Float32}(x), CuArray{Float32}(router), gate, up, down, n_used,
-    )
+    withenv("GESSO_MOE_HOST_EXPERTS" => "0") do
+        Gesso.Inference._moe_topk_swiglu!(
+            cuda, y_ref, CuArray{Float32}(x), CuArray{Float32}(router), gate, up, down, n_used,
+        )
+    end
     y_ref_h = Array(y_ref)
     @test approx_eq(y_ref_h, y_cpu; atol=1e-3)
 
