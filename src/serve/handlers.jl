@@ -242,7 +242,7 @@ _completion_id() = "chatcmpl-" * string(rand(UInt64), base=16, pad=16)
 
 function _parse_body(raw::Vector{UInt8})
     body = try
-        JSON.parse(String(copy(raw)))
+        _chat_json_parse(String(copy(raw)))
     catch
         throw(HTTPError(400, "request body is not valid JSON"))
     end
@@ -274,7 +274,7 @@ function _normalize_call(c)
     args = get(f, "arguments", "{}")
     parsed = if args isa AbstractString
         try
-            JSON.parse(String(args))
+            _chat_json_parse(String(args))
         catch
             throw(HTTPError(400, "tool call arguments are not valid JSON"))
         end

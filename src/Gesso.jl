@@ -41,7 +41,7 @@ include("Speculation/Speculation.jl")       # Phase 20: host-side draft seam (SP
 include("Planning/Planning.jl")             # Phase 7
 include("Agents/Agents.jl")                 # Phase 12
 include("CAPI/CAPI.jl")                     # Phase 16
-include("serve/Serve.jl")                   # OpenAI-compatible chat server (no core deps)
+include("serve/Serve.jl")                   # OpenAI-compatible chat server (after Inference: the engine binding and ordered JSON)
 
 # --- public semantic vocabulary (§CIX; Phase 1 item A) ----------------------
 # Re-exported so `using Gesso` sees the core vocabulary. Each module owns its
@@ -50,8 +50,8 @@ using .Semantics: PrefillWorkload, DecodeWorkload
 export PrefillWorkload, DecodeWorkload
 
 # --- chat server (src/serve) ------------------------------------------------
-using .Serve: ChatModel, serve
-export ChatModel, serve
+using .Serve: ChatModel, serve, gguf_chat_model
+export ChatModel, serve, gguf_chat_model
 
 using .ModelIR: Embedding, RMSNorm, RoPE, Attention, SwiGLU, Block, Model
 export Embedding, RMSNorm, RoPE, Attention, SwiGLU, Block, Model

@@ -6,7 +6,7 @@ using Sockets
 using JSON
 using Random
 using Gesso
-using Gesso.Serve: QwenXMLParser, feed!, finish!, ReasoningDelta, ContentDelta, ToolCallDelta
+using Gesso.Serve: QwenXMLParser, feed!, ReasoningDelta, ContentDelta, ToolCallDelta
 
 # ---------------------------------------------------------------------------
 # Gate 2: parser
@@ -126,7 +126,7 @@ function sv_run(case, chunks::Vector{Vector{UInt8}})
     for c in chunks
         append!(events, feed!(p, c))
     end
-    append!(events, finish!(p))
+    append!(events, Gesso.Serve.finish!(p))
     return sv_merge(events)
 end
 
