@@ -550,3 +550,31 @@ What the ladder gets from it:
   been timed on its own. The reader was the real cost: the first quantized
   decode kernel ran 4-8x slower than f32 at long K until it loaded 4 rows of
   codes per instruction. Measure the reader, not just the bytes.
+
+## 14. KV REUSE ACROSS CALLS (2026-10-11, ada66f0)
+
+`GenerateState` keeps the KV cache and GDN state between `reference_generate`
+calls. Ornith-35B, CUDA, q8 KV, 8k-token first turn plus 256 new tokens:
+
+| call | wall | rows reused |
+|---|---|---|
+| turn 1, cold | 27-29 s | 0 |
+| turn 2 with state | 1.26-1.29 s | 8207 |
+| regenerate turn 2 | 0.41-0.43 s | 8464 (output identical) |
+| turn 2 fresh, no state | 24.6-24.9 s | 0 |
+
+Turn-2 tokens against a fresh run (16 greedy tokens):
+
+| control | -t 12 | -t 16 |
+|---|---|---|
+| fresh vs fresh | same | same |
+| reuse of prompt rows only (snapshot path) | same | same |
+| reuse including turn-1 decode rows | same | differs from token 10 |
+
+Reuse itself is exact: the snapshot path matches a fresh prefill at both
+thread counts. The one mismatch comes from rows that turn 1 computed one at a
+time in decode; a fresh run computes those rows in a batched prefill, and the
+two paths round differently (the known prefill/decode gap on this model). The
+CPU thread count moves where that rounding lands, which flipped a near-tied
+greedy pick. llama.cpp reuses decode-computed KV the same way. Treat it as
+drift, not a defect, unless a task-level check shows otherwise.
