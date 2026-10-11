@@ -79,6 +79,7 @@ const _PROFILE = Ref{Union{Nothing,DecodeProfile}}(nothing)
 
 function __init__()
     get(ENV, "GESSO_PROFILE", "") == "1" && profile_enable!()
+    get(ENV, "GESSO_PREFILL_PROFILE", "") == "1" && prefill_profile_enable!()
     return nothing
 end
 
@@ -324,5 +325,170 @@ function print_token_log(io::IO, p::DecodeProfile)
         println(io, lpad(string(i), 5), lpad(string(round(e.ns / 1e6; digits=2)), 10),
             lpad(string(e.minflt), 9), lpad(string(e.majflt), 9), lpad(string(e.decoded), 9))
     end
+    return nothing
+end
+
+# Prefill profiler (env GESSO_PREFILL_PROFILE=1, read once at load).
+#
+# Each prefill pass is its own window. The stage macros above accumulate into
+# `_PROFILE[]`, so a pass swaps that Ref to a private DecodeProfile for its
+# duration and restores the previous value on close. The off path is therefore
+# the same single Ref read as a decode stage site, and a decode profile enabled
+# alongside this one never sees prefill time.
+#
+# Stages are the prefill-relevant subset of DECODE_STAGES. `other` is the pass
+# wall minus the stage sum: the norms, embedding, residual adds and allocation
+# that the pass runs outside any stage, plus any GPU tail that a `nothing`
+# backend stage did not wait for.
+
+const PREFILL_STAGES = (
+    :attn_mixer, :gdn_mixer, :moe_router, :moe_alloc, :moe_qupload, :moe_qgemv,
+    :moe_host, :moe_h2d, :moe_d2h, :shared_expert, :dense_ffn,
+)
+
+const PREFILL_STAGE_NS = NamedTuple{PREFILL_STAGES,NTuple{length(PREFILL_STAGES),Int64}}
+
+struct PrefillPassRecord
+    pass::Int
+    s0::Int
+    n::Int
+    K::Int
+    wall_ns::Int64
+    stage_ns::PREFILL_STAGE_NS
+    other_ns::Int64
+    h2d_bytes::Int64
+end
+
+mutable struct PrefillProfile
+    dp::DecodeProfile
+    passes::Vector{PrefillPassRecord}
+    done::Bool
+end
+
+struct PrefillPassToken
+    pp::PrefillProfile
+    backend::Any
+    prev::Union{Nothing,DecodeProfile}
+    t0::UInt64
+    s0::Int
+    n::Int
+    P::Int
+end
+
+const _PREFILL_PROFILE = Ref{Union{Nothing,PrefillProfile}}(nothing)
+
+"""
+    prefill_profile_enable!()
+
+Start a fresh prefill profile. Each prefill pass run after this call records
+one `PrefillPassRecord` and prints one PFPASS line; the last pass prints PFSUM.
+"""
+prefill_profile_enable!() = (_PREFILL_PROFILE[] = PrefillProfile(DecodeProfile(), PrefillPassRecord[], false); nothing)
+
+prefill_profile_disable!() = (_PREFILL_PROFILE[] = nothing; nothing)
+
+"""
+    prefill_profile_records() -> Vector{PrefillPassRecord}
+
+Copy of the records from the most recent prefill, empty when profiling is off.
+"""
+prefill_profile_records() = (pp = _PREFILL_PROFILE[]; pp === nothing ? PrefillPassRecord[] : copy(pp.passes))
+
+# Called once per pass by `reference_generate`. Off: one Ref read and a branch,
+# and `nothing` is returned so nothing is allocated.
+@inline function _prefill_pass_begin(backend, s0::Int, n::Int, P::Int)
+    pp = _PREFILL_PROFILE[]
+    pp === nothing && return nothing
+    return _prefill_pass_open(pp, backend, s0, n, P)
+end
+
+@inline function _prefill_pass_end(tok)
+    tok === nothing && return nothing
+    return _prefill_pass_close(tok)
+end
+
+function _prefill_clear!(dp::DecodeProfile)
+    for s in DECODE_STAGES
+        dp.ns[s] = 0
+        dp.calls[s] = 0
+    end
+    for s in DECODE_SUBSTAGES
+        dp.sub_ns[s] = 0
+    end
+    for s in DECODE_COUNTERS
+        dp.counters[s] = 0
+    end
+    dp.d2h = 0
+    dp.h2d = 0
+    return nothing
+end
+
+function _prefill_pass_open(pp::PrefillProfile, backend, s0::Int, n::Int, P::Int)
+    # A prefill that finished, or one that starts at row 1, begins a new record
+    # list. A resumed prefill (s0 > 1, after a prefix snapshot) follows the
+    # pass it resumes on from, so its records join the same list.
+    if pp.done || s0 == 1
+        empty!(pp.passes)
+        pp.done = false
+    end
+    dp = pp.dp
+    _prefill_clear!(dp)
+    # Drain work queued by earlier stages so the wall starts at the pass boundary
+    _profile_sync(backend)
+    prev = _PROFILE[]
+    # A pass that threw left the prefill profile installed; never save it as the
+    # decode profile to restore
+    prev === dp && (prev = nothing)
+    _PROFILE[] = dp
+    dp.window = true
+    return PrefillPassToken(pp, backend, prev, time_ns(), s0, n, P)
+end
+
+function _prefill_pass_close(tok::PrefillPassToken)
+    pp = tok.pp
+    dp = pp.dp
+    _profile_sync(tok.backend)
+    wall = Int64(time_ns() - tok.t0)
+    dp.window = false
+    _PROFILE[] = tok.prev
+    stage_ns = PREFILL_STAGE_NS(ntuple(i -> dp.ns[PREFILL_STAGES[i]], length(PREFILL_STAGES)))
+    other = wall - sum(values(stage_ns))
+    K = tok.s0 + tok.n - 1
+    rec = PrefillPassRecord(length(pp.passes) + 1, tok.s0, tok.n, K, wall, stage_ns, other,
+        dp.counters[:expert_h2d_bytes])
+    push!(pp.passes, rec)
+    _print_prefill_pass(stdout, rec)
+    if K == tok.P
+        pp.done = true
+        _print_prefill_summary(stdout, pp)
+    end
+    return nothing
+end
+
+_prefill_ms(ns::Integer) = round(ns / 1e6; digits=3)
+
+function _print_prefill_pass(io::IO, r::PrefillPassRecord)
+    print(io, "PFPASS i=", r.pass, " n=", r.n, " K=", r.K, " wall_ms=", _prefill_ms(r.wall_ns))
+    for s in PREFILL_STAGES
+        print(io, " ", s, "=", _prefill_ms(getfield(r.stage_ns, s)))
+    end
+    print(io, " other=", _prefill_ms(r.other_ns))
+    println(io, " h2d_mb=", round(r.h2d_bytes / 2^20; digits=2),
+        " h2d_ms=", _prefill_ms(getfield(r.stage_ns, :moe_h2d)))
+    flush(io)
+    return nothing
+end
+
+function _print_prefill_summary(io::IO, pp::PrefillProfile)
+    rows = sum(r.n for r in pp.passes; init=0)
+    wall = sum(r.wall_ns for r in pp.passes; init=0)
+    print(io, "PFSUM passes=", length(pp.passes), " rows=", rows, " wall_ms=", _prefill_ms(wall))
+    for s in PREFILL_STAGES
+        print(io, " ", s, "=", _prefill_ms(sum(getfield(r.stage_ns, s) for r in pp.passes; init=0)))
+    end
+    other = sum(r.other_ns for r in pp.passes; init=0)
+    h2d = sum(r.h2d_bytes for r in pp.passes; init=0)
+    println(io, " other=", _prefill_ms(other), " h2d_mb=", round(h2d / 2^20; digits=2))
+    flush(io)
     return nothing
 end

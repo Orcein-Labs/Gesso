@@ -1038,6 +1038,9 @@ function _hot_prefill_issue!(backend, hot::_HotLayer, P::_HotPrefill, cfg::_HotP
                     unsafe_copyto!(dst + o, src, nb; async=true, stream=cs)
                     o += nb
                 end
+                # Async copies have no stage of their own: the bytes are counted
+                # here and the copies' issue cost sits in the enclosing moe_qgemv.
+                Gesso.Inference._profile_count!(:expert_h2d_bytes, o)
                 lastr[slot[e]] = r
             end
             CUDA.record(_hotp_event(P, 2r + 2), cs)
