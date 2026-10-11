@@ -57,10 +57,15 @@ function _hot_budget_bytes()
     mib = Int64(1024 * 1024)
     fixed = _hot_env_int("GESSO_GPU_HOT_EXPERTS_MIB", -1)
     fixed >= 0 && return Int64(fixed) * mib
-    reserve = _hot_env_int("GESSO_GPU_HOT_RESERVE_MIB", _HOT_RESERVE_DEFAULT_MIB)
     CUDA.reclaim(CUDA.CUDACore.RECLAIM_GC)
-    return _expert_budget_from_free(Int64(CUDA.free_memory()), reserve)
+    return _expert_budget_from_free(Int64(CUDA.free_memory()), _hot_reserve_mib())
 end
+
+_hot_reserve_mib() = _hot_env_int("GESSO_GPU_HOT_RESERVE_MIB", _HOT_RESERVE_DEFAULT_MIB)
+# Room promised to everything else on the card: a desktop crashed on a full
+# one. Pools are sized against it at load, but a long prompt's KV is allocated
+# later, so every pool allocation and prefill pass checks it again.
+_hot_reserve_bytes() = Int64(max(0, _hot_reserve_mib())) << 20
 
 struct _HotConfig
     decay::Float32     # per-token decay of the pick counts
@@ -188,12 +193,18 @@ _hot_leave!(hot::_HotLayer) = (_HOT_NEXT[] = hot.layer + 1; nothing)
 
 function CUDA.CUDACore.purge!(::_HotPurge)
     _HOT_BUSY[] && return
+    _hot_release_until!(max(_HOT_PURGE_FLOOR, Int64(_HOT_PF_CFG[].headroom) * _HOT_SEQ[]))
+    return
+end
+
+# Release pools, the one needed furthest ahead first, until `target` bytes are
+# freed or none are left.
+function _hot_release_until!(target::Int64)
     live = [hot for hot in values(_HOT) if hot.pool !== nothing]
     isempty(live) && return
     span = maximum(hot -> hot.layer, values(_HOT)) + 1
     next = _HOT_NEXT[]
     sort!(live; by=hot -> mod(hot.layer - next, span), rev=true)
-    target = max(_HOT_PURGE_FLOOR, Int64(_HOT_PF_CFG[].headroom) * _HOT_SEQ[])
     freed = Int64(0)
     for hot in live
         freed >= target && break
@@ -279,7 +290,7 @@ function _hot_alloc!(hot::_HotLayer, g, u, n_used::Int)
     _hot_prefill_release!()
     # A pool that fits by a few MiB still failed to allocate after a trim; the
     # driver wants room of its own. Only DROP, behind two GCs, then rescued it.
-    bytes = Int64(hot.nslots) * hot.stride + _HOT_ALLOC_MARGIN
+    bytes = Int64(hot.nslots) * hot.stride + max(_HOT_ALLOC_MARGIN, _hot_reserve_bytes())
     # a failed allocation under _HOT_BUSY costs a full GC; this check costs none
     if _hot_device_avail() < bytes
         hot.retry_t = hot.t + _HOT_RETRY_TOKENS
@@ -731,11 +742,31 @@ _prefill_pass_bytes(n::Int, K::Int, qdim::Int, group::Int) =
 function Gesso.Inference._prefill_pass_rows(::CUDABackend, left::Int, done::Int, chunk::Int,
     qdim::Int, group::Int)
     n = min(chunk, left)
-    budget = _prefill_device_avail() - _PREFILL_PASS_MARGIN
+    reserve = max(_PREFILL_PASS_MARGIN, _hot_reserve_bytes())
+    budget = _prefill_device_avail() - reserve
     while n > _PREFILL_PASS_STEP && _prefill_pass_bytes(n, done + n, qdim, group) > budget
         n = (n - 1) ÷ _PREFILL_PASS_STEP * _PREFILL_PASS_STEP
     end
+    _hot_make_room!(_prefill_pass_bytes(n, done + n, qdim, group))
     return n
+end
+
+Gesso.Inference._device_make_room!(::CUDABackend, bytes::Int) = _hot_make_room!(Int64(bytes))
+
+# CUDA purges pools only when an allocation fails, and stops once it fits,
+# which leaves the card full. Release them before a large allocation instead,
+# so it lands with the reserve still free.
+function _hot_make_room!(bytes::Int64)
+    reserve = max(_PREFILL_PASS_MARGIN, _hot_reserve_bytes())
+    short = bytes + reserve - _hot_device_avail()
+    short > 0 && _hot_release_until!(short)
+    # Freed pools sit in CUDA's cache, which the rest of the card cannot use.
+    if Int64(CUDA.free_memory()) < bytes + reserve
+        CUDA.synchronize()
+        dev = CUDA.device()
+        CUDA.CUDACore.stream_ordered(dev) && CUDA.CUDACore.trim(CUDA.CUDACore.pool_create(dev))
+    end
+    return
 end
 
 Gesso.Inference._prefill_end!(::CUDABackend) = _hot_prefill_release!()

@@ -884,6 +884,10 @@ _prefill_pass_rows(backend, left::Int, done::Int, chunk::Int, qdim::Int, group::
 # buffers only prefill uses.
 _prefill_end!(backend) = nothing
 
+# Called before a generation allocates `bytes` of KV cache: a backend that
+# fills spare device memory with caches of its own gives the room back first.
+_device_make_room!(backend, bytes::Int) = nothing
+
 # A zeros factory that remembers what it handed out so `_arena_release!` can
 # free all of it at once. Prefill and generation state go through one: the
 # host side of a generation allocates too little to trigger a Julia GC, so
@@ -1174,6 +1178,8 @@ function reference_generate(
         end
         if fresh
             st.key = key
+            attn = count(bt -> kv_rows(bt) > 0, tensors.blocks)
+            _device_make_room!(cpu, 2 * attn * cld(st.ctx, 4) * 4 * n_kv_heads * _kv_head_bytes(d_head, kv_fmt))
             st.kc = [
                 Activation(; shape=(kv_rows(bt), n_kv_heads, d_head), storage=kv_cache(bt))
                 for bt in tensors.blocks

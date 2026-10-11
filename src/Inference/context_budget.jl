@@ -30,17 +30,16 @@ function kv_bytes_per_token(spec::ArchitectureSpec, kv_format::Symbol)
     end
     kv_format === :q4h && !ispow2(d) && throw(gesso_error(ERR_INVALID_PLAN,
         "kv_bytes_per_token: q4h needs a power-of-two head_dim, got $d"))
-    per_head = if kv_format === :f32
-        d * sizeof(Float32)
-    elseif kv_format === :f16
-        d * sizeof(Float16)
-    elseif kv_format === :q8
-        d * sizeof(Int8) + (d ÷ _KV_BLOCK) * sizeof(Float16)
-    else
-        (d ÷ 2) * sizeof(UInt8) + (d ÷ _KV_BLOCK) * sizeof(Float16)
-    end
     attn = count(l -> layer_mixer(spec, l) === :full_attention, 0:(spec.num_layers - 1))
-    return attn * 2 * spec.n_kv_heads * per_head  # K and V
+    return attn * 2 * spec.n_kv_heads * _kv_head_bytes(d, kv_format)  # K and V
+end
+
+# One head's row of K (or V) in a cache of this format.
+function _kv_head_bytes(d::Integer, kv_format::Symbol)
+    kv_format === :f32 && return d * sizeof(Float32)
+    kv_format === :f16 && return d * sizeof(Float16)
+    kv_format === :q8 && return d * sizeof(Int8) + (d ÷ _KV_BLOCK) * sizeof(Float16)
+    return (d ÷ 2) * sizeof(UInt8) + (d ÷ _KV_BLOCK) * sizeof(Float16)
 end
 
 """
