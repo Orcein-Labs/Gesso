@@ -1,0 +1,440 @@
+# Chat server tests: gate 2 (the Qwen3.5 XML parser, every split point) and
+# gate 3 (HTTP behaviour on an ephemeral port, with fake engines). Helpers carry
+# an `sv_` prefix because every test file shares one module.
+
+using Sockets
+using JSON
+using Random
+using Gesso
+using Gesso.Serve: QwenXMLParser, feed!, finish!, ReasoningDelta, ContentDelta, ToolCallDelta
+
+# ---------------------------------------------------------------------------
+# Gate 2: parser
+
+const SV_WEATHER = Any[Dict{String,Any}("type" => "function", "function" => Dict{String,Any}(
+    "name" => "get_weather",
+    "parameters" => Dict{String,Any}("type" => "object", "properties" => Dict{String,Any}(
+        "city" => Dict{String,Any}("type" => "string"),
+        "days" => Dict{String,Any}("type" => "integer"),
+        "metric" => Dict{String,Any}("type" => "boolean"),
+        "ratio" => Dict{String,Any}("type" => "number"),
+        "tags" => Dict{String,Any}("type" => "array"),
+        "opts" => Dict{String,Any}("type" => "object"),
+        "note" => Dict{String,Any}("type" => Any["string", "null"]),
+    )),
+))]
+
+sv_think(r::AbstractString) = r * "\n</think>\n\n"
+sv_r(s::AbstractString) = (:reasoning, String(s))
+sv_c(s::AbstractString) = (:content, String(s))
+sv_t(i::Int, name::AbstractString, args::AbstractDict) = (:call, i, String(name), Dict{String,Any}(args))
+
+function sv_call(name::AbstractString, params::Vector{Pair{String,String}})
+    s = "<tool_call>\n<function=$name>\n"
+    for (k, v) in params
+        s *= "<parameter=$k>\n$v\n</parameter>\n"
+    end
+    return s * "</function>\n</tool_call>"
+end
+
+# Each case: the raw output text, the request's tools, stop strings, whether
+# thinking is on, and the events it must produce (merged per kind, in order).
+function sv_parser_cases()
+    cases = NamedTuple[]
+    add!(text, expected; tools=Any[], stop=String[], thinking=true) =
+        push!(cases, (text=text, tools=tools, stop=stop, thinking=thinking, expected=expected))
+
+    reasoning = ["Need the city.", "Check: 2 < 3 & 4 > 1.", "naïve café — ✓",
+        "<b>not a tag</b>", "line one\nline two", "think about </thin then </thing",
+        "a <tool_ and <tool_call is not yet", "x"]
+    contents = ["Paris.", "Sure — done ✓", "ok"]
+    for r in reasoning, c in contents
+        add!(sv_think(r) * c, [sv_r(r * "\n"), sv_c(c)])
+    end
+
+    W = SV_WEATHER
+    add!(sv_think("plan") * "Let me check.\n\n" *
+            sv_call("get_weather", ["city" => "Paris", "days" => "3"]) * "\nDone.",
+        [sv_r("plan\n"), sv_c("Let me check.\n\n"),
+            sv_t(0, "get_weather", Dict("city" => "Paris", "days" => 3)), sv_c("Done.")]; tools=W)
+    tool_params = [
+        (["city" => "Oslo", "metric" => "true"], Dict("city" => "Oslo", "metric" => true)),
+        (["ratio" => "0.25"], Dict("ratio" => 0.25)),
+        (["ratio" => "7"], Dict("ratio" => 7)),
+        (["tags" => "[\"a\", \"b\"]"], Dict("tags" => Any["a", "b"])),
+        (["opts" => "{\"x\": 1}"], Dict("opts" => Dict("x" => 1))),
+        (["note" => "line1\nline2"], Dict("note" => "line1\nline2")),
+        (["days" => "abc"], Dict("days" => "abc")),
+        (["extra" => "v"], Dict("extra" => "v")),
+        (Pair{String,String}[], Dict{String,Any}()),
+    ]
+    for (params, args) in tool_params
+        add!(sv_think("plan") * sv_call("get_weather", params),
+            [sv_r("plan\n"), sv_t(0, "get_weather", args)]; tools=W)
+    end
+    add!(sv_think("plan") * sv_call("other", ["q" => "x"]),
+        [sv_r("plan\n"), sv_t(0, "other", Dict("q" => "x"))]; tools=W)
+    add!(sv_think("plan") * sv_call("get_weather", ["city" => "Paris"]) * "\n" *
+            sv_call("get_weather", ["city" => "Rome"]),
+        [sv_r("plan\n"), sv_t(0, "get_weather", Dict("city" => "Paris")),
+            sv_t(1, "get_weather", Dict("city" => "Rome"))]; tools=W)
+    add!(sv_think("plan") * "café → " * sv_call("get_weather", ["city" => "Lima"]),
+        [sv_r("plan\n"), sv_c("café → "), sv_t(0, "get_weather", Dict("city" => "Lima"))]; tools=W)
+
+    add!("Hi there", [sv_c("Hi there")]; thinking=false)
+    add!("Sure.\n" * sv_call("get_weather", ["city" => "Bern"]),
+        [sv_c("Sure.\n"), sv_t(0, "get_weather", Dict("city" => "Bern"))]; tools=W, thinking=false)
+
+    S = ["<|im_end|>"]
+    add!(sv_think("plan") * "Hello<|im_end|>tail ignored", [sv_r("plan\n"), sv_c("Hello")]; stop=S)
+    add!("plan<|im_end|>x", [sv_r("plan")]; stop=S)
+    add!(sv_think("plan") * "A <|im_end|>", [sv_r("plan\n"), sv_c("A ")]; stop=S)
+
+    add!(sv_think("plan") * "x </thx y </tool_cal z <tool_",
+        [sv_r("plan\n"), sv_c("x </thx y </tool_cal z <tool_")])
+    add!("plan</thin", [sv_r("plan</thin")])
+    add!(sv_think("plan") * "<tool_call>\n<function=get_weather>\n<parameter=city>\nParis\n</parameter>\n",
+        [sv_r("plan\n"),
+            sv_c("<tool_call>\n<function=get_weather>\n<parameter=city>\nParis\n</parameter>\n")])
+    return cases
+end
+
+# Adjacent text of one kind is joined, so the sequence does not depend on how
+# the bytes were chunked.
+function sv_merge(events)
+    items = Any[]
+    for e in events
+        if e isa ReasoningDelta || e isa ContentDelta
+            kind = e isa ReasoningDelta ? :reasoning : :content
+            if !isempty(items) && items[end][1] === kind
+                items[end] = (kind, items[end][2] * e.text)
+            else
+                push!(items, (kind, e.text))
+            end
+        elseif e isa ToolCallDelta
+            push!(items, (:call, e.index, e.name, JSON.parse(e.arguments)))
+        else
+            error("unexpected parser event $(typeof(e))")
+        end
+    end
+    return items
+end
+
+function sv_run(case, chunks::Vector{Vector{UInt8}})
+    p = QwenXMLParser(; tools=copy(case.tools), thinking=case.thinking, stop=case.stop)
+    events = Any[]
+    for c in chunks
+        append!(events, feed!(p, c))
+    end
+    append!(events, finish!(p))
+    return sv_merge(events)
+end
+
+# Every two-way split, one byte per chunk, and seeded random partitions.
+function sv_chunkings(bytes::Vector{UInt8}, rng::AbstractRNG)
+    out = Vector{Vector{UInt8}}[]
+    for i in 0:length(bytes)
+        push!(out, [bytes[1:i], bytes[(i + 1):end]])
+    end
+    push!(out, [UInt8[b] for b in bytes])
+    for _ in 1:25
+        chunks = Vector{UInt8}[]
+        pos = 1
+        while pos <= length(bytes)
+            k = rand(rng, 1:9)
+            push!(chunks, bytes[pos:min(pos + k - 1, end)])
+            pos += k
+        end
+        push!(out, chunks)
+    end
+    return out
+end
+
+@testset "parser: scripted outputs at every split point" begin
+    cases = sv_parser_cases()
+    @test length(cases) >= 30
+    rng = MersenneTwister(20261011)
+    for (i, case) in enumerate(cases)
+        @testset "case $i" begin
+            bytes = Vector{UInt8}(codeunits(case.text))
+            @test sv_run(case, [bytes]) == case.expected
+            chunkings = sv_chunkings(bytes, rng)
+            two_way = chunkings[1:(end - 26)]
+            per_byte = chunkings[end - 25]
+            random_cuts = chunkings[(end - 24):end]
+            @test all(sv_run(case, ch) == case.expected for ch in two_way)
+            @test sv_run(case, per_byte) == case.expected
+            @test all(sv_run(case, ch) == case.expected for ch in random_cuts)
+        end
+    end
+end
+
+# ---------------------------------------------------------------------------
+# Gate 3: HTTP on an ephemeral port, with fake engines
+
+const SV_THINK = "think about it\n</think>\n\n" * repeat("word ", 40)
+
+# Tokens are bytes, so detokenize is exact for these ASCII scripts. `log` gets
+# the ids each generate call emitted, `peak` the most calls seen at once.
+function sv_fake(; script::AbstractString=SV_THINK, n_ctx::Integer=4096, delay::Real=0.0,
+        cached::Integer=2, log=Vector{Vector{Int}}(), active=Ref(0), peak=Ref(0))
+    return ChatModel(
+        tokenize=s -> Int.(codeunits(s)),
+        detokenize=ids -> String(UInt8.(ids)),
+        render=(msgs, tools, thinking) -> join((string(m["content"]) for m in msgs), "\n"),
+        generate=(prompt_ids; max_new_tokens, on_token) -> begin
+            active[] += 1
+            peak[] = max(peak[], active[])
+            try
+                out = Int[]
+                for b in codeunits(script)
+                    length(out) >= max_new_tokens && break
+                    push!(out, Int(b))
+                    delay > 0 && sleep(delay)
+                    on_token(Int(b)) === false && break
+                end
+                push!(log, out)
+                return (generated=out, cached=cached)
+            finally
+                active[] -= 1
+            end
+        end,
+        n_ctx=n_ctx,
+        model_id="gesso-test",
+    )
+end
+
+sv_post(path::AbstractString, body::AbstractString) =
+    "POST $path HTTP/1.1\r\nHost: test\r\nContent-Type: application/json\r\n" *
+    "Content-Length: $(ncodeunits(body))\r\n\r\n" * body
+sv_get(path::AbstractString) = "GET $path HTTP/1.1\r\nHost: test\r\n\r\n"
+sv_chat(messages; extra...) = JSON.json(merge(Dict{String,Any}("messages" => messages),
+    Dict{String,Any}(String(k) => v for (k, v) in extra)))
+const SV_USER = [Dict("role" => "user", "content" => "hi")]
+
+function sv_read_head(sock::TCPSocket)
+    status = parse(Int, split(strip(readline(sock; keep=false)))[2])
+    headers = Dict{String,String}()
+    while true
+        line = strip(readline(sock; keep=false))
+        isempty(line) && break
+        k, v = split(line, ':'; limit=2)
+        headers[lowercase(strip(k))] = strip(v)
+    end
+    return status, headers
+end
+
+function sv_read_chunks(sock::TCPSocket)
+    out = UInt8[]
+    while true
+        n = parse(Int, strip(readline(sock; keep=false)); base=16)
+        if n == 0
+            while !isempty(strip(readline(sock; keep=false)))
+            end
+            return out
+        end
+        append!(out, read(sock, n))
+        readline(sock; keep=false)
+    end
+end
+
+function sv_read_response(sock::TCPSocket)
+    status, headers = sv_read_head(sock)
+    body = if get(headers, "transfer-encoding", "") == "chunked"
+        sv_read_chunks(sock)
+    elseif haskey(headers, "content-length")
+        read(sock, parse(Int, headers["content-length"]))
+    else
+        UInt8[]
+    end
+    return (status=status, headers=headers, body=String(body))
+end
+
+function sv_request(port::Integer, raw::AbstractString)
+    sock = Sockets.connect(Sockets.localhost, port)
+    try
+        write(sock, raw)
+        return sv_read_response(sock)
+    finally
+        close(sock)
+    end
+end
+
+@testset "stream: SSE framing, usage chunk, [DONE]" begin
+    srv = serve(sv_fake(); port=0, block=false)
+    try
+        body = sv_chat(SV_USER; stream=true, stream_options=Dict("include_usage" => true))
+        resp = sv_request(srv.port, sv_post("/v1/chat/completions", body))
+        @test resp.status == 200
+        @test resp.headers["content-type"] == "text/event-stream"
+        @test resp.headers["transfer-encoding"] == "chunked"
+        blocks = split(resp.body, "\n\n"; keepempty=false)
+        @test all(startswith(b, "data: ") for b in blocks)
+        @test blocks[end] == "data: [DONE]"
+        events = [JSON.parse(b[7:end]) for b in blocks[1:(end - 1)]]
+        deltas = [c["choices"][1]["delta"] for c in events if !isempty(c["choices"])]
+        @test join(d["reasoning_content"] for d in deltas if haskey(d, "reasoning_content")) ==
+              "think about it\n"
+        @test join(d["content"] for d in deltas if haskey(d, "content")) == repeat("word ", 40)
+        finals = [c["choices"][1]["finish_reason"] for c in events if !isempty(c["choices"])]
+        @test finals[end] == "stop"
+        usage = events[end]
+        @test isempty(usage["choices"])
+        @test usage["usage"]["prompt_tokens"] == 2
+        @test usage["usage"]["completion_tokens"] == ncodeunits(SV_THINK)
+        @test usage["usage"]["prompt_tokens_details"]["cached_tokens"] == 2
+    finally
+        close(srv)
+    end
+end
+
+@testset "non-stream: message, reasoning, usage" begin
+    srv = serve(sv_fake(); port=0, block=false)
+    try
+        resp = sv_request(srv.port, sv_post("/v1/chat/completions", sv_chat(SV_USER)))
+        @test resp.status == 200
+        out = JSON.parse(resp.body)
+        choice = out["choices"][1]
+        @test choice["message"]["content"] == repeat("word ", 40)
+        @test choice["message"]["reasoning_content"] == "think about it\n"
+        @test choice["finish_reason"] == "stop"
+        @test out["usage"]["prompt_tokens_details"]["cached_tokens"] == 2
+    finally
+        close(srv)
+    end
+end
+
+@testset "non-stream tool call: finish_reason and tool_calls" begin
+    script = sv_think("plan") * sv_call("get_weather", ["city" => "Paris"])
+    srv = serve(sv_fake(script=script); port=0, block=false)
+    try
+        resp = sv_request(srv.port, sv_post("/v1/chat/completions", sv_chat(SV_USER; tools=SV_WEATHER)))
+        choice = JSON.parse(resp.body)["choices"][1]
+        @test choice["finish_reason"] == "tool_calls"
+        @test choice["message"]["content"] === nothing
+        call = choice["message"]["tool_calls"][1]
+        @test call["function"]["name"] == "get_weather"
+        @test JSON.parse(call["function"]["arguments"]) == Dict("city" => "Paris")
+    finally
+        close(srv)
+    end
+end
+
+@testset "keep-alive: several requests on one socket" begin
+    srv = serve(sv_fake(); port=0, block=false)
+    try
+        sock = Sockets.connect(Sockets.localhost, srv.port)
+        try
+            write(sock, sv_get("/health"))
+            r1 = sv_read_response(sock)
+            @test r1.status == 200
+            @test JSON.parse(r1.body)["status"] == "ok"
+            @test get(r1.headers, "connection", "") != "close"
+
+            write(sock, sv_post("/v1/chat/completions", sv_chat(SV_USER)))
+            r2 = sv_read_response(sock)
+            @test r2.status == 200
+            @test JSON.parse(r2.body)["choices"][1]["finish_reason"] == "stop"
+
+            write(sock, sv_get("/props"))
+            r3 = sv_read_response(sock)
+            @test JSON.parse(r3.body)["default_generation_settings"]["n_ctx"] == 4096
+
+            write(sock, sv_get("/v1/models"))
+            r4 = sv_read_response(sock)
+            @test JSON.parse(r4.body)["data"][1]["meta"]["n_ctx"] == 4096
+        finally
+            close(sock)
+        end
+    finally
+        close(srv)
+    end
+end
+
+@testset "chunked request body" begin
+    srv = serve(sv_fake(); port=0, block=false)
+    try
+        raw_body = sv_chat(SV_USER)
+        cut = 10
+        pieces = [raw_body[1:cut], raw_body[(cut + 1):end]]
+        head = "POST /v1/chat/completions HTTP/1.1\r\nHost: test\r\nTransfer-Encoding: chunked\r\n\r\n"
+        payload = head * join(string(string(ncodeunits(p), base=16), "\r\n", p, "\r\n") for p in pieces) * "0\r\n\r\n"
+        resp = sv_request(srv.port, payload)
+        @test resp.status == 200
+        @test JSON.parse(resp.body)["choices"][1]["message"]["content"] == repeat("word ", 40)
+    finally
+        close(srv)
+    end
+end
+
+@testset "errors: 400 and 404 keep the connection usable" begin
+    srv = serve(sv_fake(); port=0, block=false)
+    try
+        sock = Sockets.connect(Sockets.localhost, srv.port)
+        try
+            write(sock, sv_post("/v1/chat/completions", "{not json"))
+            @test sv_read_response(sock).status == 400
+            write(sock, sv_post("/v1/chat/completions", JSON.json(Dict("stream" => false))))
+            @test sv_read_response(sock).status == 400
+            write(sock, sv_post("/v1/chat/completions", sv_chat(SV_USER; stream="yes")))
+            @test sv_read_response(sock).status == 400
+            write(sock, sv_get("/nope"))
+            @test sv_read_response(sock).status == 404
+            write(sock, sv_get("/health"))
+            @test sv_read_response(sock).status == 200
+        finally
+            close(sock)
+        end
+    finally
+        close(srv)
+    end
+end
+
+@testset "prompt longer than the context is a 400" begin
+    srv = serve(sv_fake(n_ctx=8); port=0, block=false)
+    try
+        body = sv_chat([Dict("role" => "user", "content" => "hello world!!")])
+        @test sv_request(srv.port, sv_post("/v1/chat/completions", body)).status == 400
+    finally
+        close(srv)
+    end
+end
+
+@testset "client disconnect cancels generation; the next request succeeds" begin
+    log = Vector{Vector{Int}}()
+    srv = serve(sv_fake(delay=0.01, log=log); port=0, block=false)
+    try
+        sock = Sockets.connect(Sockets.localhost, srv.port)
+        write(sock, sv_post("/v1/chat/completions", sv_chat(SV_USER; stream=true)))
+        status, _ = sv_read_head(sock)
+        @test status == 200
+        readline(sock; keep=false)     # size line of the role chunk: the stream is open
+        close(sock)
+
+        r = sv_request(srv.port, sv_post("/v1/chat/completions", sv_chat(SV_USER; max_tokens=5)))
+        @test r.status == 200
+        @test JSON.parse(r.body)["usage"]["completion_tokens"] == 5
+        @test length(log) == 2
+        @test length(log[1]) < ncodeunits(SV_THINK)
+    finally
+        close(srv)
+    end
+end
+
+@testset "two concurrent clients are served in turn" begin
+    active = Ref(0)
+    peak = Ref(0)
+    reply = repeat("ok ", 20)
+    srv = serve(sv_fake(script="think\n</think>\n\n" * reply, delay=0.002,
+        active=active, peak=peak); port=0, block=false)
+    try
+        raw = sv_post("/v1/chat/completions", sv_chat(SV_USER))
+        tasks = [@async sv_request(srv.port, raw) for _ in 1:2]
+        results = fetch.(tasks)
+        @test all(r.status == 200 for r in results)
+        @test all(JSON.parse(r.body)["choices"][1]["message"]["content"] == reply for r in results)
+        @test peak[] == 1
+    finally
+        close(srv)
+    end
+end

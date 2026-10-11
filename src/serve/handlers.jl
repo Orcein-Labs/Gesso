@@ -1,0 +1,316 @@
+# Routes and the chat completion handler.
+
+function route(srv::Server, req::HTTPRequest, io::IO, keepalive::Bool)::Bool
+    path = String(first(split(req.target, '?'; limit=2)))
+    if path == "/health"
+        _require_method(req, "GET")
+        write_json(io, 200, Dict("status" => "ok"); keepalive=keepalive)
+        return keepalive
+    elseif path == "/props"
+        _require_method(req, "GET")
+        write_json(io, 200, Dict(
+                "default_generation_settings" => Dict("n_ctx" => srv.model.n_ctx),
+                "total_slots" => 1,
+                "model_alias" => srv.model.model_id,
+            ); keepalive=keepalive)
+        return keepalive
+    elseif path == "/v1/models"
+        _require_method(req, "GET")
+        write_json(io, 200, Dict(
+                "object" => "list",
+                "data" => [Dict(
+                    "id" => srv.model.model_id,
+                    "object" => "model",
+                    "created" => 0,
+                    "owned_by" => "gesso",
+                    "meta" => Dict("n_ctx" => srv.model.n_ctx),
+                )],
+            ); keepalive=keepalive)
+        return keepalive
+    elseif path == "/v1/chat/completions"
+        _require_method(req, "POST")
+        return handle_chat(srv, req, io, keepalive)
+    end
+    throw(HTTPError(404, "no route for $path"))
+end
+
+function _require_method(req::HTTPRequest, method::String)
+    req.method == method || throw(HTTPError(405, "$(req.method) not allowed here, use $method"))
+    return nothing
+end
+
+# State of one chat request. `started` is set once a stream's headers are out:
+# after that an error can no longer become a 500, so the connection is closed.
+mutable struct Turn
+    model::ChatModel
+    parser::QwenXMLParser
+    io::IO
+    stream::Bool
+    include_usage::Bool
+    keepalive::Bool
+    cancelled::Ref{Bool}
+    started::Ref{Bool}
+    ids::Vector{Int}
+    shown::Int                      # bytes of the decoded text already parsed
+    id::String
+    created::Int
+    reasoning::Vector{String}
+    content::Vector{String}
+    calls::Vector{ToolCallDelta}
+end
+
+function handle_chat(srv::Server, req::HTTPRequest, io::IO, keepalive::Bool)::Bool
+    body = _parse_body(req.body)
+    model = srv.model
+
+    messages = get(body, "messages", nothing)
+    (messages isa AbstractVector && !isempty(messages)) ||
+        throw(HTTPError(400, "messages must be a non-empty array"))
+    tools = get(body, "tools", nothing)
+    tools = tools === nothing ? Any[] : tools
+    tools isa AbstractVector || throw(HTTPError(400, "tools must be an array"))
+    stream = get(body, "stream", false)
+    stream isa Bool || throw(HTTPError(400, "stream must be a boolean"))
+    include_usage = stream && _flag(get(body, "stream_options", nothing), "include_usage")
+    stop = _stop_list(get(body, "stop", nothing))
+    thinking = _thinking(body)
+    requested = _max_tokens(body)
+
+    msgs = _normalize_messages(messages)
+    prompt_ids = model.tokenize(model.render(msgs, collect(Any, tools), thinking))
+    n = length(prompt_ids)
+    n >= model.n_ctx &&
+        throw(HTTPError(400, "prompt is $n tokens, which leaves no room in a context of $(model.n_ctx)"))
+    room = model.n_ctx - n
+    max_new = requested === nothing ? room : min(requested, room)
+
+    # A client that goes away is seen as EOF on its socket. The watcher reads
+    # no bytes, so a pipelined request is still there for the next read.
+    cancelled = Ref(false)
+    @async try
+        eof(io) && (cancelled[] = true)
+    catch
+    end
+
+    turn = Turn(model, QwenXMLParser(; tools=collect(Any, tools), thinking=thinking, stop=stop),
+        io, stream, include_usage, keepalive, cancelled, Ref(false), Int[], 0,
+        _completion_id(), round(Int, time()), String[], String[], ToolCallDelta[])
+
+    gen = try
+        lock(srv.gate) do
+            _run_turn!(turn, prompt_ids, max_new)
+        end
+    catch e
+        if turn.started[]
+            @error "generation failed after the stream started" exception=(e, catch_backtrace())
+            return false
+        end
+        rethrow()
+    end
+    (gen === nothing || turn.cancelled[]) && return false
+
+    _sync_text!(turn; final=true)
+    _deliver!(turn, finish!(turn.parser))
+    generated = length(gen.generated)
+    reason = _finish_reason(turn, generated, max_new)
+    usage = _usage(n, generated, gen.cached)
+
+    if turn.stream
+        _write_event!(turn, _chunk(turn, Dict{String,Any}(), reason))
+        if include_usage
+            _write_event!(turn, Dict(
+                "id" => turn.id, "object" => "chat.completion.chunk", "created" => turn.created,
+                "model" => model.model_id, "choices" => Any[], "usage" => usage))
+        end
+        turn.cancelled[] && return false
+        try
+            write_chunk(io, "data: [DONE]\n\n")
+            end_event_stream(io)
+        catch e
+            e isa Base.IOError || e isa EOFError || rethrow()
+            return false
+        end
+        return keepalive
+    end
+
+    content = join(turn.content)
+    message = Dict{String,Any}("role" => "assistant")
+    message["content"] = (isempty(content) && !isempty(turn.calls)) ? nothing : content
+    isempty(turn.reasoning) || (message["reasoning_content"] = join(turn.reasoning))
+    isempty(turn.calls) || (message["tool_calls"] = [_call_object(c) for c in turn.calls])
+    write_json(io, 200, Dict(
+            "id" => turn.id,
+            "object" => "chat.completion",
+            "created" => turn.created,
+            "model" => model.model_id,
+            "choices" => [Dict("index" => 0, "message" => message, "finish_reason" => reason)],
+            "usage" => usage,
+        ); keepalive=keepalive)
+    return keepalive
+end
+
+function _run_turn!(turn::Turn, prompt_ids::Vector{Int}, max_new::Int)
+    turn.cancelled[] && return nothing
+    if turn.stream
+        start_event_stream(turn.io; keepalive=turn.keepalive)
+        turn.started[] = true
+        _write_event!(turn, _chunk(turn, Dict("role" => "assistant", "content" => ""), nothing))
+    end
+    return turn.model.generate(prompt_ids; max_new_tokens=max_new,
+        on_token=id -> _on_token(turn, id))
+end
+
+function _on_token(turn::Turn, id::Integer)
+    yield()     # lets the disconnect watcher run between tokens
+    push!(turn.ids, Int(id))
+    turn.cancelled[] && return false
+    _sync_text!(turn; final=false)
+    return !turn.parser.stopped && !turn.cancelled[]
+end
+
+# Decode the whole generated sequence and feed the new bytes to the parser. A
+# trailing U+FFFD means the last token ended mid-character, so it waits for more.
+function _sync_text!(turn::Turn; final::Bool)
+    isempty(turn.ids) && return nothing
+    text = turn.model.detokenize(turn.ids)
+    !final && endswith(text, '�') && return nothing
+    bytes = codeunits(text)
+    n = length(bytes)
+    n <= turn.shown && return nothing
+    new = Vector{UInt8}(view(bytes, (turn.shown + 1):n))
+    turn.shown = n
+    _deliver!(turn, feed!(turn.parser, new))
+    return nothing
+end
+
+function _deliver!(turn::Turn, events)
+    for e in events
+        if e isa ReasoningDelta
+            push!(turn.reasoning, e.text)
+            turn.stream && _write_event!(turn, _chunk(turn, Dict("reasoning_content" => e.text), nothing))
+        elseif e isa ContentDelta
+            push!(turn.content, e.text)
+            turn.stream && _write_event!(turn, _chunk(turn, Dict("content" => e.text), nothing))
+        elseif e isa ToolCallDelta
+            push!(turn.calls, e)
+            turn.stream && _write_event!(turn, _chunk(turn,
+                Dict("tool_calls" => [Dict("index" => e.index, "id" => e.id, "type" => "function",
+                    "function" => Dict("name" => e.name, "arguments" => e.arguments))]), nothing))
+        end
+    end
+    return nothing
+end
+
+function _write_event!(turn::Turn, obj)
+    turn.cancelled[] && return nothing
+    try
+        write_sse(turn.io, JSON.json(obj))
+    catch e
+        e isa Base.IOError || e isa EOFError || rethrow()
+        turn.cancelled[] = true
+    end
+    return nothing
+end
+
+function _chunk(turn::Turn, delta, finish)
+    return Dict(
+        "id" => turn.id,
+        "object" => "chat.completion.chunk",
+        "created" => turn.created,
+        "model" => turn.model.model_id,
+        "choices" => [Dict("index" => 0, "delta" => delta, "finish_reason" => finish)],
+    )
+end
+
+function _finish_reason(turn::Turn, generated::Int, max_new::Int)
+    turn.parser.n_calls > 0 && return "tool_calls"
+    (!turn.parser.stopped && generated >= max_new) && return "length"
+    return "stop"
+end
+
+_call_object(c::ToolCallDelta) = Dict("id" => c.id, "type" => "function",
+    "function" => Dict("name" => c.name, "arguments" => c.arguments))
+
+_usage(prompt::Int, completion::Int, cached::Int) = Dict(
+    "prompt_tokens" => prompt,
+    "completion_tokens" => completion,
+    "total_tokens" => prompt + completion,
+    "prompt_tokens_details" => Dict("cached_tokens" => cached),
+)
+
+_completion_id() = "chatcmpl-" * string(rand(UInt64), base=16, pad=16)
+
+function _parse_body(raw::Vector{UInt8})
+    body = try
+        JSON.parse(String(copy(raw)))
+    catch
+        throw(HTTPError(400, "request body is not valid JSON"))
+    end
+    body isa AbstractDict || throw(HTTPError(400, "request body must be a JSON object"))
+    return body
+end
+
+function _normalize_messages(messages::AbstractVector)
+    out = Dict{String,Any}[]
+    for m in messages
+        m isa AbstractDict || throw(HTTPError(400, "each message must be an object"))
+        haskey(m, "role") || throw(HTTPError(400, "each message needs a role"))
+        msg = Dict{String,Any}(String(k) => v for (k, v) in m)
+        calls = get(m, "tool_calls", nothing)
+        if calls isa AbstractVector
+            msg["tool_calls"] = Any[_normalize_call(c) for c in calls]
+        end
+        push!(out, msg)
+    end
+    return out
+end
+
+# The chat template reads tool-call arguments as a mapping, but the OpenAI wire
+# format sends them as a JSON string. Parse them here, once.
+function _normalize_call(c)
+    c isa AbstractDict || throw(HTTPError(400, "tool_calls entries must be objects"))
+    f = get(c, "function", nothing)
+    f isa AbstractDict || throw(HTTPError(400, "a tool call needs a function object"))
+    args = get(f, "arguments", "{}")
+    parsed = if args isa AbstractString
+        try
+            JSON.parse(String(args))
+        catch
+            throw(HTTPError(400, "tool call arguments are not valid JSON"))
+        end
+    else
+        args
+    end
+    parsed isa AbstractDict || throw(HTTPError(400, "tool call arguments must be a JSON object"))
+    return Dict{String,Any}("id" => get(c, "id", nothing), "type" => "function",
+        "function" => Dict{String,Any}("name" => String(get(f, "name", "")), "arguments" => parsed))
+end
+
+# `enable_thinking` may come at the top level or inside chat_template_kwargs. The
+# template defaults to thinking on.
+function _thinking(body::AbstractDict)
+    kw = get(body, "chat_template_kwargs", nothing)
+    if kw isa AbstractDict && haskey(kw, "enable_thinking")
+        return kw["enable_thinking"] !== false
+    end
+    haskey(body, "enable_thinking") && return body["enable_thinking"] !== false
+    return true
+end
+
+function _max_tokens(body::AbstractDict)
+    v = haskey(body, "max_completion_tokens") ? body["max_completion_tokens"] : get(body, "max_tokens", nothing)
+    v === nothing && return nothing
+    (v isa Integer && v > 0) || throw(HTTPError(400, "max_tokens must be a positive integer"))
+    return Int(v)
+end
+
+function _stop_list(v)
+    v === nothing && return String[]
+    v isa AbstractString && return String[v]
+    if v isa AbstractVector && all(x -> x isa AbstractString, v)
+        return String[String(x) for x in v]
+    end
+    throw(HTTPError(400, "stop must be a string or an array of strings"))
+end
+
+_flag(d, key::String) = d isa AbstractDict && get(d, key, false) === true

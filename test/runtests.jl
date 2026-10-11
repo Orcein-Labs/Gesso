@@ -55,6 +55,8 @@ using Gesso: reference_prefill, reference_generate
     # generation with a real KV append
     include("test_reference_prefill.jl")
     include("test_reference_generate.jl")
+    include("test_generate_hooks.jl")
+    include("test_serve.jl")
     include("test_batch.jl")
     include("test_containment.jl")
     include("test_observability.jl")
@@ -260,6 +262,7 @@ using Gesso: reference_prefill, reference_generate
             "Libdl" => "ggml to_float for GGUF dequant (qwen35moe)",
             "Mmap" => "safetensors byte region (§LXXVI)",
             "JSON" => "config.json + safetensors header parsing (§LXXVI)",
+            "Sockets" => "TCP listener for the OpenAI-compatible server (src/serve)",
         )
         project = joinpath(pkgdir(Gesso), "Project.toml")
         section = ""

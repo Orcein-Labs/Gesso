@@ -97,6 +97,9 @@ const INVENTORY = Dict{Symbol, Tuple{Symbol, Vector{String}}}(
 
     # --- §CIX semantics vocabulary (workload dispatch types) ----------------
     :PrefillWorkload => (:live, ["test_semantics.jl", "test_operators.jl"]),
+    # --- chat server (src/serve) -------------------------------------------
+    :ChatModel => (:live, ["test_serve.jl"]),
+    :serve => (:live, ["test_serve.jl"]),
     :DecodeWorkload => (:live, ["test_semantics.jl", "test_operators.jl"]),
 
     # --- §CIX ModelIR vocabulary --------------------------------------------
