@@ -142,10 +142,18 @@ function _fp_walk(h::UInt64, x)
             h = _fp_walk(_fnv!(h, codeunits(string(k))), v)
         end
         return h
+    elseif x isa Union{AbstractDict,AbstractSet}
+        # Slot order follows object addresses, which differ between Julia
+        # processes, so each entry is hashed alone and the sum is order-free.
+        acc = UInt64(0)
+        for e in x
+            acc += _fp_walk(_FNV_OFFSET, e)
+        end
+        return _fnv!(h, reinterpret(UInt8, UInt64[length(x), acc]))
     elseif x isa AbstractArray
         h = _fnv!(h, reinterpret(UInt8, Int64[length(x)]))
-        for v in x
-            h = _fp_walk(h, v)
+        for i in eachindex(x)
+            h = isassigned(x, i) ? _fp_walk(h, x[i]) : _fnv!(h, codeunits("#undef"))
         end
         return h
     elseif x isa Union{Bool,Number,AbstractString,Symbol}
@@ -154,7 +162,8 @@ function _fp_walk(h::UInt64, x)
         return _fnv!(h, codeunits(string(typeof(x))))
     end
     for f in fieldnames(typeof(x))
-        h = _fp_walk(_fnv!(h, codeunits(string(f))), getfield(x, f))
+        h = _fnv!(h, codeunits(string(f)))
+        h = isdefined(x, f) ? _fp_walk(h, getfield(x, f)) : _fnv!(h, codeunits("#undef"))
     end
     return h
 end

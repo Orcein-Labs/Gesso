@@ -199,3 +199,39 @@ end
         end
     end
 end
+
+# Fields left unassigned by an incomplete constructor, for the fingerprint walk.
+mutable struct _FpPartial
+    a::Vector{Int}
+    b::Vector{Int}
+    _FpPartial() = new()
+end
+
+@testset "model fingerprint ignores Dict and Set layout and tolerates undefined slots" begin
+    fp = Gesso.Inference._model_fingerprint
+    built = sizehint!(Set{Symbol}(), 1000)
+    push!(built, :c)
+    push!(built, :a)
+    push!(built, :b)
+    t_plain = (; s=Set([:a, :b, :c]))
+    t_built = (; s=built)
+    @test fp(t_plain) == fp(t_built)
+    @test fp((; s=Set([:a, :b, :c]))) != fp((; s=Set([:a, :b, :d])))
+
+    d1 = Dict(:x => 1, :y => 2, :z => 3)
+    d2 = sizehint!(Dict{Symbol,Int}(), 500)
+    d2[:z] = 3
+    d2[:x] = 1
+    d2[:y] = 2
+    @test fp(d1) == fp(d2)
+    @test fp(Dict(:x => 1)) != fp(Dict(:x => 2))
+
+    partial = _FpPartial()
+    partial.a = [7]
+    @test fp(partial) isa UInt64
+    filled = _FpPartial()
+    filled.a = [7]
+    filled.b = Int[]
+    @test fp(partial) != fp(filled)
+    @test fp(_FpPartial()) == fp(_FpPartial())
+end
