@@ -578,3 +578,47 @@ two paths round differently (the known prefill/decode gap on this model). The
 CPU thread count moves where that rounding lands, which flipped a near-tied
 greedy pick. llama.cpp reuses decode-computed KV the same way. Treat it as
 drift, not a defect, unless a task-level check shows otherwise.
+
+## 15. PARK/RESUME AND THE TIER PRIMITIVES (2026-10-11)
+
+### 15.1 Park and resume on disk (e5ca8a9, eff6f98)
+
+`save_state` writes the KV cache, with QuantKV codes and scales, plus the GDN
+state, the snapshot and the transcript ids. `load_state` brings it back in
+another process. Ornith-35B, CUDA, q8 KV, a 65,490-token prompt, 8 greedy
+tokens:
+
+| step | wall | notes |
+|---|---|---|
+| prefill + 8 tokens, cold | 1128.7 s | budget 4800, before hot experts became the default |
+| save | 1.29 s | 806 MiB file |
+| load, new process | 1.9-2.6 s | |
+| resume, first call in the process | 55.3 s | 65,490 rows reused; includes first-call compilation |
+| resume after a warm-up workload | 3.2 s | 65,490 rows reused |
+
+All three runs emit the same 8 tokens. The model fingerprint matched across
+processes only after eff6f98. Dict and Set slot order follows object
+addresses, so the first fingerprint changed between processes and refused
+its own file. A returning 64k conversation now costs a 2 s load instead of a
+19-minute re-prefill.
+
+### 15.2 Tier primitives: built, not wired (e520aae, 34c4538, 8f6cd6b)
+
+Nothing in the decode loop calls these yet. They are the pieces §5's
+GPU-recent/host-old split needs:
+
+- **GPU row-range partial.** `_attention_partial_device!` runs the split-K
+  decode kernel from row offset `r0` and writes the unnormalised
+  (m, l, acc). Decode keeps `r0 = 0`; its output was checked bit for bit
+  against the old kernel. Covers f32, f16, q8 and q4h.
+- **CPU partial and log-sum-exp merge.** Each K and V column is read once
+  per KV head, with rows innermost. Partials and the merge stay in Float64.
+  The time at 4096 rows on 2 threads fell from 26 ms to 3.0 ms per layer.
+- **Integer q8 scores.** This path uses Int16 query codes and Int32
+  accumulation. It was slower than float in all four timed cells
+  (4096/16384 rows, 1/2 threads), so it is off by default.
+
+The 35B does not need the split at 64k, because the whole q8 cache fits on
+the card. Wire it when a context outgrows VRAM, such as 128k on Gemma4.
+Before then, time it at 64k on a quiet machine, since the timings above were
+taken beside other jobs.
