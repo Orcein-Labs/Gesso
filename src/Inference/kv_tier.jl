@@ -24,11 +24,18 @@
 # safe at _KV_TIER_BLOCK_ROWS rows. Each block's m, l and acc are widened to
 # Float64 for the cross-block merge.
 #
+# int_scores scores q8 keys with Int16 query codes and Int32 accumulation, one
+# scale product per 32-value block. Int16 is needed: Int8 query codes miss the
+# 5e-3 gate at unit scale. It is off by default: the rows-innermost layout keeps
+# LLVM from emitting vpmaddwd, and on this Haswell the integer path's median was
+# slower than float in all four timed cells.
+#
 # A q4h cache stores rows in the Hadamard-rotated basis. The caller rotates q
 # before the partial and rotates the finished output back, as the decode step
 # does; the partial itself stays format-agnostic.
 
 const _KV_TIER_BLOCK_ROWS = 1024
+const _KV_TIER_INT_SCORES = false
 
 struct KVPartial
     m::Vector{Float64}
@@ -57,12 +64,17 @@ struct KVTierBlock
     acc::Matrix{Float32}   # (group, d_head)
     mx::Vector{Float32}    # (group)
     l::Vector{Float32}     # (group)
+    qi::Matrix{Int16}      # (n_heads, d_head): qs as codes in [-32767, 32767], see _quantize_query!
+    qsc::Matrix{Float32}   # (n_heads, d_head ÷ 32): scale of each qi block
+    ti::Matrix{Int32}      # (block_rows, group): per-32-block integer sums
 end
 
 function _kv_tier_block(block_rows::Int, n_heads::Int, d_head::Int, group::Int)
     return KVTierBlock(zeros(Float32, n_heads, d_head), zeros(Float32, block_rows, group),
         zeros(Float32, block_rows, group), zeros(Float32, group, d_head),
-        zeros(Float32, group), zeros(Float32, group))
+        zeros(Float32, group), zeros(Float32, group),
+        zeros(Int16, n_heads, d_head), zeros(Float32, n_heads, d_head ÷ _KV_BLOCK),
+        zeros(Int32, block_rows, group))
 end
 
 # Preallocated partials and block scratch for a decode loop. Build it once for
@@ -106,6 +118,56 @@ function _scale_query!(qs::Matrix{Float32}, q, d_head::Int)
         qs[hh, j] = Float32(q[1, hh, j]) * inv_sqd
     end
     return qs
+end
+
+# The query as Int16 codes, one scale per query head and 32-value block. Eight
+# bits were tried first and left the score error near 1e-2 relative: that error
+# is multiplied by the score, so large-score rows lose the most.
+function _quantize_query!(blk::KVTierBlock, d_head::Int)
+    qs = blk.qs
+    @inbounds for b in 1:(d_head ÷ _KV_BLOCK), hh in axes(qs, 1)
+        js = ((b - 1) * _KV_BLOCK + 1):(b * _KV_BLOCK)
+        sc = maximum(abs, view(qs, hh, js)) / 32767.0f0
+        inv = sc == 0 ? 0.0f0 : 1.0f0 / sc
+        blk.qsc[hh, b] = sc
+        for j in js
+            blk.qi[hh, j] = unsafe_trunc(Int16, clamp(round(qs[hh, j] * inv), -32767.0f0, 32767.0f0))
+        end
+    end
+    return blk
+end
+
+# Integer scores for a q8 cache: the per-block sums of code products are exact in
+# Int32, and both scales multiply the block sum once.
+function _score_block_int!(blk::KVTierBlock, kc::QuantKV{:q8}, hk::Int, r0::Int,
+    nr::Int, d_head::Int, group::Int)
+    s = blk.s
+    ti = blk.ti
+    qi = blk.qi
+    codes = kc.codes
+    scales = kc.scales
+    hh0 = (hk - 1) * group
+    @inbounds for g in 1:group, i in 1:nr
+        s[i, g] = 0.0f0
+    end
+    @inbounds for b in 1:(d_head ÷ _KV_BLOCK)
+        for g in 1:group, i in 1:nr
+            ti[i, g] = 0
+        end
+        for j in ((b - 1) * _KV_BLOCK + 1):(b * _KV_BLOCK), g in 1:group
+            qv = qi[hh0 + g, j]
+            @simd for i in 1:nr
+                ti[i, g] += Int32(qv) * Int32(codes[r0 + i, hk, j])
+            end
+        end
+        for g in 1:group
+            qsc = blk.qsc[hh0 + g, b]
+            @simd for i in 1:nr
+                s[i, g] += Float32(ti[i, g]) * qsc * Float32(scales[r0 + i, hk, b])
+            end
+        end
+    end
+    return s
 end
 
 # Scores of one KV head's query group over rows r0+1:r0+nr.
@@ -227,7 +289,8 @@ end
 # Partial over rows `rows` of K and V caches shaped (rows, n_kv, d). Passing a
 # block scratch avoids allocation; otherwise one is made for this range.
 function _attention_partial_cpu!(part::KVPartial, q, kc, vc, rows::UnitRange{Int},
-    n_heads::Int, d_head::Int, group::Int; blk::Union{KVTierBlock,Nothing}=nothing)
+    n_heads::Int, d_head::Int, group::Int; blk::Union{KVTierBlock,Nothing}=nothing,
+    int_scores::Bool=_KV_TIER_INT_SCORES)
     isempty(rows) && return _partial_reset!(part)
     n_kv = size(kc, 2)
     n_heads == n_kv * group || throw(gesso_error(ERR_INVALID_PLAN,
@@ -238,8 +301,14 @@ function _attention_partial_cpu!(part::KVPartial, q, kc, vc, rows::UnitRange{Int
     size(scratch.s, 1) >= nr || throw(gesso_error(ERR_INVALID_PLAN,
         "attention partial: block scratch holds $(size(scratch.s, 1)) rows, need $nr"))
     _scale_query!(scratch.qs, q, d_head)
+    use_int = int_scores && kc isa QuantKV{:q8}
+    use_int && _quantize_query!(scratch, d_head)
     for hk in 1:n_kv
-        _score_block!(scratch, kc, hk, r0, nr, d_head, group)
+        if use_int
+            _score_block_int!(scratch, kc, hk, r0, nr, d_head, group)
+        else
+            _score_block!(scratch, kc, hk, r0, nr, d_head, group)
+        end
         _softmax_block!(scratch, nr, group)
         _value_block!(scratch, vc, hk, r0, nr, d_head, group)
         hh0 = (hk - 1) * group
@@ -293,12 +362,13 @@ end
 # Block partials are computed in parallel into slots indexed by block, never by
 # threadid, so the scratch each block uses does not depend on the scheduler.
 function _partials_threaded!(parts::Vector{KVPartial}, blocks::Vector{KVTierBlock},
-    n_blocks::Int, q, kc, vc, K::Int, block_rows::Int, n_heads::Int, d_head::Int, group::Int)
+    n_blocks::Int, q, kc, vc, K::Int, block_rows::Int, n_heads::Int, d_head::Int, group::Int,
+    int_scores::Bool)
     Threads.@threads for b in 1:n_blocks
         r0 = (b - 1) * block_rows + 1
         r1 = min(K, b * block_rows)
         _attention_partial_cpu!(parts[b], q, kc, vc, r0:r1, n_heads, d_head, group;
-            blk=blocks[b])
+            blk=blocks[b], int_scores)
     end
     return parts
 end
@@ -308,13 +378,14 @@ end
 # the thread count: each block's partial is fixed, and the merge order is fixed.
 # Pass a KVTierWorkspace to reuse its buffers across calls.
 function _attention_split_cpu!(attn, q, kc, vc, K::Int, n_heads::Int, d_head::Int,
-    group::Int; block_rows::Int=_KV_TIER_BLOCK_ROWS, ws::Union{KVTierWorkspace,Nothing}=nothing)
+    group::Int; block_rows::Int=_KV_TIER_BLOCK_ROWS, ws::Union{KVTierWorkspace,Nothing}=nothing,
+    int_scores::Bool=_KV_TIER_INT_SCORES)
     K >= 1 || throw(gesso_error(ERR_INVALID_PLAN, "attention split: K must be >= 1, got $K"))
     ws === nothing && (ws = KVTierWorkspace(K, n_heads, d_head, group; block_rows))
     _check_workspace(ws, K, n_heads, d_head, group, block_rows)
     n_blocks = cld(K, block_rows)
     _partials_threaded!(ws.parts, ws.blocks, n_blocks, q, kc, vc, K, block_rows,
-        n_heads, d_head, group)
+        n_heads, d_head, group, int_scores)
     total = ws.parts[1]
     for b in 2:n_blocks
         _partial_merge!(total, ws.parts[b])

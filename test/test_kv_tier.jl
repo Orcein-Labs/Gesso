@@ -37,11 +37,11 @@ function _kvt_split(rng, K::Int, n::Int)
     return [(bounds[i] + 1):bounds[i + 1] for i in 1:n]
 end
 
-function _kvt_merged(q, kc, vc, ranges, n_heads, d, group)
+function _kvt_merged(q, kc, vc, ranges, n_heads, d, group; int_scores::Bool=false)
     total = _KVT._kv_partial(n_heads, d)
     tmp = _KVT._kv_partial(n_heads, d)
     for r in ranges
-        _KVT._attention_partial_cpu!(tmp, q, kc, vc, r, n_heads, d, group)
+        _KVT._attention_partial_cpu!(tmp, q, kc, vc, r, n_heads, d, group; int_scores)
         _KVT._partial_merge!(total, tmp)
     end
     out = zeros(Float32, 1, n_heads, d)
@@ -177,4 +177,113 @@ Base.getindex(w::_KVTGeneric, i::Int, j::Int, k::Int) = w.x[i, j, k]
         _KVT._attention_split_cpu!(reused, q, kc, vc, K, n_heads, d, group; ws=ws)
     end
     @test reused == fresh
+end
+
+# Attention in Float64 over the dequantized cache, so the only error left is the
+# one the integer score path adds.
+function _kvt_exact64(q, kc, vc, n_heads, d, group, K)
+    out = zeros(Float64, 1, n_heads, d)
+    for hh in 1:n_heads
+        hk = div(hh - 1, group) + 1
+        sc = zeros(Float64, K)
+        for u in 1:K, j in 1:d
+            sc[u] += Float64(q[1, hh, j]) * Float64(kc[u, hk, j])
+        end
+        sc ./= sqrt(d)
+        w = exp.(sc .- maximum(sc))
+        w ./= sum(w)
+        for u in 1:K, j in 1:d
+            out[1, hh, j] += w[u] * Float64(vc[u, hk, j])
+        end
+    end
+    return out
+end
+
+@testset "kv tier: integer q8 scores match Float64 attention" begin
+    n_heads, n_kv, d, K = 16, 2, 256, 1000
+    group = div(n_heads, n_kv)
+    for (si, scale) in enumerate((1.0f0, 50.0f0))
+        rng = MersenneTwister(0x6bd0 + si)
+        q = scale .* randn(rng, Float32, 1, n_heads, d)
+        kc = _kvt_cache(:q8, randn(rng, Float32, K, n_kv, d))
+        vc = _kvt_cache(:q8, randn(rng, Float32, K, n_kv, d))
+        ref = _kvt_exact64(q, kc, vc, n_heads, d, group, K)
+        out = _kvt_merged(q, kc, vc, [1:333, 334:700, 701:K], n_heads, d, group; int_scores=true)
+        err = maximum(abs.(out .- ref)) / maximum(abs.(ref))
+        @test all(isfinite, out)
+        @test err <= 5e-3
+        @info "kv tier integer scores" scale worst_relerr_vs_f64=err
+    end
+end
+
+@testset "kv tier: integer scores keep the needle row on top and dominate the output" begin
+    n_heads, n_kv, d, K = 16, 2, 256, 4096
+    group = div(n_heads, n_kv)
+    rng = MersenneTwister(0x6be0)
+    kf = randn(rng, Float32, K, n_kv, d)
+    u = randn(rng, Float32, n_kv, d)
+    needle = 4096
+    for hk in 1:n_kv
+        kf[needle, hk, :] .= 3.0f0 .* u[hk, :]
+    end
+    q = randn(rng, Float32, 1, n_heads, d)
+    for hh in 1:n_heads
+        hk = div(hh - 1, group) + 1
+        q[1, hh, :] .+= 0.5f0 .* u[hk, :]
+    end
+    kc = _kvt_cache(:q8, kf)
+    vf = zeros(Float32, K, n_kv, d)
+    vf[needle, :, :] .= 1.0f0
+    vc = _kvt_cache(:q8, vf)
+
+    blk_f = _KVT._kv_tier_block(K, n_heads, d, group)
+    blk_i = _KVT._kv_tier_block(K, n_heads, d, group)
+    _KVT._scale_query!(blk_f.qs, q, d)
+    _KVT._scale_query!(blk_i.qs, q, d)
+    _KVT._quantize_query!(blk_i, d)
+    for hk in 1:n_kv
+        _KVT._score_block!(blk_f, kc, hk, 0, K, d, group)
+        _KVT._score_block_int!(blk_i, kc, hk, 0, K, d, group)
+        for g in 1:group
+            @test argmax(blk_i.s[1:K, g]) == needle
+            @test argmax(blk_f.s[1:K, g]) == argmax(blk_i.s[1:K, g])
+        end
+    end
+
+    out = _kvt_merged(q, kc, vc, [1:K], n_heads, d, group; int_scores=true)
+    @test minimum(out) > 0.9
+    @test maximum(out) < 1.1
+end
+
+@testset "kv tier: integer partials merge to the single integer pass" begin
+    n_heads, n_kv, d, K = 16, 2, 256, 2000
+    group = div(n_heads, n_kv)
+    rng = MersenneTwister(0x6bf0)
+    q = randn(rng, Float32, 1, n_heads, d)
+    kc = _kvt_cache(:q8, randn(rng, Float32, K, n_kv, d))
+    vc = _kvt_cache(:q8, randn(rng, Float32, K, n_kv, d))
+    single = _kvt_merged(q, kc, vc, [1:K], n_heads, d, group; int_scores=true)
+    split = _kvt_merged(q, kc, vc, [1:1, 2:700, 701:1400, 1401:K], n_heads, d, group; int_scores=true)
+    @test _kvt_relerr(split, single) <= 1e-5
+    fresh = zeros(Float32, 1, n_heads, d)
+    _KVT._attention_split_cpu!(fresh, q, kc, vc, K, n_heads, d, group; block_rows=512, int_scores=true)
+    @test _kvt_relerr(fresh, single) <= 1e-5
+end
+
+@testset "kv tier: the integer-score gate can fail" begin
+    # One 32-value scale block of every key row is doubled. The corrupted cache
+    # must then miss the Float64 attention of the true cache by more than the gate.
+    n_heads, n_kv, d, K = 16, 2, 256, 1000
+    group = div(n_heads, n_kv)
+    rng = MersenneTwister(0x6c00)
+    q = randn(rng, Float32, 1, n_heads, d)
+    kc = _kvt_cache(:q8, randn(rng, Float32, K, n_kv, d))
+    vc = _kvt_cache(:q8, randn(rng, Float32, K, n_kv, d))
+    ref = _kvt_exact64(q, kc, vc, n_heads, d, group, K)
+    bad = _KVT.QuantKV{:q8}(kc.codes, copy(kc.scales), kc.d)
+    bad.scales[:, :, 1] .*= Float16(2)
+    out = _kvt_merged(q, bad, vc, [1:333, 334:700, 701:K], n_heads, d, group; int_scores=true)
+    corrupt_err = _kvt_relerr(out, ref)
+    @info "kv tier corrupted-scale control" relerr=corrupt_err
+    @test corrupt_err > 5e-3
 end
