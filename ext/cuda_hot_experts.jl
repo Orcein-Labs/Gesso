@@ -21,17 +21,18 @@
 # By default each hot layer's slabs move into page-locked anonymous memory
 # (GESSO_GPU_HOT_PIN=0 opts out; a file mmap cannot be registered with the
 # driver). A swap is then three async DMA copies with no host memcpy. On a
-# single-channel host
-# the staged copy read and wrote each expert through DRAM before the DMA read
-# it a third time, while the CPU experts competed for the same bus.
+# single-channel host the staged copy read and wrote each expert through DRAM
+# before the DMA read it a third time, while the CPU experts competed for the
+# same bus.
 #
 # Hits use the GPU kernels (q8_1 activations) and misses the CPU ones (Q8_K),
 # so the output rounds differently from the all-CPU path.
 
 _hot_experts_enabled() = get(ENV, "GESSO_GPU_HOT_EXPERTS", "1") == "1"
 
-# Left free on the card for the desktop or compositor. Prefill passes are
-# sized against it at each pass.
+# Left free on the card for the desktop or compositor: a full card has crashed
+# the browser with an NVRM OOM. A prefill that runs short releases pools
+# (_HotPurge), so the pool, not the pass, gives way.
 const _HOT_RESERVE_DEFAULT_MIB = 1024
 
 function _hot_env_int(name, default)
