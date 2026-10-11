@@ -13,7 +13,8 @@
 # accumulation maps one warp per output dim with lanes striding over keys, so
 # both phases read the cache coalesced.
 
-import Gesso.Inference: _attention_decode_device!, _attention_prefill_device!
+import Gesso.Inference: _attention_decode_device!, _attention_prefill_device!, _attention_partial_device!,
+    _partial_download!
 
 const _ATTN_TILE = 1024
 const _ATTN_THREADS = 256
@@ -316,8 +317,10 @@ _attn_vec4(::Any) = false
 _attn_vec4(x::QuantKV{<:Any,<:CuArray}) = size(x, 1) % 4 == 0
 _attn_vec4(x::CuArray{Float16,3}) = size(x, 1) % 4 == 0
 
-function _cuda_attn_split_kernel!(op, ml, q, kc, vc, K::Int, scale::Float32, d::Int, ::Val{G}, ::Val{C},
-    ::Val{V}) where {G,C,V}
+# Rows r0+1:K are attended, so r0 only moves where the chunks start. The
+# default decode passes r0 = 0 and gets the same tiles as before.
+function _cuda_attn_split_kernel!(op, ml, q, kc, vc, r0::Int, K::Int, scale::Float32, d::Int, ::Val{G},
+    ::Val{C}, ::Val{V}) where {G,C,V}
     R = C * _ATTN_SPLIT_W ÷ _ATTN_THREADS
     WP = _ATTN_SPLIT_W + 1
     # shared layout: q [d, G] | scores, then probs [C, G] | tile [W+1, C]
@@ -331,7 +334,7 @@ function _cuda_attn_split_kernel!(op, ml, q, kc, vc, K::Int, scale::Float32, d::
     lane = (tid - 1) % 32
     hk = Int(blockIdx().x)
     s = Int(blockIdx().y)
-    t0 = (s - 1) * C
+    t0 = r0 + (s - 1) * C
     n = min(C, K - t0)
     h0 = (hk - 1) * G
     nh = Int(gridDim().x) * G
@@ -435,27 +438,139 @@ function _cuda_attn_combine_kernel!(attn, op, ml, S::Int, d::Int, nh::Int)
     return
 end
 
-function _attn_decode_split!(attn, q, kc, vc, n_kv::Int, d::Int, K::Int, scale::Float32, vg::Val)
-    want = cld(K * n_kv, _ATTN_SPLIT_BLOCKS)
-    want <= 32 && return _attn_split_launch!(attn, q, kc, vc, n_kv, d, K, scale, vg, Val(32))
-    want <= 64 && return _attn_split_launch!(attn, q, kc, vc, n_kv, d, K, scale, vg, Val(64))
-    return _attn_split_launch!(attn, q, kc, vc, n_kv, d, K, scale, vg, Val(128))
+# Chunk size for about _ATTN_SPLIT_BLOCKS blocks over nrows rows.
+function _attn_split_chunk(n_kv::Int, nrows::Int)
+    want = cld(nrows * n_kv, _ATTN_SPLIT_BLOCKS)
+    want <= 32 && return Val(32)
+    want <= 64 && return Val(64)
+    return Val(128)
 end
 
-function _attn_split_launch!(attn, q, kc, vc, n_kv::Int, d::Int, K::Int, scale::Float32, ::Val{G}, ::Val{C}) where {G,C}
-    S = cld(K, C)
+function _attn_decode_split!(attn, q, kc, vc, n_kv::Int, d::Int, K::Int, scale::Float32, vg::Val)
+    return _attn_split_launch!(attn, q, kc, vc, n_kv, d, 0, K, scale, vg, _attn_split_chunk(n_kv, K))
+end
+
+# The vector loads take 4-row groups that start on a multiple of 4, so they
+# are only valid for r0 % 4 == 0; other ranges take the per-element path.
+function _attn_split_pass!(q, kc, vc, n_kv::Int, d::Int, r0::Int, r1::Int, scale::Float32, ::Val{G},
+    ::Val{C}) where {G,C}
+    S = cld(r1 - r0, C)
     nh = n_kv * G
     sc = _ATTN_SPLIT
     sc.o = _attn_split_buf(sc.o, d * nh * S)
     sc.ml = _attn_split_buf(sc.ml, 2 * nh * S)
     shmem = (G * d + G * C + (_ATTN_SPLIT_W + 1) * C) * sizeof(Float32)
+    vv = r0 % 4 == 0 && _attn_vec4(kc) && _attn_vec4(vc)
     @fastcuda threads = _ATTN_THREADS blocks = (n_kv, S) shmem = shmem _cuda_attn_split_kernel!(
-        sc.o, sc.ml, q, kc, vc, K, scale, d, Val(G), Val(C), Val(_attn_vec4(kc) && _attn_vec4(vc)),
+        sc.o, sc.ml, q, kc, vc, r0, r1, scale, d, Val(G), Val(C), Val(vv),
     )
+    return S, nh
+end
+
+function _attn_split_launch!(attn, q, kc, vc, n_kv::Int, d::Int, r0::Int, r1::Int, scale::Float32, ::Val{G},
+    ::Val{C}) where {G,C}
+    S, nh = _attn_split_pass!(q, kc, vc, n_kv, d, r0, r1, scale, Val(G), Val(C))
     @fastcuda threads = _ATTN_THREADS blocks = nh shmem = (S + 34) * sizeof(Float32) _cuda_attn_combine_kernel!(
-        attn, sc.o, sc.ml, S, d, nh,
+        attn, _ATTN_SPLIT.o, _ATTN_SPLIT.ml, S, d, nh,
     )
     return true
+end
+
+function _attn_partial_launch!(pm, pl, pacc, q, kc, vc, n_kv::Int, d::Int, r0::Int, r1::Int, scale::Float32,
+    ::Val{G}, ::Val{C}) where {G,C}
+    S, nh = _attn_split_pass!(q, kc, vc, n_kv, d, r0, r1, scale, Val(G), Val(C))
+    @fastcuda threads = _ATTN_THREADS blocks = nh shmem = (S + 34) * sizeof(Float32) _cuda_attn_partial_combine_kernel!(
+        pm, pl, pacc, _ATTN_SPLIT.o, _ATTN_SPLIT.ml, S, d, nh,
+    )
+    return true
+end
+
+# Same merge as _cuda_attn_combine_kernel!, but it keeps the joint max, the
+# total sum and the unnormalised output, so a host merge can fold this range
+# together with others.
+function _cuda_attn_partial_combine_kernel!(pm, pl, pacc, op, ml, S::Int, d::Int, nh::Int)
+    sh = CUDA.@cuDynamicSharedMem(Float32, S + 34)
+    h = Int(blockIdx().x)
+    tid = Int(threadIdx().x)
+    nt = Int(blockDim().x)
+    nw = nt ÷ 32
+    @inbounds begin
+        mx = -Inf32
+        for s in tid:nt:S
+            mx = max(mx, ml[(s - 1) * 2 * nh + h])
+        end
+        mx = _attn_block_reduce(max, mx, -Inf32, sh, S, tid, nw)
+        l = 0.0f0
+        for s in tid:nt:S
+            w = exp(ml[(s - 1) * 2 * nh + h] - mx)
+            sh[s] = w
+            l += ml[(s - 1) * 2 * nh + nh + h] * w
+        end
+        tot = _attn_block_reduce(+, l, 0.0f0, sh, S, tid, nw)
+        if tid == 1
+            pm[h] = mx
+            pl[h] = tot
+        end
+        for j in tid:nt:d
+            acc = 0.0f0
+            for s in 1:S
+                acc += op[((s - 1) * nh + h - 1) * d + j] * sh[s]
+            end
+            pacc[h, j] = acc
+        end
+    end
+    return
+end
+
+# Row-range partial for the tiered attention: the same chunk pass as decode,
+# over rows first(rows):last(rows), merged to a per-head max, sum and
+# unnormalised output. Scores use the same 1/sqrt(d) scale as decode, so the
+# result merges by log-sum-exp with a CPU partial (Inference/kv_tier.jl).
+function _attention_partial_device!(
+    ::CUDABackend,
+    pm::CuVector{Float32},
+    pl::CuVector{Float32},
+    pacc::CuMatrix{Float32},
+    q::CuArray,
+    kc::_CuKV,
+    vc::_CuKV,
+    rows::UnitRange{Int},
+    n_heads::Int,
+    d_head::Int,
+    group::Int,
+)
+    n_kv = div(n_heads, group)
+    n_kv * group == n_heads || throw(ArgumentError(
+        "partial attention: n_heads=$n_heads is not a multiple of group=$group"))
+    length(pm) == n_heads && length(pl) == n_heads && size(pacc) == (n_heads, d_head) || throw(ArgumentError(
+        "partial attention: buffers do not match n_heads=$n_heads, d_head=$d_head"))
+    if isempty(rows)
+        fill!(pm, -Inf32)
+        fill!(pl, 0.0f0)
+        fill!(pacc, 0.0f0)
+        return true
+    end
+    first(rows) >= 1 && last(rows) <= size(kc, 1) || throw(ArgumentError(
+        "partial attention: rows $rows outside the cache's 1:$(size(kc, 1))"))
+    group in (1, 2, 4, 8) || throw(ArgumentError("partial attention: group $group is not 1, 2, 4 or 8"))
+    r0 = first(rows) - 1
+    r1 = last(rows)
+    scale = Float32(1 / sqrt(d_head))
+    C = _attn_split_chunk(n_kv, length(rows))
+    group == 8 && return _attn_partial_launch!(pm, pl, pacc, q, kc, vc, n_kv, d_head, r0, r1, scale, Val(8), C)
+    group == 4 && return _attn_partial_launch!(pm, pl, pacc, q, kc, vc, n_kv, d_head, r0, r1, scale, Val(4), C)
+    group == 2 && return _attn_partial_launch!(pm, pl, pacc, q, kc, vc, n_kv, d_head, r0, r1, scale, Val(2), C)
+    return _attn_partial_launch!(pm, pl, pacc, q, kc, vc, n_kv, d_head, r0, r1, scale, Val(1), C)
+end
+
+# Copies a device partial into the host KVPartial. A separate path from the
+# decode output: three small arrays, no normalisation.
+function _partial_download!(part::Gesso.Inference.KVPartial, pm::CuVector{Float32}, pl::CuVector{Float32},
+    pacc::CuMatrix{Float32})
+    part.m .= Array(pm)
+    part.l .= Array(pl)
+    part.acc .= Array(pacc)
+    return part
 end
 
 # Prefill keys are taken in tiles with an online softmax, so the score scratch

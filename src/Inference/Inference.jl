@@ -108,6 +108,7 @@ _block_mixer(bt) = haskey(bt, :mixer) ? bt.mixer : :full_attention
 
 include("decode_profile.jl")       # GESSO_PROFILE=1 decode stage profiler
 include("kv_format.jl")            # GESSO_KV_FORMAT cache storage: f32, f16, q8, q4h
+include("kv_tier.jl")              # exact row-split attention partials + log-sum-exp merge (CPU)
 include("generate_state.jl")       # KV and GDN state carried between generate calls
 
 const _T_GDN_NS = Ref(Int64(0))

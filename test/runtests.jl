@@ -37,6 +37,7 @@ using Gesso: reference_prefill, reference_generate
     include("test_cpu_ops.jl")
     include("test_rope_layout.jl")
     include("test_attention_heads.jl")
+    include("test_kv_tier.jl")
 
     # CAPABILITY-0a: `supports(backend, cap)` is a hand-written Set, so the
     # declaration is tied to EXECUTION here — every claimed capability must
@@ -135,6 +136,7 @@ using Gesso: reference_prefill, reference_generate
     include("test_expert_cache.jl")
     include("test_cuda_quant_dense.jl")
     include("test_cuda_attention_decode.jl")
+    include("test_cuda_kv_tier.jl")
     include("test_kv_format.jl")
 
     # Phase 4 (§LXXVII item C): full prefill + generate on device vs the CPU
