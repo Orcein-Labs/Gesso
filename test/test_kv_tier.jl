@@ -96,7 +96,10 @@ end
         ref = _kvt_reference(qq, kc, vc, n_heads, d, group, K)
         split = _kvt_merged(qq, kc, vc, [1:333, 334:700, 701:K], n_heads, d, group)
         @test all(isfinite, split)
-        @test _kvt_relerr(split, ref) <= 1e-5
+        # At this score scale the Float32 reference is itself about 2e-5 from an
+        # exact Float64 attention, so 1e-5 would measure reference noise. This
+        # bound still catches a dropped rescale, which is off by O(1).
+        @test _kvt_relerr(split, ref) <= 1e-4
     end
 end
 
@@ -145,4 +148,33 @@ end
     @test _kvt_merged(q, kc, vc, [1:0, 1:15, 16:16, 17:17, 18:30], n_heads, d, 2) ≈ full atol = 1e-6
     empty = _KVT._kv_partial(n_heads, d)
     @test_throws Gesso.GessoError _KVT._partial_finish!(zeros(Float32, 1, n_heads, d), empty)
+end
+
+# Forwards to a cache's getindex without being a QuantKV, so the generic methods
+# run over the same codes and scales the q8 fast path reads.
+struct _KVTGeneric{C<:AbstractArray} <: AbstractArray{Float32,3}
+    x::C
+end
+Base.size(w::_KVTGeneric) = size(w.x)
+Base.getindex(w::_KVTGeneric, i::Int, j::Int, k::Int) = w.x[i, j, k]
+
+@testset "kv tier: q8 fast path matches the generic getindex path on the same cache" begin
+    n_heads, n_kv, d, K = 16, 2, 256, 1000
+    group = div(n_heads, n_kv)
+    rng = MersenneTwister(0x6bc0)
+    q = randn(rng, Float32, 1, n_heads, d)
+    kc = _kvt_cache(:q8, randn(rng, Float32, K, n_kv, d))
+    vc = _kvt_cache(:q8, randn(rng, Float32, K, n_kv, d))
+    ranges = [1:400, 401:K]
+    fast = _kvt_merged(q, kc, vc, ranges, n_heads, d, group)
+    generic = _kvt_merged(q, _KVTGeneric(kc), _KVTGeneric(vc), ranges, n_heads, d, group)
+    @test _kvt_relerr(fast, generic) <= 1e-5
+    fresh = zeros(Float32, 1, n_heads, d)
+    _KVT._attention_split_cpu!(fresh, q, kc, vc, K, n_heads, d, group)
+    ws = _KVT.KVTierWorkspace(K, n_heads, d, group)
+    reused = zeros(Float32, 1, n_heads, d)
+    for _ in 1:2
+        _KVT._attention_split_cpu!(reused, q, kc, vc, K, n_heads, d, group; ws=ws)
+    end
+    @test reused == fresh
 end

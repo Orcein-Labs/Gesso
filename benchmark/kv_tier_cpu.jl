@@ -12,10 +12,12 @@
 #   KV_TIER_KV_HEADS KV heads                                (2)
 #   KV_TIER_D        head dim                                (256)
 #
-# Each pass runs once untimed first, so compilation is never in a sample. The
-# per-layer figure is the median over all (layer, pass) samples. The per-token
-# figure is the median over passes of the sum across layers. GB/s counts the
-# bytes of K and V (codes and scales) read by one layer.
+# One full pass runs untimed first, so compilation and workspace first touch are
+# never in a sample. The timed calls reuse one KVTierWorkspace, so the figures
+# measure the kernel, not allocation. The per-layer figure is the median over all
+# (layer, pass) samples. The per-token figure is the median over passes of the
+# sum across layers. GB/s counts the bytes of K and V (codes and scales, or the
+# raw array for f32 and f16) that one layer reads.
 
 using Gesso
 using Random: MersenneTwister
@@ -47,11 +49,11 @@ function _kvb_cache(fmt::Symbol, x::Array{Float32,3})
     return c
 end
 
-function _kvb_pass!(attn, q, kcs, vcs, times, it)
+function _kvb_pass!(attn, q, kcs, vcs, times, it, ws)
     for l in eachindex(kcs)
         t0 = time_ns()
         _KVI._attention_split_cpu!(attn, q, kcs[l], vcs[l], KVB_ROWS, KVB_HEADS, KVB_D,
-            div(KVB_HEADS, KVB_KV_HEADS))
+            div(KVB_HEADS, KVB_KV_HEADS); ws=ws)
         times[l, it] = (time_ns() - t0) / 1.0e6
     end
     return times
@@ -70,10 +72,11 @@ function main()
     attn = zeros(Float32, 1, KVB_HEADS, KVB_D)
     bytes_per_layer = _kvb_bytes(kcs[1]) + _kvb_bytes(vcs[1])
 
+    ws = _KVI.KVTierWorkspace(KVB_ROWS, KVB_HEADS, KVB_D, div(KVB_HEADS, KVB_KV_HEADS))
     times = zeros(Float64, KVB_LAYERS, KVB_ITERS)
-    _kvb_pass!(attn, q, kcs, vcs, zeros(Float64, KVB_LAYERS, 1), 1)
+    _kvb_pass!(attn, q, kcs, vcs, zeros(Float64, KVB_LAYERS, 1), 1, ws)
     for it in 1:KVB_ITERS
-        _kvb_pass!(attn, q, kcs, vcs, times, it)
+        _kvb_pass!(attn, q, kcs, vcs, times, it, ws)
     end
 
     layer_median = _median(vec(times))
