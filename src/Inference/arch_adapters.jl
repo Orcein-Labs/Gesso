@@ -639,6 +639,35 @@ function param_map(::Qwen35MoeAdapter, spec::ArchitectureSpec)
 end
 
 """
+    gguf_param_map(::LlamaAdapter, spec)
+
+llama.cpp `llama` tensor spellings. `blk.N.ffn_norm` is the pre-FFN norm
+(`post_attention_layernorm` in HF). The output head is absent when the
+embedding is tied, so `lm_head_external` is `nothing` in that case.
+"""
+function gguf_param_map(::LlamaAdapter, spec::ArchitectureSpec)
+    refs = ParamRef[
+        ParamRef(SemanticParamId(ROLE_NORM_PRE_ATTN, 0, :frozen), "attn_norm.weight"),
+        ParamRef(SemanticParamId(ROLE_Q, 0, :projection), "attn_q.weight"),
+        ParamRef(SemanticParamId(ROLE_K, 0, :projection), "attn_k.weight"),
+        ParamRef(SemanticParamId(ROLE_V, 0, :projection), "attn_v.weight"),
+        ParamRef(SemanticParamId(ROLE_O, 0, :projection), "attn_output.weight"),
+        ParamRef(SemanticParamId(ROLE_NORM_POST_ATTN, 0, :frozen), "ffn_norm.weight"),
+        ParamRef(SemanticParamId(ROLE_GATE, 0, :projection), "ffn_gate.weight"),
+        ParamRef(SemanticParamId(ROLE_UP, 0, :projection), "ffn_up.weight"),
+        ParamRef(SemanticParamId(ROLE_DOWN, 0, :projection), "ffn_down.weight"),
+    ]
+    return FamilyParamMap(
+        :llama,
+        "blk.",
+        refs,
+        "token_embd.weight",
+        "output_norm.weight",
+        spec.tie_word_embeddings ? nothing : "output.weight",
+    )
+end
+
+"""
     gguf_param_map(::Qwen35Adapter, spec)
 
 llama.cpp `qwen35` (dense) tensor spellings: the same hybrid mixer names as

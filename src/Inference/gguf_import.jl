@@ -274,9 +274,9 @@ function gguf_header(path::AbstractString)
 end
 
 """
-    spec_from_gguf_kv(kv) -> ArchitectureSpec
+    spec_from_gguf_kv(kv; tensor_names=nothing) -> ArchitectureSpec
 
-Derive the spec from GGUF metadata. Two arches are supported:
+Derive the spec from GGUF metadata. Three arches are supported (qwen35, qwen35moe, llama):
 
 * `qwen35`: dense Gated DeltaNet hybrid, `moe = nothing`, FFN width from
   `feed_forward_length`. `block_count` includes `nextn_predict_layers` MTP
@@ -288,12 +288,13 @@ Every head count, width and SSM dimension is read from the file. Nothing
 defaults to a particular checkpoint's shape, except `full_attention_interval`
 (4) and `rope.freq_base` (10000), which the GGUF may omit.
 """
-function spec_from_gguf_kv(kv::AbstractDict)
+function spec_from_gguf_kv(kv::AbstractDict; tensor_names=nothing)
     arch = String(get(kv, "general.architecture", "qwen35moe"))
-    arch in ("qwen35", "qwen35moe") || error(
+    arch in ("qwen35", "qwen35moe", "llama") || error(
         "spec_from_gguf_kv: unsupported general.architecture $(repr(arch)) " *
-        "(supported: qwen35 dense, qwen35moe)",
+        "(supported: qwen35 dense, qwen35moe, llama)",
     )
+    arch == "llama" && return _spec_from_gguf_llama(kv, tensor_names)
     p(key, default=nothing) = get(kv, "$arch.$key", default)
     req(key) = (v = p(key); v === nothing ? error("spec_from_gguf_kv: missing $arch.$key") : v)
     nextn = Int(p("nextn_predict_layers", 0))
@@ -385,16 +386,75 @@ function spec_from_gguf_kv(kv::AbstractDict)
     )
 end
 
-gguf_architecture_spec(path::AbstractString) = spec_from_gguf_kv(gguf_header(path).kv)
+"""
+`llama` GGUF spec. Tied embeddings are read from the tensor list, not from
+metadata: converters drop `output.weight` when the head is tied. Without
+`tensor_names` the head is assumed present.
+
+llama.cpp's converter permutes `attn_q` and `attn_k` rows into adjacent-pair
+order for ggml's NORMAL rope. The weights are kept as stored and the rope is
+declared `interleaved`, which gives the same attention scores as HF's
+half-split rope on the unpermuted weights. Rope scaling beyond `linear`, and
+the `rope_freqs.weight` tensor that carries llama3 scaling, are refused rather
+than dropped.
+"""
+function _spec_from_gguf_llama(kv::AbstractDict, tensor_names)
+    p(key, default=nothing) = get(kv, "llama.$key", default)
+    req(key) = (v = p(key); v === nothing ? error("spec_from_gguf_kv: missing llama.$key") : v)
+    hidden = Int(req("embedding_length"))
+    n_heads = Int(req("attention.head_count"))
+    head_dim = Int(p("attention.key_length", 0))
+    toks = get(kv, "tokenizer.ggml.tokens", nothing)
+    vocab = toks isa Integer ? Int(toks) : toks === nothing ? Int(p("vocab_size", 0)) : length(toks)
+    vocab > 0 || error("spec_from_gguf_kv: no vocabulary size in GGUF metadata")
+    scaling = String(p("rope.scaling.type", "none"))
+    (kind, factor) = if scaling in ("none", "")
+        (:none, 1.0)
+    elseif scaling == "linear"
+        (:linear, Float64(req("rope.scaling.factor")))
+    else
+        throw(LoweringNotImplemented(:rope_scaling, :llama))
+    end
+    tensor_names !== nothing && "rope_freqs.weight" in tensor_names && error(
+        "spec_from_gguf_kv: llama rope_freqs.weight present (llama3 scaling baked into per-dim factors); not supported",
+    )
+    tied = tensor_names !== nothing && !("output.weight" in tensor_names)
+    return ArchitectureSpec(;
+        family=:llama,
+        hidden_size=hidden,
+        num_layers=Int(req("block_count")),
+        n_heads,
+        n_kv_heads=Int(p("attention.head_count_kv", n_heads)),
+        vocab_size=vocab,
+        intermediate_size=Int(req("feed_forward_length")),
+        head_dim=head_dim > 0 ? head_dim : nothing,
+        rope=RoPEPolicy(;
+            theta=Float64(p("rope.freq_base", 10000.0)),
+            kind,
+            factor,
+            rotary_dim=Int(p("rope.dimension_count", 0)),
+            interleaved=true,
+        ),
+        tie_word_embeddings=tied,
+        rms_norm_eps=Float64(p("attention.layer_norm_rms_epsilon", 1e-6)),
+    )
+end
+
+function gguf_architecture_spec(path::AbstractString)
+    hdr = gguf_header(path)
+    return spec_from_gguf_kv(hdr.kv; tensor_names=Set(t.name for t in hdr.tensors))
+end
 
 function _dequant_f32(data::Vector{UInt8}, offset0::Int, ggml_type::Int32, n_elem::Int)
-    traits = _ggml_traits(ggml_type)
     y = Vector{Float32}(undef, n_elem)
-    if ggml_type == 0  # F32
+    # F32 is a byte copy. Taking it before the ggml lookup keeps F32-only
+    # files loadable without a llama.cpp build.
+    if ggml_type == 0
         nbytes = n_elem * 4
         y .= reinterpret(Float32, view(data, (offset0+1):(offset0+nbytes)))
         return y
     end
+    traits = _ggml_traits(ggml_type)
     traits.to_float == C_NULL &&
         error("gguf_import: no to_float for ggml type $ggml_type")
     ccall(
@@ -657,6 +717,7 @@ function _materialize_gguf_tensor(hdr, info::GgufTensorInfo, spec::ArchitectureS
 end
 
 _gguf_param_map(spec::ArchitectureSpec) =
+    spec.family === :llama ? gguf_param_map(LlamaAdapter(), spec) :
     spec.moe === nothing ? gguf_param_map(Qwen35Adapter(), spec) :
     gguf_param_map(Qwen35MoeAdapter(), spec)
 
@@ -682,7 +743,7 @@ end
 """
     load_gguf(path; T=Float32) -> (model, tensors, spec)
 
-Load a `qwen35` (dense) or `qwen35moe` GGUF. Dense 2-D projection weights and
+Load a `qwen35` (dense), `qwen35moe` or `llama` GGUF. Dense 2-D projection weights and
 the embedding and output head stay as quant bytes (`QuantMatrix`), not F32.
 Small and 1-D tensors materialize to `T` (Float32 by default; F64 cannot hold
 these checkpoints). Routed experts stay mmap'd as `GgufQuantSlice` and dequant
@@ -690,7 +751,7 @@ one selected expert at a time. `tensors.mtp` records the MTP blocks (not run).
 """
 function load_gguf(path::AbstractString; T::Type=Float32, verbose::Bool=false)
     hdr = gguf_header(path)
-    spec = spec_from_gguf_kv(hdr.kv)
+    spec = spec_from_gguf_kv(hdr.kv; tensor_names=Set(t.name for t in hdr.tensors))
     pmap = _gguf_param_map(spec)
     info_by = Dict{String, GgufTensorInfo}(info.name => info for info in hdr.tensors)
     required = _required_gguf_names(pmap, spec)
