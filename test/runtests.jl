@@ -220,6 +220,9 @@ using Gesso: reference_prefill, reference_generate
     # seam and its sources, ported from GessoSymbolicDrafts 59553aa. No verifier.
     include("test_speculation.jl")
 
+    # Context budget + compaction policy: pure CPU, no device.
+    include("test_context_budget.jl")
+
     # Phase 10D (foundation hardening item A): every public name has a home —
     # export inventory + parked-empty fence. Always-on, no device/snapshot.
     include("test_export_inventory.jl")
