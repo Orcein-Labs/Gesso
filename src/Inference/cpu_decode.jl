@@ -234,6 +234,27 @@ function _gdn_delta_slab!(rec, core, qn, kn, v, decay, beta, delta, jlo::Int, jh
     return rec
 end
 
+# One slab of the delta-rule recurrence. It runs on the shared CPU pool, not
+# `Threads.@threads`: the pool workers are still spinning from the projection
+# matvecs, and a scheduler fan-out here would compete with them for cores.
+struct _GDNSlabChunk{R,S}
+    rec::R
+    sc::S
+    dv::Int
+    nv::Int
+    dk::Int
+end
+
+function (g::_GDNSlabChunk)(c::Int)
+    sc = g.sc
+    nslab = sc.nslab
+    jlo = div((c - 1) * g.dv, nslab) + 1
+    jhi = div(c * g.dv, nslab)
+    _gdn_delta_slab!(g.rec, sc.core, sc.qn, sc.kn, sc.vn, sc.decay, sc.beta,
+        view(sc.delta, :, c), jlo, jhi, g.nv, g.dk)
+    return nothing
+end
+
 function _gdn_decode_cpu!(cpu, h::Activation, normed::Activation, sub::Activation, bt, spec,
     wl, eps, conv_state, rec_state, sc::CPUDecodeScratch)
     mx = spec.mixer
@@ -325,13 +346,7 @@ function _gdn_decode_finish!(cpu, sub::Activation, bt, spec, wl, eps, conv_state
     end
 
     @decode_sub :gdn_recur cpu begin
-        nslab = sc.nslab
-        Threads.@threads for c in 1:nslab
-            jlo = div((c - 1) * dv, nslab) + 1
-            jhi = div(c * dv, nslab)
-            _gdn_delta_slab!(rec_state, sc.core, sc.qn, sc.kn, sc.vn, sc.decay, sc.beta,
-                view(sc.delta, :, c), jlo, jhi, nv, dk)
-        end
+        _pool_run_chunks!(_GDNSlabChunk(rec_state, sc, dv, nv, dk), sc.nslab)
     end
 
     @decode_sub :gdn_gnorm cpu begin

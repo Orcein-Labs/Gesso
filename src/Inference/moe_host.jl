@@ -73,7 +73,7 @@ function _moe_host_batchable(gate_s::GgufQuantSlice, up_s::GgufQuantSlice,
            down_s.ne0 == ff && down_s.ne1 == h
 end
 
-_moe_host_nchunks(total::Int) = clamp(min(Threads.nthreads(), cld(total, _QGEMV_MIN_ROWS)), 1, total)
+_moe_host_nchunks(total::Int) = _qgemv_nchunks(total)
 
 """
     _moe_host_experts_auto!(yrow, xf, order, weights, n_used, gate_s, up_s, down_s) -> yrow

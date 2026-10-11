@@ -592,7 +592,7 @@ function _qgemv_q8k_threaded!(
     alpha::Float32=1.0f0,
     beta::Float32=0.0f0,
     simd::Bool=q8k_simd_enabled(),
-    nchunks::Int=min(Threads.nthreads(), max(1, cld(ne1, _QGEMV_MIN_ROWS))),
+    nchunks::Int=_qgemv_nchunks(ne1),
 )
     _q8k_check_gemv(y, ggml_type, ne0, ne1, q)
     length(xq) == ne0 || error("q8k gemv: xq length $(length(xq)) ≠ ne0 $ne0")

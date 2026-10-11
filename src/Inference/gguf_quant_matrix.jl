@@ -193,7 +193,7 @@ function _quant_matmul_group!(dsts::Tuple, xq::Q8KVec, ws::Tuple; simd::Bool=q8k
         size(d) == (1, w.nrows) || error("quant group: dst $(size(d)) ≠ (1, $(w.nrows))")
     end
     total = _group_rows(ws)
-    nc = clamp(min(Threads.nthreads(), cld(total, _QGEMV_MIN_ROWS)), 1, total)
+    nc = _qgemv_nchunks(total)
     _run_row_chunks!(_GroupChunk(dsts, ws, xq, total, nc, simd), nc, total * length(xq))
     return dsts
 end

@@ -263,7 +263,8 @@ end
         @test p.hot_until[] == 0
         _RP.pool_hold!(10_000_000_000)
         far = p.hot_until[]
-        @test far > time_ns()
+        # A one-participant pool has no workers to keep hot, so the hold is a no-op.
+        @test k >= 2 ? far > time_ns() : far == 0
         _RP.pool_hold!(1_000)
         @test p.hot_until[] == far
         # Held workers are spinning rather than parked; jobs still run once each.

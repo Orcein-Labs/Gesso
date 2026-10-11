@@ -331,6 +331,28 @@ _is_quant_expert_bank(s) = s isa GgufQuantSlice || s isa GpuQuantSlice
 # order. Results are bit-identical for any chunk count.
 const _QGEMV_MIN_ROWS = 8
 
+# Chunks per thread for the row-chunk loops. The pool hands chunks out by
+# ticket, so more chunks than threads lets a fast thread take a slow one's
+# share instead of the whole pass waiting on the slowest thread (unpinned
+# threads can share a physical core). `GESSO_GEMV_CHUNKS_PER_THREAD` overrides;
+# read once per process.
+const _GEMV_CHUNKS_PER_THREAD = Ref{Int}(0)
+const _GEMV_CHUNKS_PER_THREAD_DEFAULT = 16
+
+function _gemv_chunks_per_thread()::Int
+    k = _GEMV_CHUNKS_PER_THREAD[]
+    if k <= 0
+        v = tryparse(Int, get(ENV, "GESSO_GEMV_CHUNKS_PER_THREAD", ""))
+        k = v === nothing || v < 1 ? _GEMV_CHUNKS_PER_THREAD_DEFAULT : v
+        _GEMV_CHUNKS_PER_THREAD[] = k
+    end
+    return k
+end
+
+# Chunk count for `rows` output rows: at least _QGEMV_MIN_ROWS rows per chunk.
+_qgemv_nchunks(rows::Int)::Int =
+    clamp(min(Threads.nthreads() * _gemv_chunks_per_thread(), cld(rows, _QGEMV_MIN_ROWS)), 1, max(rows, 1))
+
 # Scheduler for the row-chunk loops above. `f(c)` runs chunk c of 1:nc.
 # `@threads` forks and joins on every call. The persistent pool (cpu_pool.jl,
 # `Gesso.Runtime.pool_run!`) keeps its workers, so a call costs a wake-up, not
@@ -383,7 +405,7 @@ function _qgemv_bytes_threaded!(
     ne1::Int,
     alpha::Float32,
     beta::Float32;
-    nchunks::Int=min(Threads.nthreads(), max(1, cld(ne1, _QGEMV_MIN_ROWS))),
+    nchunks::Int=_qgemv_nchunks(ne1),
 )
     length(y) == ne1 || error("qgemv: y length $(length(y)) ≠ ne1 $ne1")
     length(x) == ne0 || error("qgemv: x length $(length(x)) ≠ ne0 $ne0")
