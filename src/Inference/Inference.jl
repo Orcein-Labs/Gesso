@@ -1144,7 +1144,7 @@ function reference_generate(
         # (the cache is runtime state, not a weight — no fixture-walk entries)
         # (linear-attention blocks keep no cache: a zero-row placeholder)
         kv_rows(bt) = _block_mixer(bt) === :linear_attention ? 0 : P + cap
-        kv_fmt = _kv_format()
+        kv_fmt = _kv_format(_kv_default_format(backend_name(cpu), d_head))
         kv_like = zeros_like((0, 0, 0))
         function kv_cache(bt)
             rows = kv_rows(bt)

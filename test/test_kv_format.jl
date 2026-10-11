@@ -28,6 +28,12 @@ _kv_dense(x) = Float32[x[u, h, j] for u in axes(x, 1), h in axes(x, 2), j in axe
     end
     @test withenv(() -> _KVI._kv_format(), "GESSO_KV_FORMAT" => nothing) === :f32
     @test_throws Gesso.GessoError withenv(() -> _KVI._kv_format(), "GESSO_KV_FORMAT" => "q3")
+    # unset takes the backend default; a set variable overrides it either way
+    @test withenv(() -> _KVI._kv_format(:q8), "GESSO_KV_FORMAT" => nothing) === :q8
+    @test withenv(() -> _KVI._kv_format(:q8), "GESSO_KV_FORMAT" => "f32") === :f32
+    @test _KVI._kv_default_format(:cuda, 256) === :q8
+    @test _KVI._kv_default_format(:cuda, 16) === :f32
+    @test _KVI._kv_default_format(:cpu, 256) === :f32
 end
 
 @testset "kv format: allocation sizes and shape checks" begin

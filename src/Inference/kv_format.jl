@@ -1,4 +1,5 @@
-# KV cache storage formats, picked per generate call by GESSO_KV_FORMAT:
+# KV cache storage formats, picked per generate call by GESSO_KV_FORMAT
+# (unset: _kv_default_format):
 #
 #   f32  the activations as computed: 40 KiB a token on the 35B (1.25 GiB at 32k)
 #   f16  half precision, llama.cpp's default cache type: half of f32
@@ -21,13 +22,22 @@
 const KV_FORMATS = (:f32, :f16, :q8, :q4h)
 const _KV_BLOCK = 32
 
-function _kv_format()
-    raw = lowercase(strip(get(ENV, "GESSO_KV_FORMAT", "f32")))
+function _kv_format(default::Symbol=:f32)
+    haskey(ENV, "GESSO_KV_FORMAT") || return default
+    raw = lowercase(strip(ENV["GESSO_KV_FORMAT"]))
     f = Symbol(raw)
     f in KV_FORMATS || throw(gesso_error(ERR_INVALID_PLAN,
         "GESSO_KV_FORMAT=$raw: expected one of $(join(KV_FORMATS, ", "))"))
     return f
 end
+
+# Unset GESSO_KV_FORMAT means q8 on CUDA: its logit drift on the 35B matches
+# f16 (llama.cpp's default) and its decode beats f32 at every length, at 27%
+# of the memory. The CPU decode reads a quantized cache one getindex per
+# element and has no vectorized reader, so it stays f32 until one is measured.
+# A head too narrow for one scale block also stays f32.
+_kv_default_format(backend::Symbol, d_head::Int) =
+    backend === :cuda && d_head % _KV_BLOCK == 0 ? :q8 : :f32
 
 struct QuantKV{F,C<:AbstractArray,S<:AbstractArray} <: AbstractArray{Float32,3}
     codes::C   # q8: (rows, n_kv, d) Int8; q4h: (rows, n_kv, d ÷ 2) UInt8, two codes a byte
