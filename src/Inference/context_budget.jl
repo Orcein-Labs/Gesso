@@ -71,6 +71,20 @@ function _interp(xs::Vector{Float64}, ys::Vector{Float64}, x::Real)
     return ys[i] + t * (ys[i + 1] - ys[i])
 end
 
+# Integral of _interp over [a, b]: the cost of tokens a+1..b, each paying the
+# rate of the length it lands at. Exact for the piecewise-linear model.
+function _integrate(xs::Vector{Float64}, ys::Vector{Float64}, a::Float64, b::Float64)
+    total = 0.0
+    lo = a
+    for x in xs
+        x <= lo && continue
+        x >= b && break
+        total += (x - lo) * (_interp(xs, ys, lo) + _interp(xs, ys, x)) / 2
+        lo = x
+    end
+    return total + (b - lo) * (_interp(xs, ys, lo) + _interp(xs, ys, b)) / 2
+end
+
 function _cost_samples(name::AbstractString, samples)
     isempty(samples) && throw(ArgumentError("CostModel: $name needs at least one sample"))
     lens = Float64[]
@@ -117,21 +131,24 @@ end
 """
     prefill_seconds(cm, n_tokens, at_len) -> Float64
 
-Seconds to prefill `n_tokens` appended at context length `at_len`.
+Seconds to prefill `n_tokens` appended at context length `at_len`. The rate
+is integrated over the span, so a long cold prefill pays for the lengths it
+grows through, not the length-0 rate throughout.
 """
 function prefill_seconds(cm::CostModel, n_tokens::Real, at_len::Real)
     _check_span(n_tokens, at_len)
-    return Float64(n_tokens) * _interp(cm.prefill_len, cm.prefill_s, at_len)
+    return _integrate(cm.prefill_len, cm.prefill_s, Float64(at_len), Float64(at_len) + n_tokens)
 end
 
 """
     decode_seconds(cm, n_tokens, at_len) -> Float64
 
-Seconds to decode `n_tokens` at context length `at_len`.
+Seconds to decode `n_tokens` starting at context length `at_len`, integrated
+over the span as `prefill_seconds` is.
 """
 function decode_seconds(cm::CostModel, n_tokens::Real, at_len::Real)
     _check_span(n_tokens, at_len)
-    return Float64(n_tokens) * _interp(cm.decode_len, cm.decode_s, at_len)
+    return _integrate(cm.decode_len, cm.decode_s, Float64(at_len), Float64(at_len) + n_tokens)
 end
 
 """
@@ -187,7 +204,7 @@ function latency_ceiling_tokens(cm::CostModel; min_decode_tok_s=nothing,
         isfinite(max_reprefill_s) && max_reprefill_s >= 0 ||
             throw(ArgumentError("latency_ceiling_tokens: max_reprefill_s must be finite and nonnegative"))
     end
-    feasible(L) = (max_dec_s === nothing || decode_seconds(cm, 1, L) <= max_dec_s) &&
+    feasible(L) = (max_dec_s === nothing || _interp(cm.decode_len, cm.decode_s, L) <= max_dec_s) &&
                   (max_reprefill_s === nothing || prefill_seconds(cm, L, 0) <= max_reprefill_s)
 
     cands = Int[0, max_len]
@@ -207,9 +224,13 @@ function latency_ceiling_tokens(cm::CostModel; min_decode_tok_s=nothing,
         end
     end
     if max_reprefill_s !== nothing
-        p0 = prefill_seconds(cm, 1, 0)
-        bound = max_reprefill_s / p0
-        push!(cands, floor(Int, bound), floor(Int, bound) + 1)
+        # Cold prefill time grows strictly with length: bisect for the largest fit.
+        lo, hi = 0, max_len
+        while lo < hi
+            mid = hi - (hi - lo) ÷ 2
+            prefill_seconds(cm, mid, 0) <= max_reprefill_s ? (lo = mid) : (hi = mid - 1)
+        end
+        push!(cands, lo)
     end
 
     best = 0

@@ -71,9 +71,13 @@ end
 
 @testset "context budget: CostModel" begin
     cm = CostModel(prefill=[100 => 1.0, 200 => 3.0], decode=[0 => 1.0, 1000 => 2.0])
-    # linear between samples: at 150 the prefill rate is 2.0 s/token
-    @test prefill_seconds(cm, 10, 150) == 20.0
-    @test decode_seconds(cm, 10, 500) == 15.0
+    # linear between samples, integrated over the span: the prefill rate runs
+    # 2.0 -> 2.2 s/token across 150..160, the decode rate 1.5 -> 1.51 across 500..510
+    @test prefill_seconds(cm, 10, 150) ≈ 21.0
+    @test decode_seconds(cm, 10, 500) ≈ 15.05
+    # A cold prefill through a knot: flat 1.0 over 0..100, then 1.0 -> 3.0 over
+    # 100..200 (mean 2.0): 100 + 200 = 300 s. The length-0 rate alone gives 200.
+    @test prefill_seconds(cm, 200, 0) ≈ 300.0
     # flat below the first sample and past the last
     @test prefill_seconds(cm, 10, 50) == 10.0
     @test prefill_seconds(cm, 10, 5000) == 30.0
@@ -113,6 +117,12 @@ end
     # is reached at L = 500, which no sample holds.
     mid = CostModel(prefill=[0 => 0.5], decode=[0 => 0.5, 1000 => 1.5])
     @test latency_ceiling_tokens(mid; min_decode_tok_s=1.0, max_len=5000) == 500
+
+    # Prefill rate grows 0.5 -> 1.5 s/token over 0..1000, so a cold prefill of L
+    # costs 0.5 L + L^2/2000. 400 s fits L = 524 (399.29 s) but not 525 (400.31 s).
+    # A constant length-0 rate would answer 800.
+    grow = CostModel(prefill=[0 => 0.5, 1000 => 1.5], decode=[0 => 1.0])
+    @test latency_ceiling_tokens(grow; max_reprefill_s=400.0, max_len=5000) == 524
 end
 
 @testset "context budget: ContextBudget" begin
@@ -155,32 +165,36 @@ end
     budget = ContextBudget(memory_tokens=100000)   # safe 100000, target 50000, threshold 90000
 
     # Rent: decode(L) = 0.01 + 1e-6 * L s/token, prefill 0.002 s/token.
-    # At ctx 60000 a turn of 256 new tokens pays
-    #   rent per turn = 256 * (d(60000) - d(50000)) = 256 * (0.07 - 0.06) = 2.56 s.
-    # Compaction costs
-    #   C = 1024 * d(60000) + (50000 + 1024) * 0.002 = 71.68 + 102.048 = 173.728 s.
-    # Rent paid after n turns is 2.56 n. The first n with 2.56 n >= 173.728 is
-    # n = 68 (67 turns give 171.52, 68 give 174.08), so compaction fires on turn 68.
+    # Costs integrate the rate over each span. At ctx 60000 a turn of 256 new
+    # tokens pays rent = 256 * (0.07 - 0.06) = 2.56 s, since d is linear and the
+    # two spans sit 10000 apart. Compaction costs
+    #   C = 1024 * (d(60000) + d(61024)) / 2 + (50000 + 1024) * 0.002
+    #     = 1024 * 0.070512 + 102.048 = 72.204288 + 102.048 = 174.252288 s.
+    # The first n with 2.56 n >= C is 69 (68 turns give 174.08), so compaction
+    # fires on turn 69.
     rent_cm = CostModel(prefill=[0 => 0.002], decode=[0 => 0.01, 100000 => 0.11])
     policy = CompactionPolicy()
     tracker = CompactionTracker()
     ctx = 60000
-    decisions = [decide_compaction(policy, budget, rent_cm, tracker, ctx) for _ in 1:70]
+    decisions = [decide_compaction(policy, budget, rent_cm, tracker, ctx) for _ in 1:71]
     @test !decisions[1].compact
     @test decisions[1].reason === :wait
-    @test findfirst(d -> d.compact, decisions) == 68
-    @test all(d -> d.reason === :wait, decisions[1:67])
-    @test decisions[68].reason === :rent_or_buy
-    @test decisions[68].target_tokens == 50000
-    @test decisions[68].target_tokens < ctx
-    @test isapprox(decisions[68].compaction_cost_s, 173.728; atol=1e-6)
-    @test isapprox(decisions[68].accumulated_slowdown_s, 68 * 2.56; atol=1e-6)
+    @test findfirst(d -> d.compact, decisions) == 69
+    @test all(d -> d.reason === :wait, decisions[1:68])
+    @test decisions[69].reason === :rent_or_buy
+    @test decisions[69].target_tokens == 50000
+    @test decisions[69].target_tokens < ctx
+    @test isapprox(decisions[69].compaction_cost_s, 174.252288; atol=1e-6)
+    @test isapprox(decisions[69].accumulated_slowdown_s, 69 * 2.56; atol=1e-6)
 
-    # The caller clears the rent after compacting, so the next turn waits again.
+    # The caller clears the rent after compacting, so the next turn starts the
+    # count again: 256 tokens past target pay 256 * 256e-6 = 0.065536 s of rent.
     reset!(tracker, 50000)
     d = decide_compaction(policy, budget, rent_cm, tracker, 50000 + 256)
     @test !d.compact
-    @test d.reason === :below_target || d.reason === :wait
+    @test d.reason === :wait
+    @test isapprox(d.accumulated_slowdown_s, 0.065536; atol=1e-9)
+    @test tracker.turns_since_compaction == 1
 
     # Hard ceiling: 96000 + 4096 > 100000 overflows, so it fires under every rule.
     for rule in (:rent_or_buy, :threshold, :never)
