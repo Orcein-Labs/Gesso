@@ -1093,7 +1093,7 @@ and attends over the whole cache; the prompt is NEVER re-prefilled.
 Returns the full 0-based id sequence (prompt + new tokens). Stops at EOS
 (token 2) or `max_new_tokens`, whichever comes first.
 
-`info`: pass a `Ref{NamedTuple}` to receive `(kv_len, steps, reused)` — the
+`info`: pass a `Ref{Any}` to receive `(kv_len, steps, reused)` — the
 diagnostic channel the KV-length invariant is tested through. KV length
 equals prefix length: `kv_len == length(prompt) + steps`. `reused` is the
 count of prompt tokens a `state` already held, which were not prefilled.
