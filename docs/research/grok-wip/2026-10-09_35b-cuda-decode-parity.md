@@ -339,8 +339,11 @@ weights at 6097 MiB, with 860 MiB available once the pools are reclaimed.
 The F32 KV cache is 40 KiB a token over the 10 attention layers, which is
 640 MiB at 16k, so F32 fails at 16384 and passes at 12288.
 
-`GESSO_KV_FORMAT` now picks the cache format for a run. f32 stays the
-default.
+`GESSO_KV_FORMAT` now picks the cache format for a run. Unset, it is q8
+on CUDA and f32 on CPU (f2bcfda). With the variable unset, P16384 decodes
+at 22.99 ms/token where f32 runs out of memory. The decode gate with q8
+passes with exact ids at 61.1 tok/s. This covers `reference_generate`
+only: `Session` keeps K and V in f32 pages in `PagedKVManager`.
 
 | format | storage | KiB/token | 16k | 32k |
 |---|---|---|---|---|
@@ -472,7 +475,8 @@ and serial host work per hybrid layer.
    (6.5 GB/s) is under half of DRAM (14 GB/s), so this only pays at high hit
    rates. Not built.
 5. **Long context.** q8 is at the f16 drift level and decodes faster than
-   f32 at every length, so it is the candidate default cache. Past 32k, the
+   f32 at every length, so it is now the CUDA default cache. `Session` does
+   not use it yet; its paged manager needs quantized pages. Past 32k, the
    limits are prefill time (130 s at 32k, quadratic attention) and the
    ~860 MiB headroom. The next steps are a task-level quality check before
    q4h goes beyond opt-in, and compaction or subquad attention for prefill.
@@ -483,7 +487,8 @@ and serial host work per hybrid layer.
     GESSO_GPU_HOT_EXPERTS=1 GESSO_GPU_HOT_PIN=1 GESSO_GPU_BUDGET_MIB=4096 \
       GESSO_ORNITH35_GGUF=<gguf> julia --project=benchmark -t 16 scripts/gate_35b.jl cuda
 
-Any run takes `GESSO_KV_FORMAT=f32|f16|q8|q4h` for the KV cache format.
+Any run takes `GESSO_KV_FORMAT=f32|f16|q8|q4h` for the KV cache format
+(unset: q8 on CUDA, f32 on CPU).
 
 Raw logs (per-run medians, hit rates, profiles) stay in local scratch. They
 are not committed.

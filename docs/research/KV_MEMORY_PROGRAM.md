@@ -543,7 +543,9 @@ What the ladder gets from it:
   rows have no floor. This is the KIVI/KVQuant prior from §9.5 step 5:
   8-bit is safe, 4-bit is marginal.
 - **Rung 4 is still undefined** (§12 action 1). q4h stays opt-in until it is.
-  A KL ratio is not a task score.
+  A KL ratio is not a task score. q8 became the CUDA default on the rung-3
+  evidence alone (f2bcfda): its drift matches f16, which is llama.cpp's
+  default cache type, so a rung-4 check would test the reference too.
 - **Cost honesty (§5.3).** Encoding runs inside the cache write and hasn't
   been timed on its own. The reader was the real cost: the first quantized
   decode kernel ran 4-8x slower than f32 at long K until it loaded 4 rows of
