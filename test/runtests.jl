@@ -118,6 +118,14 @@ using Gesso: reference_prefill, reference_generate
     # fixture (golden ids traced from the merge table in the file header)
     include("test_tokenizer_gpt2.jl")
 
+    # Qwen3.5 chat template (hand-ported XML renderer, no Jinja): gate 3 byte-for-byte
+    # vs llama-server /apply-template on committed fixtures; no server or GGUF needed
+    include("test_chat_template.jl")
+
+    # Qwen3.5 GGUF BPE tokenizer: gate 1 id parity vs llama-server /tokenize, gate 2
+    # round trip and streaming equality, 200 KB speed gate; GGUF-gated (skips without it)
+    include("test_gguf_tokenizer.jl")
+
     # Phase 3 (§LXXVI item D): the REAL-model gate — one named skip unless
     # GESSO_SMOLLM2_DIR points at a local snapshot; it never downloads
     include("test_smollm2.jl")
