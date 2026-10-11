@@ -12,9 +12,10 @@
 # onto q. That changes rounding by a few ulps per term, which is inside the 1e-5
 # split tolerance. The 1/sqrt(d) factor still lands on the scores, not the cache.
 #
-# All query heads of one KV head are computed together. Each cache column is
-# streamed once and updates every head in the group, so the cache is read once
-# per KV head rather than once per query head. A q8 cache takes a fast path that
+# All query heads of one KV head are computed together, a row block at a time.
+# A block's cache column is small enough to stay in L1 while every head in the
+# group sweeps it, so memory sees the cache once per KV head, and the innermost
+# loop runs down the contiguous rows, where it vectorizes. A q8 cache takes a fast path that
 # reads codes and scales directly (value = code * scale, one scale per 32
 # values); the other formats go through getindex, so they read what the
 # reference reads.
@@ -107,8 +108,7 @@ function _scale_query!(qs::Matrix{Float32}, q, d_head::Int)
     return qs
 end
 
-# Scores of one KV head's query group over rows r0+1:r0+nr. Each cache column is
-# read once and feeds every head in the group.
+# Scores of one KV head's query group over rows r0+1:r0+nr.
 function _score_block!(blk::KVTierBlock, kc::AbstractArray, hk::Int, r0::Int,
     nr::Int, d_head::Int, group::Int)
     s = blk.s
@@ -117,10 +117,10 @@ function _score_block!(blk::KVTierBlock, kc::AbstractArray, hk::Int, r0::Int,
     @inbounds for g in 1:group, i in 1:nr
         s[i, g] = 0.0f0
     end
-    @inbounds for j in 1:d_head, i in 1:nr
-        kv = Float32(kc[r0 + i, hk, j])
-        for g in 1:group
-            s[i, g] += qs[hh0 + g, j] * kv
+    @inbounds for j in 1:d_head, g in 1:group
+        qv = qs[hh0 + g, j]
+        @simd for i in 1:nr
+            s[i, g] += qv * Float32(kc[r0 + i, hk, j])
         end
     end
     return s
@@ -144,10 +144,10 @@ function _score_block!(blk::KVTierBlock, kc::QuantKV{:q8}, hk::Int, r0::Int,
         for g in 1:group, i in 1:nr
             t[i, g] = 0.0f0
         end
-        for j in ((b - 1) * _KV_BLOCK + 1):(b * _KV_BLOCK), i in 1:nr
-            c = Float32(codes[r0 + i, hk, j])
-            for g in 1:group
-                t[i, g] += qs[hh0 + g, j] * c
+        for j in ((b - 1) * _KV_BLOCK + 1):(b * _KV_BLOCK), g in 1:group
+            qv = qs[hh0 + g, j]
+            @simd for i in 1:nr
+                t[i, g] += qv * Float32(codes[r0 + i, hk, j])
             end
         end
         for g in 1:group, i in 1:nr
@@ -187,18 +187,18 @@ function _value_block!(blk::KVTierBlock, vc::AbstractArray, hk::Int, r0::Int,
     @inbounds for j in 1:d_head, g in 1:group
         acc[g, j] = 0.0f0
     end
-    @inbounds for j in 1:d_head, i in 1:nr
-        v = Float32(vc[r0 + i, hk, j])
-        for g in 1:group
-            acc[g, j] += s[i, g] * v
+    @inbounds for j in 1:d_head, g in 1:group
+        a = 0.0f0
+        @simd for i in 1:nr
+            a += s[i, g] * Float32(vc[r0 + i, hk, j])
         end
+        acc[g, j] = a
     end
     return acc
 end
 
 # For each 32-value block the weights are multiplied by that block's scale of
-# each row once, into t. Each value column is then read once and feeds every
-# head in the group.
+# each row once, into t, so the code loop is a plain dot product down the rows.
 function _value_block!(blk::KVTierBlock, vc::QuantKV{:q8}, hk::Int, r0::Int,
     nr::Int, d_head::Int, group::Int)
     s = blk.s
@@ -213,11 +213,12 @@ function _value_block!(blk::KVTierBlock, vc::QuantKV{:q8}, hk::Int, r0::Int,
         for g in 1:group, i in 1:nr
             t[i, g] = s[i, g] * Float32(scales[r0 + i, hk, b])
         end
-        for j in ((b - 1) * _KV_BLOCK + 1):(b * _KV_BLOCK), i in 1:nr
-            c = Float32(codes[r0 + i, hk, j])
-            for g in 1:group
-                acc[g, j] += t[i, g] * c
+        for j in ((b - 1) * _KV_BLOCK + 1):(b * _KV_BLOCK), g in 1:group
+            a = 0.0f0
+            @simd for i in 1:nr
+                a += t[i, g] * Float32(codes[r0 + i, hk, j])
             end
+            acc[g, j] += a
         end
     end
     return acc
