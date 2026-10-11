@@ -58,7 +58,7 @@ function _hot_budget_bytes()
     fixed = _hot_env_int("GESSO_GPU_HOT_EXPERTS_MIB", -1)
     fixed >= 0 && return Int64(fixed) * mib
     reserve = _hot_env_int("GESSO_GPU_HOT_RESERVE_MIB", _HOT_RESERVE_DEFAULT_MIB)
-    CUDA.reclaim()
+    CUDA.reclaim(CUDA.CUDACore.RECLAIM_GC)
     return _expert_budget_from_free(Int64(CUDA.free_memory()), reserve)
 end
 
@@ -106,6 +106,7 @@ mutable struct _HotLayer
     hits::Int
     picks::Int
     swaps::Int
+    retry_t::Int               # decode skips the pool allocation until t reaches it
 end
 
 const _HOT = IdDict{Any,_HotLayer}()
@@ -175,6 +176,10 @@ const _HOT_NEXT = Ref(1)       # the hot layer the model reaches next
 const _HOT_SEQ = Ref(1)        # rows in the current forward pass
 const _HOT_PURGE_FLOOR = Int64(512) << 20
 const _HOT_ALLOC_MARGIN = Int64(64) << 20
+# Decode tokens a layer waits after its pool did not fit. A long prompt's KV
+# cache holds the memory until the generation ends, so retrying every token
+# would only repeat the failure; the next generation gets the pool back.
+const _HOT_RETRY_TOKENS = 64
 
 # Entering a hot layer's MoE, and leaving it. Between the two the layer itself
 # is next; afterwards it is the furthest away.
@@ -232,7 +237,7 @@ function _hot_register!(blocks)
             zeros(Float32, n_exp), zeros(Int, n_exp), 0,
             Int32[], nothing, Int[], Int[], false, pin && _hot_pin_slabs!((g, u, d)),
             CuEvent(CUDA.EVENT_DISABLE_TIMING),
-            CuEvent(CUDA.EVENT_DISABLE_TIMING), Int[], UInt8[], 0, 0, 0)
+            CuEvent(CUDA.EVENT_DISABLE_TIMING), Int[], UInt8[], 0, 0, 0, 0)
     end
     @debug "hot experts registered" layers=length(_HOT) slots=slots per_layer_mib=div(per_layer, Int64(1024 * 1024))
     return
@@ -264,16 +269,22 @@ end
 
 # Pools, metadata and staging, allocated on the compute stream the kernels
 # run on, so the views' launches take the @fastcuda fast path. A layer that
-# does not fit goes back to the CPU-only path; a prefill (`final=false`) runs
-# while its activations hold memory decode will not need, so its failure does
-# not retire the layer.
-function _hot_alloc!(hot::_HotLayer, g, u, n_used::Int; final::Bool=true)
+# does not fit runs on the CPU-only path for _HOT_RETRY_TOKENS decode tokens,
+# then tries again. Retiring it for good cost decode 62 -> 34 tok/s for every
+# generation after one long prompt.
+function _hot_alloc!(hot::_HotLayer, g, u, n_used::Int)
     hot.pool === nothing || return true
     hot.nslots >= 1 || return false
-    final && _hot_prefill_release!()
+    hot.t < hot.retry_t && return false
+    _hot_prefill_release!()
     # A pool that fits by a few MiB still failed to allocate after a trim; the
     # driver wants room of its own. Only DROP, behind two GCs, then rescued it.
     bytes = Int64(hot.nslots) * hot.stride + _HOT_ALLOC_MARGIN
+    # a failed allocation under _HOT_BUSY costs a full GC; this check costs none
+    if _hot_device_avail() < bytes
+        hot.retry_t = hot.t + _HOT_RETRY_TOKENS
+        return false
+    end
     if CUDA.free_memory() < bytes
         # This runs under _HOT_BUSY, so CUDA's retry cannot purge and its next
         # rescue is a full GC (~0.25 s). What blocks the pool is usually CUDA's
@@ -282,8 +293,20 @@ function _hot_alloc!(hot::_HotLayer, g, u, n_used::Int; final::Bool=true)
         CUDA.synchronize()
         dev = CUDA.device()
         CUDA.CUDACore.stream_ordered(dev) && CUDA.CUDACore.trim(CUDA.CUDACore.pool_create(dev))
-        !final && CUDA.free_memory() < bytes && return false
+        # what the trim could not hand back is fragmented; the allocation would
+        # fail only after the GC, and decode retries every _HOT_RETRY_TOKENS
+        if CUDA.free_memory() < bytes
+            hot.retry_t = hot.t + _HOT_RETRY_TOKENS
+            return false
+        end
     end
+    # CUDA's retry for a failed allocation purges, syncs and trims, then runs
+    # two full GCs. In decode they free nothing: after a P4096 prompt, live
+    # equalled used (6835 MiB) at all seven of them, because what holds the
+    # memory is that generation's KV and buffers. The GCs cost 1.7 s of 64
+    # tokens. With GC disabled they return at once; purge, sync and trim
+    # still run, and a pool that does not fit waits _HOT_RETRY_TOKENS.
+    gc_on = GC.enable(false)
     try
         pool = CuVector{UInt8}(undef, hot.nslots * hot.stride)
         base = pointer(pool)
@@ -297,9 +320,11 @@ function _hot_alloc!(hot::_HotLayer, g, u, n_used::Int; final::Bool=true)
         hot.base = base
     catch err
         err isa CUDA.OutOfGPUMemoryError || rethrow()
-        @debug "hot experts: pool does not fit" layer=hot.layer final
-        final && (hot.nslots = 0)
+        @debug "hot experts: pool does not fit" layer=hot.layer
+        hot.retry_t = hot.t + _HOT_RETRY_TOKENS
         return false
+    finally
+        GC.enable(gc_on)
     end
     if length(hot.meta_h) != 3n_used
         hot.meta_h = Vector{Int32}(undef, 3n_used)
@@ -577,7 +602,7 @@ struct _HotPrefillConfig
     upload_s::Float64   # seconds per byte
     cpu_expert_s::Float64
     cpu_pair_s::Float64
-    headroom::Int       # device bytes per prompt token: a re-allocated pool leaves this free, a purge frees at least this
+    headroom::Int       # device bytes per prompt token: a purge frees at least this, a pass is sized by it
     stream::Int         # slots in the shared ring of a layer without a pool, 0 none
 end
 
@@ -605,7 +630,7 @@ function _hot_stream_layer(hot::_HotLayer, g, u, n_exp::Int, cfg::_HotPrefillCon
     if sl === nothing
         sl = _HotLayer(0, 0, 0, nothing, nothing, CuPtr{UInt8}(0), Int32[], Int32[], Int[],
             Float32[], Int[], 0, Int32[], nothing, Int[], Int[], false, true,
-            CuEvent(CUDA.EVENT_DISABLE_TIMING), CuEvent(CUDA.EVENT_DISABLE_TIMING), Int[], UInt8[], 0, 0, 0)
+            CuEvent(CUDA.EVENT_DISABLE_TIMING), CuEvent(CUDA.EVENT_DISABLE_TIMING), Int[], UInt8[], 0, 0, 0, 0)
         _HOT_STREAM[] = sl
     end
     need = cfg.stream * hot.stride
@@ -647,24 +672,69 @@ function _hot_stream_release!()
 end
 
 # Decode wants the prefill's device buffers back for its pools: after a
-# 4096-token prompt D alone holds 256 MiB, two pools.
+# 4096-token prompt D alone holds 256 MiB, two pools. The device-bank MoE batch
+# and the dense F16 GEMM scratch are prefill-only too, another 78 MiB there.
 function _hot_prefill_release!()
     _hot_stream_release!()
-    P = _HOT_PREFILL
-    for f in (:meta_d, :xt, :g, :u, :a, :d)
-        buf = getfield(P, f)
+    _free_fields!(_HOT_PREFILL, (:meta_d, :xt, :g, :u, :a, :d))
+    _free_fields!(_MOE_PAIR_BATCH, (:meta_d, :xt, :g, :u, :a, :d))
+    _free_fields!(_DQ_GEMM, (:w16, :x16))
+    return
+end
+
+function _free_fields!(s, fields)
+    for f in fields
+        buf = getfield(s, f)
         buf === nothing && continue
         CUDA.unsafe_free!(buf)
-        setfield!(P, f, nothing)
+        setfield!(s, f, nothing)
     end
     return
 end
 
-# Free device memory plus what CUDA's pool holds that no array uses.
+# Free device memory plus what CUDA's pool holds that no array uses. With
+# JULIA_CUDA_MEMORY_POOL=none there is no pool and cached_memory() is missing.
 function _hot_device_avail()
     CC = CUDA.CUDACore
-    return Int64(CUDA.free_memory()) + max(Int64(0), Int64(CC.cached_memory()) - Int64(CC.used_memory()))
+    cached = coalesce(CC.cached_memory(), 0)
+    return Int64(CUDA.free_memory()) + max(Int64(0), Int64(cached) - Int64(CC.used_memory()))
 end
+
+# Device memory a prefill pass can claim: purge! hands back the pools and the
+# prefill buffers regrow to the pass.
+function _prefill_device_avail()
+    pools = sum(hot -> hot.pool === nothing ? Int64(0) : Int64(length(hot.pool)), values(_HOT); init=Int64(0))
+    P = _HOT_PREFILL
+    bufs = sum(f -> (b = getfield(P, f); b === nothing ? Int64(0) : Int64(sizeof(b))),
+        (:meta_d, :xt, :g, :u, :a, :d); init=Int64(0))
+    return _hot_device_avail() + pools + bufs
+end
+
+# A pass of n rows over K keys: per-row activations (the prefill headroom
+# estimate, ~0.75 MiB on the 35B MoE) and the attention's key-tile scores.
+# Attention reads the KV heads in place and tiles the keys
+# (_attention_prefill_device!), so nothing grows with K past the tile. The
+# margin is the shared ring and the driver's room to place the rest.
+const _PREFILL_PASS_MARGIN = Int64(160) << 20
+const _PREFILL_PASS_STEP = 128
+
+_prefill_pass_bytes(n::Int, K::Int, qdim::Int, group::Int) =
+    Int64(_HOT_PF_CFG[].headroom) * n + 4 * Int64(n) * _attn_prefill_tile(n, K)
+
+# P4096 in passes of 1024 ran out of memory next to hot+pin pools; a fixed
+# smaller chunk costs short prompts throughput they could have had. The pass
+# steps down by _PREFILL_PASS_STEP rows until its estimate fits.
+function Gesso.Inference._prefill_pass_rows(::CUDABackend, left::Int, done::Int, chunk::Int,
+    qdim::Int, group::Int)
+    n = min(chunk, left)
+    budget = _prefill_device_avail() - _PREFILL_PASS_MARGIN
+    while n > _PREFILL_PASS_STEP && _prefill_pass_bytes(n, done + n, qdim, group) > budget
+        n = (n - 1) ÷ _PREFILL_PASS_STEP * _PREFILL_PASS_STEP
+    end
+    return n
+end
+
+Gesso.Inference._prefill_end!(::CUDABackend) = _hot_prefill_release!()
 
 # Grow-only buffers shared by every hot layer. GPU pairs are numbered in round
 # order, expert by expert, token order within an expert; D's column g is pair g.
@@ -769,27 +839,17 @@ function _moe_hot_prefill!(backend, hot::_HotLayer, xd, b, X, Y, gate, up, down,
     P.d = _hotp_dev(P.d, Float32, h * npairs)
     _cuda_q8_buffers!(_CUDA_Q8_EXPERT, max(seq * (h ÷ 32), min(seg, npairs) * (ff ÷ 32)))
     hot.copying && (_cuda_event_wait(hot.ready); _hot_commit!(hot))
-    # A pool purged earlier in this prompt would be allocated under _HOT_BUSY.
-    # Unless it leaves room for the later layers' activations, they purge it
-    # again before it is read twice, so it is not worth the upload.
-    # A pool that fits on paper can still fail after the trim (fragmentation);
-    # that layer streams too.
+    # A pool purged earlier in this prompt streams through the shared ring
+    # rather than being allocated again. The allocation runs under _HOT_BUSY;
+    # on long prompts its first attempt failed although the precheck passed,
+    # and CUDA's retry paid two full GCs (~0.36 s) per layer before it landed,
+    # only for a later layer to purge it again. At P8192 that was 15-30 s of a
+    # 38-54 s prefill; without it, 26.4 s and no GC. Prompts that fit in one
+    # pass never purge, so P256-P1024 do not change. Decode allocates it back.
     lay = hot
     if hot.pool === nothing
-        fits = hot.nslots > 0 &&
-            _hot_device_avail() >= Int64(hot.nslots) * hot.stride + Int64(cfg.headroom) * seq
-        if fits
-            _HOT_BUSY[] = true
-            try
-                fits = _hot_alloc!(hot, gate, up, n_used; final=false)
-            finally
-                _HOT_BUSY[] = false
-            end
-        end
-        if !fits
-            lay = _hot_stream_layer(hot, gate, up, n_exp, cfg)
-            lay === nothing && return false
-        end
+        lay = _hot_stream_layer(hot, gate, up, n_exp, cfg)
+        lay === nothing && return false
     end
     _HOT_BUSY[] = true
     try
@@ -917,7 +977,7 @@ function _hot_prefill_issue!(backend, hot::_HotLayer, P::_HotPrefill, cfg::_HotP
     P.woff = woff
     unsafe_copyto!(pointer(P.meta_d), pointer(meta), woff + seq * n_used; async=true, stream=s)
     xt = unsafe_wrap(CuArray, pointer(P.xt), (h, seq))
-    permutedims!(xt, xd, (2, 1))
+    _transpose_into!(xt, xd)
 
     _hotp_compute!(backend, hot, P, xt, gate, up, down, rstart[1], rstart[2] - 1, cfg.seg, h, ff)
     CUDA.record(_hotp_event(P, 1), s)

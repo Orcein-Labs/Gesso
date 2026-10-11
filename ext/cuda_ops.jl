@@ -495,7 +495,7 @@ end
 
 function _cuda_matmul_storage!(dst::AbstractArray, x::AbstractArray, w::AbstractArray)
     _xwt_ok(dst, x, w) && return _cuda_xwt!(dst, x, w)
-    CUDA.CUBLAS.gemm!('N', 'T', _cu_scalar(one(eltype(dst))), x, w, _cu_scalar(zero(eltype(dst))), dst)
+    _blas_gemm!('N', 'T', _cu_scalar(one(eltype(dst))), x, w, _cu_scalar(zero(eltype(dst))), dst)
     return dst
 end
 
@@ -1184,6 +1184,7 @@ _host_f32(s::Gesso.Inference.QuantMatrix) = Gesso.Inference._quant_host_f32(s)
 _host_f32(s) = convert(Array{Float32}, s)
 
 function _to_device_cuda(tensors)
+    _blas_reserve!()   # before the weights and pools leave no room for it
     @debug "vram before dense placement" free_mib=div(Int64(CUDA.free_memory()), Int64(1024 * 1024)) dense_budget_mib=div(Gesso.Inference._gpu_budget_bytes(), Int64(1024 * 1024))
     budget = Gesso.Inference._gpu_budget_bytes()
     wdt = _gpu_weight_eltype()
@@ -1433,7 +1434,8 @@ function _expert_cache_budget_bytes()
     reserve = tryparse(Int, rraw)
     reserve === nothing && error("GESSO_GPU_RESERVE_MIB must be an integer MiB, got '$rraw'")
     free_raw = Int64(CUDA.free_memory())
-    CUDA.reclaim()   # return the allocator's cached blocks so the free figure is real
+    # GC level: a DROP would also destroy library handles that must be re-created later
+    CUDA.reclaim(CUDA.CUDACore.RECLAIM_GC)   # return the allocator's cached blocks so the free figure is real
     free = Int64(CUDA.free_memory())
     budget = _expert_budget_from_free(free, reserve)
     @debug "expert cache budget" free_before_reclaim_mib=div(free_raw, mib) free_mib=div(free, mib) reserve_mib=reserve budget_mib=div(budget, mib)
@@ -1528,17 +1530,17 @@ function _attention_scores_device!(::CUDABackend, sc, q::AbstractArray, k::Abstr
     qh = view(q, :, hh, :)
     kh = view(k, 1:K, hh, :)
     if size(q, 1) == 1
-        CUDA.CUBLAS.gemv!('N', _cu_scalar(eltype(sc)(1 / sqrt(d_head))), kh, view(q, 1, hh, :), _cu_scalar(zero(eltype(sc))), view(sc, 1, :))
+        _blas_gemv!('N', _cu_scalar(eltype(sc)(1 / sqrt(d_head))), kh, view(q, 1, hh, :), _cu_scalar(zero(eltype(sc))), view(sc, 1, :))
     else
-        CUDA.CUBLAS.gemm!('N', 'T', _cu_scalar(eltype(sc)(1 / sqrt(d_head))), qh, kh, _cu_scalar(zero(eltype(sc))), sc)
+        _blas_gemm!('N', 'T', _cu_scalar(eltype(sc)(1 / sqrt(d_head))), qh, kh, _cu_scalar(zero(eltype(sc))), sc)
     end
     return sc
 end
 function _attention_values_device!(::CUDABackend, attn::AbstractArray, probs, v::AbstractArray, hh, K)
     if size(attn, 1) == 1
-        CUDA.CUBLAS.gemv!('T', _cu_scalar(one(eltype(attn))), view(v, 1:K, hh, :), view(probs, 1, :), _cu_scalar(zero(eltype(attn))), view(attn, 1, hh, :))
+        _blas_gemv!('T', _cu_scalar(one(eltype(attn))), view(v, 1:K, hh, :), view(probs, 1, :), _cu_scalar(zero(eltype(attn))), view(attn, 1, hh, :))
     else
-        CUDA.CUBLAS.gemm!('N', 'N', _cu_scalar(one(eltype(attn))), probs, view(v, 1:K, hh, :), _cu_scalar(zero(eltype(attn))), view(attn, :, hh, :))
+        _blas_gemm!('N', 'N', _cu_scalar(one(eltype(attn))), probs, view(v, 1:K, hh, :), _cu_scalar(zero(eltype(attn))), view(attn, :, hh, :))
     end
     return attn
 end
@@ -2519,7 +2521,7 @@ function _shared_gate_add!(::CUDABackend, y, x, sd, gvec)
     seq == 1 && x isa DenseCuArray && y isa DenseCuArray && sd isa DenseCuArray &&
         return _cuda_shared_gate1!(y, x, sd, g)
     acc = _dev_scratch(:shared_gate_acc, seq)
-    CUDA.CUBLAS.gemv!('N', _cu_scalar(one(eltype(y))), x, g, _cu_scalar(zero(eltype(y))), acc)
+    _blas_gemv!('N', _cu_scalar(one(eltype(y))), x, g, _cu_scalar(zero(eltype(y))), acc)
     tx = min(16, seq)
     ty = min(16, h)
     @fastcuda threads = (tx, ty) blocks = (cld(seq, tx), cld(h, ty)) _cuda_shared_gate_kernel!(
@@ -3064,6 +3066,17 @@ end
 const _MOE_PAIR_BATCH = _MoePairBatch(Int32[], nothing, nothing, nothing, nothing, nothing, nothing,
     Int[], Int[], Int[])
 
+# GPUArrays' permutedims! launches on vec(src), a derived array that holds a
+# reference to src's memory until a GC finalizes it, so the arena's unsafe_free!
+# of a prefill FFN input freed nothing: a 4096-token prompt carried all 32 MiB
+# of them into decode, a pool and a half. An unowned alias leaves vec nothing
+# to hold.
+function _transpose_into!(dst::DenseCuArray, x::DenseCuArray)
+    GC.@preserve x permutedims!(dst, unsafe_wrap(CuArray, pointer(x), size(x)), (2, 1))
+    return dst
+end
+_transpose_into!(dst, x) = permutedims!(dst, x, (2, 1))
+
 function _moe_device_prefill_ok(y, x, router, gate, up, down, n_used::Int)
     G = Gesso.Inference.GpuQuantSlice
     I = Gesso.Inference
@@ -3146,7 +3159,7 @@ function _moe_topk_device_prefill!(backend::CUDABackend, y, x, router, gate, up,
     end
 
     xt = unsafe_wrap(CuArray, pointer(B.xt), (h, seq))
-    permutedims!(xt, x, (2, 1))
+    _transpose_into!(xt, x)
     meta = B.meta_h
     cnt = resize!(B.cnt, n_exp)
     pfirst = resize!(B.first, n_exp)
@@ -3383,10 +3396,10 @@ function _moe_topk_swiglu!(
                 _fetch_expert!(backend, Wg, gate, e)
                 _fetch_expert!(backend, Wu, up, e)
                 _fetch_expert!(backend, Wd, down, e)
-                CUDA.CUBLAS.gemv!('N', _cu_scalar(one(Float32)), Wg, xt, _cu_scalar(zero(Float32)), gacc)
-                CUDA.CUBLAS.gemv!('N', _cu_scalar(one(Float32)), Wu, xt, _cu_scalar(zero(Float32)), uacc)
+                _blas_gemv!('N', _cu_scalar(one(Float32)), Wg, xt, _cu_scalar(zero(Float32)), gacc)
+                _blas_gemv!('N', _cu_scalar(one(Float32)), Wu, xt, _cu_scalar(zero(Float32)), uacc)
                 _silu_mul!(backend, hact, uacc, gacc)
-                CUDA.CUBLAS.gemv!('N', w, Wd, hact, one(Float32), yrow)
+                _blas_gemv!('N', w, Wd, hact, one(Float32), yrow)
             end
         end
         view(y, t, :) .= yrow

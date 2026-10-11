@@ -77,7 +77,7 @@ end
 # logits = x * Wᵀ for the router, any token count.
 function _cuda_router_logits!(logits, x, w)
     _xwt_ok(logits, x, w) && return _cuda_xwt!(logits, x, w)
-    CUDA.CUBLAS.gemm!('N', 'T', _cu_scalar(one(Float32)), x, w, _cu_scalar(zero(Float32)), logits)
+    _blas_gemm!('N', 'T', _cu_scalar(one(Float32)), x, w, _cu_scalar(zero(Float32)), logits)
     return logits
 end
 

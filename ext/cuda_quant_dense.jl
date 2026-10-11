@@ -437,7 +437,7 @@ function _cuda_dq_gemm_group!(ds::Tuple, xs, qs::Tuple{Vararg{GpuDenseQuant}}, n
             Wf = unsafe_wrap(CuArray, pointer(G.w16), (k, rc))
             _dq_with_kind(_cuda_dq_f16_launch!, q.ggml_type, Wf, q, kv, r0, rc, nb, k)
             Y = unsafe_wrap(CuArray, pointer(d, r0 * n + 1), (n, rc))
-            C.cublasGemmEx(C.handle(), 'N', 'N', n, rc, k, _cu_scalar(one(Float32)), x16, Float16, n,
+            C.cublasGemmEx(_blas_handle(), 'N', 'N', n, rc, k, _cu_scalar(one(Float32)), x16, Float16, n,
                 Wf, Float16, k, _cu_scalar(zero(Float32)), Y, Float32, n, C.CUBLAS_COMPUTE_32F, C.CUBLAS_GEMM_DEFAULT)
             r0 += rc
         end

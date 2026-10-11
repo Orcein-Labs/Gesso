@@ -78,6 +78,10 @@ else
             (6, 3, 32, 300, 5),     # GQA group 2, K not a multiple of the block
             (4, 1, 8, 1025, 0),     # one key past the first score tile
             (2, 1, 16, 2600, 7),    # three score tiles, last partial
+            (16, 2, 256, 1, 0),     # Ornith-35B shape (group 8), one key
+            (8, 1, 64, 700, 2),     # group 8, last key chunk partial
+            (16, 2, 256, 4100, 3),  # Ornith-35B shape at a long context
+            (6, 1, 16, 90, 1),      # group 6 takes the per-head kernel
         ]
         for (i, (nh, nk, d, K, extra)) in enumerate(cases)
             err = _run_decode_attn_case(nh, nk, d, K, extra; seed=0x5a0 + i)

@@ -13,7 +13,7 @@
 # accumulation maps one warp per output dim with lanes striding over keys, so
 # both phases read the cache coalesced.
 
-import Gesso.Inference: _attention_decode_device!
+import Gesso.Inference: _attention_decode_device!, _attention_prefill_device!
 
 const _ATTN_TILE = 1024
 const _ATTN_THREADS = 256
@@ -22,6 +22,16 @@ const _ATTN_THREADS = 256
     off = 16
     while off >= 1
         v = op(v, CUDA.shfl_down_sync(0xffffffff, v, off))
+        off >>= 1
+    end
+    return v
+end
+
+# every lane gets the result
+@inline function _attn_warp_allreduce(op, v)
+    off = 16
+    while off >= 1
+        v = op(v, CUDA.shfl_xor_sync(0xffffffff, v, off))
         off >>= 1
     end
     return v
@@ -133,9 +143,298 @@ function _attention_decode_device!(
     K::Int,
 )
     K >= 1 || throw(ArgumentError("decode attention needs at least one cache row, got K=$K"))
+    n_kv = div(n_heads, group)
+    scale = Float32(1 / sqrt(d_head))
+    group == 8 && return _attn_decode_split!(attn, q, kc, vc, n_kv, d_head, K, scale, Val(8))
+    group == 4 && return _attn_decode_split!(attn, q, kc, vc, n_kv, d_head, K, scale, Val(4))
+    group == 2 && return _attn_decode_split!(attn, q, kc, vc, n_kv, d_head, K, scale, Val(2))
+    group == 1 && return _attn_decode_split!(attn, q, kc, vc, n_kv, d_head, K, scale, Val(1))
     shmem = (_ATTN_TILE + 2 * d_head + 33) * sizeof(Float32)
     @fastcuda threads = _ATTN_THREADS blocks = n_heads shmem = shmem _cuda_attn_decode_kernel!(
         attn, q, kc, vc, group, K, Float32(1 / sqrt(d_head)), d_head,
     )
+    return true
+end
+
+# Split-K decode. The per-head kernel above runs n_heads blocks, each reading
+# its kv head's whole cache: at K=4096 on the 35B (16 heads over 2 kv heads)
+# that was 1.3-3.4 ms a layer, the cache read 8 times at 40 GB/s. Here a block
+# takes one kv head and a chunk of C keys, scores all G query heads of the
+# group from a single read of each row, and leaves the chunk's unnormalised
+# output with its max and sum; _cuda_attn_combine_kernel! folds the chunks.
+# C is picked for about _ATTN_SPLIT_BLOCKS blocks.
+const _ATTN_SPLIT_BLOCKS = 128
+const _ATTN_SPLIT_W = 32
+
+mutable struct _AttnSplitScratch
+    o::Union{Nothing,CuVector{Float32}}
+    ml::Union{Nothing,CuVector{Float32}}
+end
+const _ATTN_SPLIT = _AttnSplitScratch(nothing, nothing)
+
+function _attn_split_buf(buf, n::Int)
+    buf !== nothing && length(buf) >= n && return buf
+    buf === nothing || CUDA.unsafe_free!(buf)
+    return CuVector{Float32}(undef, cld(n, 1 << 14) << 14)
+end
+
+# The cache is (rows, kv heads, d): a key's dims are rows*kv_heads apart, so
+# the block stages tiles of W dims over its chunk, read along the keys, into
+# shared rows padded to W+1 (key-major writes and dim-major reads both miss
+# bank conflicts). Every load of the thread's share is issued before the
+# first store: one at a time, each waited out its own DRAM latency.
+@inline function _attn_tile_load!(sh, to::Int, src, t0::Int, hk::Int, j0::Int, n::Int, W::Int, tid::Int,
+    ::Val{C}, ::Val{R}) where {C,R}
+    vals = ntuple(Val(R)) do r
+        x = tid - 1 + (r - 1) * _ATTN_THREADS
+        jj = x ÷ C
+        i = x - jj * C
+        (i < n && jj < W) ? @inbounds(src[t0 + i + 1, hk, j0 + jj + 1]) : 0.0f0
+    end
+    for r in 1:R
+        x = tid - 1 + (r - 1) * _ATTN_THREADS
+        jj = x ÷ C
+        i = x - jj * C
+        @inbounds sh[to + i * (_ATTN_SPLIT_W + 1) + jj + 1] = vals[r]
+    end
+    return
+end
+
+function _cuda_attn_split_kernel!(op, ml, q, kc, vc, K::Int, scale::Float32, d::Int, ::Val{G}, ::Val{C}) where {G,C}
+    R = C * _ATTN_SPLIT_W ÷ _ATTN_THREADS
+    WP = _ATTN_SPLIT_W + 1
+    # shared layout: q [d, G] | scores, then probs [C, G] | tile [W+1, C]
+    sh = CUDA.@cuDynamicSharedMem(Float32, G * d + G * C + WP * C)
+    po = G * d
+    to = po + G * C
+    tid = Int(threadIdx().x)
+    nt = _ATTN_THREADS
+    nw = nt ÷ 32
+    wid = (tid - 1) ÷ 32
+    lane = (tid - 1) % 32
+    hk = Int(blockIdx().x)
+    s = Int(blockIdx().y)
+    t0 = (s - 1) * C
+    n = min(C, K - t0)
+    h0 = (hk - 1) * G
+    nh = Int(gridDim().x) * G
+
+    @inbounds begin
+        for g in 1:G, j in tid:nt:d
+            sh[(g - 1) * d + j] = q[1, h0 + g, j]
+        end
+        # the score loop below keeps this mapping, so each thread clears what it adds to
+        for x in tid:nt:(G * C)
+            sh[po + x] = 0.0f0
+        end
+
+        for j0 in 0:_ATTN_SPLIT_W:(d - 1)
+            W = min(_ATTN_SPLIT_W, d - j0)
+            CUDA.sync_threads()
+            _attn_tile_load!(sh, to, kc, t0, hk, j0, n, W, tid, Val(C), Val(R))
+            CUDA.sync_threads()
+            for x in tid:nt:(G * C)
+                g0 = (x - 1) ÷ C
+                i = x - g0 * C
+                acc = 0.0f0
+                for jj in 1:W
+                    acc += sh[g0 * d + j0 + jj] * sh[to + (i - 1) * WP + jj]
+                end
+                sh[po + x] += acc
+            end
+        end
+        CUDA.sync_threads()
+
+        # one warp per query head: the chunk's max, then probabilities in place
+        for g in (wid + 1):nw:G
+            b = po + (g - 1) * C
+            mx = -Inf32
+            for i in (lane + 1):32:n
+                mx = max(mx, sh[b + i] * scale)
+            end
+            mx = _attn_warp_allreduce(max, mx)
+            sm = 0.0f0
+            for i in (lane + 1):32:n
+                p = exp(sh[b + i] * scale - mx)
+                sh[b + i] = p
+                sm += p
+            end
+            sm = _attn_warp_reduce(+, sm)
+            if lane == 0
+                ml[(s - 1) * 2 * nh + h0 + g] = mx
+                ml[(s - 1) * 2 * nh + nh + h0 + g] = sm
+            end
+        end
+
+        for j0 in 0:_ATTN_SPLIT_W:(d - 1)
+            W = min(_ATTN_SPLIT_W, d - j0)
+            CUDA.sync_threads()
+            _attn_tile_load!(sh, to, vc, t0, hk, j0, n, W, tid, Val(C), Val(R))
+            CUDA.sync_threads()
+            for x in tid:nt:(G * _ATTN_SPLIT_W)
+                g0 = (x - 1) ÷ _ATTN_SPLIT_W
+                jj = x - g0 * _ATTN_SPLIT_W
+                jj <= W || continue
+                acc = 0.0f0
+                for i in 1:n
+                    acc += sh[po + g0 * C + i] * sh[to + (i - 1) * WP + jj]
+                end
+                op[((s - 1) * nh + h0 + g0) * d + j0 + jj] = acc
+            end
+        end
+    end
+    return
+end
+
+# The chunk weights exp(m_s - m) are computed once per head into shared
+# memory; every output dim then reads its S partials independently.
+function _cuda_attn_combine_kernel!(attn, op, ml, S::Int, d::Int, nh::Int)
+    sh = CUDA.@cuDynamicSharedMem(Float32, S + 34)
+    h = Int(blockIdx().x)
+    tid = Int(threadIdx().x)
+    nt = Int(blockDim().x)
+    nw = nt ÷ 32
+    @inbounds begin
+        mx = -Inf32
+        for s in tid:nt:S
+            mx = max(mx, ml[(s - 1) * 2 * nh + h])
+        end
+        mx = _attn_block_reduce(max, mx, -Inf32, sh, S, tid, nw)
+        l = 0.0f0
+        for s in tid:nt:S
+            w = exp(ml[(s - 1) * 2 * nh + h] - mx)
+            sh[s] = w
+            l += ml[(s - 1) * 2 * nh + nh + h] * w
+        end
+        inv = 1.0f0 / _attn_block_reduce(+, l, 0.0f0, sh, S, tid, nw)
+        for j in tid:nt:d
+            acc = 0.0f0
+            for s in 1:S
+                acc += op[((s - 1) * nh + h - 1) * d + j] * sh[s]
+            end
+            attn[1, h, j] = acc * inv
+        end
+    end
+    return
+end
+
+function _attn_decode_split!(attn, q, kc, vc, n_kv::Int, d::Int, K::Int, scale::Float32, vg::Val)
+    want = cld(K * n_kv, _ATTN_SPLIT_BLOCKS)
+    want <= 32 && return _attn_split_launch!(attn, q, kc, vc, n_kv, d, K, scale, vg, Val(32))
+    want <= 64 && return _attn_split_launch!(attn, q, kc, vc, n_kv, d, K, scale, vg, Val(64))
+    return _attn_split_launch!(attn, q, kc, vc, n_kv, d, K, scale, vg, Val(128))
+end
+
+function _attn_split_launch!(attn, q, kc, vc, n_kv::Int, d::Int, K::Int, scale::Float32, ::Val{G}, ::Val{C}) where {G,C}
+    S = cld(K, C)
+    nh = n_kv * G
+    sc = _ATTN_SPLIT
+    sc.o = _attn_split_buf(sc.o, d * nh * S)
+    sc.ml = _attn_split_buf(sc.ml, 2 * nh * S)
+    shmem = (G * d + G * C + (_ATTN_SPLIT_W + 1) * C) * sizeof(Float32)
+    @fastcuda threads = _ATTN_THREADS blocks = (n_kv, S) shmem = shmem _cuda_attn_split_kernel!(
+        sc.o, sc.ml, q, kc, vc, K, scale, d, Val(G), Val(C),
+    )
+    @fastcuda threads = _ATTN_THREADS blocks = nh shmem = (S + 34) * sizeof(Float32) _cuda_attn_combine_kernel!(
+        attn, sc.o, sc.ml, S, d, nh,
+    )
+    return true
+end
+
+# Prefill keys are taken in tiles with an online softmax, so the score scratch
+# is (tile, L) whatever K is: 16 MiB, against 2*4*L*K bytes for the reference
+# buffers (256 MiB for a 1024-row pass at 32k keys).
+const _ATTN_PF_TILE_BYTES = 16 << 20
+const _ATTN_PF_TILE_MIN = 256
+
+_attn_prefill_tile(L::Int, K::Int) =
+    min(K, max(_ATTN_PF_TILE_MIN, fld(_ATTN_PF_TILE_BYTES ÷ 4, max(L, 1)) ÷ _ATTN_PF_TILE_MIN * _ATTN_PF_TILE_MIN))
+
+# One block per query row over one key tile. St is (tile, L) so a row's scores
+# are contiguous. Keys past the row's own position are masked: row i sees key
+# u <= K - L + i. Leaves the unnormalised probabilities in St, folds the tile
+# into the running max m and sum l, and rescales the row's accumulated output
+# by exp(m_old - m_new) before the tile's P*V lands on it. The first tile has
+# no accumulator yet: its GEMM writes with beta = 0.
+function _cuda_attn_pf_tile_kernel!(St, m, l, attn, hh::Int, h_l::Int, Tn::Int, lim0::Int, first::Bool, d::Int)
+    sh = CUDA.@cuStaticSharedMem(Float32, 33)
+    tid = Int(threadIdx().x)
+    nt = Int(blockDim().x)
+    nw = nt ÷ 32
+    i = Int(blockIdx().x)
+    lim = lim0 + i
+
+    lmax = -Inf32
+    for j in tid:nt:Tn
+        lmax = max(lmax, j <= lim ? St[j, i] : -Inf32)
+    end
+    tmax = _attn_block_reduce(max, lmax, -Inf32, sh, 0, tid, nw)
+    # key 1 is in the first tile and visible to every row, so m is finite
+    # from then on and a fully masked later tile leaves it alone
+    mo = first ? -Inf32 : m[i]
+    mn = max(mo, tmax)
+    lsum = 0.0f0
+    for j in tid:nt:Tn
+        p = j <= lim ? exp(St[j, i] - mn) : 0.0f0
+        St[j, i] = p
+        lsum += p
+    end
+    tsum = _attn_block_reduce(+, lsum, 0.0f0, sh, 0, tid, nw)
+    alpha = exp(mo - mn)
+    if !first
+        for c in tid:nt:d
+            attn[i, hh, c] *= alpha
+        end
+    end
+    if tid == 1
+        l[i, h_l] = first ? tsum : l[i, h_l] * alpha + tsum
+        m[i] = mn
+    end
+    return
+end
+
+function _cuda_attn_pf_norm_kernel!(attn, l, d::Int)
+    i = Int(blockIdx().x)
+    h = Int(blockIdx().y)
+    inv = 1.0f0 / l[i, h]
+    for c in Int(threadIdx().x):Int(blockDim().x):d
+        attn[i, h, c] *= inv
+    end
+    return
+end
+
+function _attention_prefill_device!(
+    ::CUDABackend, attn::CuArray{Float32}, q::CuArray{Float32}, k, v,
+    n_heads::Int, d_head::Int, group::Int, L::Int, K::Int,
+)
+    L == 0 && return true
+    T = _attn_prefill_tile(L, K)
+    St = CuArray{Float32}(undef, T, L)
+    m = CuArray{Float32}(undef, L)
+    l = CuArray{Float32}(undef, L, n_heads)
+    try
+        scale = _cu_scalar(Float32(1 / sqrt(d_head)))
+        one_, zero_ = _cu_scalar(1.0f0), _cu_scalar(0.0f0)
+        for hh in 1:n_heads
+            hk = div(hh - 1, group) + 1
+            qh = view(q, :, hh, :)
+            oh = view(attn, :, hh, :)
+            for t0 in 0:T:(K - 1)
+                Tn = min(T, K - t0)
+                rows = (t0 + 1):(t0 + Tn)
+                S = view(St, 1:Tn, :)
+                _blas_gemm!('N', 'T', scale, view(k, rows, hk, :), qh, zero_, S)
+                @fastcuda threads = _ATTN_THREADS blocks = L _cuda_attn_pf_tile_kernel!(
+                    St, m, l, attn, hh, hh, Tn, K - L - t0, t0 == 0, d_head,
+                )
+                _blas_gemm!('T', 'N', one_, S, view(v, rows, hk, :), t0 == 0 ? zero_ : one_, oh)
+            end
+        end
+        @fastcuda threads = min(_ATTN_THREADS, d_head) blocks = (L, n_heads) _cuda_attn_pf_norm_kernel!(attn, l, d_head)
+    finally
+        CUDA.unsafe_free!(St)
+        CUDA.unsafe_free!(m)
+        CUDA.unsafe_free!(l)
+    end
     return true
 end

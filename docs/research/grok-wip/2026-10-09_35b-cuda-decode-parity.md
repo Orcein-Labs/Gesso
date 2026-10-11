@@ -19,6 +19,7 @@
 | 46c94b2 | fused add+rmsnorm, KV append, qk-norm rows | 49.10 tok/s, ids ok | p9419 15.97 ms | |
 | 7f279eb | prefill temporaries freed, pools purged on pressure | 45.95 tok/s, ids ok (host swapping) | p9419 15.23 ms, p1000 16.51 ms, 0 GCs | 590/590 |
 | 16709c2 | prefill streaming ring, prefill buffers released before decode | 44.8 tok/s, ids ok | | 653/653 |
+| lane m | tiled prefill attention, P8192 in 26.4 s, split-K decode attention | 61.7 tok/s, ids ok | P4096 43.9 tok/s, P8192 39.9 tok/s (was 20.3, 11.9) | 398/398 |
 
 The gate is a short cold run and moves about +-2 tok/s between runs. The
 medians come from `bench_ab`: six warm 32-token generations per prompt.
@@ -235,6 +236,107 @@ Open: the pools drop to 0 during a 4096-token prompt. Decode refills them over
 the next generations. Warm decode measured 50-52 tok/s after the sweep.
 Prompts over 4096 still take the CPU path. MoE token chunking would lift that
 limit.
+
+### Long prompts (lane m, 314eef7 -> next commit)
+
+The goal here is the longest context that fits next to the weights, with
+decode speed that holds up as the context grows. 314eef7 split the prefill
+into passes. This round fixed what the long prompts broke after that.
+
+**Prefill memory.**
+
+- **Attention tiles the keys.** `_attention_prefill_device!` reads the KV
+  heads in place (GQA, no repeat) and runs an online softmax over key tiles.
+  Its score scratch is (tile, L), whatever K is. The reference path needs the
+  KV heads repeated (1 GiB at 32k keys) and two (L, K) score buffers.
+- **Passes size themselves.** A pass steps down from 1024 rows until its
+  estimate fits in what a purge can free. P4096 in fixed 1024-row passes ran
+  out of memory next to hot+pin pools.
+- **Gesso keeps its own cuBLAS handle** (`ext/cuda_blas.jl`). A failed
+  pool allocation walks CUDA.jl's reclaim ladder to DROP, which destroys
+  idle cuBLAS handles. The next `cublasCreate` is a driver allocation with
+  no retry, and it failed mid-prefill. The handle is created before the
+  weights are placed, and its state follows `CUBLAS.handle()`.
+- **A pool purged during a prompt streams through the ring for the rest of
+  that prompt.** Re-allocating it took two full GCs (~0.36 s) per layer, and
+  a later layer purged it again. At P8192 that was 15-30 s of a 38-54 s
+  prefill. P8192 now prefills in 26.4 s with no GC. P256-P1024 fit in one
+  pass and never purge, so they don't change.
+- **Lazy score buffers, newest hidden row only.** Keeping every hidden row
+  cost 8 KiB a token, 256 MiB at 32k.
+
+**Decode after a long prompt.** The fixed tree first measured 21.8 tok/s for
+tokens 2-65 of a P4096 generation and 16.4 tok/s for tokens 65-129. Short
+prompts ran at 37 tok/s. Four separate causes:
+
+- **GC stalls.** CUDA's allocation retry runs two full GCs. In decode they
+  free nothing: after P4096, live memory equalled used memory (6835 MiB) at
+  all seven GCs, because that generation's KV holds the memory. They cost
+  1.7 s of 64 tokens. Pool allocations now retry with the GC disabled. A pool
+  that doesn't fit waits `_HOT_RETRY_TOKENS` decode tokens and then tries
+  again. It used to be retired for good, which cost 62 -> 34 tok/s on every
+  later generation.
+- **The `permutedims!` alias leak.** GPUArrays launches on `vec(src)`, a
+  derived array that keeps `src`'s memory alive until a GC. The arena's
+  `unsafe_free!` of each prefill FFN input freed nothing, and P4096 carried
+  32 MiB into decode. `_transpose_into!` passes an unowned alias instead.
+- **Prefill-only scratch.** The device-bank MoE batch and the dense F16 GEMM
+  scratch (78 MiB) are now freed before decode, with the D buffer and the ring.
+- **Decode attention read the cache 8 times.** The per-head kernel ran one
+  block per query head, so each of the 2 KV heads' caches was streamed once
+  for each of its 8 query heads, at ~40 GB/s. Split-K (flash-decoding)
+  replaces it. A block takes one KV head and a chunk of C keys
+  (C in 32/64/128, sized for ~128 blocks). It scores all 8 query heads from
+  one read of each key tile staged in shared memory, and writes the chunk's
+  unnormalised output, max and sum. A second kernel folds the chunks. Groups
+  other than 1/2/4/8 keep the per-head kernel.
+
+One layer at the 35B shape, microbenchmark:
+
+| K | per-head (us) | split-K (us) | split-K GB/s |
+|---|---|---|---|
+| 1 | 52 | 14 | - |
+| 1024 | 325 | 37 | 112 |
+| 4096 | 1291 | 92 | 182 |
+| 16384 | 11141 | 395 | 170 |
+| 32768 | 22226 | 786 | 171 |
+
+The maximum difference from the per-head kernel is 1.1e-6. The ideal at
+400 GB/s is 42 us at K=4096, so there's about 2x left. At 0.9 ms per token
+over 10 layers, that 2x isn't worth chasing yet.
+
+End to end: one generation of 65 tokens per row, per-token timing (sum of the
+synced head and the decode step, tokens 2-64). Both kernels ran in the same
+process, with `GESSO_GPU_HOT_EXPERTS_MIB=480` so the pool budget doesn't
+vary between rows:
+
+| prompt | per-head tok/s | split-K tok/s | prefill |
+|---|---|---|---|
+| P1 | 48.8 | 46.5 | - |
+| P4096 | 20.3 | 43.9 | 10-11 s |
+| P8192 | 11.9 | 39.9 | 22.5 s |
+
+P1 is within run noise. Gate after the change: 61.7 tok/s, ids ok. Targeted
+CUDA tests (import_llama, attention_decode, ops, quant_dense, hybrid, moe,
+inference): 398/398. The decode-attention oracle gained cases for the 35B
+shape at 1 and 4100 keys, a partial last chunk, and a group that keeps the
+per-head kernel.
+
+**Measurement caveats.**
+
+- Taking the difference of two generations (n=65 minus n=1, each with its
+  own prefill) is not a decode measurement at long prompts. Prefill varies by
+  about 1 s, and one such difference read 160 tok/s.
+- The hot-pool budget is set from free memory at registration. It came out
+  at 13 MiB per layer in one run and 22 MiB in the next, which moved the
+  short-prompt baseline from 37 to 45 tok/s. Fix
+  `GESSO_GPU_HOT_EXPERTS_MIB` when comparing.
+
+Open: 16k and 32k prompts still run out of device memory. The F32 KV cache
+is 40 KiB a token over the 10 attention layers: 640 MiB at 16k, 1.25 GiB at
+32k. That's a large share of the ~1 GiB not taken by weights and pools,
+but what else fills the device at 16k hasn't been measured. That
+measurement comes before F16/Q8 KV.
 
 ## Where the time goes now
 
