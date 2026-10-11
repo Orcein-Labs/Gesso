@@ -11,6 +11,7 @@
 #   KV_TIER_HEADS    query heads                             (16)
 #   KV_TIER_KV_HEADS KV heads                                (2)
 #   KV_TIER_D        head dim                                (256)
+#   KV_TIER_INT      1 scores q8 keys with the integer path     (0: float)
 #
 # One full pass runs untimed first, so compilation and workspace first touch are
 # never in a sample. The timed calls reuse one KVTierWorkspace, so the figures
@@ -34,6 +35,7 @@ const KVB_HEADS = _kvb_env("KV_TIER_HEADS", 16)
 const KVB_KV_HEADS = _kvb_env("KV_TIER_KV_HEADS", 2)
 const KVB_D = _kvb_env("KV_TIER_D", 256)
 const KVB_FORMAT = Symbol(lowercase(get(ENV, "KV_TIER_FORMAT", "q8")))
+const KVB_INT = get(ENV, "KV_TIER_INT", "0") == "1"
 
 _median(x) = (s = sort(x); n = length(s); isodd(n) ? s[(n + 1) ÷ 2] : (s[n ÷ 2] + s[n ÷ 2 + 1]) / 2)
 
@@ -53,7 +55,7 @@ function _kvb_pass!(attn, q, kcs, vcs, times, it, ws)
     for l in eachindex(kcs)
         t0 = time_ns()
         _KVI._attention_split_cpu!(attn, q, kcs[l], vcs[l], KVB_ROWS, KVB_HEADS, KVB_D,
-            div(KVB_HEADS, KVB_KV_HEADS); ws=ws)
+            div(KVB_HEADS, KVB_KV_HEADS); ws=ws, int_scores=KVB_INT)
         times[l, it] = (time_ns() - t0) / 1.0e6
     end
     return times
@@ -82,8 +84,8 @@ function main()
     layer_median = _median(vec(times))
     token_median = _median(sum(times; dims=1)[:])
     gbps = bytes_per_layer / (layer_median * 1.0e-3) / 1.0e9
-    @printf("kv_tier_cpu format=%s rows=%d layers=%d iters=%d heads=%d kv_heads=%d d=%d threads=%d\n",
-        fmt, KVB_ROWS, KVB_LAYERS, KVB_ITERS, KVB_HEADS, KVB_KV_HEADS, KVB_D, Threads.nthreads())
+    @printf("kv_tier_cpu format=%s scores=%s rows=%d layers=%d iters=%d heads=%d kv_heads=%d d=%d threads=%d\n",
+        fmt, KVB_INT ? "int" : "float", KVB_ROWS, KVB_LAYERS, KVB_ITERS, KVB_HEADS, KVB_KV_HEADS, KVB_D, Threads.nthreads())
     @printf("kv_tier_cpu median_ms_per_layer=%.4f median_ms_per_token=%.4f kv_bytes_per_layer=%d gb_per_s=%.3f\n",
         layer_median, token_median, bytes_per_layer, gbps)
     return nothing
