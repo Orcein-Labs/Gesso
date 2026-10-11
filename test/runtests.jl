@@ -83,6 +83,7 @@ using Gesso: reference_prefill, reference_generate
     include("test_qwen35_hybrid.jl")
     include("test_moe_routing.jl")
     include("test_decode_profile.jl")
+    include("test_prefill_profile.jl")
     include("test_gguf_import.jl")
     include("test_gguf_llama.jl")
     include("test_qwen35_dense.jl")

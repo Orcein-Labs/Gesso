@@ -823,13 +823,14 @@ _merge_heads!(dst::Activation, src::Activation, n_heads, d_head) =
     _gpu_budget_bytes() -> Int64
 
 Device-resident weight budget for `to_device`. `GESSO_GPU_BUDGET_MIB`
-(default 6144) is the 8 GB 5060 with headroom for activations, KV, and
-the active-expert scratch. Float32 weights fill the budget first;
-remaining bytes upload `GgufQuantSlice` expert slabs as `GpuQuantSlice`.
+(default 4800) leaves an 8 GB card room for 1024-row prefill passes and the
+hot-expert pool. Larger budgets leave the pass sizer only 128-row passes.
+Float32 weights fill the budget first; remaining bytes upload
+`GgufQuantSlice` expert slabs as `GpuQuantSlice`.
 """
 function _gpu_budget_bytes()
-    raw = get(ENV, "GESSO_GPU_BUDGET_MIB", "6144")
-    mib = something(tryparse(Int, raw), 6144)
+    raw = get(ENV, "GESSO_GPU_BUDGET_MIB", "4800")
+    mib = something(tryparse(Int, raw), 4800)
     return Int64(max(0, mib)) * Int64(1024 * 1024)
 end
 
@@ -1241,6 +1242,7 @@ function reference_generate(
             s0 = s1 + 1
             s1 += _prefill_pass_rows(cpu, P - s1, s1, chunk, qdim, group)
             n = s1 - s0 + 1
+            ptok = _prefill_pass_begin(cpu, s0, n, P)
             K = s1                                   # keys: every cached row so far
             positions = collect((s0-1):(s1-1))
             tmp = pass_tmp
@@ -1270,7 +1272,7 @@ function reference_generate(
             for (bi, blk) in enumerate(model.blocks)
                 bt = tensors.blocks[bi]
                 if _block_mixer(bt) === :linear_attention
-                    _hybrid_linear_block!(
+                    @decode_stage :gdn_mixer cpu _hybrid_linear_block!(
                         cpu,
                         hp,
                         normed,
@@ -1285,74 +1287,76 @@ function reference_generate(
                     )
                     hp.storage .+= sub.storage
                 else
-                    rmsnorm!(cpu, normed, hp, bt.attn_rms, wp; eps)
-                    matmul!(cpu, q, normed, bt.wq, wp)
-                    matmul!(cpu, k, normed, bt.wk, wp)
-                    matmul!(cpu, v, normed, bt.wv, wp)
-                    _split_heads!(qh, q, n_heads, d_head)
-                    _split_heads!(kh, k, n_kv_heads, d_head)
-                    _split_heads!(vh, v, n_kv_heads, d_head)
-                    if haskey(bt, :wq_norm)
-                        rmsnorm!(cpu, qh, qh, bt.wq_norm, wp; eps)
-                        rmsnorm!(cpu, kh, kh, bt.wk_norm, wp; eps)
-                    end
-                    rope!(
-                        cpu,
-                        qh,
-                        kh,
-                        positions,
-                        wp;
-                        theta,
-                        inv_freq,
-                        interleaved=_tensors_rope_interleaved(tensors),
-                        rotary_dim,
-                    )
-                    # KV APPEND: the pass's post-rope K/V become cache rows s0..s1,
-                    # stored at n_kv_heads (GQA caches the small side, §LXXVI)
-                    _kv_write_rows!(kc[bi].storage, kh.storage, s0)
-                    _kv_write_rows!(vc[bi].storage, vh.storage, s0)
-                    # a later pass attends the cached rows before it as well. A
-                    # cache in another format is read back on the first pass too,
-                    # so prefill attends the same keys decode will.
-                    ks, vs = s0 == 1 && kv_fmt === :f32 ? (kh, vh) : (
-                        Activation(; shape=(K, n_kv_heads, d_head), storage=@view kc[bi].storage[1:K, :, :]),
-                        Activation(; shape=(K, n_kv_heads, d_head), storage=@view vc[bi].storage[1:K, :, :]))
-                    kv_rot = _kv_rotated(kc[bi].storage)
-                    kv_rot && _kv_rotate!(qh.storage, true)
-                    if !_attention_prefill_device!(cpu, attn.storage, qh.storage,
-                        ks.storage, vs.storage, n_heads, d_head, group, n, K)
-                        if scores === nothing
-                            scores = TemporaryWorkspace(; shape=(n, K), storage=tmp((n, K)))
-                            scores_out = TemporaryWorkspace(; shape=(n, K), storage=tmp((n, K)))
+                    @decode_stage :attn_mixer cpu begin
+                        rmsnorm!(cpu, normed, hp, bt.attn_rms, wp; eps)
+                        matmul!(cpu, q, normed, bt.wq, wp)
+                        matmul!(cpu, k, normed, bt.wk, wp)
+                        matmul!(cpu, v, normed, bt.wv, wp)
+                        _split_heads!(qh, q, n_heads, d_head)
+                        _split_heads!(kh, k, n_kv_heads, d_head)
+                        _split_heads!(vh, v, n_kv_heads, d_head)
+                        if haskey(bt, :wq_norm)
+                            rmsnorm!(cpu, qh, qh, bt.wq_norm, wp; eps)
+                            rmsnorm!(cpu, kh, kh, bt.wk_norm, wp; eps)
                         end
-                        # repeat KV heads for the contraction only (identity when MHA)
-                        kx = _repeat_heads(ks, group)
-                        vx = _repeat_heads(vs, group)
-                        _attention_heads!(
+                        rope!(
                             cpu,
-                            attn.storage,
-                            scores,
-                            scores_out,
-                            qh.storage,
-                            kx.storage,
-                            vx.storage,
-                            n_heads,
-                            d_head,
-                            n,
-                            K,
-                            wp,
+                            qh,
+                            kh,
+                            positions,
+                            wp;
+                            theta,
+                            inv_freq,
+                            interleaved=_tensors_rope_interleaved(tensors),
+                            rotary_dim,
                         )
-                        kx === ks || (_release_storage!(kx.storage); _release_storage!(vx.storage))
-                    end
-                    kv_rot && _kv_rotate!(attn.storage, false)
+                        # KV APPEND: the pass's post-rope K/V become cache rows s0..s1,
+                        # stored at n_kv_heads (GQA caches the small side, §LXXVI)
+                        _kv_write_rows!(kc[bi].storage, kh.storage, s0)
+                        _kv_write_rows!(vc[bi].storage, vh.storage, s0)
+                        # a later pass attends the cached rows before it as well. A
+                        # cache in another format is read back on the first pass too,
+                        # so prefill attends the same keys decode will.
+                        ks, vs = s0 == 1 && kv_fmt === :f32 ? (kh, vh) : (
+                            Activation(; shape=(K, n_kv_heads, d_head), storage=@view kc[bi].storage[1:K, :, :]),
+                            Activation(; shape=(K, n_kv_heads, d_head), storage=@view vc[bi].storage[1:K, :, :]))
+                        kv_rot = _kv_rotated(kc[bi].storage)
+                        kv_rot && _kv_rotate!(qh.storage, true)
+                        if !_attention_prefill_device!(cpu, attn.storage, qh.storage,
+                            ks.storage, vs.storage, n_heads, d_head, group, n, K)
+                            if scores === nothing
+                                scores = TemporaryWorkspace(; shape=(n, K), storage=tmp((n, K)))
+                                scores_out = TemporaryWorkspace(; shape=(n, K), storage=tmp((n, K)))
+                            end
+                            # repeat KV heads for the contraction only (identity when MHA)
+                            kx = _repeat_heads(ks, group)
+                            vx = _repeat_heads(vs, group)
+                            _attention_heads!(
+                                cpu,
+                                attn.storage,
+                                scores,
+                                scores_out,
+                                qh.storage,
+                                kx.storage,
+                                vx.storage,
+                                n_heads,
+                                d_head,
+                                n,
+                                K,
+                                wp,
+                            )
+                            kx === ks || (_release_storage!(kx.storage); _release_storage!(vx.storage))
+                        end
+                        kv_rot && _kv_rotate!(attn.storage, false)
 
-                    _merge_heads!(merged, attn, n_heads, d_head)
-                    if haskey(bt, :wattn_gate)
-                        matmul!(cpu, gate_attn, normed, bt.wattn_gate, wp)
-                        _sigmoid_mul!(cpu, merged.storage, merged.storage, gate_attn.storage)
+                        _merge_heads!(merged, attn, n_heads, d_head)
+                        if haskey(bt, :wattn_gate)
+                            matmul!(cpu, gate_attn, normed, bt.wattn_gate, wp)
+                            _sigmoid_mul!(cpu, merged.storage, merged.storage, gate_attn.storage)
+                        end
+                        matmul!(cpu, sub, merged, bt.wo, wp)
+                        hp.storage .+= sub.storage
                     end
-                    matmul!(cpu, sub, merged, bt.wo, wp)
-                    hp.storage .+= sub.storage
                 end
                 rmsnorm!(cpu, normed2, hp, bt.ffn_rms, wp; eps)
                 _ffn_block!(cpu, down, gate, up, act, normed2, bt, wp, block_tmp)
@@ -1361,6 +1365,7 @@ function reference_generate(
             end
             s1 == P && (h.storage .= @view hp.storage[n:n, :])
             _arena_release!(pass_tmp)
+            _prefill_pass_end(ptok)
         end
         _prefill_end!(cpu)
         append!(st.ids, @view prompt[(n0 + 1):P])

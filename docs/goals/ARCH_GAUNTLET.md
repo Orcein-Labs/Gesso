@@ -160,7 +160,7 @@ sigmoid-gate / silu-gate run as `@cuda` kernels. Qwen3.5-0.8B Hello
 `:rope_partial_dim`, `:rope_interleaved`, `:rope_linear`, `:rope_llama3`.
 
 CUDA MoE expert offload (2026-10-08): `to_device` uploads non-expert
-weights small-first until `GESSO_GPU_BUDGET_MIB` (default 6144);
+weights small-first until `GESSO_GPU_BUDGET_MIB` (default 4800);
 overflow is `HostOffload`; `GgufQuantSlice` experts stay mmap'd.
 Active experts dequant into scratch, H2D, CUBLAS gemv. Same path for
 any `(n_experts, n_used, expert_ff, hidden)` — Ornith 256/8, Xing 64/4,
