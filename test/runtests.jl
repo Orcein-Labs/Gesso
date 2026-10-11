@@ -102,6 +102,11 @@ using Gesso: reference_prefill, reference_generate
     # AVX2 bit-exact vs scalar, real Qwen3.8-27B UD-IQ2_M rows (env-gated)
     include("test_quant_cpu_iq_s.jl")
 
+    # Multi-column Q8_K dots (K = 1..8 activation tiles) bit-equal to the
+    # single-column kernel for every type; prefill on/off through _quant_matmul!;
+    # real Saluki rows (env-gated)
+    include("test_quant_cpu_multi.jl")
+
     # K-quant and Q8_0 MoE expert GEMV and top-k SwiGLU vs dequant + F32;
     # real Kolibri-1 Q2_K expert rows (env-gated)
     include("test_moe_kquant_experts.jl")
