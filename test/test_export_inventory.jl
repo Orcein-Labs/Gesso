@@ -126,6 +126,7 @@ const INVENTORY = Dict{Symbol, Tuple{Symbol, Vector{String}}}(
     # --- Phase 2/3 oracle + import (§LXXV/§LXXVI) ---------------------------
     :reference_prefill => (:live, ["test_reference_prefill.jl"]),
     :reference_generate => (:live, ["test_reference_generate.jl"]),
+    :GenerateState => (:live, ["test_reference_generate.jl", "test_qwen35_hybrid.jl", "test_cuda_hybrid.jl"]),
     :load_llama_config => (:live, ["test_import_llama.jl"]),
     :config_to_model => (:live, ["test_import_llama.jl"]),
     :load_safetensors => (:live, ["test_import_llama.jl"]),
