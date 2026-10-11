@@ -1145,6 +1145,8 @@ function reference_generate(
     on_token=nothing,
     stop_ids=(),
     eos_ids=(TOY_EOS,),
+    draft=nothing,
+    max_draft::Int=8,
 )
     isempty(prompt) && error("reference_generate: prompt is empty")
     theta=_resolved_rope_theta(tensors, theta)
@@ -1373,6 +1375,7 @@ function reference_generate(
 
         ids = collect(prompt)
         steps = 0
+        spec_windows = spec_drafted = spec_accepted = 0
         timing = get(ENV, "GESSO_TIMING", "") == "1"
         if timing
             println("gesso_timing prefill_ms=$(round((time_ns() - t_prefill) / 1e6; digits=1))")
@@ -1403,6 +1406,28 @@ function reference_generate(
             if stop
                 _profile_token_end(tok_t0, false)
                 break
+            end
+            if draft !== nothing
+                # the window consumes the anchor and the accepted drafts; the
+                # correction is left for the next top-of-loop argmax, as in the
+                # baseline. An empty draft falls through to the plain step.
+                Spec = getproperty(parentmodule(@__MODULE__), :Speculation)
+                d = Spec.propose(draft, Spec.DraftContext(ids, nothing, vocab);
+                    max_tokens=min(max_draft, cap - steps))
+                if !isempty(d.ids)
+                    steps, accepted, stopped = _verify_window_round!(
+                        model, tensors, kc, vc, cpu, wd, h, gdn_conv, gdn_rec, cpu_scratch,
+                        ids, st.ids, d.ids, P + steps, steps, cap, on_token, stop_ids, eos_ids;
+                        vocab, n_heads, n_kv_heads, d_head, group, eps, theta, inv_freq, rotary_dim,
+                    )
+                    Spec.observe!(draft, d, accepted)
+                    spec_windows += 1
+                    spec_drafted += length(d.ids)
+                    spec_accepted += accepted
+                    _profile_token_end(tok_t0, !stopped)
+                    stopped && break
+                    continue
+                end
             end
             t_dec = time_ns()
             _decode_step!(
@@ -1440,7 +1465,11 @@ function reference_generate(
             end
         end
 
-        info isa Ref{Any} && (info[] = (kv_len=P + steps, steps=steps, reused=n0))
+        if info isa Ref{Any}
+            info[] = draft === nothing ? (kv_len=P + steps, steps=steps, reused=n0) :
+                (kv_len=P + steps, steps=steps, reused=n0,
+                    speculation=(windows=spec_windows, drafted=spec_drafted, accepted=spec_accepted))
+        end
         ok = true
         return ids
     finally
@@ -1494,6 +1523,155 @@ function _last_logits(model, tensors, h, cpu, wl, vocab, row::Int; eps::Real=1e-
     return vec(out.storage)
 end
 
+# Row buffers for one single-token decode or one verify-window row: the residual
+# stream, the normed inputs, the projection outputs and the attention heads. CPU
+# decode reads them from the preallocated scratch; the other backends allocate
+# them per call, as before.
+function _decode_row_buffers(cpu_scratch, zeros_like, dim::Int, kdim::Int, qdim::Int,
+    n_heads::Int, n_kv_heads::Int, d_head::Int, hidden_ffn::Int)
+    hp = Activation(; shape=(1, dim), storage=_decode_buf(cpu_scratch, Val(:hp), zeros_like, (1, dim)))
+    normed = Activation(; shape=(1, dim), storage=_decode_buf(cpu_scratch, Val(:normed), zeros_like, (1, dim)))
+    q = Activation(; shape=(1, qdim), storage=_decode_buf(cpu_scratch, Val(:q), zeros_like, (1, qdim)))
+    gate_attn = Activation(; shape=(1, qdim), storage=_decode_buf(cpu_scratch, Val(:gate_attn), zeros_like, (1, qdim)))
+    k = Activation(; shape=(1, kdim), storage=_decode_buf(cpu_scratch, Val(:k), zeros_like, (1, kdim)))
+    v = Activation(; shape=(1, kdim), storage=_decode_buf(cpu_scratch, Val(:v), zeros_like, (1, kdim)))
+    qh = Activation(; shape=(1, n_heads, d_head), storage=_decode_buf(cpu_scratch, Val(:qh), zeros_like, (1, n_heads, d_head)))
+    kh = Activation(;
+        shape=(1, n_kv_heads, d_head),
+        storage=_decode_buf(cpu_scratch, Val(:kh), zeros_like, (1, n_kv_heads, d_head)),
+    )
+    vh = Activation(;
+        shape=(1, n_kv_heads, d_head),
+        storage=_decode_buf(cpu_scratch, Val(:vh), zeros_like, (1, n_kv_heads, d_head)),
+    )
+    attn = Activation(; shape=(1, n_heads, d_head), storage=_decode_buf(cpu_scratch, Val(:attn), zeros_like, (1, n_heads, d_head)))
+    merged = Activation(; shape=(1, qdim), storage=_decode_buf(cpu_scratch, Val(:merged_attn), zeros_like, (1, qdim)))
+    sub = Activation(; shape=(1, dim), storage=_decode_buf(cpu_scratch, Val(:sub), zeros_like, (1, dim)))
+    normed2 = Activation(; shape=(1, dim), storage=_decode_buf(cpu_scratch, Val(:normed2), zeros_like, (1, dim)))
+    gate = Activation(; shape=(1, hidden_ffn), storage=_decode_buf(cpu_scratch, Val(:gate), zeros_like, (1, hidden_ffn)))
+    up = Activation(; shape=(1, hidden_ffn), storage=_decode_buf(cpu_scratch, Val(:up), zeros_like, (1, hidden_ffn)))
+    act = Activation(; shape=(1, hidden_ffn), storage=_decode_buf(cpu_scratch, Val(:act), zeros_like, (1, hidden_ffn)))
+    down = Activation(; shape=(1, dim), storage=_decode_buf(cpu_scratch, Val(:down), zeros_like, (1, dim)))
+    xq_dim = cpu_scratch === nothing ? nothing : cpu_scratch.xq_dim
+    xq_qdim = cpu_scratch === nothing ? nothing : cpu_scratch.xq_qdim
+    xq_ff = cpu_scratch === nothing ? nothing : cpu_scratch.xq_ff
+    return (; hp, normed, q, gate_attn, k, v, qh, kh, vh, attn, merged, sub, normed2,
+        gate, up, act, down, xq_dim, xq_qdim, xq_ff)
+end
+
+# Attention half of one decode block for layer `bi`: norm, QKV projections, RoPE,
+# KV append at 1-based cache row `pos0`, attention over rows 1:pos0, and the output
+# projection into `bufs.sub`. The residual add is in `_decode_ffn_block!`. The
+# single-token step and the verify window both call this per row, so the
+# arithmetic exists once.
+function _decode_attn_block!(bt, bi::Int, kc, vc, bufs, cpu, wl, tensors, zeros_like, cpu_scratch,
+    pos0::Int; n_heads, n_kv_heads, d_head, group, eps, theta, inv_freq, rotary_dim=0)
+    (; hp, normed, q, gate_attn, k, v, qh, kh, vh, attn, merged, sub, xq_dim, xq_qdim) = bufs
+    K = pos0                                    # cache rows now: P + steps
+    @decode_stage :norm cpu rmsnorm!(cpu, normed, hp, bt.attn_rms, wl; eps)
+    @decode_stage :attn_mixer cpu begin
+        @decode_sub :attn_proj cpu begin
+            # q, k, v and the attention gate read the same normed row:
+            # one quantization, one threaded pass over all their rows.
+            if haskey(bt, :wattn_gate)
+                _dec_matmul_group!(cpu, (q, k, v, gate_attn), xq_dim, normed,
+                    (bt.wq, bt.wk, bt.wv, bt.wattn_gate), wl)
+            else
+                _dec_matmul_group!(cpu, (q, k, v), xq_dim, normed, (bt.wq, bt.wk, bt.wv), wl)
+            end
+        end
+        @decode_sub :attn_headnorm_rope cpu begin
+            _split_heads!(qh, q, n_heads, d_head)
+            _split_heads!(kh, k, n_kv_heads, d_head)
+            _split_heads!(vh, v, n_kv_heads, d_head)
+            if haskey(bt, :wq_norm)
+                rmsnorm!(cpu, qh, qh, bt.wq_norm, wl; eps)
+                rmsnorm!(cpu, kh, kh, bt.wk_norm, wl; eps)
+            end
+            rope!(
+                cpu,
+                qh,
+                kh,
+                _decode_pos(cpu_scratch, pos0 - 1),
+                wl;
+                theta,
+                inv_freq,
+                interleaved=_tensors_rope_interleaved(tensors),
+                rotary_dim,
+            )  # 0-based position
+        end
+        @decode_sub :attn_kv_append cpu begin
+            # KV APPEND: exactly one row per layer per step, at n_kv_heads
+            _kv_append_storage!(kc[bi].storage, vc[bi].storage, kh.storage, vh.storage, pos0)
+        end
+        kv_rot = _kv_rotated(kc[bi].storage)
+        kv_rot && _kv_rotate!(qh.storage, true)
+        if cpu_scratch === nothing
+            # the query is the LAST position: it attends to the whole cache.
+            # A device backend that fuses the decode attention reads the
+            # cache rows in place; otherwise the CACHE rows are repeated per
+            # query head (kh above is the single new row; it was consumed by
+            # the append) and the reference per-head loop runs.
+            fused = @decode_sub :attn_core cpu _attention_decode_device!(
+                cpu, attn.storage, qh.storage, kc[bi].storage, vc[bi].storage,
+                n_heads, d_head, group, K,
+            )
+            if !fused
+                # the reference attention needs (1, K) workspaces; the fused
+                # path allocates none
+                scores = TemporaryWorkspace(; shape=(1, K), storage=zeros_like((1, K)))
+                scores_out = TemporaryWorkspace(; shape=(1, K), storage=zeros_like((1, K)))
+                @decode_sub :attn_kv_append cpu begin
+                    kx = _repeat_heads(kc[bi], group)
+                    vx = _repeat_heads(vc[bi], group)
+                end
+                @decode_sub :attn_core cpu _attention_heads!(
+                    cpu,
+                    attn.storage,
+                    scores,
+                    scores_out,
+                    qh.storage,
+                    kx.storage,
+                    vx.storage,
+                    n_heads,
+                    d_head,
+                    1,
+                    K,
+                    wl,
+                )
+            end
+        else
+            # fused: reads the cache rows 1:K in place, no repeat copy
+            @decode_sub :attn_core cpu _attention_decode_cpu!(
+                attn.storage, qh.storage, kc[bi].storage, vc[bi].storage,
+                cpu_scratch.probs, n_heads, d_head, group, K,
+            )
+        end
+        kv_rot && _kv_rotate!(attn.storage, false)
+        @decode_sub :attn_outproj cpu begin
+            _merge_heads!(merged, attn, n_heads, d_head)
+            if haskey(bt, :wattn_gate)
+                _sigmoid_mul!(cpu, merged.storage, merged.storage, gate_attn.storage)
+            end
+            _dec_matmul_group!(cpu, (sub,), xq_qdim, merged, (bt.wo,), wl)
+        end
+    end
+    return sub
+end
+
+# FFN half of one decode block: residual add of the mixer output `bufs.sub`, the
+# FFN norm, the gated FFN, and the second residual add. Leaves the block's output
+# in `bufs.hp`.
+function _decode_ffn_block!(bt, bufs, cpu, wl, zeros_like; eps)
+    (; hp, sub, normed2, down, gate, up, act, xq_dim, xq_ff) = bufs
+    # both mixers leave their output in `sub`: residual add, then norm
+    @decode_stage :norm cpu _add_rmsnorm!(cpu, normed2, hp, sub.storage, bt.ffn_rms, wl; eps)
+    _ffn_block!(cpu, down, gate, up, act, normed2, bt, wl, zeros_like;
+        xq_in=xq_dim, xq_ff=xq_ff)
+    _add_storage!(hp.storage, down.storage)  # residual
+    return hp
+end
+
 # one DecodeWorkload step: embed `tok` at 0-based `pos0`, append K/V per
 # layer at n_kv_heads, attend over the WHOLE cache with KV heads repeated
 # per query head (no re-prefill), residual + FFN, and leave the new
@@ -1527,37 +1705,10 @@ function _decode_step!(
     kdim = n_kv_heads * d_head
     qdim = n_heads * d_head
     zeros_like = _decode_zeros_like(cpu, tensors)
-    xq_dim = cpu_scratch === nothing ? nothing : cpu_scratch.xq_dim
-    xq_qdim = cpu_scratch === nothing ? nothing : cpu_scratch.xq_qdim
-    xq_ff = cpu_scratch === nothing ? nothing : cpu_scratch.xq_ff
-    # CPU decode reads every activation from the preallocated scratch; the
-    # other backends allocate them per call, as before.
-    hp = Activation(; shape=(1, dim), storage=_decode_buf(cpu_scratch, Val(:hp), zeros_like, (1, dim)))
-    @decode_stage :embed cpu embedding_lookup!(cpu, hp, tensors.embedding, [tok], wl)
-    normed = Activation(; shape=(1, dim), storage=_decode_buf(cpu_scratch, Val(:normed), zeros_like, (1, dim)))
-    q = Activation(; shape=(1, qdim), storage=_decode_buf(cpu_scratch, Val(:q), zeros_like, (1, qdim)))
-    gate_attn = Activation(; shape=(1, qdim), storage=_decode_buf(cpu_scratch, Val(:gate_attn), zeros_like, (1, qdim)))
-    k = Activation(; shape=(1, kdim), storage=_decode_buf(cpu_scratch, Val(:k), zeros_like, (1, kdim)))
-    v = Activation(; shape=(1, kdim), storage=_decode_buf(cpu_scratch, Val(:v), zeros_like, (1, kdim)))
-    qh = Activation(; shape=(1, n_heads, d_head), storage=_decode_buf(cpu_scratch, Val(:qh), zeros_like, (1, n_heads, d_head)))
-    kh = Activation(;
-        shape=(1, n_kv_heads, d_head),
-        storage=_decode_buf(cpu_scratch, Val(:kh), zeros_like, (1, n_kv_heads, d_head)),
-    )
-    vh = Activation(;
-        shape=(1, n_kv_heads, d_head),
-        storage=_decode_buf(cpu_scratch, Val(:vh), zeros_like, (1, n_kv_heads, d_head)),
-    )
-    attn = Activation(; shape=(1, n_heads, d_head), storage=_decode_buf(cpu_scratch, Val(:attn), zeros_like, (1, n_heads, d_head)))
-    merged = Activation(; shape=(1, qdim), storage=_decode_buf(cpu_scratch, Val(:merged_attn), zeros_like, (1, qdim)))
-    sub = Activation(; shape=(1, dim), storage=_decode_buf(cpu_scratch, Val(:sub), zeros_like, (1, dim)))
-    normed2 = Activation(; shape=(1, dim), storage=_decode_buf(cpu_scratch, Val(:normed2), zeros_like, (1, dim)))
     hidden_ffn = model.blocks[1].ffn.hidden
-    gate = Activation(; shape=(1, hidden_ffn), storage=_decode_buf(cpu_scratch, Val(:gate), zeros_like, (1, hidden_ffn)))
-    up = Activation(; shape=(1, hidden_ffn), storage=_decode_buf(cpu_scratch, Val(:up), zeros_like, (1, hidden_ffn)))
-    act = Activation(; shape=(1, hidden_ffn), storage=_decode_buf(cpu_scratch, Val(:act), zeros_like, (1, hidden_ffn)))
-    down = Activation(; shape=(1, dim), storage=_decode_buf(cpu_scratch, Val(:down), zeros_like, (1, dim)))
-    K = pos0                                    # cache rows now: P + steps
+    bufs = _decode_row_buffers(cpu_scratch, zeros_like, dim, kdim, qdim, n_heads, n_kv_heads, d_head, hidden_ffn)
+    hp = bufs.hp
+    @decode_stage :embed cpu embedding_lookup!(cpu, hp, tensors.embedding, [tok], wl)
     _T_GDN_NS[] = 0
     _T_ATTN_NS[] = 0
     _T_FFN_NS[] = 0
@@ -1569,8 +1720,8 @@ function _decode_step!(
             @decode_stage :gdn_mixer cpu _hybrid_linear_block!(
                 cpu,
                 hp,
-                normed,
-                sub,
+                bufs.normed,
+                bufs.sub,
                 bt,
                 tensors.spec,
                 wl,
@@ -1584,103 +1735,13 @@ function _decode_step!(
             # the residual add of `sub` happens in the FFN norm below
             _T_GDN_NS[] += time_ns() - t0
         else
-        t0 = time_ns()
-        @decode_stage :norm cpu rmsnorm!(cpu, normed, hp, bt.attn_rms, wl; eps)
-        @decode_stage :attn_mixer cpu begin
-            @decode_sub :attn_proj cpu begin
-                # q, k, v and the attention gate read the same normed row:
-                # one quantization, one threaded pass over all their rows.
-                if haskey(bt, :wattn_gate)
-                    _dec_matmul_group!(cpu, (q, k, v, gate_attn), xq_dim, normed,
-                        (bt.wq, bt.wk, bt.wv, bt.wattn_gate), wl)
-                else
-                    _dec_matmul_group!(cpu, (q, k, v), xq_dim, normed, (bt.wq, bt.wk, bt.wv), wl)
-                end
-            end
-            @decode_sub :attn_headnorm_rope cpu begin
-                _split_heads!(qh, q, n_heads, d_head)
-                _split_heads!(kh, k, n_kv_heads, d_head)
-                _split_heads!(vh, v, n_kv_heads, d_head)
-                if haskey(bt, :wq_norm)
-                    rmsnorm!(cpu, qh, qh, bt.wq_norm, wl; eps)
-                    rmsnorm!(cpu, kh, kh, bt.wk_norm, wl; eps)
-                end
-                rope!(
-                    cpu,
-                    qh,
-                    kh,
-                    _decode_pos(cpu_scratch, pos0 - 1),
-                    wl;
-                    theta,
-                    inv_freq,
-                    interleaved=_tensors_rope_interleaved(tensors),
-                    rotary_dim,
-                )  # 0-based position
-            end
-            @decode_sub :attn_kv_append cpu begin
-                # KV APPEND: exactly one row per layer per step, at n_kv_heads
-                _kv_append_storage!(kc[bi].storage, vc[bi].storage, kh.storage, vh.storage, pos0)
-            end
-            kv_rot = _kv_rotated(kc[bi].storage)
-            kv_rot && _kv_rotate!(qh.storage, true)
-            if cpu_scratch === nothing
-                # the query is the LAST position: it attends to the whole cache.
-                # A device backend that fuses the decode attention reads the
-                # cache rows in place; otherwise the CACHE rows are repeated per
-                # query head (kh above is the single new row; it was consumed by
-                # the append) and the reference per-head loop runs.
-                fused = @decode_sub :attn_core cpu _attention_decode_device!(
-                    cpu, attn.storage, qh.storage, kc[bi].storage, vc[bi].storage,
-                    n_heads, d_head, group, K,
-                )
-                if !fused
-                    # the reference attention needs (1, K) workspaces; the fused
-                    # path allocates none
-                    scores = TemporaryWorkspace(; shape=(1, K), storage=zeros_like((1, K)))
-                    scores_out = TemporaryWorkspace(; shape=(1, K), storage=zeros_like((1, K)))
-                    @decode_sub :attn_kv_append cpu begin
-                        kx = _repeat_heads(kc[bi], group)
-                        vx = _repeat_heads(vc[bi], group)
-                    end
-                    @decode_sub :attn_core cpu _attention_heads!(
-                        cpu,
-                        attn.storage,
-                        scores,
-                        scores_out,
-                        qh.storage,
-                        kx.storage,
-                        vx.storage,
-                        n_heads,
-                        d_head,
-                        1,
-                        K,
-                        wl,
-                    )
-                end
-            else
-                # fused: reads the cache rows 1:K in place, no repeat copy
-                @decode_sub :attn_core cpu _attention_decode_cpu!(
-                    attn.storage, qh.storage, kc[bi].storage, vc[bi].storage,
-                    cpu_scratch.probs, n_heads, d_head, group, K,
-                )
-            end
-            kv_rot && _kv_rotate!(attn.storage, false)
-            @decode_sub :attn_outproj cpu begin
-                _merge_heads!(merged, attn, n_heads, d_head)
-                if haskey(bt, :wattn_gate)
-                    _sigmoid_mul!(cpu, merged.storage, merged.storage, gate_attn.storage)
-                end
-                _dec_matmul_group!(cpu, (sub,), xq_qdim, merged, (bt.wo,), wl)
-            end
-        end
-        _T_ATTN_NS[] += time_ns() - t0
+            t0 = time_ns()
+            _decode_attn_block!(bt, bi, kc, vc, bufs, cpu, wl, tensors, zeros_like, cpu_scratch, pos0;
+                n_heads, n_kv_heads, d_head, group, eps, theta, inv_freq, rotary_dim)
+            _T_ATTN_NS[] += time_ns() - t0
         end
         t1 = time_ns()
-        # both mixers leave their output in `sub`: residual add, then norm
-        @decode_stage :norm cpu _add_rmsnorm!(cpu, normed2, hp, sub.storage, bt.ffn_rms, wl; eps)
-        _ffn_block!(cpu, down, gate, up, act, normed2, bt, wl, zeros_like;
-            xq_in=xq_dim, xq_ff=xq_ff)
-        _add_storage!(hp.storage, down.storage)  # residual
+        _decode_ffn_block!(bt, bufs, cpu, wl, zeros_like; eps)
         _T_FFN_NS[] += time_ns() - t1
     end
     # write the new hidden state into its row slot — storage CONTENT, not a
@@ -1736,6 +1797,7 @@ include("quant_cpu_kquants.jl")    # native Q8_K / Q8_0 x K-quant dot products: 
 include("gguf_quant_matrix.jl")    # quantized dense 2-D weights (QuantMatrix) + CPU matmul
 include("moe_host.jl")              # batched Q8_K top-k SwiGLU for host-resident expert slabs
 include("cpu_decode.jl")           # CPU seq = 1 GDN decode: preallocated F32 mixer
+include("verify_window.jl")        # speculative verify window: layer-major rows, fused GDN, commit
 include("tokenizer_protocol.jl")   # Pass C: the tokenizer PROTOCOL
 include("gguf_tokenizer.jl")       # GGUF tokenizer section: qwen35 BPE, streaming decode
 include("chat_template.jl")         # Qwen3.5 XML chat template renderer (no Jinja)

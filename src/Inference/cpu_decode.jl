@@ -255,17 +255,20 @@ function (g::_GDNSlabChunk)(c::Int)
     return nothing
 end
 
-function _gdn_decode_cpu!(cpu, h::Activation, normed::Activation, sub::Activation, bt, spec,
-    wl, eps, conv_state, rec_state, sc::CPUDecodeScratch)
+# Norm, projections and conv for one token. Leaves the raw conv input in `sc.mixed`,
+# the gate values in `sc.z`, the gate inputs in `sc.a` and `sc.b`, and the conv
+# output in `sc.convout`; advances `conv_state` by one token. The verify window
+# runs this per row and copies `sc.mixed` and `sc.z` into its records before the
+# next row overwrites them.
+function _gdn_project_conv!(cpu, h::Activation, normed::Activation, bt, spec, wl, eps,
+    conv_state, sc::CPUDecodeScratch)
     mx = spec.mixer
     nk, nv, dk, dv = sc.nk, sc.nv, sc.dk, sc.dv
     key_dim = nk * dk
     value_dim = nv * dv
     conv_dim = 2 * key_dim + value_dim
-    group = div(nv, nk)
     nv % nk == 0 || error("gdn decode: n_v_heads $nv not divisible by n_k_heads $nk")
     ksz = mx.conv_kernel_dim
-    epsf = Float32(eps)
 
     @decode_sub :gdn_norm cpu rmsnorm!(cpu, normed, h, bt.attn_rms, wl; eps)
     mixed = Activation(; shape=(1, conv_dim), storage=sc.mixed)
@@ -284,27 +287,30 @@ function _gdn_decode_cpu!(cpu, h::Activation, normed::Activation, sub::Activatio
     @decode_sub :gdn_conv cpu begin
         _gdn_conv_decode!(sc.convout, vec(sc.mixed), bt.wgdn_conv.storage, conv_state, ksz)
     end
-    return _gdn_decode_finish!(cpu, sub, bt, spec, wl, eps, conv_state, rec_state, sc, epsf)
+    return sc
 end
 
-# Gates, q/k normalization, delta rule, gated norm, and output projection,
-# all reading `sc.mixed` (already holding the conv output) and `sc.z`.
-function _gdn_decode_finish!(cpu, sub::Activation, bt, spec, wl, eps, conv_state, rec_state,
-    sc::CPUDecodeScratch, epsf::Float32)
+function _gdn_decode_cpu!(cpu, h::Activation, normed::Activation, sub::Activation, bt, spec,
+    wl, eps, conv_state, rec_state, sc::CPUDecodeScratch)
+    _gdn_project_conv!(cpu, h, normed, bt, spec, wl, eps, conv_state, sc)
+    return _gdn_decode_finish!(cpu, sub, bt, spec, wl, eps, conv_state, rec_state, sc, Float32(eps))
+end
+
+# Gates and q/k normalization for one token. Reads the conv output in `sc.convout`
+# and the gate projections in `sc.a` and `sc.b`; writes `sc.beta`, `sc.decay` and
+# the value and normalized q/k columns that the delta rule consumes.
+function _gdn_gates_qk!(cpu, bt, spec, sc::CPUDecodeScratch)
     nk, nv, dk, dv = sc.nk, sc.nv, sc.dk, sc.dv
     key_dim = nk * dk
-    value_dim = nv * dv
     group = div(nv, nk)
     tiled = spec.mixer.v_head_tiled
     conv = sc.convout
-    zv = vec(sc.z)
     av = vec(sc.a)
     bv = vec(sc.b)
     # FrozenParameter storage is `Any`; assert the concrete type once so the
     # per-head loops are not dynamically dispatched.
     A_log = bt.wgdn_A_log.storage::Vector{Float32}
     dt_bias = bt.wgdn_dt_bias.storage::Vector{Float32}
-    scale_norm = bt.wgdn_norm.storage::Vector{Float32}
 
     @decode_sub :gdn_gates cpu begin
         @inbounds for hh in 1:nv
@@ -344,22 +350,29 @@ function _gdn_decode_finish!(cpu, sub::Activation, bt, spec, wl, eps, conv_state
             end
         end
     end
+    return nothing
+end
 
-    @decode_sub :gdn_recur cpu begin
-        _pool_run_chunks!(_GDNSlabChunk(rec_state, sc, dv, nv, dk), sc.nslab)
-    end
+# Gated RMS norm and output projection for one token. `core` is the delta-rule
+# output and `zv` the gate values; the window passes per-row views of its records
+# and the single-token path passes `sc.core` and `vec(sc.z)`.
+function _gdn_gnorm_out!(cpu, sub::Activation, bt, wl, sc::CPUDecodeScratch,
+    core::AbstractVector{Float32}, zv::AbstractVector{Float32}, epsf::Float32)
+    nv, dv = sc.nv, sc.dv
+    value_dim = nv * dv
+    scale_norm = bt.wgdn_norm.storage::Vector{Float32}
 
     @decode_sub :gdn_gnorm cpu begin
         merged = vec(sc.merged)
         @inbounds for hh in 1:nv
             ss = 0.0f0
             for j in 1:dv
-                cv = sc.core[hh + nv * (j - 1)]
+                cv = core[hh + nv * (j - 1)]
                 ss += cv * cv
             end
             r = sqrt(ss / dv + epsf)
             for j in 1:dv
-                cv = sc.core[hh + nv * (j - 1)]
+                cv = core[hh + nv * (j - 1)]
                 zj = zv[(hh - 1) * dv + j]
                 merged[(hh - 1) * dv + j] = (cv / r * scale_norm[j]) * (zj / (1.0f0 + exp(-zj)))
             end
@@ -371,6 +384,18 @@ function _gdn_decode_finish!(cpu, sub::Activation, bt, spec, wl, eps, conv_state
         _dec_matmul_group!(cpu, (sub,), sc.xq_vdim, merged_act, (bt.wgdn_o,), wl)
     end
     return sub
+end
+
+# Gates, q/k normalization, delta rule, gated norm, and output projection for
+# one token, reading `sc.convout` (conv output) and the gate inputs in `sc.a`,
+# `sc.b`, `sc.z`.
+function _gdn_decode_finish!(cpu, sub::Activation, bt, spec, wl, eps, conv_state, rec_state,
+    sc::CPUDecodeScratch, epsf::Float32)
+    _gdn_gates_qk!(cpu, bt, spec, sc)
+    @decode_sub :gdn_recur cpu begin
+        _pool_run_chunks!(_GDNSlabChunk(rec_state, sc, sc.dv, sc.nv, sc.dk), sc.nslab)
+    end
+    return _gdn_gnorm_out!(cpu, sub, bt, wl, sc, sc.core, vec(sc.z), epsf)
 end
 
 # Single-query causal attention over the first `K` cache rows, all query heads,
