@@ -274,6 +274,11 @@ function _partial_merge!(dst::KVPartial, src::KVPartial)
 end
 
 # attn (1, n_heads, d) <- acc / l. An all-empty partial has no mass to normalize.
+# Device partials. The CUDA extension adds the methods; other backends decline,
+# as the decode hook does.
+_attention_partial_device!(backend, args...) = false
+function _partial_download! end
+
 function _partial_finish!(attn, part::KVPartial)
     for hh in eachindex(part.m)
         part.l[hh] > 0 || throw(gesso_error(ERR_INVALID_PLAN,
