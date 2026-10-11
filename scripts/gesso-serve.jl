@@ -104,11 +104,16 @@ function launch(opts)
 
     model, tensors, spec = Gesso.load_gguf(path)
     tk = Gesso.Inference.load_gguf_tokenizer(path)
-    backend = opts["cpu"] ? Gesso.CPUBackend() : cuda_backend()
-    if !opts["cpu"]
-        tensors = Base.invokelatest(() -> Gesso.to_device(backend, tensors))
-    end
+    opts["cpu"] && return serve_loaded(model, tensors, spec, tk, Gesso.CPUBackend(), host, port, n_ctx, model_id)
+    backend = cuda_backend()
+    # The CUDA methods are newer than this frame. Every later call dispatches on
+    # the backend, the warm-up and the server tasks included, so the rest of the
+    # launch runs in the latest world instead of wrapping each call.
+    tensors = Base.invokelatest(() -> Gesso.to_device(backend, tensors))
+    return Base.invokelatest(serve_loaded, model, tensors, spec, tk, backend, host, port, n_ctx, model_id)
+end
 
+function serve_loaded(model, tensors, spec, tk, backend, host, port, n_ctx, model_id)
     chat = gguf_chat_model(model, tensors, spec, tk; backend=backend, n_ctx=n_ctx, model_id=model_id)
 
     # One short generation before the port opens, so the first client does not
