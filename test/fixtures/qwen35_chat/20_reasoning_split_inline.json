@@ -1,0 +1,21 @@
+{
+ "input": {
+  "messages": [
+   {
+    "role": "user",
+    "content": "q"
+   },
+   {
+    "role": "assistant",
+    "content": "x<think>t</think>y"
+   },
+   {
+    "role": "user",
+    "content": "next"
+   }
+  ],
+  "add_generation_prompt": true,
+  "enable_thinking": true
+ },
+ "expected": "<|im_start|>user\nq<|im_end|>\n<|im_start|>assistant\n<think>\nt\n</think>\n\ny<|im_end|>\n<|im_start|>user\nnext<|im_end|>\n<|im_start|>assistant\n<think>\n"
+}

@@ -15,6 +15,7 @@ license = "Apache-2.0"
 #   Libdl  — ggml to_float for GGUF dequant (qwen35moe)
 #   Mmap   — safetensors byte region (§LXXVI)
 #   JSON   — config.json + safetensors header parsing (§LXXVI)
+#   Sockets — TCP listener for the OpenAI-compatible server (src/serve)
 #
 # Backend lowering arrives as package extensions when their phases call for
 # it — never as core dependencies:
@@ -35,6 +36,10 @@ Mmap = "a63ad114-7e13-5084-954f-fe012c677804"
 # Phase 3 (§LXXVI): the ONE sanctioned third-party dependency — config.json
 # and the safetensors header are JSON. Justified in the dependency-law test.
 JSON = "682c06a0-de6a-54ab-a142-c8b1cf79cde6"
+# Serve (src/serve): the OpenAI-compatible chat server listens on TCP. HTTP/1.1
+# framing is hand-written, so Sockets is the only network dependency. Stdlib,
+# justified in the dependency-law test.
+Sockets = "6462fe0b-24de-5631-8697-dd941f90decc"
 
 [weakdeps]
 # Phase 4 (§LXXVII): CUDA.jl is a package EXTENSION, never a core dep (§VII).

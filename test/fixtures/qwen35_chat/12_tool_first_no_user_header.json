@@ -1,0 +1,21 @@
+{
+ "input": {
+  "messages": [
+   {
+    "role": "tool",
+    "content": "R1"
+   },
+   {
+    "role": "tool",
+    "content": "R2"
+   },
+   {
+    "role": "user",
+    "content": "next"
+   }
+  ],
+  "add_generation_prompt": true,
+  "enable_thinking": true
+ },
+ "expected": "\n<tool_response>\nR1\n</tool_response>\n<tool_response>\nR2\n</tool_response><|im_end|>\n<|im_start|>user\nnext<|im_end|>\n<|im_start|>assistant\n<think>\n"
+}

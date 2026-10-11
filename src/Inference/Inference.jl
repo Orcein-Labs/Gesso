@@ -1107,6 +1107,22 @@ count of prompt tokens a `state` already held, which were not prefilled.
 call. Pass the whole conversation as `prompt` each turn; only the tokens past
 what the state holds are prefilled. Without one, buffers live for the call.
 
+`on_token`: called with each generated id right after it joins the output,
+EOS included. Returning `false` stops generation there, and that id is the
+last one returned. Any other return value, `nothing` included, continues.
+
+`stop_ids`: generation stops after emitting one of these ids, which is
+returned like EOS. The defaults (`on_token=nothing`, `stop_ids=()`) leave the
+output and the state unchanged.
+
+`eos_ids`: the ids that end generation. The default is the toy contract's
+EOS (id 2). A real vocabulary must pass its own: in a GPT-2 byte-level vocab,
+id 2 is `#`, and generation would end at the first markdown heading.
+
+An early stop, from either hook, takes the EOS path: the stopping id is in the
+returned ids but its K/V rows are not written. The state holds every id before
+it, so the next call on the same conversation prefills just that one id.
+
 Phase 3 (§LXXVI item A): `eps` / `theta` thread through as in
 `reference_prefill`; `tensors.final_rms` (when present) is applied before
 the tied head on every argmax step; GQA models cache K/V at `n_kv_heads`
@@ -1125,6 +1141,9 @@ function reference_generate(
     eps::Real=1e-6,
     theta=nothing,
     state::Union{Nothing,GenerateState}=nothing,
+    on_token=nothing,
+    stop_ids=(),
+    eos_ids=(TOY_EOS,),
 )
     isempty(prompt) && error("reference_generate: prompt is empty")
     theta=_resolved_rope_theta(tensors, theta)
@@ -1372,7 +1391,11 @@ function reference_generate(
                 println("gesso_timing token=$(steps) id=$(next) head_ms=$(round(head_ms; digits=1))")
                 flush(stdout)
             end
-            if next == TOY_EOS || steps >= cap
+            stop = steps >= cap || next in eos_ids || next in stop_ids
+            if on_token !== nothing && on_token(next) === false
+                stop = true
+            end
+            if stop
                 _profile_token_end(tok_t0, false)
                 break
             end
@@ -1709,6 +1732,8 @@ include("gguf_quant_matrix.jl")    # quantized dense 2-D weights (QuantMatrix) +
 include("moe_host.jl")              # batched Q8_K top-k SwiGLU for host-resident expert slabs
 include("cpu_decode.jl")           # CPU seq = 1 GDN decode: preallocated F32 mixer
 include("tokenizer_protocol.jl")   # Pass C: the tokenizer PROTOCOL
+include("gguf_tokenizer.jl")       # GGUF tokenizer section: qwen35 BPE, streaming decode
+include("chat_template.jl")         # Qwen3.5 XML chat template renderer (no Jinja)
 include("import_report.jl")      # Passes I/J: report + generated matrix
 
 end # module Inference

@@ -57,6 +57,9 @@ using Gesso: reference_prefill, reference_generate
     include("test_reference_prefill.jl")
     include("test_reference_generate.jl")
     include("test_generate_state_io.jl")
+    include("test_generate_hooks.jl")
+    include("test_serve.jl")
+    include("test_serve_engine.jl")
     include("test_batch.jl")
     include("test_containment.jl")
     include("test_observability.jl")
@@ -117,6 +120,14 @@ using Gesso: reference_prefill, reference_generate
     # Phase 3 (§LXXVI item C): GPT-2 byte-level BPE against a tiny data-only
     # fixture (golden ids traced from the merge table in the file header)
     include("test_tokenizer_gpt2.jl")
+
+    # Qwen3.5 chat template (hand-ported XML renderer, no Jinja): gate 3 byte-for-byte
+    # vs llama-server /apply-template on committed fixtures; no server or GGUF needed
+    include("test_chat_template.jl")
+
+    # Qwen3.5 GGUF BPE tokenizer: gate 1 id parity vs llama-server /tokenize, gate 2
+    # round trip and streaming equality, 200 KB speed gate; GGUF-gated (skips without it)
+    include("test_gguf_tokenizer.jl")
 
     # Phase 3 (§LXXVI item D): the REAL-model gate — one named skip unless
     # GESSO_SMOLLM2_DIR points at a local snapshot; it never downloads
@@ -263,6 +274,7 @@ using Gesso: reference_prefill, reference_generate
             "Libdl" => "ggml to_float for GGUF dequant (qwen35moe)",
             "Mmap" => "safetensors byte region (§LXXVI)",
             "JSON" => "config.json + safetensors header parsing (§LXXVI)",
+            "Sockets" => "TCP listener for the OpenAI-compatible server (src/serve)",
         )
         project = joinpath(pkgdir(Gesso), "Project.toml")
         section = ""
