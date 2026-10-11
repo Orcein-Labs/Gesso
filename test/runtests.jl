@@ -55,6 +55,7 @@ using Gesso: reference_prefill, reference_generate
     # generation with a real KV append
     include("test_reference_prefill.jl")
     include("test_reference_generate.jl")
+    include("test_generate_state_io.jl")
     include("test_batch.jl")
     include("test_containment.jl")
     include("test_observability.jl")

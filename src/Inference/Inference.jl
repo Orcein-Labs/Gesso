@@ -1148,6 +1148,7 @@ function reference_generate(
     P + cap <= st.ctx || throw(gesso_error(ERR_INVALID_PLAN,
         "reference_generate: prompt $P + max_new_tokens $cap exceed the state's ctx $(st.ctx)"))
     fresh = st.arena === nothing
+    fresh && state !== nothing && _bind_state!(st, tensors, kv_fmt)
     fresh && (st.arena = _ZerosArena(_zeros_like_factory(cpu, tensors)))
     zeros_like = st.arena
     # a prefill block's temporaries, dead once the block returns
@@ -1195,6 +1196,7 @@ function reference_generate(
                 mx, dim; qdim=n_heads * d_head, ff=_dense_ffn_hidden(model),
                 kdim=n_kv_heads * d_head, n_heads, n_kv_heads, d_head, vocab, ctx=st.ctx,
             ) : nothing
+            st.pending === nothing || _restore_pending!(st)
         end
         kc, vc, h = st.kc, st.vc, st.h
         gdn_conv, gdn_rec, gdn_scratch, cpu_scratch = st.gdn_conv, st.gdn_rec, st.gdn_scratch, st.cpu_scratch
@@ -1652,7 +1654,7 @@ function _decode_step!(
     return h
 end
 
-export reference_generate, GenerateState
+export reference_generate, GenerateState, save_state, load_state
 
 # Phase 3 (§LXXVI item B): Llama-family checkpoint import — config,
 # safetensors reader, name map. Transport, not architecture (§VIII).
