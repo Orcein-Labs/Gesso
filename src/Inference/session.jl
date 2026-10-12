@@ -439,7 +439,8 @@ function _assert_disjoint_scratch!(parent::Session, child::Session)
 end
 
 # greedy id from a logits row: argmax, ties = first index, 0-based (§LXXVIII;
-# no Random, no Sampler zoo)
+# no Random). Greedy is the default everywhere; the one opt-in sampler lives in
+# sampling.jl and is reachable only through reference_generate's `sampler`.
 _all_finite(a) = all(isfinite, a)
 
 _nonfinite_logits() = gesso_error(
