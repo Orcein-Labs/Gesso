@@ -75,6 +75,7 @@ function handle_chat(srv::Server, req::HTTPRequest, io::IO, keepalive::Bool)::Bo
     stop = _stop_list(get(body, "stop", nothing))
     thinking = _thinking(body)
     requested = _max_tokens(body)
+    sampling = _sampling(body)
 
     msgs = _normalize_messages(messages)
     prompt_ids = model.tokenize(model.render(msgs, collect(Any, tools), thinking))
@@ -98,7 +99,7 @@ function handle_chat(srv::Server, req::HTTPRequest, io::IO, keepalive::Bool)::Bo
 
     gen = try
         lock(srv.gate) do
-            _run_turn!(turn, prompt_ids, max_new)
+            _run_turn!(turn, prompt_ids, max_new, sampling)
         end
     catch e
         if turn.started[]
@@ -149,15 +150,16 @@ function handle_chat(srv::Server, req::HTTPRequest, io::IO, keepalive::Bool)::Bo
     return keepalive
 end
 
-function _run_turn!(turn::Turn, prompt_ids::Vector{Int}, max_new::Int)
+function _run_turn!(turn::Turn, prompt_ids::Vector{Int}, max_new::Int, sampling)
     turn.cancelled[] && return nothing
     if turn.stream
         start_event_stream(turn.io; keepalive=turn.keepalive)
         turn.started[] = true
         _write_event!(turn, _chunk(turn, Dict("role" => "assistant", "content" => ""), nothing))
     end
+    extra = sampling === nothing ? (;) : (sampling=sampling,)
     return turn.model.generate(prompt_ids; max_new_tokens=max_new,
-        on_token=id -> _on_token(turn, id))
+        on_token=id -> _on_token(turn, id), extra...)
 end
 
 function _on_token(turn::Turn, id::Integer)
@@ -295,6 +297,26 @@ function _thinking(body::AbstractDict)
     end
     haskey(body, "enable_thinking") && return body["enable_thinking"] !== false
     return true
+end
+
+# Greedy unless the request sets a temperature above 0. top_p and seed only
+# matter once sampling is on; a seed that is absent is taken from the clock.
+function _sampling(body::AbstractDict)
+    t = get(body, "temperature", nothing)
+    p = get(body, "top_p", 1.0)
+    seed = get(body, "seed", nothing)
+    t === nothing && return nothing
+    (t isa Real && !(t isa Bool) && isfinite(t) && 0 <= t <= 2) ||
+        throw(HTTPError(400, "temperature must be a number from 0 to 2"))
+    (p isa Real && !(p isa Bool) && 0 < p <= 1) ||
+        throw(HTTPError(400, "top_p must be a number in (0, 1]"))
+    t == 0 && return nothing
+    if seed === nothing
+        seed = Int(time_ns() >> 2)
+    end
+    (seed isa Integer && !(seed isa Bool) && 0 <= seed <= typemax(Int64)) ||
+        throw(HTTPError(400, "seed must be a non-negative integer"))
+    return Sampler(temperature=t, top_p=p, seed=seed)
 end
 
 function _max_tokens(body::AbstractDict)

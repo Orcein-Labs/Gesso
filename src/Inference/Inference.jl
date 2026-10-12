@@ -1165,8 +1165,11 @@ function reference_generate(
     eos_ids=(TOY_EOS,),
     draft=nothing,
     max_draft::Int=8,
+    sampler=nothing,
 )
     isempty(prompt) && error("reference_generate: prompt is empty")
+    (sampler === nothing || draft === nothing) || throw(ArgumentError(
+        "reference_generate: a sampler and a speculative draft are exclusive; speculation verifies greedily"))
     theta=_resolved_rope_theta(tensors, theta)
     _infer_device_storage!(:reference_generate, backend, tensors)
     cpu = backend
@@ -1438,7 +1441,8 @@ function reference_generate(
                 model, tensors, h, cpu, wd, vocab, 1; eps,
                 buf=cpu_scratch,
             )
-            next = @decode_stage :sample cpu _greedy_id(logits_row)            # 0-based id
+            next = @decode_stage :sample cpu (sampler === nothing ?
+                _greedy_id(logits_row) : _sample_id(sampler, logits_row))      # 0-based id
             head_ms = (time_ns() - t_head) / 1e6
             push!(ids, next)
             steps += 1
@@ -1861,6 +1865,7 @@ include("quant_cpu_multi.jl")      # multi-column Q8_K dots for prefill (K activ
 include("gguf_quant_matrix.jl")    # quantized dense 2-D weights (QuantMatrix) + CPU matmul
 include("moe_host.jl")              # batched Q8_K top-k SwiGLU for host-resident expert slabs
 include("cpu_decode.jl")           # CPU seq = 1 GDN decode: preallocated F32 mixer
+include("sampling.jl")             # opt-in temperature/top-p sampler for reference_generate
 include("verify_window.jl")        # speculative verify window: layer-major rows, fused GDN, commit
 include("tokenizer_protocol.jl")   # Pass C: the tokenizer PROTOCOL
 include("gguf_tokenizer.jl")       # GGUF tokenizer section: qwen35 BPE, streaming decode

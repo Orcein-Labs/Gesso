@@ -3,7 +3,7 @@
 # Weights and the backend are passed in by the caller, so this file names no
 # GPU type and the package stays free of CUDA.
 
-using ..Inference: GGUFBPE, render_chat, reference_generate, GenerateState
+using ..Inference: GGUFBPE, render_chat, reference_generate, GenerateState, Sampler
 import ..Inference: encode, decode
 
 """
@@ -24,12 +24,12 @@ function gguf_chat_model(model, tensors, spec, tk::GGUFBPE;
     eps = spec.rms_norm_eps
     state = GenerateState(n_ctx)
 
-    function generate(prompt_ids; max_new_tokens, on_token)
+    function generate(prompt_ids; max_new_tokens, on_token, sampling=nothing)
         run = wrapped -> begin
             info = Ref{Any}(nothing)
             ids = reference_generate(model, tensors, prompt_ids; backend=backend,
                 max_new_tokens=max_new_tokens, info=info, eps=eps, state=state,
-                on_token=wrapped, eos_ids=eos)
+                on_token=wrapped, eos_ids=eos, sampler=sampling)
             return (ids, info[].reused)
         end
         return _run_generation(run, prompt_ids, eos; on_token=on_token)

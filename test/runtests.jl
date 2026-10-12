@@ -63,6 +63,7 @@ using Gesso: reference_prefill, reference_generate
     include("test_ctx_checkpoints.jl")
     include("test_serve.jl")
     include("test_serve_engine.jl")
+    include("test_sampling.jl")
     include("test_batch.jl")
     include("test_containment.jl")
     include("test_observability.jl")

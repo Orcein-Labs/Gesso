@@ -6,9 +6,11 @@
 #       the whole generated sequence, so byte-level pieces can be joined
 #   render(messages::Vector{Dict{String,Any}}, tools::Vector{Any}, thinking::Bool) -> String
 #       the chat template, with tool-call arguments already parsed to mappings
-#   generate(prompt_ids::Vector{Int}; max_new_tokens::Int, on_token) -> (generated, cached)
+#   generate(prompt_ids::Vector{Int}; max_new_tokens::Int, on_token, sampling=nothing) -> (generated, cached)
 #       `on_token(id)` returns false to stop; `cached` is the number of prompt
-#       tokens whose K/V was reused from the previous call
+#       tokens whose K/V was reused from the previous call. `sampling` is a
+#       Sampler when the request set a temperature, and nothing for greedy.
+#       It is passed only when set, so engines that ignore it keep working.
 #
 # `n_ctx` bounds prompt plus completion, and `model_id` is the name clients send.
 
