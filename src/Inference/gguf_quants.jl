@@ -416,7 +416,9 @@ function _qgemv_bytes_threaded!(
     if p !== nothing && p.window
         return _qgemv_bytes_threaded_timed!(p, y, x, q, ggml_type, ne0, ne1, alpha, beta, nc, rb, nq)
     end
-    Threads.@threads for c in 1:nc
+    # Pool dispatch, not @threads: the threaded fork/join costs more than a
+    # decode-size GEMV, and the pool's workers spin between calls.
+    _run_row_chunks!(nc, ne1 * ne0) do c
         _qgemv_chunk!(y, x, q, ggml_type, ne0, ne1, alpha, beta, nc, c, rb, nq)
     end
     return y

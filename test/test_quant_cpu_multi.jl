@@ -5,6 +5,8 @@
 #   * the prefill path through _quant_matmul! equals the per-token path bit for
 #     bit, with the GESSO_PREFILL_MULTI switch on and off
 #   * the tile kernels do not allocate after warm-up
+#   * the single-column path through _quant_matmul! reuses its scratch buffers
+#     across shapes (large, small, large) and stays bit-equal to fresh buffers
 
 using Random: Xoshiro
 using Test: AbstractTestSet, Broken, get_testset, record
@@ -170,6 +172,37 @@ end
             end
             @testset "$name" begin
                 @test nmis == 0
+            end
+        end
+    end
+end
+
+@testset "single-column scratch: reuse across shapes is bit-equal to fresh buffers" begin
+    rng = Xoshiro(0x5c4a)
+    shapes = ((64, 4), (8, 1), (64, 4), (128, 8))
+    # F32 is the only type on the plain GEMV branch of _quant_matmul! (every IQ
+    # and K type is Q8_K-supported); Q4_K covers the Q8_K branch. Both reuse
+    # the scratch, so both need to be covered.
+    for (name, ty) in (("F32", _MQ.GGML_TYPE_F32), ("Q4_K", _MQ.GGML_TYPE_Q4_K))
+        @testset "$name" begin
+            for (nrows, nb) in shapes
+                ne0 = 256 * nb
+                rb = _MQ._qrow_bytes(ty, ne0)
+                w = ty == _MQ.GGML_TYPE_F32 ? collect(reinterpret(UInt8, randn(rng, Float32, nrows * ne0))) :
+                    _mq_random_rows(rng, ty, nrows, nb)
+                q = _MQ.QuantMatrix(w, 0, ty, ne0, nrows, rb, C_NULL, Int64(256))
+                x = randn(rng, Float32, 1, ne0)
+                dst = zeros(Float32, 1, nrows)
+                _MQ._quant_matmul!(dst, x, q)
+                ref = zeros(Float32, nrows)
+                xf = Float32.(x[1, :])
+                bytes = view(w, 1:(nrows * rb))
+                if _MQ._quant_q8k_native(ty)
+                    _MQ._qgemv_q8k_f32!(ref, xf, bytes, ty, ne0, nrows; threaded=true)
+                else
+                    _MQ._qgemv_bytes_threaded!(ref, xf, bytes, ty, ne0, nrows, 1.0f0, 0.0f0)
+                end
+                @test all(dst[1, r] === ref[r] for r in 1:nrows)
             end
         end
     end

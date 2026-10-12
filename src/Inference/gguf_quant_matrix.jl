@@ -111,6 +111,24 @@ end
 # Rows dequantized per fallback chunk: bounds the F32 buffer to about 64 MiB.
 const _QUANT_FALLBACK_CHUNK_ELEMS = 1 << 24
 
+# Activation and output rows for the single-column loop in `_quant_matmul!`.
+# No scratch reaches that call, so the buffers live here. Only the driver
+# thread calls it, since the pool workers run the chunks and never get here.
+# The buffers grow to the largest shape seen and are not shrunk, so steady
+# decode allocates nothing on this path.
+mutable struct _QuantGemvScratch
+    xf::Vector{Float32}
+    y::Vector{Float32}
+end
+const _QUANT_GEMV_SCRATCH = _QuantGemvScratch(Float32[], Float32[])
+
+function _quant_gemv_scratch(ne0::Int, nrows::Int)
+    s = _QUANT_GEMV_SCRATCH
+    length(s.xf) < ne0 && resize!(s.xf, ne0)
+    length(s.y) < nrows && resize!(s.y, nrows)
+    return s
+end
+
 function _quant_matmul!(dst::AbstractMatrix, x::AbstractMatrix, q::QuantMatrix)
     seq, ne0 = size(x)
     ne0 == q.ne0 || error("quant matmul: x has $ne0 features, weight has $(q.ne0)")
@@ -120,8 +138,9 @@ function _quant_matmul!(dst::AbstractMatrix, x::AbstractMatrix, q::QuantMatrix)
         if seq > 1 && _quant_q8k_native(q.ggml_type) && _prefill_multi_enabled()
             return _quant_matmul_multi!(dst, x, q)
         end
-        xf = Vector{Float32}(undef, q.ne0)
-        y = Vector{Float32}(undef, q.nrows)
+        s = _quant_gemv_scratch(q.ne0, q.nrows)
+        xf = view(s.xf, 1:q.ne0)
+        y = view(s.y, 1:q.nrows)
         bytes = _quant_bytes(q)
         for t in 1:seq
             @inbounds for i in 1:q.ne0
