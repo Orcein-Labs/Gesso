@@ -356,28 +356,34 @@ end
 # Gated RMS norm and output projection for one token. `core` is the delta-rule
 # output and `zv` the gate values; the window passes per-row views of its records
 # and the single-token path passes `sc.core` and `vec(sc.z)`.
+# Gated RMS norm of one token's delta-rule output into `merged` (value_dim). The
+# per-head loop is shared by the single-token path and the verify window, so the
+# window's per-row norm is the decode arithmetic, not a copy of it.
+function _gdn_gnorm_merge!(merged::AbstractVector{Float32}, nv::Int, dv::Int,
+    core::AbstractVector{Float32}, zv::AbstractVector{Float32}, scale_norm::Vector{Float32}, epsf::Float32)
+    @inbounds for hh in 1:nv
+        ss = 0.0f0
+        for j in 1:dv
+            cv = core[hh + nv * (j - 1)]
+            ss += cv * cv
+        end
+        r = sqrt(ss / dv + epsf)
+        for j in 1:dv
+            cv = core[hh + nv * (j - 1)]
+            zj = zv[(hh - 1) * dv + j]
+            merged[(hh - 1) * dv + j] = (cv / r * scale_norm[j]) * (zj / (1.0f0 + exp(-zj)))
+        end
+    end
+    return merged
+end
+
 function _gdn_gnorm_out!(cpu, sub::Activation, bt, wl, sc::CPUDecodeScratch,
     core::AbstractVector{Float32}, zv::AbstractVector{Float32}, epsf::Float32)
     nv, dv = sc.nv, sc.dv
     value_dim = nv * dv
     scale_norm = bt.wgdn_norm.storage::Vector{Float32}
 
-    @decode_sub :gdn_gnorm cpu begin
-        merged = vec(sc.merged)
-        @inbounds for hh in 1:nv
-            ss = 0.0f0
-            for j in 1:dv
-                cv = core[hh + nv * (j - 1)]
-                ss += cv * cv
-            end
-            r = sqrt(ss / dv + epsf)
-            for j in 1:dv
-                cv = core[hh + nv * (j - 1)]
-                zj = zv[(hh - 1) * dv + j]
-                merged[(hh - 1) * dv + j] = (cv / r * scale_norm[j]) * (zj / (1.0f0 + exp(-zj)))
-            end
-        end
-    end
+    @decode_sub :gdn_gnorm cpu _gdn_gnorm_merge!(vec(sc.merged), nv, dv, core, zv, scale_norm, epsf)
 
     @decode_sub :gdn_outproj cpu begin
         merged_act = Activation(; shape=(1, value_dim), storage=sc.merged)

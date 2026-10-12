@@ -1559,15 +1559,13 @@ function _decode_row_buffers(cpu_scratch, zeros_like, dim::Int, kdim::Int, qdim:
         gate, up, act, down, xq_dim, xq_qdim, xq_ff)
 end
 
-# Attention half of one decode block for layer `bi`: norm, QKV projections, RoPE,
-# KV append at 1-based cache row `pos0`, attention over rows 1:pos0, and the output
-# projection into `bufs.sub`. The residual add is in `_decode_ffn_block!`. The
-# single-token step and the verify window both call this per row, so the
-# arithmetic exists once.
+# Attention half of one decode block for layer `bi`: norm, QKV projections, the
+# per-row core (RoPE, KV append, attention), and the output projection into
+# `bufs.sub`. The residual add is in `_decode_ffn_block!`. The single-token step
+# and the verify window both run the core per row, so its arithmetic exists once.
 function _decode_attn_block!(bt, bi::Int, kc, vc, bufs, cpu, wl, tensors, zeros_like, cpu_scratch,
     pos0::Int; n_heads, n_kv_heads, d_head, group, eps, theta, inv_freq, rotary_dim=0)
-    (; hp, normed, q, gate_attn, k, v, qh, kh, vh, attn, merged, sub, xq_dim, xq_qdim) = bufs
-    K = pos0                                    # cache rows now: P + steps
+    (; hp, normed, q, gate_attn, k, v, sub, xq_dim, xq_qdim) = bufs
     @decode_stage :norm cpu rmsnorm!(cpu, normed, hp, bt.attn_rms, wl; eps)
     @decode_stage :attn_mixer cpu begin
         @decode_sub :attn_proj cpu begin
@@ -1580,83 +1578,101 @@ function _decode_attn_block!(bt, bi::Int, kc, vc, bufs, cpu, wl, tensors, zeros_
                 _dec_matmul_group!(cpu, (q, k, v), xq_dim, normed, (bt.wq, bt.wk, bt.wv), wl)
             end
         end
-        @decode_sub :attn_headnorm_rope cpu begin
-            _split_heads!(qh, q, n_heads, d_head)
-            _split_heads!(kh, k, n_kv_heads, d_head)
-            _split_heads!(vh, v, n_kv_heads, d_head)
-            if haskey(bt, :wq_norm)
-                rmsnorm!(cpu, qh, qh, bt.wq_norm, wl; eps)
-                rmsnorm!(cpu, kh, kh, bt.wk_norm, wl; eps)
-            end
-            rope!(
-                cpu,
-                qh,
-                kh,
-                _decode_pos(cpu_scratch, pos0 - 1),
-                wl;
-                theta,
-                inv_freq,
-                interleaved=_tensors_rope_interleaved(tensors),
-                rotary_dim,
-            )  # 0-based position
-        end
-        @decode_sub :attn_kv_append cpu begin
-            # KV APPEND: exactly one row per layer per step, at n_kv_heads
-            _kv_append_storage!(kc[bi].storage, vc[bi].storage, kh.storage, vh.storage, pos0)
-        end
-        kv_rot = _kv_rotated(kc[bi].storage)
-        kv_rot && _kv_rotate!(qh.storage, true)
-        if cpu_scratch === nothing
-            # the query is the LAST position: it attends to the whole cache.
-            # A device backend that fuses the decode attention reads the
-            # cache rows in place; otherwise the CACHE rows are repeated per
-            # query head (kh above is the single new row; it was consumed by
-            # the append) and the reference per-head loop runs.
-            fused = @decode_sub :attn_core cpu _attention_decode_device!(
-                cpu, attn.storage, qh.storage, kc[bi].storage, vc[bi].storage,
-                n_heads, d_head, group, K,
-            )
-            if !fused
-                # the reference attention needs (1, K) workspaces; the fused
-                # path allocates none
-                scores = TemporaryWorkspace(; shape=(1, K), storage=zeros_like((1, K)))
-                scores_out = TemporaryWorkspace(; shape=(1, K), storage=zeros_like((1, K)))
-                @decode_sub :attn_kv_append cpu begin
-                    kx = _repeat_heads(kc[bi], group)
-                    vx = _repeat_heads(vc[bi], group)
-                end
-                @decode_sub :attn_core cpu _attention_heads!(
-                    cpu,
-                    attn.storage,
-                    scores,
-                    scores_out,
-                    qh.storage,
-                    kx.storage,
-                    vx.storage,
-                    n_heads,
-                    d_head,
-                    1,
-                    K,
-                    wl,
-                )
-            end
-        else
-            # fused: reads the cache rows 1:K in place, no repeat copy
-            @decode_sub :attn_core cpu _attention_decode_cpu!(
-                attn.storage, qh.storage, kc[bi].storage, vc[bi].storage,
-                cpu_scratch.probs, n_heads, d_head, group, K,
-            )
-        end
-        kv_rot && _kv_rotate!(attn.storage, false)
+        _decode_attn_core!(bt, bi, kc, vc, bufs, cpu, wl, tensors, zeros_like, cpu_scratch, pos0;
+            n_heads, n_kv_heads, d_head, group, eps, theta, inv_freq, rotary_dim)
         @decode_sub :attn_outproj cpu begin
-            _merge_heads!(merged, attn, n_heads, d_head)
-            if haskey(bt, :wattn_gate)
-                _sigmoid_mul!(cpu, merged.storage, merged.storage, gate_attn.storage)
-            end
-            _dec_matmul_group!(cpu, (sub,), xq_qdim, merged, (bt.wo,), wl)
+            _attn_merge_gate!(bt, bufs, cpu, n_heads, d_head)
+            _dec_matmul_group!(cpu, (sub,), xq_qdim, bufs.merged, (bt.wo,), wl)
         end
     end
     return sub
+end
+
+# The per-row attention core: head split and norm, RoPE at the row's position,
+# the KV append at 1-based cache row `pos0`, and attention over rows 1:pos0.
+# Reads the projected q, k, v in `bufs` and leaves the heads in `bufs.attn`.
+function _decode_attn_core!(bt, bi::Int, kc, vc, bufs, cpu, wl, tensors, zeros_like, cpu_scratch, pos0::Int;
+    n_heads, n_kv_heads, d_head, group, eps, theta, inv_freq, rotary_dim=0)
+    (; q, k, v, qh, kh, vh, attn) = bufs
+    K = pos0                                    # cache rows now: P + steps
+    @decode_sub :attn_headnorm_rope cpu begin
+        _split_heads!(qh, q, n_heads, d_head)
+        _split_heads!(kh, k, n_kv_heads, d_head)
+        _split_heads!(vh, v, n_kv_heads, d_head)
+        if haskey(bt, :wq_norm)
+            rmsnorm!(cpu, qh, qh, bt.wq_norm, wl; eps)
+            rmsnorm!(cpu, kh, kh, bt.wk_norm, wl; eps)
+        end
+        rope!(
+            cpu,
+            qh,
+            kh,
+            _decode_pos(cpu_scratch, pos0 - 1),
+            wl;
+            theta,
+            inv_freq,
+            interleaved=_tensors_rope_interleaved(tensors),
+            rotary_dim,
+        )  # 0-based position
+    end
+    @decode_sub :attn_kv_append cpu begin
+        # KV APPEND: exactly one row per layer per step, at n_kv_heads
+        _kv_append_storage!(kc[bi].storage, vc[bi].storage, kh.storage, vh.storage, pos0)
+    end
+    kv_rot = _kv_rotated(kc[bi].storage)
+    kv_rot && _kv_rotate!(qh.storage, true)
+    if cpu_scratch === nothing
+        # the query is the LAST position: it attends to the whole cache.
+        # A device backend that fuses the decode attention reads the
+        # cache rows in place; otherwise the CACHE rows are repeated per
+        # query head (kh above is the single new row; it was consumed by
+        # the append) and the reference per-head loop runs.
+        fused = @decode_sub :attn_core cpu _attention_decode_device!(
+            cpu, attn.storage, qh.storage, kc[bi].storage, vc[bi].storage,
+            n_heads, d_head, group, K,
+        )
+        if !fused
+            # the reference attention needs (1, K) workspaces; the fused
+            # path allocates none
+            scores = TemporaryWorkspace(; shape=(1, K), storage=zeros_like((1, K)))
+            scores_out = TemporaryWorkspace(; shape=(1, K), storage=zeros_like((1, K)))
+            @decode_sub :attn_kv_append cpu begin
+                kx = _repeat_heads(kc[bi], group)
+                vx = _repeat_heads(vc[bi], group)
+            end
+            @decode_sub :attn_core cpu _attention_heads!(
+                cpu,
+                attn.storage,
+                scores,
+                scores_out,
+                qh.storage,
+                kx.storage,
+                vx.storage,
+                n_heads,
+                d_head,
+                1,
+                K,
+                wl,
+            )
+        end
+    else
+        # fused: reads the cache rows 1:K in place, no repeat copy
+        @decode_sub :attn_core cpu _attention_decode_cpu!(
+            attn.storage, qh.storage, kc[bi].storage, vc[bi].storage,
+            cpu_scratch.probs, n_heads, d_head, group, K,
+        )
+    end
+    kv_rot && _kv_rotate!(attn.storage, false)
+    return attn
+end
+
+# Heads back to the merged (1, qdim) row, with the attention output gate applied.
+function _attn_merge_gate!(bt, bufs, cpu, n_heads::Int, d_head::Int)
+    _merge_heads!(bufs.merged, bufs.attn, n_heads, d_head)
+    if haskey(bt, :wattn_gate)
+        _sigmoid_mul!(cpu, bufs.merged.storage, bufs.merged.storage, bufs.gate_attn.storage)
+    end
+    return bufs.merged
 end
 
 # FFN half of one decode block: residual add of the mixer output `bufs.sub`, the

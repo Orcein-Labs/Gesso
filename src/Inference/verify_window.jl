@@ -5,9 +5,10 @@
 # row is the sequential single-token decode for that row, so the logits, KV rows,
 # GDN state, conv state and hidden row match `_decode_step!` bit for bit.
 #
-# Layer-major: each block runs for every row before the next block starts, so
-# the GDN delta rule can run as one fused kernel over the window's tokens. The
-# matvecs still run per row; P2 replaces them with multi-column products.
+# Layer-major: each block runs for every row before the next block starts. The
+# weight projections run once over all T rows, so each weight streams once per
+# window. The steps that read earlier rows' state stay per row: the GDN conv and
+# gates, the fused delta-rule kernel, and the attention core.
 
 # Test-only red control. When set, a partial accept skips the replay from the
 # pre-window state and commits the state after every window row. The state
@@ -97,7 +98,8 @@ end
 # Verify-window result: the hidden rows after the whole stack, the logits and
 # greedy id of every row, and the per-block GDN records (nothing for attention).
 # `hwin` and `logits` take the element type of the state they run on (zeros_like),
-# so a Float64 model keeps the bits the baseline `h` keeps.
+# so a Float64 model keeps the bits the baseline `h` keeps. A prefill window runs
+# without the head, so its `logits` is empty and `preds` is empty.
 struct _VerifyWindow{H<:AbstractMatrix}
     T::Int
     hwin::H
@@ -106,11 +108,60 @@ struct _VerifyWindow{H<:AbstractMatrix}
     recs::Vector{Any}
 end
 
-# One GDN block for the window. Phase 1 runs norm, projections, conv and gates per
-# row and records the per-token values. Phase 2 runs the fused kernel over all
-# rows. Phase 3 runs the gated norm and FFN per row. Each phase reads the hidden
-# rows from `hwin`, so a row is never read after another row overwrote it.
-function _window_gdn_block!(bt, spec, hwin::AbstractMatrix, bufs, cpu, wl, zeros_like,
+# Row copies between the (T, n) window matrices and the one-row (1, n) buffers
+# that the single-token decode kernels take. The arithmetic runs on the same
+# one-row storage as decode, so per-row results are decode's bits.
+_win_load!(dst::AbstractArray, src::AbstractMatrix, t::Int) = (copyto!(vec(dst), view(src, t, :)); dst)
+_win_store!(dst::AbstractMatrix, t::Int, src::AbstractArray) = (copyto!(view(dst, t, :), vec(src)); dst)
+
+# The quantized weight behind a projection, or `nothing` for a dense weight.
+_window_quant(w) = hasfield(typeof(w), :storage) && getfield(w, :storage) isa QuantMatrix ?
+    getfield(w, :storage) : nothing
+
+# y = x * W' over all rows of `x`. A native quantized weight runs once over the
+# whole window through the multi-column dot. Any other weight runs one (1, n)
+# product per row, which is what decode runs, so the bits match by construction.
+function _window_matmul!(cpu, dst::AbstractMatrix, x::AbstractMatrix, w, wl, zeros_like)
+    q = _window_quant(w)
+    if q !== nothing && _quant_native(q.ggml_type)
+        _quant_matmul!(dst, x, q)
+        return dst
+    end
+    xr = zeros_like((1, size(x, 2)))
+    yr = zeros_like((1, size(dst, 2)))
+    xa = Activation(; shape=(1, size(x, 2)), storage=xr)
+    ya = Activation(; shape=(1, size(dst, 2)), storage=yr)
+    for t in axes(x, 1)
+        _win_load!(xr, x, t)
+        matmul!(cpu, ya, xa, w, wl)
+        _win_store!(dst, t, yr)
+    end
+    return dst
+end
+
+# Matrices the window's blocks write into, sized for T rows and allocated once
+# per window.
+function _window_buffers(zl, T::Int, dim::Int, kdim::Int, qdim::Int, conv_dim::Int,
+    value_dim::Int, hidden::Int, vocab::Int, head::Bool)
+    return (;
+        normed=zl((T, dim)), mixed=zl((T, conv_dim)), zc=zl((T, value_dim)),
+        gdn_merged=zl((T, value_dim)),
+        q=zl((T, qdim)), k=zl((T, kdim)), v=zl((T, kdim)), gate=zl((T, qdim)),
+        attn_merged=zl((T, qdim)),
+        sub=zl((T, dim)), normed2=zl((T, dim)),
+        ffn_gate=zl((T, hidden)), ffn_up=zl((T, hidden)), ffn_act=zl((T, hidden)),
+        ffn_down=zl((T, dim)),
+        hn=zl((T, dim)),
+        logits=zl(head ? (T, vocab) : (0, vocab)),
+    )
+end
+
+# One GDN block for the window. The norm and the qkv/z projections run over all
+# rows at once. The conv and gates run per row, since row t reads the conv state
+# that rows before t wrote. The fused kernel then runs over all rows, and the
+# gated norm and ssm_out projection run over all rows. Returns the records and
+# leaves the block's output in `W.sub`.
+function _window_gdn_block!(bt, spec, hwin::AbstractMatrix, W, bufs, cpu, wl, zeros_like,
     conv_in, rec_in, sc, eps)
     T = size(hwin, 1)
     sc === nothing &&
@@ -121,6 +172,7 @@ function _window_gdn_block!(bt, spec, hwin::AbstractMatrix, bufs, cpu, wl, zeros
     conv_dim = size(sc.mixed, 2)
     value_dim = nv * dv
     epsf = Float32(eps)
+    ksz = spec.mixer.conv_kernel_dim
     rec = _GDNWindowRec(
         zeros(Float32, conv_dim, T), zeros(Float32, value_dim, T),
         zeros(Float32, nv * dk, T), zeros(Float32, nv * dk, T), zeros(Float32, nv * dv, T),
@@ -130,10 +182,25 @@ function _window_gdn_block!(bt, spec, hwin::AbstractMatrix, bufs, cpu, wl, zeros
     # the conv state advances row by row here; the committed conv is rebuilt
     # from `rec.mixed` in `_commit_window!`, so this copy is discarded
     wconv = copy(conv_in)
+    a_act = Activation(; shape=(1, nv), storage=sc.a)
+    b_act = Activation(; shape=(1, nv), storage=sc.b)
 
     for t in 1:T
-        @views bufs.hp.storage[1, :] .= hwin[t, :]
-        _gdn_project_conv!(cpu, bufs.hp, bufs.normed, bt, spec, wl, eps, wconv, sc)
+        _win_load!(bufs.hp.storage, hwin, t)
+        rmsnorm!(cpu, bufs.normed, bufs.hp, bt.attn_rms, wl; eps)
+        _win_store!(W.normed, t, bufs.normed.storage)
+    end
+    _window_matmul!(cpu, W.mixed, W.normed, bt.wgdn_qkv, wl, zeros_like)
+    _window_matmul!(cpu, W.zc, W.normed, bt.wgdn_z, wl, zeros_like)
+
+    for t in 1:T
+        _win_load!(bufs.normed.storage, W.normed, t)
+        _win_load!(sc.mixed, W.mixed, t)
+        _win_load!(sc.z, W.zc, t)
+        # wgdn_a and wgdn_b are dense Float32 and stay on the (1, n) product, as in decode
+        matmul!(cpu, a_act, bufs.normed, bt.wgdn_a, wl)
+        matmul!(cpu, b_act, bufs.normed, bt.wgdn_b, wl)
+        _gdn_conv_decode!(sc.convout, vec(sc.mixed), bt.wgdn_conv.storage, wconv, ksz)
         _gdn_gates_qk!(cpu, bt, spec, sc)
         copyto!(view(rec.mixed, :, t), vec(sc.mixed))
         copyto!(view(rec.z, :, t), vec(sc.z))
@@ -146,22 +213,105 @@ function _window_gdn_block!(bt, spec, hwin::AbstractMatrix, bufs, cpu, wl, zeros
 
     _pool_run_chunks!(_GDNWindowChunk(rec_in, rec.rec_out, rec, T), sc.nslab)
 
+    scale_norm = bt.wgdn_norm.storage::Vector{Float32}
     for t in 1:T
-        @views bufs.hp.storage[1, :] .= hwin[t, :]
-        _gdn_gnorm_out!(cpu, bufs.sub, bt, wl, sc, view(rec.core, :, t), view(rec.z, :, t), epsf)
-        _decode_ffn_block!(bt, bufs, cpu, wl, zeros_like; eps)
-        @views hwin[t, :] .= bufs.hp.storage[1, :]
+        _gdn_gnorm_merge!(view(W.gdn_merged, t, :), nv, dv,
+            view(rec.core, :, t), view(rec.z, :, t), scale_norm, epsf)
     end
+    _window_matmul!(cpu, W.sub, W.gdn_merged, bt.wgdn_o, wl, zeros_like)
     return rec
+end
+
+# One attention block for the window. The norm and the q, k, v and gate
+# projections run over all rows. The per-row core then appends each row's KV
+# at its own cache row and attends over the rows up to it, so row t never reads
+# a cache row after `base+t-1`. The output projection runs over all rows.
+function _window_attn_block!(bt, bi::Int, kc, vc, hwin::AbstractMatrix, W, bufs, cpu, wl,
+    tensors, zeros_like, cpu_scratch, base::Int;
+    n_heads::Int, n_kv_heads::Int, d_head::Int, group::Int, eps, theta, inv_freq, rotary_dim::Int=0)
+    T = size(hwin, 1)
+    for t in 1:T
+        _win_load!(bufs.hp.storage, hwin, t)
+        rmsnorm!(cpu, bufs.normed, bufs.hp, bt.attn_rms, wl; eps)
+        _win_store!(W.normed, t, bufs.normed.storage)
+    end
+    _window_matmul!(cpu, W.q, W.normed, bt.wq, wl, zeros_like)
+    _window_matmul!(cpu, W.k, W.normed, bt.wk, wl, zeros_like)
+    _window_matmul!(cpu, W.v, W.normed, bt.wv, wl, zeros_like)
+    gated = haskey(bt, :wattn_gate)
+    gated && _window_matmul!(cpu, W.gate, W.normed, bt.wattn_gate, wl, zeros_like)
+
+    for t in 1:T
+        _win_load!(bufs.q.storage, W.q, t)
+        _win_load!(bufs.k.storage, W.k, t)
+        _win_load!(bufs.v.storage, W.v, t)
+        gated && _win_load!(bufs.gate_attn.storage, W.gate, t)
+        _decode_attn_core!(bt, bi, kc, vc, bufs, cpu, wl, tensors, zeros_like, cpu_scratch, base + t - 1;
+            n_heads, n_kv_heads, d_head, group, eps, theta, inv_freq, rotary_dim)
+        _attn_merge_gate!(bt, bufs, cpu, n_heads, d_head)
+        _win_store!(W.attn_merged, t, bufs.merged.storage)
+    end
+    _window_matmul!(cpu, W.sub, W.attn_merged, bt.wo, wl, zeros_like)
+    return W.sub
+end
+
+# The FFN half of a block over all rows. `subT` is the mixer output for every
+# row. Dense FFNs run gate, up and down over all rows. A MoE FFN routes each row
+# on its own, as decode does, so its rows run through the decode block.
+function _window_ffn_block!(bt, hwin::AbstractMatrix, subT::AbstractMatrix, W, bufs, cpu, wl,
+    zeros_like; eps)
+    T = size(hwin, 1)
+    if haskey(bt, :wrouter)
+        for t in 1:T
+            _win_load!(bufs.hp.storage, hwin, t)
+            _win_load!(bufs.sub.storage, subT, t)
+            _decode_ffn_block!(bt, bufs, cpu, wl, zeros_like; eps)
+            _win_store!(hwin, t, bufs.hp.storage)
+        end
+        return hwin
+    end
+    _add_storage!(hwin, subT)
+    for t in 1:T
+        _win_load!(bufs.hp.storage, hwin, t)
+        rmsnorm!(cpu, bufs.normed2, bufs.hp, bt.ffn_rms, wl; eps)
+        _win_store!(W.normed2, t, bufs.normed2.storage)
+    end
+    _window_matmul!(cpu, W.ffn_gate, W.normed2, bt.wgate, wl, zeros_like)
+    _window_matmul!(cpu, W.ffn_up, W.normed2, bt.wup, wl, zeros_like)
+    swiglu!(cpu,
+        Activation(; shape=size(W.ffn_act), storage=W.ffn_act),
+        Activation(; shape=size(W.ffn_gate), storage=W.ffn_gate),
+        Activation(; shape=size(W.ffn_up), storage=W.ffn_up), wl)
+    _window_matmul!(cpu, W.ffn_down, W.ffn_act, bt.wdown, wl, zeros_like)
+    _add_storage!(hwin, W.ffn_down)
+    return hwin
+end
+
+# The tied head over all rows: the final RMSNorm per row, then one lm_head product
+# over the window. The argmax is taken per row by the caller.
+function _window_head!(tensors, hwin::AbstractMatrix, W, bufs, cpu, wl, zeros_like; eps)
+    final_rms = haskey(tensors, :final_rms) ? tensors.final_rms : nothing
+    for t in axes(hwin, 1)
+        _win_load!(bufs.hp.storage, hwin, t)
+        if final_rms === nothing
+            _win_store!(W.hn, t, bufs.hp.storage)
+        else
+            rmsnorm!(cpu, bufs.normed2, bufs.hp, final_rms, wl; eps)
+            _win_store!(W.hn, t, bufs.normed2.storage)
+        end
+    end
+    _window_matmul!(cpu, W.logits, W.hn, tensors.lm_head, wl, zeros_like)
+    return W.logits
 end
 
 # Runs `toks` (the anchor, then the drafts) at 1-based cache rows base .. base+T-1.
 # Row t writes its KV row at base+t-1 and attends over rows 1 .. base+t-1 only.
 # Nothing in `gdn_conv` or `gdn_rec` changes: the window works on copies, and
-# `_commit_window!` decides what survives.
+# `_commit_window!` decides what survives. With `head=false` the window skips the
+# logits, which is how a prompt prefill uses it.
 function _decode_window!(model, tensors, kc, vc, toks::AbstractVector{Int}, base::Int, cpu, wl,
     gdn_conv, gdn_rec, cpu_scratch; vocab::Int, n_heads::Int, n_kv_heads::Int, d_head::Int,
-    group::Int, eps, theta, inv_freq, rotary_dim::Int=0)
+    group::Int, eps, theta, inv_freq, rotary_dim::Int=0, head::Bool=true)
     T = length(toks)
     T >= 1 || error("verify window: empty window")
     base >= 1 || error("verify window: base row $base is before the first cache row")
@@ -173,34 +323,33 @@ function _decode_window!(model, tensors, kc, vc, toks::AbstractVector{Int}, base
     bufs = _decode_row_buffers(cpu_scratch, zeros_like, dim, kdim, qdim, n_heads, n_kv_heads, d_head, hidden_ffn)
     hwin = zeros_like((T, dim))
     embedding_lookup!(cpu, Activation(; shape=(T, dim), storage=hwin), tensors.embedding, collect(toks), wl)
+    conv_dim = cpu_scratch === nothing ? 0 : size(cpu_scratch.mixed, 2)
+    value_dim = cpu_scratch === nothing ? 0 : cpu_scratch.nv * cpu_scratch.dv
+    W = _window_buffers(zeros_like, T, dim, kdim, qdim, conv_dim, value_dim, hidden_ffn, vocab, head)
 
     recs = Vector{Any}(nothing, length(model.blocks))
     for (bi, blk) in enumerate(model.blocks)
         bt = tensors.blocks[bi]
         if _block_mixer(bt) === :linear_attention
-            recs[bi] = _window_gdn_block!(bt, tensors.spec, hwin, bufs, cpu, wl, zeros_like,
+            recs[bi] = _window_gdn_block!(bt, tensors.spec, hwin, W, bufs, cpu, wl, zeros_like,
                 gdn_conv[bi], gdn_rec[bi], cpu_scratch, eps)
+            subT = W.sub
         else
-            for t in 1:T
-                @views bufs.hp.storage[1, :] .= hwin[t, :]
-                _decode_attn_block!(bt, bi, kc, vc, bufs, cpu, wl, tensors, zeros_like, cpu_scratch,
-                    base + t - 1; n_heads, n_kv_heads, d_head, group, eps, theta, inv_freq, rotary_dim)
-                _decode_ffn_block!(bt, bufs, cpu, wl, zeros_like; eps)
-                @views hwin[t, :] .= bufs.hp.storage[1, :]
-            end
+            subT = _window_attn_block!(bt, bi, kc, vc, hwin, W, bufs, cpu, wl, tensors, zeros_like,
+                cpu_scratch, base; n_heads, n_kv_heads, d_head, group, eps, theta, inv_freq, rotary_dim)
         end
+        _window_ffn_block!(bt, hwin, subT, W, bufs, cpu, wl, zeros_like; eps)
     end
 
-    logits = zeros_like((T, vocab))
-    preds = Vector{Int}(undef, T)
-    hact = Activation(; shape=(T, dim), storage=hwin)
-    for t in 1:T
-        # the head scratch is overwritten by the next row, so the argmax is taken here
-        row = _last_logits(model, tensors, hact, cpu, wl, vocab, t; eps, buf=cpu_scratch)
-        logits[t, :] .= row
-        preds[t] = _greedy_id(row)
+    if head
+        logits = _window_head!(tensors, hwin, W, bufs, cpu, wl, zeros_like; eps)
+        preds = Vector{Int}(undef, T)
+        for t in 1:T
+            preds[t] = _greedy_id(view(logits, t, :))
+        end
+        return _VerifyWindow(T, hwin, logits, preds, recs)
     end
-    return _VerifyWindow(T, hwin, logits, preds, recs)
+    return _VerifyWindow(T, hwin, W.logits, Int[], recs)
 end
 
 # Rebuilds the conv state after the first `m` window inputs. The state holds the
