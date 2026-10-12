@@ -8,8 +8,9 @@
 #   julia --project scripts/gesso-serve.jl --gguf <path> [--host 127.0.0.1]
 #         [--port 8080] [--n-ctx 65536] [--model-id ornith-35b] [--cpu]
 #       Loads a GGUF and serves it. The path comes from --gguf or from
-#       GESSO_ORNITH35_GGUF. The backend is CUDA unless --cpu is given. CUDA is
-#       loaded only on that path, so the package itself never depends on it.
+#       GESSO_ORNITH35_GGUF. GESSO_BACKEND=lava|cuda|cpu picks the backend and
+#       defaults to lava; --cpu is the same as GESSO_BACKEND=cpu. Only the GPU
+#       package that was asked for is loaded, so the package never depends on it.
 
 using Gesso
 using Sockets
@@ -87,12 +88,13 @@ function resolve_gguf(opts)
     return path
 end
 
-# CUDA is loaded at run time, so the script does not need a top-level `using` and
-# a --cpu run never touches the GPU stack. The backend binding exists only once
+# The GPU package is loaded at run time, so the script needs no top-level `using`
+# and a cpu run never touches a GPU stack. The backend binding exists only once
 # the extension is loaded, hence the invokelatest calls.
-function cuda_backend()
-    Core.eval(Main, :(using CUDA))
-    return Base.invokelatest(() -> Gesso.CUDABackend())
+function gpu_backend(which::AbstractString)
+    pkg, ctor = which == "lava" ? (:Lava, :LavaBackend) : (:CUDA, :CUDABackend)
+    Core.eval(Main, :(using $pkg))
+    return Base.invokelatest(() -> getfield(Gesso, ctor)())
 end
 
 function launch(opts)
@@ -102,11 +104,15 @@ function launch(opts)
     n_ctx = parse(Int, get(opts, "--n-ctx", string(DEFAULTS.n_ctx)))
     model_id = get(opts, "--model-id", DEFAULTS.model_id)
 
+    which = opts["cpu"] ? "cpu" : get(ENV, "GESSO_BACKEND", "lava")
+    # Fail on a bad backend name before spending minutes on the weights.
+    which in ("lava", "cuda", "cpu") ||
+        throw(ArgumentError("GESSO_BACKEND must be lava, cuda or cpu, got '$which'"))
     model, tensors, spec = Gesso.load_gguf(path)
     tk = Gesso.Inference.load_gguf_tokenizer(path)
-    opts["cpu"] && return serve_loaded(model, tensors, spec, tk, Gesso.CPUBackend(), host, port, n_ctx, model_id)
-    backend = cuda_backend()
-    # The CUDA methods are newer than this frame. Every later call dispatches on
+    which == "cpu" && return serve_loaded(model, tensors, spec, tk, Gesso.CPUBackend(), host, port, n_ctx, model_id)
+    backend = gpu_backend(which)
+    # The GPU methods are newer than this frame. Every later call dispatches on
     # the backend, the warm-up and the server tasks included, so the rest of the
     # launch runs in the latest world instead of wrapping each call.
     tensors = Base.invokelatest(() -> Gesso.to_device(backend, tensors))
