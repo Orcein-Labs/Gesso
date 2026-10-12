@@ -159,6 +159,10 @@ using Gesso: reference_prefill, reference_generate
     # LAVA_LOADED / VULKAN_OK consts come from the seam file above.
     include("test_lava_ops.jl")
 
+    # Lava fused single-query decode attention (GQA read in place) vs the F64
+    # oracle; named skip without a device.
+    include("test_lava_attention_decode.jl")
+
     # Phase 8 L1: Lava dense quant GEMV (GGUF bytes on device, in-kernel
     # dequant) vs the host F64 reference; named skip without a device.
     include("test_lava_quant.jl")

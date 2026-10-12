@@ -149,6 +149,7 @@ include("lava_quant.jl")
 # Phase 8 item B (§LXXXI): the Lava operator methods on LavaArray{Float32}
 # + explicit to_device transfer. Same op names, more-specific methods (§CIX).
 include("lava_ops.jl")
+include("lava_attention.jl")
 
 # L2 hybrid decode seams for qwen35moe: the gated-delta-net mixer, its gating
 # ops, and the host-expert MoE route. Needs lava_ops.jl for the device helpers.
