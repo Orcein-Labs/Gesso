@@ -140,6 +140,10 @@ const LAVA_SUPPORTED_CAPS = Set([
 supports(::LavaBackend, cap::Symbol) = cap in LAVA_SUPPORTED_CAPS
 supports(::Type{LavaBackend}, cap::Symbol) = cap in LAVA_SUPPORTED_CAPS
 
+# Dense quant GEMV (LavaDenseQuant) must load before lava_ops.jl, which routes
+# to it from _lava_matmul! and _lava_to_device.
+include("lava_quant.jl")
+
 # Phase 8 item B (§LXXXI): the Lava operator methods on LavaArray{Float32}
 # + explicit to_device transfer. Same op names, more-specific methods (§CIX).
 include("lava_ops.jl")

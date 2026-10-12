@@ -467,6 +467,11 @@ end
 function _lava_matmul!(dst, x, w)
     a = _LAVA_DECODE_AUDIT
     t0 = a.enabled ? time_ns() : UInt64(0)
+    if w.storage isa LavaDenseQuant
+        _lq_matmul!(dst.storage, x.storage, w.storage)
+        a.enabled && _lava_note_op!(:matmul, time_ns() - t0)
+        return dst
+    end
     T = eltype(dst.storage)
     mul!(dst.storage, x.storage, transpose(w.storage), one(T), zero(T))
     a.enabled && _lava_note_op!(:matmul, time_ns() - t0)
@@ -913,18 +918,32 @@ the lowering) and return a new named tuple of the same shape — `embedding`,
 tensors. Tied heads stay tied on device: `lm_head === embedding`.
 """
 function _lava_to_device(tensors)
-    _to_f32(s) = s isa Lava.LavaArray ? s : Lava.LavaArray{Float32}(s)
+    # GGUF quant matrices dequantize to F32 here (embedding rows are gathered
+    # from F32 storage). Projection weights stay as GGUF bytes when they are
+    # eligible and fit the dense budget (the CUDA rule, GESSO_GPU_BUDGET_MIB).
+    budget = Ref(Gesso.Inference._gpu_budget_bytes())
+    _to_f32(s) = s isa Lava.LavaArray ? s :
+        s isa Gesso.Inference.QuantMatrix ? Lava.LavaArray{Float32}(Gesso.Inference._quant_host_f32(s)) :
+        Lava.LavaArray{Float32}(s)
+    _to_proj(s) = begin
+        if s isa Gesso.Inference.QuantMatrix && _lq_eligible(s) && _lq_device_bytes(s) <= budget[]
+            budget[] -= _lq_device_bytes(s)
+            return _lq_upload(s)
+        end
+        return _to_f32(s)
+    end
     # tensors in the map carry (shape, storage); blocks are NAMED TUPLES of
     # tensors, so their fields convert field-wise
-    _conv_t(t) = begin
+    _conv_t(t; proj::Bool = false) = begin
         hasproperty(t, :storage) || return t         # mixer tags and other metadata
         t.storage === nothing && return t            # unset storage stays unset
-        typeof(t)(; shape = t.shape, storage = _to_f32(t.storage))
+        st = proj && t isa Gesso.ProjectionWeight ? _to_proj(t.storage) : _to_f32(t.storage)
+        typeof(t)(; shape = t.shape, storage = st)
     end
-    _conv_blk(b) = NamedTuple{keys(b)}(map(_conv_t, values(b)))
+    _conv_blk(b) = NamedTuple{keys(b)}(map(t -> _conv_t(t; proj = true), values(b)))
     embedding = _conv_t(tensors.embedding)
     blocks = [_conv_blk(b) for b in tensors.blocks]
-    lm_head = tensors.lm_head === tensors.embedding ? embedding : _conv_t(tensors.lm_head)
+    lm_head = tensors.lm_head === tensors.embedding ? embedding : _conv_t(tensors.lm_head; proj = true)
     fr = haskey(tensors, :final_rms) ? tensors.final_rms : nothing
     final_rms = fr === nothing ? nothing : _conv_t(fr)
     _lava_sync!()
