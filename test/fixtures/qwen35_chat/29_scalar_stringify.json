@@ -1,0 +1,30 @@
+{
+ "input": {
+  "messages": [
+   {
+    "role": "user",
+    "content": "go"
+   },
+   {
+    "role": "assistant",
+    "content": "",
+    "tool_calls": [
+     {
+      "type": "function",
+      "function": {
+       "name": "calc",
+       "arguments": "{\"a\": true, \"b\": null, \"c\": 1e20, \"d\": 1e-7, \"e\": 42, \"f\": -2.5e-5, \"g\": \"s\"}"
+      }
+     }
+    ]
+   },
+   {
+    "role": "tool",
+    "content": "ok"
+   }
+  ],
+  "add_generation_prompt": true,
+  "enable_thinking": true
+ },
+ "expected": "<|im_start|>user\ngo<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n<tool_call>\n<function=calc>\n<parameter=a>\nTrue\n</parameter>\n<parameter=b>\nNone\n</parameter>\n<parameter=c>\n1e+20\n</parameter>\n<parameter=d>\n1e-07\n</parameter>\n<parameter=e>\n42\n</parameter>\n<parameter=f>\n-2.5e-05\n</parameter>\n<parameter=g>\ns\n</parameter>\n</function>\n</tool_call><|im_end|>\n<|im_start|>user\n<tool_response>\nok\n</tool_response><|im_end|>\n<|im_start|>assistant\n<think>\n"
+}

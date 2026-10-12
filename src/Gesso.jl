@@ -31,20 +31,27 @@ include("Parameters/Parameters.jl")         # Phase 1/3
 include("Operators/Operators.jl")           # Phase 1/2
 include("Lowering/Lowering.jl")             # Phase 4
 include("Operators/cpu.jl")                 # Phase 2: CPU reference methods (§LXXV)
+include("Operators/cpu_linear.jl")          # Qwen3.5 Gated DeltaNet + sigmoid gate
 include("Inference/Inference.jl")           # Phase 5
 include("Runtime/Runtime.jl")               # Phase 5+
 include("Profiling/Profiling.jl")           # Phase 6
 include("Representation/Representation.jl") # Phase 10
 include("Autotune/Autotune.jl")             # Phase 9
+include("Speculation/Speculation.jl")       # Phase 20: host-side draft seam (SPECULATION_SEAM.md)
 include("Planning/Planning.jl")             # Phase 7
 include("Agents/Agents.jl")                 # Phase 12
 include("CAPI/CAPI.jl")                     # Phase 16
+include("serve/Serve.jl")                   # OpenAI-compatible chat server (after Inference: the engine binding and ordered JSON)
 
 # --- public semantic vocabulary (§CIX; Phase 1 item A) ----------------------
 # Re-exported so `using Gesso` sees the core vocabulary. Each module owns its
 # names; the root only forwards them.
 using .Semantics: PrefillWorkload, DecodeWorkload
 export PrefillWorkload, DecodeWorkload
+
+# --- chat server (src/serve) ------------------------------------------------
+using .Serve: ChatModel, serve, gguf_chat_model
+export ChatModel, serve, gguf_chat_model
 
 using .ModelIR: Embedding, RMSNorm, RoPE, Attention, SwiGLU, Block, Model
 export Embedding, RMSNorm, RoPE, Attention, SwiGLU, Block, Model
@@ -56,11 +63,32 @@ export Embedding, RMSNorm, RoPE, Attention, SwiGLU, Block, Model
 using .Inference:
     reference_prefill,
     reference_generate,
+    GenerateState,
+    save_state,
+    load_state,
+    kv_bytes_per_token,
+    memory_ceiling_tokens,
+    CostModel,
+    prefill_seconds,
+    decode_seconds,
+    ContextBudget,
+    latency_ceiling_tokens,
+    CompactionPolicy,
+    CompactionTracker,
+    reset!,
+    decide_compaction,
     load_llama_config,
     config_to_model,
     load_safetensors,
     materialize_llama,
     load_llama,
+    load_gguf,
+    gguf_architecture_spec,
+    gguf_header,
+    GgufQuantSlice,
+    GpuQuantSlice,
+    HostOffload,
+    gguf_dequant_expert,
     GPT2BPE,
     load_gpt2_tokenizer,
     encode,
@@ -81,6 +109,8 @@ using .Inference:
     ArchitectureAdapter,
     LlamaAdapter,
     Qwen2Adapter,
+    Qwen35Adapter,
+    Qwen35MoeAdapter,
     GemmaAdapter,
     MistralAdapter,
     Phi3Adapter,
@@ -89,10 +119,17 @@ using .Inference:
     adapter_for,
     known_families,
     architecture_spec,
+    LinearMixerSpec,
+    MoeSpec,
+    layer_mixer,
     materialize_architecture,
+    load_architecture,
+    spec_to_model,
     parse_config,
     param_map,
+    gguf_param_map,
     fused_qkv_rows,
+    fused_qg_rows,
     family_symbol,
     is_scaled,
     canonical_name,
@@ -110,11 +147,32 @@ using .Inference:
     vocab_size
 export reference_prefill,
     reference_generate,
+    GenerateState,
+    save_state,
+    load_state,
+    kv_bytes_per_token,
+    memory_ceiling_tokens,
+    CostModel,
+    prefill_seconds,
+    decode_seconds,
+    ContextBudget,
+    latency_ceiling_tokens,
+    CompactionPolicy,
+    CompactionTracker,
+    reset!,
+    decide_compaction,
     load_llama_config,
     config_to_model,
     load_safetensors,
     materialize_llama,
     load_llama,
+    load_gguf,
+    gguf_architecture_spec,
+    gguf_header,
+    GgufQuantSlice,
+    GpuQuantSlice,
+    HostOffload,
+    gguf_dequant_expert,
     GPT2BPE,
     load_gpt2_tokenizer,
     encode,
@@ -135,6 +193,8 @@ export reference_prefill,
     ArchitectureAdapter,
     LlamaAdapter,
     Qwen2Adapter,
+    Qwen35Adapter,
+    Qwen35MoeAdapter,
     GemmaAdapter,
     MistralAdapter,
     Phi3Adapter,
@@ -143,7 +203,12 @@ export reference_prefill,
     adapter_for,
     known_families,
     architecture_spec,
-    materialize_architecture
+    LinearMixerSpec,
+    MoeSpec,
+    layer_mixer,
+    materialize_architecture,
+    load_architecture,
+    spec_to_model
 
 using .Parameters:
     SemanticTensor,
@@ -183,18 +248,27 @@ export SemanticTensor,
     ArchitectureAdapter,
     LlamaAdapter,
     Qwen2Adapter,
+    Qwen35Adapter,
+    Qwen35MoeAdapter,
     GemmaAdapter,
     MistralAdapter,
     Phi3Adapter,
     PhiAdapter,
     FusedQKVLayout,
     fused_qkv_rows,
+    fused_qg_rows,
     adapter_for,
     known_families,
     architecture_spec,
+    LinearMixerSpec,
+    MoeSpec,
+    layer_mixer,
     materialize_architecture,
+    load_architecture,
+    spec_to_model,
     parse_config,
     param_map,
+    gguf_param_map,
     family_symbol,
     is_scaled,
     canonical_name,
@@ -210,5 +284,37 @@ export SemanticTensor,
     compatibility_table,
     tokenizer_metadata,
     vocab_size
+
+# Phase 20 (§XCIII; docs/design/SPECULATION_SEAM.md): the draft-source seam and
+# its host-only sources. No verifier is wired here; decoding is unchanged.
+using .Speculation:
+    DraftSource,
+    DraftContext,
+    Draft,
+    propose,
+    observe!,
+    SuffixSource,
+    TemplateRule,
+    TemplateSource,
+    SymbolicSource,
+    IntegerArithmetic,
+    IntegerSequence,
+    LastLineProcedure,
+    complete_text,
+    feedback_counts
+export DraftSource,
+    DraftContext,
+    Draft,
+    propose,
+    observe!,
+    SuffixSource,
+    TemplateRule,
+    TemplateSource,
+    SymbolicSource,
+    IntegerArithmetic,
+    IntegerSequence,
+    LastLineProcedure,
+    complete_text,
+    feedback_counts
 
 end

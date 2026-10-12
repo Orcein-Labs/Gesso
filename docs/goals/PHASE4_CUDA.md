@@ -10,7 +10,7 @@
 **Status:** LANDED (Buffy, 2026-09-29). Items A/B/C committed
 (9224a8c, e1cb74a, 5355a38); item D skip-or-green — RTX 5060 present, no
 local SmolLM2 snapshot (gate compares device logits to the frozen CPU
-golden at atol=1e-2 when both exist). Next: Phase 5.
+golden at atol=1e-2 when both exist). Next: `docs/goals/PHASE5_ENGINE.md`.
 
 ---
 

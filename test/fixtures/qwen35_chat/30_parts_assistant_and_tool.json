@@ -1,0 +1,43 @@
+{
+ "input": {
+  "messages": [
+   {
+    "role": "user",
+    "content": "q"
+   },
+   {
+    "role": "assistant",
+    "content": [
+     {
+      "type": "text",
+      "text": "x"
+     },
+     {
+      "type": "text",
+      "text": "y"
+     }
+    ]
+   },
+   {
+    "role": "tool",
+    "content": [
+     {
+      "type": "text",
+      "text": "r1"
+     },
+     {
+      "type": "text",
+      "text": "r2"
+     }
+    ]
+   },
+   {
+    "role": "user",
+    "content": "z"
+   }
+  ],
+  "add_generation_prompt": true,
+  "enable_thinking": true
+ },
+ "expected": "<|im_start|>user\nq<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\nx\ny<|im_end|>\n<|im_start|>user\n<tool_response>\nr1\nr2\n</tool_response><|im_end|>\n<|im_start|>user\nz<|im_end|>\n<|im_start|>assistant\n<think>\n"
+}

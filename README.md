@@ -65,8 +65,10 @@ session = Gesso.Session(model, tensors; backend, context_length=128, eos_token_i
 ids = Gesso.generate(session, "Hello"; max_new_tokens=8)
 ```
 
-Requesting CUDA or Lava without a device throws a typed error. There is no
-silent CPU fallback.
+Lava (Vulkan) is the default backend. CUDA is opt-in for people who prefer the
+vendor stack, and the scripts select it with `GESSO_BACKEND=cuda`. Requesting
+CUDA or Lava without a device throws a typed error. There is no silent CPU
+fallback.
 
 Reproduce the table:
 

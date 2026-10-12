@@ -1,0 +1,49 @@
+{
+ "input": {
+  "messages": [
+   {
+    "role": "user",
+    "content": "both"
+   },
+   {
+    "role": "assistant",
+    "content": "Let me check.",
+    "tool_calls": [
+     {
+      "type": "function",
+      "function": {
+       "name": "a_fn",
+       "arguments": {
+        "k": "v"
+       }
+      }
+     },
+     {
+      "type": "function",
+      "function": {
+       "name": "b_fn",
+       "arguments": {
+        "k": "w"
+       }
+      }
+     }
+    ]
+   },
+   {
+    "role": "tool",
+    "content": "ra"
+   },
+   {
+    "role": "tool",
+    "content": "rb"
+   },
+   {
+    "role": "user",
+    "content": "ok"
+   }
+  ],
+  "add_generation_prompt": true,
+  "enable_thinking": true
+ },
+ "expected": "<|im_start|>user\nboth<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\nLet me check.\n\n<tool_call>\n<function=a_fn>\n<parameter=k>\nv\n</parameter>\n</function>\n</tool_call>\n<tool_call>\n<function=b_fn>\n<parameter=k>\nw\n</parameter>\n</function>\n</tool_call><|im_end|>\n<|im_start|>user\n<tool_response>\nra\n</tool_response>\n<tool_response>\nrb\n</tool_response><|im_end|>\n<|im_start|>user\nok<|im_end|>\n<|im_start|>assistant\n<think>\n"
+}

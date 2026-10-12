@@ -1,0 +1,13 @@
+{
+ "input": {
+  "messages": [
+   {
+    "role": "user",
+    "content": "\n  hi \u000b\n"
+   }
+  ],
+  "add_generation_prompt": true,
+  "enable_thinking": true
+ },
+ "expected": "<|im_start|>user\nhi<|im_end|>\n<|im_start|>assistant\n<think>\n"
+}

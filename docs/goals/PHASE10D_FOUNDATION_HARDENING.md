@@ -546,6 +546,10 @@ fusion-narration comments: none → all KEEP, nothing to fix. `@inferred`
   path. Flipping the two `@test_broken` in test_type_stability.jl is the
   exit condition. Not done here — the spec forbids inventing the
   hierarchy in this sprint.
+  **RESOLVED by 10H (2026-10-03, `PHASE10H_TYPE_STABILITY.md`).** §CIX
+  was amended in exactly one clause: the ARRAY TYPE holding a tensor is
+  a trait-equivalent and may be a SINGLE type parameter `S`. All three
+  `@inferred` gates are green; the P-1 `@test_broken` trio is gone.
 - **P-2 (decode! alloc profile)**: per-token Activations + gather-on-read
   copies (SmolLM2 CPU 15.9 MB/token) are the §LXXVIII contract shape;
   removing them needs Session scratch state — evidence handed to the

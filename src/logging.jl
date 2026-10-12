@@ -42,7 +42,9 @@ end
 
 Base.@kwdef mutable struct GessoLogConfig
     min_level::LogLevel = LOG_INFO
-    io::IO = stderr
+    # `nothing` means stderr, resolved at emit time. A stream captured when the
+    # package is precompiled is dead in the session that loads the cache.
+    io::Union{Nothing, IO} = nothing
     timestamps::Bool = true
 end
 
@@ -102,7 +104,8 @@ function glog(io::IO, level::LogLevel, event::Symbol; kw...)
     return nothing
 end
 
-glog(level::LogLevel, event::Symbol; kw...) = glog(GLOBAL_CONFIG.io, level, event; kw...)
+glog(level::LogLevel, event::Symbol; kw...) =
+    glog(something(GLOBAL_CONFIG.io, stderr), level, event; kw...)
 
 _render(x) = repr(x)
 _render(x::AbstractString) = x

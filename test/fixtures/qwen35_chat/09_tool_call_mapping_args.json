@@ -1,0 +1,41 @@
+{
+ "input": {
+  "messages": [
+   {
+    "role": "user",
+    "content": "go"
+   },
+   {
+    "role": "assistant",
+    "content": "",
+    "tool_calls": [
+     {
+      "type": "function",
+      "function": {
+       "name": "do_it",
+       "arguments": {
+        "a": [
+         1,
+         2
+        ],
+        "b": {
+         "x": 1.5
+        },
+        "c": true,
+        "d": null,
+        "e": "str"
+       }
+      }
+     }
+    ]
+   },
+   {
+    "role": "tool",
+    "content": "done"
+   }
+  ],
+  "add_generation_prompt": true,
+  "enable_thinking": true
+ },
+ "expected": "<|im_start|>user\ngo<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n<tool_call>\n<function=do_it>\n<parameter=a>\n[1, 2]\n</parameter>\n<parameter=b>\n{\"x\": 1.5}\n</parameter>\n<parameter=c>\nTrue\n</parameter>\n<parameter=d>\nNone\n</parameter>\n<parameter=e>\nstr\n</parameter>\n</function>\n</tool_call><|im_end|>\n<|im_start|>user\n<tool_response>\ndone\n</tool_response><|im_end|>\n<|im_start|>assistant\n<think>\n"
+}

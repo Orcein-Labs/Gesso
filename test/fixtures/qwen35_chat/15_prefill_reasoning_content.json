@@ -1,0 +1,18 @@
+{
+ "input": {
+  "messages": [
+   {
+    "role": "user",
+    "content": "q"
+   },
+   {
+    "role": "assistant",
+    "content": "c",
+    "reasoning_content": "  r  \n"
+   }
+  ],
+  "add_generation_prompt": true,
+  "enable_thinking": true
+ },
+ "expected": "<|im_start|>user\nq<|im_end|>\n<|im_start|>assistant\n<think>\n  r  \n\n</think>\n\nc"
+}

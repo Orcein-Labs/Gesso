@@ -7,9 +7,9 @@
                     (external paper: BLOCKED until first composition
                      experiment produces numbers — Gesso_Stack.md §XLII,
                      North Star §42: no paper before there is data)
-    Derived from:       Gesso_musings.md (repo root — the dangerous
-                        notebook — do not sanitize; promote from it,
-                        never wholesale)
+    Index:              docs/research/README.md
+    Derived from:       Gesso_musings.md (the dangerous notebook —
+                        do not sanitize; promote from it, never wholesale)
     Canon:              docs/Gesso_Stack.md remains canon; this document
                         extends §XXXI, §X, §LIX and feeds Phases 5/9/10.
 
@@ -521,3 +521,104 @@ Steps 2–3 are first-semantic-win candidates in the Phase 7 class
        distributions in receipts.
     6. Wire KV pipelines into the Phase 10 planner vocabulary (§5) and
        the North Star search machinery as its second client (§7.2).
+
+---
+
+## 13. FIRST DATA (2026-10-11, 35B on an 8 GB card, ahead of Phases 5/10)
+
+Layer 5 (precision) landed early, as a single per-run format rather than a
+searched pipeline. The long-prompt OOM on the 35B forced it.
+`GESSO_KV_FORMAT` picks one of f32, f16, q8 or q4h for the whole cache.
+q4h is a signed Walsh-Hadamard rotation plus Lloyd-Max 4-bit levels. The
+rotation is orthonormal, so the query takes the same rotation and RoPE
+stays as it is (§5.2). The measurements, kernels and memory table are in
+`grok-wip/2026-10-09_35b-cuda-decode-parity.md`, "Quantized KV".
+
+What the ladder gets from it:
+
+- **Rung 3 only.** Teacher-forced greedy, 32 steps, real text. KL(f32 || fmt)
+  is measured against an f32-vs-f32 control of 4.1e-3, which is run-to-run
+  GPU nondeterminism. At P=2048, f16 and q8 sit at 1.4-1.9x the control and
+  q4h at 4.4-5.2x. At P=8192 the control itself ran out of memory, so those
+  rows have no floor. This is the KIVI/KVQuant prior from §9.5 step 5:
+  8-bit is safe, 4-bit is marginal.
+- **Rung 4 is still undefined** (§12 action 1). q4h stays opt-in until it is.
+  A KL ratio is not a task score. q8 became the CUDA default on the rung-3
+  evidence alone (f2bcfda): its drift matches f16, which is llama.cpp's
+  default cache type, so a rung-4 check would test the reference too.
+- **Cost honesty (§5.3).** Encoding runs inside the cache write and hasn't
+  been timed on its own. The reader was the real cost: the first quantized
+  decode kernel ran 4-8x slower than f32 at long K until it loaded 4 rows of
+  codes per instruction. Measure the reader, not just the bytes.
+
+## 14. KV REUSE ACROSS CALLS (2026-10-11, ada66f0)
+
+`GenerateState` keeps the KV cache and GDN state between `reference_generate`
+calls. Ornith-35B, CUDA, q8 KV, 8k-token first turn plus 256 new tokens:
+
+| call | wall | rows reused |
+|---|---|---|
+| turn 1, cold | 27-29 s | 0 |
+| turn 2 with state | 1.26-1.29 s | 8207 |
+| regenerate turn 2 | 0.41-0.43 s | 8464 (output identical) |
+| turn 2 fresh, no state | 24.6-24.9 s | 0 |
+
+Turn-2 tokens against a fresh run (16 greedy tokens):
+
+| control | -t 12 | -t 16 |
+|---|---|---|
+| fresh vs fresh | same | same |
+| reuse of prompt rows only (snapshot path) | same | same |
+| reuse including turn-1 decode rows | same | differs from token 10 |
+
+Reuse itself is exact: the snapshot path matches a fresh prefill at both
+thread counts. The one mismatch comes from rows that turn 1 computed one at a
+time in decode; a fresh run computes those rows in a batched prefill, and the
+two paths round differently (the known prefill/decode gap on this model). The
+CPU thread count moves where that rounding lands, which flipped a near-tied
+greedy pick. llama.cpp reuses decode-computed KV the same way. Treat it as
+drift, not a defect, unless a task-level check shows otherwise.
+
+## 15. PARK/RESUME AND THE TIER PRIMITIVES (2026-10-11)
+
+### 15.1 Park and resume on disk (e5ca8a9, eff6f98)
+
+`save_state` writes the KV cache, with QuantKV codes and scales, plus the GDN
+state, the snapshot and the transcript ids. `load_state` brings it back in
+another process. Ornith-35B, CUDA, q8 KV, a 65,490-token prompt, 8 greedy
+tokens:
+
+| step | wall | notes |
+|---|---|---|
+| prefill + 8 tokens, cold | 1128.7 s | budget 4800, before hot experts became the default |
+| save | 1.29 s | 806 MiB file |
+| load, new process | 1.9-2.6 s | |
+| resume, first call in the process | 55.3 s | 65,490 rows reused; includes first-call compilation |
+| resume after a warm-up workload | 3.2 s | 65,490 rows reused |
+
+All three runs emit the same 8 tokens. The model fingerprint matched across
+processes only after eff6f98. Dict and Set slot order follows object
+addresses, so the first fingerprint changed between processes and refused
+its own file. A returning 64k conversation now costs a 2 s load instead of a
+19-minute re-prefill.
+
+### 15.2 Tier primitives: built, not wired (e520aae, 34c4538, 8f6cd6b)
+
+Nothing in the decode loop calls these yet. They are the pieces §5's
+GPU-recent/host-old split needs:
+
+- **GPU row-range partial.** `_attention_partial_device!` runs the split-K
+  decode kernel from row offset `r0` and writes the unnormalised
+  (m, l, acc). Decode keeps `r0 = 0`; its output was checked bit for bit
+  against the old kernel. Covers f32, f16, q8 and q4h.
+- **CPU partial and log-sum-exp merge.** Each K and V column is read once
+  per KV head, with rows innermost. Partials and the merge stay in Float64.
+  The time at 4096 rows on 2 threads fell from 26 ms to 3.0 ms per layer.
+- **Integer q8 scores.** This path uses Int16 query codes and Int32
+  accumulation. It was slower than float in all four timed cells
+  (4096/16384 rows, 1/2 threads), so it is off by default.
+
+The 35B does not need the split at 64k, because the whole q8 cache fits on
+the card. Wire it when a context outgrows VRAM, such as 128k on Gemma4.
+Before then, time it at 64k on a quiet machine, since the timings above were
+taken beside other jobs.

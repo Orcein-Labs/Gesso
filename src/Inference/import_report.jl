@@ -156,7 +156,7 @@ end
 #
 # So the matrix now probes the CONFIG SPACE, and reports the worst case.
 #
-# Only five axes can change `required_semantics`; everything else (sizes, head
+# The axes that change `required_semantics`; everything else (sizes, head
 # counts, bias flags, norm kind, tied embeddings) provably cannot, and probing
 # them would only multiply identical rows. The axes are read off
 # `required_semantics` itself, not hand-listed from memory.
@@ -175,9 +175,19 @@ const _MATRIX_ROPES = (
     RoPEPolicy(),
     RoPEPolicy(; kind=:linear, factor=4.0),
     RoPEPolicy(; kind=:llama3, factor=8.0, original_max_position_embeddings=8192),
+    RoPEPolicy(; rotary_dim=4),
+    RoPEPolicy(; interleaved=true),
 )
 const _MATRIX_ACTIVATIONS = (:swiglu, :gelu)
-const _MATRIX_FEATURES = (Symbol[], [:qk_norm], [:moe], [:qk_norm, :moe])
+const _MATRIX_FEATURES = (
+    Symbol[],
+    [:qk_norm],
+    [:moe],
+    [:qk_norm, :moe],
+    [:linear_attention],
+    [:attn_output_gate],
+    [:mrope],
+)
 const _MATRIX_WINDOWS = (nothing, 64)
 
 # The stable order `required_semantics` emits, DERIVED from it rather than

@@ -250,18 +250,17 @@ end
         @test plain != scaled
     end
 
-    @testset "unsupported policy DIMENSIONS still fail closed at the operation" begin
+    @testset "partial rotary and interleaved layout execute on CPU" begin
         for rope in (
             Gesso.RoPEPolicy(; kind=:linear, factor=2.0, interleaved=true),
             Gesso.RoPEPolicy(; kind=:linear, factor=2.0, rotary_dim=4),
         )
-            err = try
-                Gesso.generate(_session(model, merge(ts0, (; rope))), PROMPT; max_new_tokens=2)
-                nothing
-            catch e
-                e
-            end
-            @test err isa Gesso.LoweringNotImplemented
+            ids = Gesso.generate(
+                _session(model, merge(ts0, (; rope))),
+                PROMPT;
+                max_new_tokens=2,
+            )
+            @test length(ids) == length(PROMPT) + 2
         end
     end
 end

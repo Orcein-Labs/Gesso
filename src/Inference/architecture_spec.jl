@@ -53,6 +53,7 @@ struct RoPEPolicy
     high_freq_factor::Float64
     rotary_dim::Int
     interleaved::Bool
+    mrope_section::Vector{Int}
 
     function RoPEPolicy(;
         theta::Real=10000.0,
@@ -63,6 +64,7 @@ struct RoPEPolicy
         high_freq_factor::Real=4.0,
         rotary_dim::Integer=0,
         interleaved::Bool=false,
+        mrope_section::Vector{Int}=Int[],
     )
         kind in (:none, :linear, :llama3) || error(
             "RoPEPolicy: unsupported scaling kind $(repr(kind)) — this build expresses :none, :linear, :llama3 (§LXX: no silent substitution)",
@@ -83,6 +85,8 @@ struct RoPEPolicy
                 "RoPEPolicy: :llama3 scaling requires original_max_position_embeddings > 0",
             )
         end
+        isempty(mrope_section) || sum(mrope_section) > 0 ||
+            error("RoPEPolicy: mrope_section must sum to a positive rotary pair count")
         return new(
             Float64(theta),
             kind,
@@ -92,6 +96,7 @@ struct RoPEPolicy
             Float64(high_freq_factor),
             Int(rotary_dim),
             interleaved,
+            Vector{Int}(mrope_section),
         )
     end
 end
@@ -99,32 +104,91 @@ end
 is_scaled(p::RoPEPolicy) = p.kind !== :none
 
 """
-    ArchitectureSpec
+    LinearMixerSpec
 
-Canonical description of WHAT a model architecture IS (BREADTH-0 Pass A).
+Gated DeltaNet geometry for a hybrid family (Qwen3.5 / Ornith). `layer_types`
+is 1-based in the Julia vector and 0-based in the checkpoint: index `i`
+describes layer `i-1`. Empty `layer_types` is illegal — a dense full-attention
+model leaves `ArchitectureSpec.mixer === nothing` instead.
 
-One canonical boundary replaces per-family config knowledge. Fields:
-
-    family                the external family name, as a provenance label only
-    hidden_size           model dimension
-    num_layers            layer count
-    n_heads / n_kv_heads  attention head count / KV head count
-    head_dim              derived: hidden_size ÷ n_heads (explicit, validated)
-    vocab_size            vocabulary size
-    intermediate_size     FFN dimension
-    norm_kind             :rms | :layer
-    activation_kind       :swiglu | :gelu | :relu  (the FFN gating/activation form)
-    rope                  positional-encoding SEMANTICS (a RoPEPolicy)
-    tie_word_embeddings   the embedding IS the output head
-    attention_bias        the attention projections carry bias
-    mlp_bias              the FFN projections carry bias
-    sliding_window        nothing, or the attention window size
-    features              extra semantic flags as a Set (:qk_norm, :moe, …)
-
-`family` is provenance — NOTHING in the engine may branch on it. Engine code
-reads dimensions, forms and capabilities (§XXXIII Pass F). The only places
-`family` is legal are an import report and a receipt.
+`v_head_tiled` selects Q/K repeat pairing when `num_value_heads > num_key_heads`.
+HuggingFace safetensors group V heads by K head (`[K0,K0,K1,K1]`, default
+false). llama.cpp GGUF conversion tiles them (`[K0,K1,K0,K1]`); GGUF loaders
+set this true. When the two head counts are equal the layouts coincide.
 """
+struct LinearMixerSpec
+    layer_types::Vector{Symbol}
+    num_key_heads::Int
+    key_head_dim::Int
+    num_value_heads::Int
+    value_head_dim::Int
+    conv_kernel_dim::Int
+    v_head_tiled::Bool
+    function LinearMixerSpec(;
+        layer_types::Vector{Symbol},
+        num_key_heads::Integer,
+        key_head_dim::Integer,
+        num_value_heads::Integer,
+        value_head_dim::Integer,
+        conv_kernel_dim::Integer,
+        v_head_tiled::Bool=false,
+    )
+        isempty(layer_types) && error("LinearMixerSpec: layer_types must not be empty")
+        for (i, t) in enumerate(layer_types)
+            t in (:linear_attention, :full_attention) || error(
+                "LinearMixerSpec: layer_types[$i] is $(repr(t)) — this build expresses :linear_attention, :full_attention",
+            )
+        end
+        num_key_heads > 0 || error("LinearMixerSpec: num_key_heads must be positive")
+        key_head_dim > 0 || error("LinearMixerSpec: key_head_dim must be positive")
+        num_value_heads > 0 || error("LinearMixerSpec: num_value_heads must be positive")
+        value_head_dim > 0 || error("LinearMixerSpec: value_head_dim must be positive")
+        conv_kernel_dim > 0 || error("LinearMixerSpec: conv_kernel_dim must be positive")
+        num_value_heads % num_key_heads == 0 || error(
+            "LinearMixerSpec: num_value_heads $num_value_heads is not divisible by num_key_heads $num_key_heads",
+        )
+        return new(
+            layer_types,
+            Int(num_key_heads),
+            Int(key_head_dim),
+            Int(num_value_heads),
+            Int(value_head_dim),
+            Int(conv_kernel_dim),
+            v_head_tiled,
+        )
+    end
+end
+
+"""
+    MoeSpec
+
+Routed Mixture-of-Experts geometry (Qwen3.5-MoE / Ornith-1.5-35B-A3B).
+`n_expert_used` experts run per token after a softmax over all `n_experts`;
+top-k weights are renormalized. A shared SwiGLU expert of width `shared_ff`
+is always on, gated by a sigmoid. Empty MoE is illegal — a dense FFN leaves
+`ArchitectureSpec.moe === nothing`.
+"""
+struct MoeSpec
+    n_experts::Int
+    n_expert_used::Int
+    expert_ff::Int
+    shared_ff::Int
+    function MoeSpec(;
+        n_experts::Integer,
+        n_expert_used::Integer,
+        expert_ff::Integer,
+        shared_ff::Integer=0,
+    )
+        n_experts > 0 || error("MoeSpec: n_experts must be positive")
+        0 < n_expert_used <= n_experts || error(
+            "MoeSpec: n_expert_used must be in 1..n_experts (got $n_expert_used of $n_experts)",
+        )
+        expert_ff > 0 || error("MoeSpec: expert_ff must be positive")
+        shared_ff >= 0 || error("MoeSpec: shared_ff must be >= 0")
+        return new(Int(n_experts), Int(n_expert_used), Int(expert_ff), Int(shared_ff))
+    end
+end
+
 struct ArchitectureSpec
     family::Symbol
     hidden_size::Int
@@ -142,6 +206,17 @@ struct ArchitectureSpec
     mlp_bias::Bool
     sliding_window::Union{Nothing, Int}
     features::Set{Symbol}
+    mixer::Union{Nothing, LinearMixerSpec}
+    rms_norm_eps::Float64
+    moe::Union{Nothing, MoeSpec}
+end
+
+function layer_mixer(spec::ArchitectureSpec, layer0::Integer)
+    spec.mixer === nothing && return :full_attention
+    0 <= layer0 < length(spec.mixer.layer_types) || error(
+        "layer_mixer: layer $layer0 out of range 0:$(length(spec.mixer.layer_types)-1)",
+    )
+    return spec.mixer.layer_types[layer0+1]
 end
 
 function ArchitectureSpec(;
@@ -159,7 +234,11 @@ function ArchitectureSpec(;
     attention_bias::Bool=false,
     mlp_bias::Bool=false,
     sliding_window::Union{Nothing, Integer}=nothing,
+    head_dim::Union{Nothing, Integer}=nothing,
     features=Set{Symbol}(),
+    mixer::Union{Nothing, LinearMixerSpec}=nothing,
+    rms_norm_eps::Real=1e-6,
+    moe::Union{Nothing, MoeSpec}=nothing,
 )
     hidden_size > 0 || error("ArchitectureSpec: hidden_size must be positive")
     num_layers > 0 || error("ArchitectureSpec: num_layers must be positive")
@@ -174,16 +253,30 @@ function ArchitectureSpec(;
     activation_kind in (:swiglu, :gelu, :relu) || error(
         "ArchitectureSpec: unsupported activation_kind $(repr(activation_kind)) — this build expresses :swiglu, :gelu, :relu",
     )
-    hidden_size % n_heads == 0 || error(
-        "ArchitectureSpec: hidden_size $hidden_size is not divisible by n_heads $n_heads",
-    )
     n_heads % n_kv_heads == 0 || error(
         "ArchitectureSpec: n_heads $n_heads is not divisible by n_kv_heads $n_kv_heads",
     )
     sliding_window === nothing ||
         sliding_window > 0 ||
         error("ArchitectureSpec: sliding_window must be positive")
-    head_dim = div(hidden_size, n_heads)
+    if head_dim === nothing
+        hidden_size % n_heads == 0 || error(
+            "ArchitectureSpec: hidden_size $hidden_size is not divisible by n_heads $n_heads",
+        )
+        head_dim = div(hidden_size, n_heads)
+    else
+        head_dim > 0 || error("ArchitectureSpec: head_dim must be positive")
+        head_dim = Int(head_dim)
+    end
+    isfinite(rms_norm_eps) && rms_norm_eps > 0 ||
+        error("ArchitectureSpec: rms_norm_eps must be finite and positive")
+    if mixer !== nothing
+        length(mixer.layer_types) == num_layers || error(
+            "ArchitectureSpec: mixer.layer_types length $(length(mixer.layer_types)) != num_layers $num_layers",
+        )
+    end
+    feats = Set{Symbol}(features)
+    moe !== nothing && push!(feats, :moe)
     return ArchitectureSpec(
         family,
         Int(hidden_size),
@@ -200,7 +293,10 @@ function ArchitectureSpec(;
         attention_bias,
         mlp_bias,
         sliding_window === nothing ? nothing : Int(sliding_window),
-        Set{Symbol}(features),
+        feats,
+        mixer,
+        Float64(rms_norm_eps),
+        moe,
     )
 end
 
@@ -225,6 +321,9 @@ capability detection can never be scattered type checks through the engine
     gated_ffn             SwiGLU-style gate/up/down
     fused_qkv             the checkpoint stores Q,K,V in ONE tensor
     moe                   mixture-of-experts routing
+    linear_attention      Gated DeltaNet / linear mixer (Qwen3.5 hybrid)
+    attn_output_gate      extra gate on the attention output projection
+    mrope                 multimodal / sectioned RoPE
     tied_embeddings
     sliding_window
     rope_scaling          :none | :linear | :llama3
@@ -236,6 +335,9 @@ struct ArchitectureCapabilities
     gated_ffn::Bool
     fused_qkv::Bool
     moe::Bool
+    linear_attention::Bool
+    attn_output_gate::Bool
+    mrope::Bool
     tied_embeddings::Bool
     sliding_window::Bool
     rope_scaling::Symbol
@@ -254,6 +356,9 @@ function capabilities(spec::ArchitectureSpec)
         spec.activation_kind === :swiglu,
         :fused_qkv in spec.features,
         :moe in spec.features,
+        :linear_attention in spec.features,
+        :attn_output_gate in spec.features,
+        :mrope in spec.features || !isempty(spec.rope.mrope_section),
         spec.tie_word_embeddings,
         spec.sliding_window !== nothing,
         spec.rope.kind,
@@ -276,12 +381,24 @@ function required_semantics(spec::ArchitectureSpec)
     caps.qk_norm && push!(req, :qk_norm)
     caps.sliding_window && push!(req, :sliding_window_attention)
     caps.moe && push!(req, :moe_routing)
+    caps.linear_attention && push!(req, :linear_attention)
+    caps.attn_output_gate && push!(req, :attn_output_gate)
+    (caps.mrope || !isempty(spec.rope.mrope_section)) && push!(req, :mrope)
+    spec.rope.rotary_dim != 0 && push!(req, :rope_partial_dim)
+    spec.rope.interleaved && push!(req, :rope_interleaved)
     push!(req, Symbol("rope_", caps.rope_scaling))
     return req
 end
 
 export RoPEPolicy,
-    ArchitectureSpec, ArchitectureCapabilities, capabilities, required_semantics, is_scaled
+    ArchitectureSpec,
+    ArchitectureCapabilities,
+    LinearMixerSpec,
+    MoeSpec,
+    capabilities,
+    required_semantics,
+    is_scaled,
+    layer_mixer
 
 # --- Pass D: the CPU-oracle reference for a positional policy ------------------
 
@@ -302,24 +419,23 @@ a vector.
               with `low_freq_factor` / `high_freq_factor` easing the boundary
               bands (the published Llama-3 convention)
 
-Unsupported policy DIMENSIONS fail closed at the dimension: a partial
-rotary dimension or an interleaved layout is a real convention this build
-does not implement, and saying so is the whole point of the capability
-lattice (§II).
+Partial rotary (`rotary_dim != 0`) and GPT-J pair layout (`interleaved`)
+are real conventions this CPU path implements. Frequencies are computed
+over `rotary_dim` when set; layout is a `rope!` concern, not a frequency
+concern. An unscaled full-head policy still returns `nothing` so Llama
+stays bit-identical (regression law §XIII).
 """
 function rope_inv_freq(policy::RoPEPolicy, d_head::Integer; theta=policy.theta)
     theta isa Real && isfinite(theta) && theta>0 || throw(
         gesso_error(ERR_INVALID_PLAN, "rope_inv_freq: theta must be finite and positive"),
     )
-    policy.interleaved &&
-        throw(LoweringNotImplemented(:rope_interleaved, Symbol("rope_", policy.kind)))
-    policy.rotary_dim != 0 &&
-        throw(LoweringNotImplemented(:rope_partial_dim, Symbol("rope_", policy.kind)))
-    policy.kind === :none && return nothing
-    d_head % 2 == 0 ||
-        error("rope_inv_freq: d_head $d_head must be even for rotary embedding")
-    n = d_head ÷ 2
-    base = [theta^(-2i / d_head) for i in 0:(n-1)]
+    rot = policy.rotary_dim == 0 ? Int(d_head) : policy.rotary_dim
+    rot > 0 && iseven(rot) ||
+        error("rope_inv_freq: rotary dimension $rot must be even and positive")
+    policy.kind === :none && policy.rotary_dim == 0 && return nothing
+    n = rot ÷ 2
+    base = [theta^(-2i / rot) for i in 0:(n-1)]
+    policy.kind === :none && return base
 
     policy.kind === :linear && return base ./ policy.factor
 

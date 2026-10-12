@@ -1,0 +1,8926 @@
+{
+"oracle": "llama-server /tokenize, add_special=false, CPU, Ornith-35B Q2_K_XL",
+"n_texts": 312,
+"cases": [
+{
+"text": "",
+"parse_special": true,
+"ids": []
+},
+{
+"text": "",
+"parse_special": false,
+"ids": []
+},
+{
+"text": " ",
+"parse_special": true,
+"ids": [
+220
+]
+},
+{
+"text": " ",
+"parse_special": false,
+"ids": [
+220
+]
+},
+{
+"text": "  ",
+"parse_special": true,
+"ids": [
+256
+]
+},
+{
+"text": "  ",
+"parse_special": false,
+"ids": [
+256
+]
+},
+{
+"text": "\n",
+"parse_special": true,
+"ids": [
+198
+]
+},
+{
+"text": "\n",
+"parse_special": false,
+"ids": [
+198
+]
+},
+{
+"text": "\n\n",
+"parse_special": true,
+"ids": [
+271
+]
+},
+{
+"text": "\n\n",
+"parse_special": false,
+"ids": [
+271
+]
+},
+{
+"text": "\r\n",
+"parse_special": true,
+"ids": [
+317
+]
+},
+{
+"text": "\r\n",
+"parse_special": false,
+"ids": [
+317
+]
+},
+{
+"text": "\t",
+"parse_special": true,
+"ids": [
+197
+]
+},
+{
+"text": "\t",
+"parse_special": false,
+"ids": [
+197
+]
+},
+{
+"text": " \t \n",
+"parse_special": true,
+"ids": [
+6800,
+695
+]
+},
+{
+"text": " \t \n",
+"parse_special": false,
+"ids": [
+6800,
+695
+]
+},
+{
+"text": "a",
+"parse_special": true,
+"ids": [
+64
+]
+},
+{
+"text": "a",
+"parse_special": false,
+"ids": [
+64
+]
+},
+{
+"text": "A",
+"parse_special": true,
+"ids": [
+32
+]
+},
+{
+"text": "A",
+"parse_special": false,
+"ids": [
+32
+]
+},
+{
+"text": "Hello",
+"parse_special": true,
+"ids": [
+9419
+]
+},
+{
+"text": "Hello",
+"parse_special": false,
+"ids": [
+9419
+]
+},
+{
+"text": "Hello, world!",
+"parse_special": true,
+"ids": [
+9419,
+11,
+1814,
+0
+]
+},
+{
+"text": "Hello, world!",
+"parse_special": false,
+"ids": [
+9419,
+11,
+1814,
+0
+]
+},
+{
+"text": "The quick brown fox jumps over the lazy dog.",
+"parse_special": true,
+"ids": [
+760,
+3841,
+13477,
+37550,
+33075,
+888,
+279,
+15217,
+5388,
+13
+]
+},
+{
+"text": "The quick brown fox jumps over the lazy dog.",
+"parse_special": false,
+"ids": [
+760,
+3841,
+13477,
+37550,
+33075,
+888,
+279,
+15217,
+5388,
+13
+]
+},
+{
+"text": "don't stop",
+"parse_special": true,
+"ids": [
+14572,
+914,
+2842
+]
+},
+{
+"text": "don't stop",
+"parse_special": false,
+"ids": [
+14572,
+914,
+2842
+]
+},
+{
+"text": "I'm sure we'll see you've been",
+"parse_special": true,
+"ids": [
+40,
+2688,
+2617,
+567,
+3172,
+1436,
+488,
+2908,
+978
+]
+},
+{
+"text": "I'm sure we'll see you've been",
+"parse_special": false,
+"ids": [
+40,
+2688,
+2617,
+567,
+3172,
+1436,
+488,
+2908,
+978
+]
+},
+{
+"text": "it's, they'd, we're, she'll, he's, can't, won't, DON'T, I'M, WE'RE, YOU'LL",
+"parse_special": true,
+"ids": [
+275,
+579,
+11,
+781,
+4035,
+11,
+567,
+2224,
+11,
+1292,
+3172,
+11,
+551,
+579,
+11,
+628,
+914,
+11,
+2677,
+914,
+11,
+42803,
+16813,
+11,
+353,
+26708,
+11,
+19076,
+90902,
+11,
+14551,
+6,
+3950
+]
+},
+{
+"text": "it's, they'd, we're, she'll, he's, can't, won't, DON'T, I'M, WE'RE, YOU'LL",
+"parse_special": false,
+"ids": [
+275,
+579,
+11,
+781,
+4035,
+11,
+567,
+2224,
+11,
+1292,
+3172,
+11,
+551,
+579,
+11,
+628,
+914,
+11,
+2677,
+914,
+11,
+42803,
+16813,
+11,
+353,
+26708,
+11,
+19076,
+90902,
+11,
+14551,
+6,
+3950
+]
+},
+{
+"text": "'s 's 'x 'ttt",
+"parse_special": true,
+"ids": [
+579,
+359,
+82,
+359,
+87,
+359,
+5391,
+83
+]
+},
+{
+"text": "'s 's 'x 'ttt",
+"parse_special": false,
+"ids": [
+579,
+359,
+82,
+359,
+87,
+359,
+5391,
+83
+]
+},
+{
+"text": "rock'n'roll",
+"parse_special": true,
+"ids": [
+19896,
+42336,
+6,
+1065
+]
+},
+{
+"text": "rock'n'roll",
+"parse_special": false,
+"ids": [
+19896,
+42336,
+6,
+1065
+]
+},
+{
+"text": "''",
+"parse_special": true,
+"ids": [
+4456
+]
+},
+{
+"text": "''",
+"parse_special": false,
+"ids": [
+4456
+]
+},
+{
+"text": "'",
+"parse_special": true,
+"ids": [
+6
+]
+},
+{
+"text": "'",
+"parse_special": false,
+"ids": [
+6
+]
+},
+{
+"text": "it''s",
+"parse_special": true,
+"ids": [
+275,
+4456,
+82
+]
+},
+{
+"text": "it''s",
+"parse_special": false,
+"ids": [
+275,
+4456,
+82
+]
+},
+{
+"text": "  leading spaces",
+"parse_special": true,
+"ids": [
+220,
+6187,
+12258
+]
+},
+{
+"text": "  leading spaces",
+"parse_special": false,
+"ids": [
+220,
+6187,
+12258
+]
+},
+{
+"text": "trailing spaces   ",
+"parse_special": true,
+"ids": [
+371,
+13868,
+12258,
+262
+]
+},
+{
+"text": "trailing spaces   ",
+"parse_special": false,
+"ids": [
+371,
+13868,
+12258,
+262
+]
+},
+{
+"text": "a  b   c    d",
+"parse_special": true,
+"ids": [
+64,
+220,
+292,
+256,
+272,
+262,
+293
+]
+},
+{
+"text": "a  b   c    d",
+"parse_special": false,
+"ids": [
+64,
+220,
+292,
+256,
+272,
+262,
+293
+]
+},
+{
+"text": "a\tb\tc",
+"parse_special": true,
+"ids": [
+64,
+2161,
+1392
+]
+},
+{
+"text": "a\tb\tc",
+"parse_special": false,
+"ids": [
+64,
+2161,
+1392
+]
+},
+{
+"text": "x\n\ny\n\n\nz",
+"parse_special": true,
+"ids": [
+87,
+271,
+88,
+1358,
+89
+]
+},
+{
+"text": "x\n\ny\n\n\nz",
+"parse_special": false,
+"ids": [
+87,
+271,
+88,
+1358,
+89
+]
+},
+{
+"text": "line one\r\nline two\r\n",
+"parse_special": true,
+"ids": [
+1021,
+799,
+317,
+1021,
+1330,
+317
+]
+},
+{
+"text": "line one\r\nline two\r\n",
+"parse_special": false,
+"ids": [
+1021,
+799,
+317,
+1021,
+1330,
+317
+]
+},
+{
+"text": "mixed \r\n\n\r\n endings",
+"parse_special": true,
+"ids": [
+54789,
+220,
+78035,
+317,
+73977
+]
+},
+{
+"text": "mixed \r\n\n\r\n endings",
+"parse_special": false,
+"ids": [
+54789,
+220,
+78035,
+317,
+73977
+]
+},
+{
+"text": "  \n  \n  ",
+"parse_special": true,
+"ids": [
+29773,
+256
+]
+},
+{
+"text": "  \n  \n  ",
+"parse_special": false,
+"ids": [
+29773,
+256
+]
+},
+{
+"text": " nbsp",
+"parse_special": true,
+"ids": [
+3966,
+5496
+]
+},
+{
+"text": " nbsp",
+"parse_special": false,
+"ids": [
+3966,
+5496
+]
+},
+{
+"text": "a b",
+"parse_special": true,
+"ids": [
+64,
+3966,
+65
+]
+},
+{
+"text": "a b",
+"parse_special": false,
+"ids": [
+64,
+3966,
+65
+]
+},
+{
+"text": "　ideographic space",
+"parse_special": true,
+"ids": [
+21742,
+90762,
+3433
+]
+},
+{
+"text": "　ideographic space",
+"parse_special": false,
+"ids": [
+21742,
+90762,
+3433
+]
+},
+{
+"text": "a em space",
+"parse_special": true,
+"ids": [
+64,
+373,
+225,
+334,
+3433
+]
+},
+{
+"text": "a em space",
+"parse_special": false,
+"ids": [
+64,
+373,
+225,
+334,
+3433
+]
+},
+{
+"text": "a b",
+"parse_special": true,
+"ids": [
+64,
+373,
+101,
+65
+]
+},
+{
+"text": "a b",
+"parse_special": false,
+"ids": [
+64,
+373,
+101,
+65
+]
+},
+{
+"text": "a b",
+"parse_special": true,
+"ids": [
+64,
+373,
+102,
+65
+]
+},
+{
+"text": "a b",
+"parse_special": false,
+"ids": [
+64,
+373,
+102,
+65
+]
+},
+{
+"text": "nel",
+"parse_special": true,
+"ids": [
+126,
+227,
+7881
+]
+},
+{
+"text": "nel",
+"parse_special": false,
+"ids": [
+126,
+227,
+7881
+]
+},
+{
+"text": " ogham",
+"parse_special": true,
+"ids": [
+157,
+248,
+222,
+525,
+5429
+]
+},
+{
+"text": " ogham",
+"parse_special": false,
+"ids": [
+157,
+248,
+222,
+525,
+5429
+]
+},
+{
+"text": "a nnbsp mmsp",
+"parse_special": true,
+"ids": [
+64,
+373,
+107,
+77,
+5496,
+50382,
+253,
+76,
+89351
+]
+},
+{
+"text": "a nnbsp mmsp",
+"parse_special": false,
+"ids": [
+64,
+373,
+107,
+77,
+5496,
+50382,
+253,
+76,
+89351
+]
+},
+{
+"text": "123",
+"parse_special": true,
+"ids": [
+16,
+17,
+18
+]
+},
+{
+"text": "123",
+"parse_special": false,
+"ids": [
+16,
+17,
+18
+]
+},
+{
+"text": "1234567890",
+"parse_special": true,
+"ids": [
+16,
+17,
+18,
+19,
+20,
+21,
+22,
+23,
+24,
+15
+]
+},
+{
+"text": "1234567890",
+"parse_special": false,
+"ids": [
+16,
+17,
+18,
+19,
+20,
+21,
+22,
+23,
+24,
+15
+]
+},
+{
+"text": "12345678901234567890",
+"parse_special": true,
+"ids": [
+16,
+17,
+18,
+19,
+20,
+21,
+22,
+23,
+24,
+15,
+16,
+17,
+18,
+19,
+20,
+21,
+22,
+23,
+24,
+15
+]
+},
+{
+"text": "12345678901234567890",
+"parse_special": false,
+"ids": [
+16,
+17,
+18,
+19,
+20,
+21,
+22,
+23,
+24,
+15,
+16,
+17,
+18,
+19,
+20,
+21,
+22,
+23,
+24,
+15
+]
+},
+{
+"text": "3.14159",
+"parse_special": true,
+"ids": [
+18,
+13,
+16,
+19,
+16,
+20,
+24
+]
+},
+{
+"text": "3.14159",
+"parse_special": false,
+"ids": [
+18,
+13,
+16,
+19,
+16,
+20,
+24
+]
+},
+{
+"text": "1,000,000",
+"parse_special": true,
+"ids": [
+16,
+11,
+15,
+15,
+15,
+11,
+15,
+15,
+15
+]
+},
+{
+"text": "1,000,000",
+"parse_special": false,
+"ids": [
+16,
+11,
+15,
+15,
+15,
+11,
+15,
+15,
+15
+]
+},
+{
+"text": "0x1F",
+"parse_special": true,
+"ids": [
+15,
+87,
+16,
+37
+]
+},
+{
+"text": "0x1F",
+"parse_special": false,
+"ids": [
+15,
+87,
+16,
+37
+]
+},
+{
+"text": "٣٤٥",
+"parse_special": true,
+"ids": [
+149,
+96,
+149,
+97,
+149,
+98
+]
+},
+{
+"text": "٣٤٥",
+"parse_special": false,
+"ids": [
+149,
+96,
+149,
+97,
+149,
+98
+]
+},
+{
+"text": "½ ¼ ²",
+"parse_special": true,
+"ids": [
+25229,
+220,
+40492,
+220,
+28495
+]
+},
+{
+"text": "½ ¼ ²",
+"parse_special": false,
+"ids": [
+25229,
+220,
+40492,
+220,
+28495
+]
+},
+{
+"text": "!!!",
+"parse_special": true,
+"ids": [
+11726
+]
+},
+{
+"text": "!!!",
+"parse_special": false,
+"ids": [
+11726
+]
+},
+{
+"text": "???",
+"parse_special": true,
+"ids": [
+31921
+]
+},
+{
+"text": "???",
+"parse_special": false,
+"ids": [
+31921
+]
+},
+{
+"text": "...",
+"parse_special": true,
+"ids": [
+1076
+]
+},
+{
+"text": "...",
+"parse_special": false,
+"ids": [
+1076
+]
+},
+{
+"text": "--",
+"parse_special": true,
+"ids": [
+312
+]
+},
+{
+"text": "--",
+"parse_special": false,
+"ids": [
+312
+]
+},
+{
+"text": "-->",
+"parse_special": true,
+"ids": [
+28104
+]
+},
+{
+"text": "-->",
+"parse_special": false,
+"ids": [
+28104
+]
+},
+{
+"text": "=>",
+"parse_special": true,
+"ids": [
+2110
+]
+},
+{
+"text": "=>",
+"parse_special": false,
+"ids": [
+2110
+]
+},
+{
+"text": "==",
+"parse_special": true,
+"ids": [
+410
+]
+},
+{
+"text": "==",
+"parse_special": false,
+"ids": [
+410
+]
+},
+{
+"text": "{}",
+"parse_special": true,
+"ids": [
+6061
+]
+},
+{
+"text": "{}",
+"parse_special": false,
+"ids": [
+6061
+]
+},
+{
+"text": "[]",
+"parse_special": true,
+"ids": [
+1249
+]
+},
+{
+"text": "[]",
+"parse_special": false,
+"ids": [
+1249
+]
+},
+{
+"text": "()",
+"parse_special": true,
+"ids": [
+363
+]
+},
+{
+"text": "()",
+"parse_special": false,
+"ids": [
+363
+]
+},
+{
+"text": "<>",
+"parse_special": true,
+"ids": [
+20475
+]
+},
+{
+"text": "<>",
+"parse_special": false,
+"ids": [
+20475
+]
+},
+{
+"text": "$$",
+"parse_special": true,
+"ids": [
+13682
+]
+},
+{
+"text": "$$",
+"parse_special": false,
+"ids": [
+13682
+]
+},
+{
+"text": "@#%&*",
+"parse_special": true,
+"ids": [
+31,
+2,
+4,
+5,
+9
+]
+},
+{
+"text": "@#%&*",
+"parse_special": false,
+"ids": [
+31,
+2,
+4,
+5,
+9
+]
+},
+{
+"text": "!?!?",
+"parse_special": true,
+"ids": [
+0,
+25153,
+30
+]
+},
+{
+"text": "!?!?",
+"parse_special": false,
+"ids": [
+0,
+25153,
+30
+]
+},
+{
+"text": "...!!!",
+"parse_special": true,
+"ids": [
+1076,
+11726
+]
+},
+{
+"text": "...!!!",
+"parse_special": false,
+"ids": [
+1076,
+11726
+]
+},
+{
+"text": "'\"`",
+"parse_special": true,
+"ids": [
+14482,
+63
+]
+},
+{
+"text": "'\"`",
+"parse_special": false,
+"ids": [
+14482,
+63
+]
+},
+{
+"text": "~~~",
+"parse_special": true,
+"ids": [
+5636,
+93
+]
+},
+{
+"text": "~~~",
+"parse_special": false,
+"ids": [
+5636,
+93
+]
+},
+{
+"text": "||",
+"parse_special": true,
+"ids": [
+8224
+]
+},
+{
+"text": "||",
+"parse_special": false,
+"ids": [
+8224
+]
+},
+{
+"text": "\\\\",
+"parse_special": true,
+"ids": [
+3312
+]
+},
+{
+"text": "\\\\",
+"parse_special": false,
+"ids": [
+3312
+]
+},
+{
+"text": "/*comment*/",
+"parse_special": true,
+"ids": [
+1022,
+5989,
+1749
+]
+},
+{
+"text": "/*comment*/",
+"parse_special": false,
+"ids": [
+1022,
+5989,
+1749
+]
+},
+{
+"text": "#!/bin/bash",
+"parse_special": true,
+"ids": [
+8436,
+6649,
+16644
+]
+},
+{
+"text": "#!/bin/bash",
+"parse_special": false,
+"ids": [
+8436,
+6649,
+16644
+]
+},
+{
+"text": "def f(x):\n    return x**2\n",
+"parse_special": true,
+"ids": [
+727,
+281,
+2007,
+1590,
+198,
+262,
+460,
+830,
+332,
+17,
+198
+]
+},
+{
+"text": "def f(x):\n    return x**2\n",
+"parse_special": false,
+"ids": [
+727,
+281,
+2007,
+1590,
+198,
+262,
+460,
+830,
+332,
+17,
+198
+]
+},
+{
+"text": "fn main() { println!(\"hi\"); }",
+"parse_special": true,
+"ids": [
+8556,
+1822,
+363,
+313,
+13356,
+16715,
+5834,
+4876,
+333
+]
+},
+{
+"text": "fn main() { println!(\"hi\"); }",
+"parse_special": false,
+"ids": [
+8556,
+1822,
+363,
+313,
+13356,
+16715,
+5834,
+4876,
+333
+]
+},
+{
+"text": "SELECT * FROM t WHERE a = 'b';",
+"parse_special": true,
+"ids": [
+4703,
+348,
+4154,
+259,
+5120,
+264,
+283,
+359,
+65,
+6750
+]
+},
+{
+"text": "SELECT * FROM t WHERE a = 'b';",
+"parse_special": false,
+"ids": [
+4703,
+348,
+4154,
+259,
+5120,
+264,
+283,
+359,
+65,
+6750
+]
+},
+{
+"text": "{\"key\": [1, 2.5, null, true]}",
+"parse_special": true,
+"ids": [
+4754,
+767,
+763,
+498,
+16,
+11,
+220,
+17,
+13,
+20,
+11,
+819,
+11,
+804,
+13587
+]
+},
+{
+"text": "{\"key\": [1, 2.5, null, true]}",
+"parse_special": false,
+"ids": [
+4754,
+767,
+763,
+498,
+16,
+11,
+220,
+17,
+13,
+20,
+11,
+819,
+11,
+804,
+13587
+]
+},
+{
+"text": "<html><body>text</body></html>",
+"parse_special": true,
+"ids": [
+13350,
+1721,
+2513,
+29,
+1272,
+510,
+2513,
+1419,
+1497,
+29
+]
+},
+{
+"text": "<html><body>text</body></html>",
+"parse_special": false,
+"ids": [
+13350,
+1721,
+2513,
+29,
+1272,
+510,
+2513,
+1419,
+1497,
+29
+]
+},
+{
+"text": "$ ls -la | grep foo",
+"parse_special": true,
+"ids": [
+3,
+18997,
+471,
+4120,
+735,
+20049,
+14785
+]
+},
+{
+"text": "$ ls -la | grep foo",
+"parse_special": false,
+"ids": [
+3,
+18997,
+471,
+4120,
+735,
+20049,
+14785
+]
+},
+{
+"text": "email@example.com",
+"parse_special": true,
+"ids": [
+2256,
+34314,
+877
+]
+},
+{
+"text": "email@example.com",
+"parse_special": false,
+"ids": [
+2256,
+34314,
+877
+]
+},
+{
+"text": "https://example.com/path?q=1&r=2#frag",
+"parse_special": true,
+"ids": [
+2349,
+1074,
+8422,
+877,
+49259,
+42332,
+28,
+16,
+58573,
+28,
+17,
+2,
+32096
+]
+},
+{
+"text": "https://example.com/path?q=1&r=2#frag",
+"parse_special": false,
+"ids": [
+2349,
+1074,
+8422,
+877,
+49259,
+42332,
+28,
+16,
+58573,
+28,
+17,
+2,
+32096
+]
+},
+{
+"text": "C:\\Users\\name\\file.txt",
+"parse_special": true,
+"ids": [
+34,
+6964,
+6914,
+59,
+591,
+59,
+1152,
+3778
+]
+},
+{
+"text": "C:\\Users\\name\\file.txt",
+"parse_special": false,
+"ids": [
+34,
+6964,
+6914,
+59,
+591,
+59,
+1152,
+3778
+]
+},
+{
+"text": "café",
+"parse_special": true,
+"ids": [
+895,
+56868
+]
+},
+{
+"text": "café",
+"parse_special": false,
+"ids": [
+895,
+56868
+]
+},
+{
+"text": "naïve façade",
+"parse_special": true,
+"ids": [
+3267,
+36328,
+571,
+218894
+]
+},
+{
+"text": "naïve façade",
+"parse_special": false,
+"ids": [
+3267,
+36328,
+571,
+218894
+]
+},
+{
+"text": "résumé",
+"parse_special": true,
+"ids": [
+41196,
+168699
+]
+},
+{
+"text": "résumé",
+"parse_special": false,
+"ids": [
+41196,
+168699
+]
+},
+{
+"text": "Ångström",
+"parse_special": true,
+"ids": [
+169111,
+938,
+485,
+82628
+]
+},
+{
+"text": "Ångström",
+"parse_special": false,
+"ids": [
+169111,
+938,
+485,
+82628
+]
+},
+{
+"text": "ß ẞ",
+"parse_special": true,
+"ids": [
+7746,
+220,
+6315,
+252
+]
+},
+{
+"text": "ß ẞ",
+"parse_special": false,
+"ids": [
+7746,
+220,
+6315,
+252
+]
+},
+{
+"text": "İstanbul",
+"parse_special": true,
+"ids": [
+46186,
+43610
+]
+},
+{
+"text": "İstanbul",
+"parse_special": false,
+"ids": [
+46186,
+43610
+]
+},
+{
+"text": "ǅ ǈ",
+"parse_special": true,
+"ids": [
+131,
+227,
+220,
+131,
+230
+]
+},
+{
+"text": "ǅ ǈ",
+"parse_special": false,
+"ids": [
+131,
+227,
+220,
+131,
+230
+]
+},
+{
+"text": "中文测试",
+"parse_special": true,
+"ids": [
+99986,
+99449
+]
+},
+{
+"text": "中文测试",
+"parse_special": false,
+"ids": [
+99986,
+99449
+]
+},
+{
+"text": "日本語のテキスト",
+"parse_special": true,
+"ids": [
+247359,
+15303,
+210342
+]
+},
+{
+"text": "日本語のテキスト",
+"parse_special": false,
+"ids": [
+247359,
+15303,
+210342
+]
+},
+{
+"text": "한국어 텍스트",
+"parse_special": true,
+"ids": [
+174675,
+30061,
+225287
+]
+},
+{
+"text": "한국어 텍스트",
+"parse_special": false,
+"ids": [
+174675,
+30061,
+225287
+]
+},
+{
+"text": "中文，标点！",
+"parse_special": true,
+"ids": [
+99986,
+3709,
+141111,
+6115
+]
+},
+{
+"text": "中文，标点！",
+"parse_special": false,
+"ids": [
+99986,
+3709,
+141111,
+6115
+]
+},
+{
+"text": "漢字かな混じり",
+"parse_special": true,
+"ids": [
+101306,
+96356,
+149667,
+97518,
+95674,
+29342
+]
+},
+{
+"text": "漢字かな混じり",
+"parse_special": false,
+"ids": [
+101306,
+96356,
+149667,
+97518,
+95674,
+29342
+]
+},
+{
+"text": "Привет, мир!",
+"parse_special": true,
+"ids": [
+51844,
+26125,
+7921,
+11,
+160202,
+0
+]
+},
+{
+"text": "Привет, мир!",
+"parse_special": false,
+"ids": [
+51844,
+26125,
+7921,
+11,
+160202,
+0
+]
+},
+{
+"text": "Ελληνικά",
+"parse_special": true,
+"ids": [
+168953,
+164594,
+159778
+]
+},
+{
+"text": "Ελληνικά",
+"parse_special": false,
+"ids": [
+168953,
+164594,
+159778
+]
+},
+{
+"text": "עברית",
+"parse_special": true,
+"ids": [
+83101,
+151188,
+151552
+]
+},
+{
+"text": "עברית",
+"parse_special": false,
+"ids": [
+83101,
+151188,
+151552
+]
+},
+{
+"text": "العربية",
+"parse_special": true,
+"ids": [
+179415,
+151479
+]
+},
+{
+"text": "العربية",
+"parse_special": false,
+"ids": [
+179415,
+151479
+]
+},
+{
+"text": "हिन्दी",
+"parse_special": true,
+"ids": [
+215989,
+150127,
+177453
+]
+},
+{
+"text": "हिन्दी",
+"parse_special": false,
+"ids": [
+215989,
+150127,
+177453
+]
+},
+{
+"text": "ไทย",
+"parse_special": true,
+"ids": [
+149826
+]
+},
+{
+"text": "ไทย",
+"parse_special": false,
+"ids": [
+149826
+]
+},
+{
+"text": "ქართული",
+"parse_special": true,
+"ids": [
+154898,
+164988,
+162480
+]
+},
+{
+"text": "ქართული",
+"parse_special": false,
+"ids": [
+154898,
+164988,
+162480
+]
+},
+{
+"text": "🎉",
+"parse_special": true,
+"ids": [
+9008,
+236,
+231
+]
+},
+{
+"text": "🎉",
+"parse_special": false,
+"ids": [
+9008,
+236,
+231
+]
+},
+{
+"text": "🎉🎉🎉",
+"parse_special": true,
+"ids": [
+9008,
+236,
+231,
+9008,
+236,
+231,
+9008,
+236,
+231
+]
+},
+{
+"text": "🎉🎉🎉",
+"parse_special": false,
+"ids": [
+9008,
+236,
+231,
+9008,
+236,
+231,
+9008,
+236,
+231
+]
+},
+{
+"text": "👍🏽",
+"parse_special": true,
+"ids": [
+9008,
+239,
+235,
+9008,
+237,
+121
+]
+},
+{
+"text": "👍🏽",
+"parse_special": false,
+"ids": [
+9008,
+239,
+235,
+9008,
+237,
+121
+]
+},
+{
+"text": "👨‍👩‍👧‍👦",
+"parse_special": true,
+"ids": [
+9008,
+239,
+101,
+373,
+235,
+9008,
+239,
+102,
+373,
+235,
+9008,
+239,
+100,
+373,
+235,
+9008,
+239,
+99
+]
+},
+{
+"text": "👨‍👩‍👧‍👦",
+"parse_special": false,
+"ids": [
+9008,
+239,
+101,
+373,
+235,
+9008,
+239,
+102,
+373,
+235,
+9008,
+239,
+100,
+373,
+235,
+9008,
+239,
+99
+]
+},
+{
+"text": "🇺🇸🇯🇵",
+"parse_special": true,
+"ids": [
+9008,
+229,
+118,
+9008,
+229,
+116,
+9008,
+229,
+107,
+9008,
+229,
+113
+]
+},
+{
+"text": "🇺🇸🇯🇵",
+"parse_special": false,
+"ids": [
+9008,
+229,
+118,
+9008,
+229,
+116,
+9008,
+229,
+107,
+9008,
+229,
+113
+]
+},
+{
+"text": "emoji 😀 mix 🚀 text",
+"parse_special": true,
+"ids": [
+36280,
+87209,
+6311,
+10838,
+248,
+222,
+1414
+]
+},
+{
+"text": "emoji 😀 mix 🚀 text",
+"parse_special": false,
+"ids": [
+36280,
+87209,
+6311,
+10838,
+248,
+222,
+1414
+]
+},
+{
+"text": "é",
+"parse_special": true,
+"ids": [
+68,
+52033
+]
+},
+{
+"text": "é",
+"parse_special": false,
+"ids": [
+68,
+52033
+]
+},
+{
+"text": "ǟ",
+"parse_special": true,
+"ids": [
+64,
+136,
+230,
+136,
+226
+]
+},
+{
+"text": "ǟ",
+"parse_special": false,
+"ids": [
+64,
+136,
+230,
+136,
+226
+]
+},
+{
+"text": "नि",
+"parse_special": true,
+"ids": [
+161520
+]
+},
+{
+"text": "नि",
+"parse_special": false,
+"ids": [
+161520
+]
+},
+{
+"text": "ก็",
+"parse_special": true,
+"ids": [
+148635
+]
+},
+{
+"text": "ก็",
+"parse_special": false,
+"ids": [
+148635
+]
+},
+{
+"text": "̂̃",
+"parse_special": true,
+"ids": [
+136,
+224,
+136,
+225
+]
+},
+{
+"text": "̂̃",
+"parse_special": false,
+"ids": [
+136,
+224,
+136,
+225
+]
+},
+{
+"text": "o̷̸",
+"parse_special": true,
+"ids": [
+78,
+136,
+115,
+136,
+116
+]
+},
+{
+"text": "o̷̸",
+"parse_special": false,
+"ids": [
+78,
+136,
+115,
+136,
+116
+]
+},
+{
+"text": "",
+"parse_special": true,
+"ids": [
+170,
+222,
+222,
+170,
+222,
+223
+]
+},
+{
+"text": "",
+"parse_special": false,
+"ids": [
+170,
+222,
+222,
+170,
+222,
+223
+]
+},
+{
+"text": "󰀀",
+"parse_special": true,
+"ids": [
+175,
+108,
+222,
+222
+]
+},
+{
+"text": "󰀀",
+"parse_special": false,
+"ids": [
+175,
+108,
+222,
+222
+]
+},
+{
+"text": "􏿽",
+"parse_special": true,
+"ids": [
+176,
+237,
+123,
+121
+]
+},
+{
+"text": "􏿽",
+"parse_special": false,
+"ids": [
+176,
+237,
+123,
+121
+]
+},
+{
+"text": "͸͹",
+"parse_special": true,
+"ids": [
+137,
+116,
+137,
+117
+]
+},
+{
+"text": "͸͹",
+"parse_special": false,
+"ids": [
+137,
+116,
+137,
+117
+]
+},
+{
+"text": "޻ࡠ",
+"parse_special": true,
+"ids": [
+154,
+119,
+156,
+94,
+254
+]
+},
+{
+"text": "޻ࡠ",
+"parse_special": false,
+"ids": [
+154,
+119,
+156,
+94,
+254
+]
+},
+{
+"text": "\u0001\u0002",
+"parse_special": true,
+"ids": [
+189,
+190,
+221
+]
+},
+{
+"text": "\u0001\u0002",
+"parse_special": false,
+"ids": [
+189,
+190,
+221
+]
+},
+{
+"text": "a\u000bb\fc",
+"parse_special": true,
+"ids": [
+64,
+199,
+65,
+200,
+66
+]
+},
+{
+"text": "a\u000bb\fc",
+"parse_special": false,
+"ids": [
+64,
+199,
+65,
+200,
+66
+]
+},
+{
+"text": "\u001c\u001d\u001e\u001f",
+"parse_special": true,
+"ids": [
+216,
+217,
+218,
+219
+]
+},
+{
+"text": "\u001c\u001d\u001e\u001f",
+"parse_special": false,
+"ids": [
+216,
+217,
+218,
+219
+]
+},
+{
+"text": "<|im_start|>user\nhi<|im_end|>",
+"parse_special": true,
+"ids": [
+248045,
+846,
+198,
+5834,
+248046
+]
+},
+{
+"text": "<|im_start|>user\nhi<|im_end|>",
+"parse_special": false,
+"ids": [
+27,
+91,
+316,
+4747,
+91,
+29,
+846,
+198,
+5834,
+27,
+91,
+316,
+6018,
+91,
+29
+]
+},
+{
+"text": "<|endoftext|>",
+"parse_special": true,
+"ids": [
+248044
+]
+},
+{
+"text": "<|endoftext|>",
+"parse_special": false,
+"ids": [
+27,
+91,
+8426,
+703,
+419,
+91,
+29
+]
+},
+{
+"text": "<think>\nreason\n</think>\n\nanswer",
+"parse_special": true,
+"ids": [
+248068,
+198,
+19290,
+198,
+248069,
+271,
+8944
+]
+},
+{
+"text": "<think>\nreason\n</think>\n\nanswer",
+"parse_special": false,
+"ids": [
+248068,
+198,
+19290,
+198,
+248069,
+271,
+8944
+]
+},
+{
+"text": "<tool_call>\n<function=f>\n</function>\n</tool_call>",
+"parse_special": true,
+"ids": [
+248058,
+198,
+27,
+1628,
+17572,
+29,
+198,
+510,
+1628,
+29,
+198,
+248059
+]
+},
+{
+"text": "<tool_call>\n<function=f>\n</function>\n</tool_call>",
+"parse_special": false,
+"ids": [
+248058,
+198,
+27,
+1628,
+17572,
+29,
+198,
+510,
+1628,
+29,
+198,
+248059
+]
+},
+{
+"text": "<tool_response>ok</tool_response>",
+"parse_special": true,
+"ids": [
+248066,
+547,
+248067
+]
+},
+{
+"text": "<tool_response>ok</tool_response>",
+"parse_special": false,
+"ids": [
+248066,
+547,
+248067
+]
+},
+{
+"text": "<|vision_start|><|image_pad|><|vision_end|>",
+"parse_special": true,
+"ids": [
+248053,
+248056,
+248054
+]
+},
+{
+"text": "<|vision_start|><|image_pad|><|vision_end|>",
+"parse_special": false,
+"ids": [
+27,
+91,
+12640,
+4747,
+91,
+1721,
+91,
+1742,
+29302,
+91,
+1721,
+91,
+12640,
+6018,
+91,
+29
+]
+},
+{
+"text": "text <|im_end|>\n<|im_start|>assistant\n",
+"parse_special": true,
+"ids": [
+1272,
+220,
+248046,
+198,
+248045,
+74455,
+198
+]
+},
+{
+"text": "text <|im_end|>\n<|im_start|>assistant\n",
+"parse_special": false,
+"ids": [
+1272,
+79790,
+316,
+6018,
+91,
+29,
+198,
+27,
+91,
+316,
+4747,
+91,
+29,
+74455,
+198
+]
+},
+{
+"text": "<|im_start|><|im_start|><|im_end|>",
+"parse_special": true,
+"ids": [
+248045,
+248045,
+248046
+]
+},
+{
+"text": "<|im_start|><|im_start|><|im_end|>",
+"parse_special": false,
+"ids": [
+27,
+91,
+316,
+4747,
+91,
+1721,
+91,
+316,
+4747,
+91,
+1721,
+91,
+316,
+6018,
+91,
+29
+]
+},
+{
+"text": "<think><think></think>",
+"parse_special": true,
+"ids": [
+248068,
+248068,
+248069
+]
+},
+{
+"text": "<think><think></think>",
+"parse_special": false,
+"ids": [
+248068,
+248068,
+248069
+]
+},
+{
+"text": "x<|endoftext|>y",
+"parse_special": true,
+"ids": [
+87,
+248044,
+88
+]
+},
+{
+"text": "x<|endoftext|>y",
+"parse_special": false,
+"ids": [
+87,
+27,
+91,
+8426,
+703,
+419,
+91,
+29,
+88
+]
+},
+{
+"text": "<|im_start|>",
+"parse_special": true,
+"ids": [
+248045
+]
+},
+{
+"text": "<|im_start|>",
+"parse_special": false,
+"ids": [
+27,
+91,
+316,
+4747,
+91,
+29
+]
+},
+{
+"text": "<|im_end|>",
+"parse_special": true,
+"ids": [
+248046
+]
+},
+{
+"text": "<|im_end|>",
+"parse_special": false,
+"ids": [
+27,
+91,
+316,
+6018,
+91,
+29
+]
+},
+{
+"text": "The answer is <think>maybe</think> 42.",
+"parse_special": true,
+"ids": [
+760,
+4087,
+369,
+220,
+248068,
+35542,
+248069,
+220,
+19,
+17,
+13
+]
+},
+{
+"text": "The answer is <think>maybe</think> 42.",
+"parse_special": false,
+"ids": [
+760,
+4087,
+369,
+220,
+248068,
+35542,
+248069,
+220,
+19,
+17,
+13
+]
+},
+{
+"text": "<function=foo>",
+"parse_special": true,
+"ids": [
+27,
+1628,
+28,
+7724,
+29
+]
+},
+{
+"text": "<function=foo>",
+"parse_special": false,
+"ids": [
+27,
+1628,
+28,
+7724,
+29
+]
+},
+{
+"text": "</parameter>",
+"parse_special": true,
+"ids": [
+510,
+15704,
+29
+]
+},
+{
+"text": "</parameter>",
+"parse_special": false,
+"ids": [
+510,
+15704,
+29
+]
+},
+{
+"text": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+"parse_special": true,
+"ids": [
+67089,
+67089,
+67089,
+67089,
+67089,
+67089,
+67089,
+67089,
+67089,
+67089,
+67089,
+67089,
+67089,
+67089,
+67089,
+67089,
+67089,
+67089,
+67089,
+67089,
+67089,
+67089,
+67089,
+67089,
+67089,
+67089,
+67089,
+67089,
+67089,
+67089,
+67089,
+67089,
+67089,
+67089,
+67089,
+67089,
+67089,
+27528
+]
+},
+{
+"text": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+"parse_special": false,
+"ids": [
+67089,
+67089,
+67089,
+67089,
+67089,
+67089,
+67089,
+67089,
+67089,
+67089,
+67089,
+67089,
+67089,
+67089,
+67089,
+67089,
+67089,
+67089,
+67089,
+67089,
+67089,
+67089,
+67089,
+67089,
+67089,
+67089,
+67089,
+67089,
+67089,
+67089,
+67089,
+67089,
+67089,
+67089,
+67089,
+67089,
+67089,
+27528
+]
+},
+{
+"text": "word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word ",
+"parse_special": true,
+"ids": [
+1119,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+220
+]
+},
+{
+"text": "word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word ",
+"parse_special": false,
+"ids": [
+1119,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+3299,
+220
+]
+},
+{
+"text": "Lorem ipsum dolor sit amet, consectetur adipiscing elit. Lorem ipsum dolor sit amet, consectetur adipiscing elit. Lorem ipsum dolor sit amet, consectetur adipiscing elit. Lorem ipsum dolor sit amet, consectetur adipiscing elit. Lorem ipsum dolor sit amet, consectetur adipiscing elit. Lorem ipsum dolor sit amet, consectetur adipiscing elit. ",
+"parse_special": true,
+"ids": [
+31697,
+25501,
+22915,
+2364,
+26335,
+11,
+33976,
+55980,
+29076,
+13,
+45364,
+25501,
+22915,
+2364,
+26335,
+11,
+33976,
+55980,
+29076,
+13,
+45364,
+25501,
+22915,
+2364,
+26335,
+11,
+33976,
+55980,
+29076,
+13,
+45364,
+25501,
+22915,
+2364,
+26335,
+11,
+33976,
+55980,
+29076,
+13,
+45364,
+25501,
+22915,
+2364,
+26335,
+11,
+33976,
+55980,
+29076,
+13,
+45364,
+25501,
+22915,
+2364,
+26335,
+11,
+33976,
+55980,
+29076,
+13,
+220
+]
+},
+{
+"text": "Lorem ipsum dolor sit amet, consectetur adipiscing elit. Lorem ipsum dolor sit amet, consectetur adipiscing elit. Lorem ipsum dolor sit amet, consectetur adipiscing elit. Lorem ipsum dolor sit amet, consectetur adipiscing elit. Lorem ipsum dolor sit amet, consectetur adipiscing elit. Lorem ipsum dolor sit amet, consectetur adipiscing elit. ",
+"parse_special": false,
+"ids": [
+31697,
+25501,
+22915,
+2364,
+26335,
+11,
+33976,
+55980,
+29076,
+13,
+45364,
+25501,
+22915,
+2364,
+26335,
+11,
+33976,
+55980,
+29076,
+13,
+45364,
+25501,
+22915,
+2364,
+26335,
+11,
+33976,
+55980,
+29076,
+13,
+45364,
+25501,
+22915,
+2364,
+26335,
+11,
+33976,
+55980,
+29076,
+13,
+45364,
+25501,
+22915,
+2364,
+26335,
+11,
+33976,
+55980,
+29076,
+13,
+45364,
+25501,
+22915,
+2364,
+26335,
+11,
+33976,
+55980,
+29076,
+13,
+220
+]
+},
+{
+"text": "$α%/\n #नि",
+"parse_special": true,
+"ids": [
+3,
+18374,
+51590,
+198,
+653,
+161520
+]
+},
+{
+"text": "$α%/\n #नि",
+"parse_special": false,
+"ids": [
+3,
+18374,
+51590,
+198,
+653,
+161520
+]
+},
+{
+"text": "Word",
+"parse_special": true,
+"ids": [
+10561
+]
+},
+{
+"text": "Word",
+"parse_special": false,
+"ids": [
+10561
+]
+},
+{
+"text": "$(<function=f>'d̈xword[].?",
+"parse_special": true,
+"ids": [
+8263,
+27,
+1628,
+17572,
+29,
+170,
+222,
+222,
+6,
+67,
+136,
+230,
+87,
+1119,
+78012,
+30
+]
+},
+{
+"text": "$(<function=f>'d̈xword[].?",
+"parse_special": false,
+"ids": [
+8263,
+27,
+1628,
+17572,
+29,
+170,
+222,
+222,
+6,
+67,
+136,
+230,
+87,
+1119,
+78012,
+30
+]
+},
+{
+"text": "　</parameter>|WORD'}",
+"parse_special": true,
+"ids": [
+21742,
+510,
+15704,
+67479,
+7001,
+8017
+]
+},
+{
+"text": "　</parameter>|WORD'}",
+"parse_special": false,
+"ids": [
+21742,
+510,
+15704,
+67479,
+7001,
+8017
+]
+},
+{
+"text": "$-+)#ß've",
+"parse_special": true,
+"ids": [
+3,
+12,
+35000,
+2,
+7746,
+2908
+]
+},
+{
+"text": "$-+)#ß've",
+"parse_special": false,
+"ids": [
+3,
+12,
+35000,
+2,
+7746,
+2908
+]
+},
+{
+"text": ", \r\n̈%%@\\*́))",
+"parse_special": true,
+"ids": [
+11,
+3966,
+317,
+136,
+230,
+2681,
+64102,
+9,
+52033,
+578
+]
+},
+{
+"text": ", \r\n̈%%@\\*́))",
+"parse_special": false,
+"ids": [
+11,
+3966,
+317,
+136,
+230,
+2681,
+64102,
+9,
+52033,
+578
+]
+},
+{
+"text": "'ll",
+"parse_special": true,
+"ids": [
+3172
+]
+},
+{
+"text": "'ll",
+"parse_special": false,
+"ids": [
+3172
+]
+},
+{
+"text": "[xβ{中:#+\\",
+"parse_special": true,
+"ids": [
+8065,
+49531,
+90,
+95789,
+25,
+7908,
+59
+]
+},
+{
+"text": "[xβ{中:#+\\",
+"parse_special": false,
+"ids": [
+8065,
+49531,
+90,
+95789,
+25,
+7908,
+59
+]
+},
+{
+"text": "<think>&(中@",
+"parse_special": true,
+"ids": [
+248068,
+50857,
+95789,
+31
+]
+},
+{
+"text": "<think>&(中@",
+"parse_special": false,
+"ids": [
+248068,
+50857,
+95789,
+31
+]
+},
+{
+"text": "<|endoftext|><'re\t$नि\t",
+"parse_special": true,
+"ids": [
+248044,
+17747,
+265,
+197,
+3,
+161520,
+197
+]
+},
+{
+"text": "<|endoftext|><'re\t$नि\t",
+"parse_special": false,
+"ids": [
+27,
+91,
+8426,
+703,
+419,
+91,
+1721,
+6,
+265,
+197,
+3,
+161520,
+197
+]
+},
+{
+"text": "</parameter>*ǅß",
+"parse_special": true,
+"ids": [
+510,
+15704,
+18853,
+131,
+227,
+7746
+]
+},
+{
+"text": "</parameter>*ǅß",
+"parse_special": false,
+"ids": [
+510,
+15704,
+18853,
+131,
+227,
+7746
+]
+},
+{
+"text": "<think>>!<function=f>　're<function=f>文</parameter>%</parameter>",
+"parse_special": true,
+"ids": [
+248068,
+29,
+83932,
+1628,
+17572,
+29,
+21742,
+2224,
+27,
+1628,
+17572,
+29,
+95905,
+510,
+15704,
+27799,
+510,
+15704,
+29
+]
+},
+{
+"text": "<think>>!<function=f>　're<function=f>文</parameter>%</parameter>",
+"parse_special": false,
+"ids": [
+248068,
+29,
+83932,
+1628,
+17572,
+29,
+21742,
+2224,
+27,
+1628,
+17572,
+29,
+95905,
+510,
+15704,
+27799,
+510,
+15704,
+29
+]
+},
+{
+"text": "-͸wordéПривет'll^.^ `Word中",
+"parse_special": true,
+"ids": [
+12,
+137,
+116,
+1119,
+933,
+51844,
+26125,
+7921,
+3172,
+38091,
+61,
+3966,
+63,
+10561,
+95789
+]
+},
+{
+"text": "-͸wordéПривет'll^.^ `Word中",
+"parse_special": false,
+"ids": [
+12,
+137,
+116,
+1119,
+933,
+51844,
+26125,
+7921,
+3172,
+38091,
+61,
+3966,
+63,
+10561,
+95789
+]
+},
+{
+"text": "?😀+=ßWord\u0001<|im_start|>123　̈ ",
+"parse_special": true,
+"ids": [
+30,
+169706,
+8236,
+7746,
+10561,
+189,
+248045,
+16,
+17,
+18,
+21742,
+136,
+230,
+3966
+]
+},
+{
+"text": "?😀+=ßWord\u0001<|im_start|>123　̈ ",
+"parse_special": false,
+"ids": [
+30,
+169706,
+8236,
+7746,
+10561,
+189,
+27,
+91,
+316,
+4747,
+91,
+29,
+16,
+17,
+18,
+21742,
+136,
+230,
+3966
+]
+},
+{
+"text": "αβ#('veß😀*<|endoftext|>",
+"parse_special": true,
+"ids": [
+18374,
+49531,
+2,
+482,
+571,
+170,
+222,
+222,
+7746,
+169706,
+9,
+248044
+]
+},
+{
+"text": "αβ#('veß😀*<|endoftext|>",
+"parse_special": false,
+"ids": [
+18374,
+49531,
+2,
+482,
+571,
+170,
+222,
+222,
+7746,
+169706,
+9,
+27,
+91,
+8426,
+703,
+419,
+91,
+29
+]
+},
+{
+"text": "  <|im_start|></parameter>_=",
+"parse_special": true,
+"ids": [
+256,
+248045,
+510,
+15704,
+29,
+44548
+]
+},
+{
+"text": "  <|im_start|></parameter>_=",
+"parse_special": false,
+"ids": [
+220,
+79790,
+316,
+4747,
+91,
+1419,
+15704,
+29,
+44548
+]
+},
+{
+"text": "+}x_Wordα`x=&%\n<think>",
+"parse_special": true,
+"ids": [
+10,
+92,
+87,
+93208,
+18374,
+63,
+87,
+24548,
+4,
+198,
+248068
+]
+},
+{
+"text": "+}x_Wordα`x=&%\n<think>",
+"parse_special": false,
+"ids": [
+10,
+92,
+87,
+93208,
+18374,
+63,
+87,
+24548,
+4,
+198,
+248068
+]
+},
+{
+"text": "</tool_call></think>नि日'd</tool_call>",
+"parse_special": true,
+"ids": [
+248059,
+248069,
+161520,
+95971,
+4035,
+248059
+]
+},
+{
+"text": "</tool_call></think>नि日'd</tool_call>",
+"parse_special": false,
+"ids": [
+248059,
+248069,
+161520,
+95971,
+4035,
+248059
+]
+},
+{
+"text": "~@. <think>.<tool_call>}\u0001\tनिβü",
+"parse_special": true,
+"ids": [
+93,
+31,
+13,
+3966,
+248068,
+13,
+248058,
+92,
+189,
+197,
+161520,
+49531,
+2314
+]
+},
+{
+"text": "~@. <think>.<tool_call>}\u0001\tनिβü",
+"parse_special": false,
+"ids": [
+93,
+31,
+13,
+3966,
+248068,
+13,
+248058,
+92,
+189,
+197,
+161520,
+49531,
+2314
+]
+},
+{
+"text": "βα　^*,",
+"parse_special": true,
+"ids": [
+160957,
+21742,
+61,
+11961
+]
+},
+{
+"text": "βα　^*,",
+"parse_special": false,
+"ids": [
+160957,
+21742,
+61,
+11961
+]
+},
+{
+"text": " 文",
+"parse_special": true,
+"ids": [
+3966,
+95905
+]
+},
+{
+"text": " 文",
+"parse_special": false,
+"ids": [
+3966,
+95905
+]
+},
+{
+"text": "\u0001</think>ǅ",
+"parse_special": true,
+"ids": [
+189,
+248069,
+131,
+227
+]
+},
+{
+"text": "\u0001</think>ǅ",
+"parse_special": false,
+"ids": [
+189,
+248069,
+131,
+227
+]
+},
+{
+"text": "]</parameter>निWord;'t<|im_start|>:<",
+"parse_special": true,
+"ids": [
+60,
+170,
+222,
+222,
+510,
+15704,
+29,
+161520,
+10561,
+34801,
+83,
+248045,
+30226
+]
+},
+{
+"text": "]</parameter>निWord;'t<|im_start|>:<",
+"parse_special": false,
+"ids": [
+60,
+170,
+222,
+222,
+510,
+15704,
+29,
+161520,
+10561,
+34801,
+83,
+27,
+91,
+316,
+4747,
+91,
+25961,
+27
+]
+},
+{
+"text": "<think>\u0001's+:>!<tool_call></think>WORDβ<|im_start|><|im_start|>'ve",
+"parse_special": true,
+"ids": [
+248068,
+189,
+6,
+82,
+14964,
+29,
+0,
+248058,
+248069,
+7001,
+49531,
+248045,
+248045,
+2908
+]
+},
+{
+"text": "<think>\u0001's+:>!<tool_call></think>WORDβ<|im_start|><|im_start|>'ve",
+"parse_special": false,
+"ids": [
+248068,
+189,
+6,
+82,
+14964,
+29,
+0,
+248058,
+248069,
+7001,
+49531,
+27,
+91,
+316,
+4747,
+91,
+1721,
+91,
+316,
+4747,
+91,
+5417,
+571
+]
+},
+{
+"text": "</think>\u0001^('s123/(?^नि[WORD|",
+"parse_special": true,
+"ids": [
+248069,
+189,
+61,
+482,
+82,
+16,
+17,
+18,
+51975,
+61,
+161520,
+58,
+7001,
+91
+]
+},
+{
+"text": "</think>\u0001^('s123/(?^नि[WORD|",
+"parse_special": false,
+"ids": [
+248069,
+189,
+61,
+482,
+82,
+16,
+17,
+18,
+51975,
+61,
+161520,
+58,
+7001,
+91
+]
+},
+{
+"text": " ́&<|im_start|>͸ü",
+"parse_special": true,
+"ids": [
+3966,
+52033,
+5,
+248045,
+137,
+116,
+2314
+]
+},
+{
+"text": " ́&<|im_start|>͸ü",
+"parse_special": false,
+"ids": [
+3966,
+52033,
+5,
+27,
+91,
+316,
+4747,
+91,
+29,
+137,
+116,
+2314
+]
+},
+{
+"text": "'tǅ<|im_start|><function=f>#<|im_start|>]日日͸/🎉β*",
+"parse_special": true,
+"ids": [
+914,
+131,
+227,
+248045,
+27,
+1628,
+17572,
+59066,
+248045,
+60,
+128858,
+137,
+116,
+14,
+9008,
+236,
+231,
+49531,
+9
+]
+},
+{
+"text": "'tǅ<|im_start|><function=f>#<|im_start|>]日日͸/🎉β*",
+"parse_special": false,
+"ids": [
+914,
+131,
+227,
+27,
+91,
+316,
+4747,
+91,
+1721,
+1628,
+17572,
+59066,
+27,
+91,
+316,
+4747,
+91,
+51733,
+128858,
+137,
+116,
+14,
+9008,
+236,
+231,
+49531,
+9
+]
+},
+{
+"text": "́(<文 -<tool_call>́ü.!",
+"parse_special": true,
+"ids": [
+52033,
+22019,
+95905,
+471,
+248058,
+52033,
+2314,
+59278
+]
+},
+{
+"text": "́(<文 -<tool_call>́ü.!",
+"parse_special": false,
+"ids": [
+52033,
+22019,
+95905,
+471,
+248058,
+52033,
+2314,
+59278
+]
+},
+{
+"text": "  =\u0001<本~|\\日 ",
+"parse_special": true,
+"ids": [
+220,
+283,
+189,
+27,
+95879,
+93,
+22242,
+95971,
+3966
+]
+},
+{
+"text": "  =\u0001<本~|\\日 ",
+"parse_special": false,
+"ids": [
+220,
+283,
+189,
+27,
+95879,
+93,
+22242,
+95971,
+3966
+]
+},
+{
+"text": "本",
+"parse_special": true,
+"ids": [
+95879
+]
+},
+{
+"text": "本",
+"parse_special": false,
+"ids": [
+95879
+]
+},
+{
+"text": "<|im_start|>)WORDПривет</tool_call>😀",
+"parse_special": true,
+"ids": [
+248045,
+8,
+7001,
+51844,
+26125,
+7921,
+248059,
+169706
+]
+},
+{
+"text": "<|im_start|>)WORDПривет</tool_call>😀",
+"parse_special": false,
+"ids": [
+27,
+91,
+316,
+4747,
+91,
+8958,
+7001,
+51844,
+26125,
+7921,
+248059,
+169706
+]
+},
+{
+"text": "WORD.*ß<function=f>123!निx{　",
+"parse_special": true,
+"ids": [
+7001,
+4749,
+7746,
+27,
+1628,
+17572,
+29,
+16,
+17,
+18,
+0,
+161520,
+87,
+90,
+21742
+]
+},
+{
+"text": "WORD.*ß<function=f>123!निx{　",
+"parse_special": false,
+"ids": [
+7001,
+4749,
+7746,
+27,
+1628,
+17572,
+29,
+16,
+17,
+18,
+0,
+161520,
+87,
+90,
+21742
+]
+},
+{
+"text": "Word͸<tool_call>$'s_  <think>",
+"parse_special": true,
+"ids": [
+10561,
+137,
+116,
+248058,
+3,
+6,
+82,
+62,
+256,
+248068
+]
+},
+{
+"text": "Word͸<tool_call>$'s_  <think>",
+"parse_special": false,
+"ids": [
+10561,
+137,
+116,
+248058,
+3,
+6,
+82,
+62,
+256,
+248068
+]
+},
+{
+"text": ")  }~  !@x.'~<function=f><think>|",
+"parse_special": true,
+"ids": [
+8,
+220,
+333,
+93,
+220,
+729,
+31,
+87,
+3058,
+93,
+27,
+1628,
+17572,
+29,
+248068,
+91
+]
+},
+{
+"text": ")  }~  !@x.'~<function=f><think>|",
+"parse_special": false,
+"ids": [
+8,
+220,
+333,
+93,
+220,
+729,
+31,
+87,
+3058,
+93,
+27,
+1628,
+17572,
+29,
+248068,
+91
+]
+},
+{
+"text": "='dα<tool_call>本`Привет123</think>",
+"parse_special": true,
+"ids": [
+1095,
+67,
+18374,
+248058,
+95879,
+63,
+51844,
+26125,
+7921,
+16,
+17,
+18,
+248069
+]
+},
+{
+"text": "='dα<tool_call>本`Привет123</think>",
+"parse_special": false,
+"ids": [
+1095,
+67,
+18374,
+248058,
+95879,
+63,
+51844,
+26125,
+7921,
+16,
+17,
+18,
+248069
+]
+},
+{
+"text": "}</think>$\u0001word\r\n&</think>日's'd*!,",
+"parse_special": true,
+"ids": [
+92,
+248069,
+3,
+189,
+1119,
+317,
+5,
+248069,
+95971,
+579,
+4035,
+9,
+16638
+]
+},
+{
+"text": "}</think>$\u0001word\r\n&</think>日's'd*!,",
+"parse_special": false,
+"ids": [
+92,
+248069,
+3,
+189,
+1119,
+317,
+5,
+248069,
+95971,
+579,
+4035,
+9,
+16638
+]
+},
+{
+"text": "[word'dWORD",
+"parse_special": true,
+"ids": [
+48063,
+4035,
+170,
+222,
+222,
+7001
+]
+},
+{
+"text": "[word'dWORD",
+"parse_special": false,
+"ids": [
+48063,
+4035,
+170,
+222,
+222,
+7001
+]
+},
+{
+"text": "?\t",
+"parse_special": true,
+"ids": [
+30,
+197
+]
+},
+{
+"text": "?\t",
+"parse_special": false,
+"ids": [
+30,
+197
+]
+},
+{
+"text": "\u0001éü#β'中",
+"parse_special": true,
+"ids": [
+189,
+170,
+222,
+222,
+933,
+170,
+222,
+222,
+2314,
+2,
+49531,
+6,
+95789
+]
+},
+{
+"text": "\u0001éü#β'中",
+"parse_special": false,
+"ids": [
+189,
+170,
+222,
+222,
+933,
+170,
+222,
+222,
+2314,
+2,
+49531,
+6,
+95789
+]
+},
+{
+"text": "中''s😀're#β123't>",
+"parse_special": true,
+"ids": [
+95789,
+4456,
+82,
+169706,
+6,
+265,
+2,
+49531,
+16,
+17,
+18,
+914,
+29
+]
+},
+{
+"text": "中''s😀're#β123't>",
+"parse_special": false,
+"ids": [
+95789,
+4456,
+82,
+169706,
+6,
+265,
+2,
+49531,
+16,
+17,
+18,
+914,
+29
+]
+},
+{
+"text": "$文<|endoftext|> *<function=f>",
+"parse_special": true,
+"ids": [
+3,
+95905,
+248044,
+3966,
+9,
+27,
+1628,
+17572,
+29
+]
+},
+{
+"text": "$文<|endoftext|> *<function=f>",
+"parse_special": false,
+"ids": [
+3,
+95905,
+27,
+91,
+8426,
+703,
+419,
+91,
+29,
+3966,
+9,
+27,
+1628,
+17572,
+29
+]
+},
+{
+"text": "'ll\t",
+"parse_special": true,
+"ids": [
+3172,
+197
+]
+},
+{
+"text": "'ll\t",
+"parse_special": false,
+"ids": [
+3172,
+197
+]
+},
+{
+"text": "<function=f>!_/\\é",
+"parse_special": true,
+"ids": [
+27,
+1628,
+17572,
+29,
+0,
+62,
+33182,
+933
+]
+},
+{
+"text": "<function=f>!_/\\é",
+"parse_special": false,
+"ids": [
+27,
+1628,
+17572,
+29,
+0,
+62,
+33182,
+933
+]
+},
+{
+"text": "_",
+"parse_special": true,
+"ids": [
+62
+]
+},
+{
+"text": "_",
+"parse_special": false,
+"ids": [
+62
+]
+},
+{
+"text": "'re_ <|im_start|>\"</parameter>~>̈<|im_start|>é}[",
+"parse_special": true,
+"ids": [
+2224,
+62,
+3966,
+248045,
+20862,
+15704,
+29,
+93,
+29,
+136,
+230,
+248045,
+933,
+41955
+]
+},
+{
+"text": "'re_ <|im_start|>\"</parameter>~>̈<|im_start|>é}[",
+"parse_special": false,
+"ids": [
+2224,
+62,
+3966,
+27,
+91,
+316,
+4747,
+91,
+9585,
+510,
+15704,
+29,
+93,
+29,
+136,
+230,
+27,
+91,
+316,
+4747,
+91,
+29,
+933,
+41955
+]
+},
+{
+"text": "<βǅ中'llWord́",
+"parse_special": true,
+"ids": [
+27,
+49531,
+131,
+227,
+95789,
+3172,
+10561,
+52033
+]
+},
+{
+"text": "<βǅ中'llWord́",
+"parse_special": false,
+"ids": [
+27,
+49531,
+131,
+227,
+95789,
+3172,
+10561,
+52033
+]
+},
+{
+"text": "</tool_call>\"中͸_\t)नि<function=f>){",
+"parse_special": true,
+"ids": [
+248059,
+1,
+95789,
+137,
+116,
+62,
+197,
+8,
+170,
+222,
+222,
+161520,
+27,
+1628,
+17572,
+29,
+5908
+]
+},
+{
+"text": "</tool_call>\"中͸_\t)नि<function=f>){",
+"parse_special": false,
+"ids": [
+248059,
+1,
+95789,
+137,
+116,
+62,
+197,
+8,
+170,
+222,
+222,
+161520,
+27,
+1628,
+17572,
+29,
+5908
+]
+},
+{
+"text": " <|im_start|>̈α}",
+"parse_special": true,
+"ids": [
+3966,
+248045,
+136,
+230,
+170,
+222,
+222,
+18374,
+92
+]
+},
+{
+"text": " <|im_start|>̈α}",
+"parse_special": false,
+"ids": [
+3966,
+27,
+91,
+316,
+4747,
+91,
+29,
+136,
+230,
+170,
+222,
+222,
+18374,
+92
+]
+},
+{
+"text": "( 't>#%\"",
+"parse_special": true,
+"ids": [
+7,
+359,
+83,
+59066,
+15330
+]
+},
+{
+"text": "( 't>#%\"",
+"parse_special": false,
+"ids": [
+7,
+359,
+83,
+59066,
+15330
+]
+},
+{
+"text": "'téПриветWORD'll͸α/β",
+"parse_special": true,
+"ids": [
+914,
+933,
+51844,
+26125,
+7921,
+7001,
+3172,
+137,
+116,
+18374,
+14,
+49531
+]
+},
+{
+"text": "'téПриветWORD'll͸α/β",
+"parse_special": false,
+"ids": [
+914,
+933,
+51844,
+26125,
+7921,
+7001,
+3172,
+137,
+116,
+18374,
+14,
+49531
+]
+},
+{
+"text": "/",
+"parse_special": true,
+"ids": [
+14
+]
+},
+{
+"text": "/",
+"parse_special": false,
+"ids": [
+14
+]
+},
+{
+"text": "\\##:ПриветWORD've^\\ [<tool_call>\n",
+"parse_special": true,
+"ids": [
+59,
+550,
+25,
+51844,
+26125,
+7921,
+7001,
+2908,
+24094,
+498,
+248058,
+198
+]
+},
+{
+"text": "\\##:ПриветWORD've^\\ [<tool_call>\n",
+"parse_special": false,
+"ids": [
+59,
+550,
+25,
+51844,
+26125,
+7921,
+7001,
+2908,
+24094,
+498,
+248058,
+198
+]
+},
+{
+"text": "\t́</tool_call>.",
+"parse_special": true,
+"ids": [
+197,
+52033,
+170,
+222,
+222,
+248059,
+13
+]
+},
+{
+"text": "\t́</tool_call>.",
+"parse_special": false,
+"ids": [
+197,
+52033,
+170,
+222,
+222,
+248059,
+13
+]
+},
+{
+"text": "^\\'re\u0001",
+"parse_special": true,
+"ids": [
+61,
+9867,
+265,
+189
+]
+},
+{
+"text": "^\\'re\u0001",
+"parse_special": false,
+"ids": [
+61,
+9867,
+265,
+189
+]
+},
+{
+"text": "　word,%(=\\$Word+",
+"parse_special": true,
+"ids": [
+21742,
+1119,
+17650,
+7,
+33289,
+170,
+222,
+222,
+3,
+10561,
+10
+]
+},
+{
+"text": "　word,%(=\\$Word+",
+"parse_special": false,
+"ids": [
+21742,
+1119,
+17650,
+7,
+33289,
+170,
+222,
+222,
+3,
+10561,
+10
+]
+},
+{
+"text": "'ll't't中\t</tool_call>\t",
+"parse_special": true,
+"ids": [
+3172,
+914,
+914,
+95789,
+197,
+248059,
+197
+]
+},
+{
+"text": "'ll't't中\t</tool_call>\t",
+"parse_special": false,
+"ids": [
+3172,
+914,
+914,
+95789,
+197,
+248059,
+197
+]
+},
+{
+"text": "& 本ß;;%<|im_end|>&|word",
+"parse_special": true,
+"ids": [
+5,
+220,
+95879,
+7746,
+6555,
+4,
+248046,
+5,
+91,
+1119
+]
+},
+{
+"text": "& 本ß;;%<|im_end|>&|word",
+"parse_special": false,
+"ids": [
+5,
+220,
+95879,
+7746,
+6555,
+4,
+27,
+91,
+316,
+6018,
+91,
+5608,
+91,
+1119
+]
+},
+{
+"text": "+<function=f>̈123</tool_call>'t\u0001 ǅß#",
+"parse_special": true,
+"ids": [
+10,
+27,
+1628,
+17572,
+29,
+136,
+230,
+16,
+17,
+18,
+248059,
+914,
+189,
+220,
+131,
+227,
+7746,
+2
+]
+},
+{
+"text": "+<function=f>̈123</tool_call>'t\u0001 ǅß#",
+"parse_special": false,
+"ids": [
+10,
+27,
+1628,
+17572,
+29,
+136,
+230,
+16,
+17,
+18,
+248059,
+914,
+189,
+220,
+131,
+227,
+7746,
+2
+]
+},
+{
+"text": ",<|im_start|>WORD)</parameter> _<function=f>\"",
+"parse_special": true,
+"ids": [
+11,
+248045,
+7001,
+12173,
+15704,
+29,
+3966,
+40365,
+1628,
+17572,
+9585
+]
+},
+{
+"text": ",<|im_start|>WORD)</parameter> _<function=f>\"",
+"parse_special": false,
+"ids": [
+66975,
+91,
+316,
+4747,
+91,
+29,
+7001,
+12173,
+15704,
+29,
+3966,
+40365,
+1628,
+17572,
+9585
+]
+},
+{
+"text": "日\r\n<=日;本'll\u0001　!'ll",
+"parse_special": true,
+"ids": [
+95971,
+317,
+7946,
+95971,
+26,
+95879,
+3172,
+189,
+21742,
+30351,
+636
+]
+},
+{
+"text": "日\r\n<=日;本'll\u0001　!'ll",
+"parse_special": false,
+"ids": [
+95971,
+317,
+7946,
+95971,
+26,
+95879,
+3172,
+189,
+21742,
+30351,
+636
+]
+},
+{
+"text": "@#\t",
+"parse_special": true,
+"ids": [
+31,
+2,
+197
+]
+},
+{
+"text": "@#\t",
+"parse_special": false,
+"ids": [
+31,
+2,
+197
+]
+},
+{
+"text": "'reβ文~\"'re(<tool_call>   're",
+"parse_special": true,
+"ids": [
+2224,
+49531,
+95905,
+93,
+19959,
+265,
+7,
+248058,
+256,
+359,
+265
+]
+},
+{
+"text": "'reβ文~\"'re(<tool_call>   're",
+"parse_special": false,
+"ids": [
+2224,
+49531,
+95905,
+93,
+19959,
+265,
+7,
+248058,
+256,
+359,
+265
+]
+},
+{
+"text": "<function=f>'d&&</parameter>#.<\u0001wordβ本  本",
+"parse_special": true,
+"ids": [
+27,
+1628,
+17572,
+5417,
+67,
+7429,
+510,
+15704,
+59066,
+15294,
+189,
+1119,
+49531,
+95879,
+220,
+220,
+95879
+]
+},
+{
+"text": "<function=f>'d&&</parameter>#.<\u0001wordβ本  本",
+"parse_special": false,
+"ids": [
+27,
+1628,
+17572,
+5417,
+67,
+7429,
+510,
+15704,
+59066,
+15294,
+189,
+1119,
+49531,
+95879,
+220,
+220,
+95879
+]
+},
+{
+"text": "'m😀'[WORD\n>Word}͸~\\",
+"parse_special": true,
+"ids": [
+2688,
+169706,
+64635,
+7001,
+198,
+29,
+10561,
+92,
+137,
+116,
+93,
+59
+]
+},
+{
+"text": "'m😀'[WORD\n>Word}͸~\\",
+"parse_special": false,
+"ids": [
+2688,
+169706,
+64635,
+7001,
+198,
+29,
+10561,
+92,
+137,
+116,
+93,
+59
+]
+},
+{
+"text": "Привет😀日Word͸<tool_call>",
+"parse_special": true,
+"ids": [
+51844,
+26125,
+7921,
+169706,
+95971,
+10561,
+137,
+116,
+248058
+]
+},
+{
+"text": "Привет😀日Word͸<tool_call>",
+"parse_special": false,
+"ids": [
+51844,
+26125,
+7921,
+169706,
+95971,
+10561,
+137,
+116,
+248058
+]
+},
+{
+"text": "'mनि </parameter>͸😀't",
+"parse_special": true,
+"ids": [
+2688,
+161520,
+3966,
+510,
+15704,
+29,
+137,
+116,
+169706,
+6,
+83
+]
+},
+{
+"text": "'mनि </parameter>͸😀't",
+"parse_special": false,
+"ids": [
+2688,
+161520,
+3966,
+510,
+15704,
+29,
+137,
+116,
+169706,
+6,
+83
+]
+},
+{
+"text": " %,日😀<think>́",
+"parse_special": true,
+"ids": [
+196829,
+95971,
+169706,
+248068,
+52033
+]
+},
+{
+"text": " %,日😀<think>́",
+"parse_special": false,
+"ids": [
+196829,
+95971,
+169706,
+248068,
+52033
+]
+},
+{
+"text": "<)|́'\\<|im_end|>",
+"parse_special": true,
+"ids": [
+27,
+17399,
+52033,
+15313,
+248046
+]
+},
+{
+"text": "<)|́'\\<|im_end|>",
+"parse_special": false,
+"ids": [
+27,
+17399,
+52033,
+6,
+5431,
+91,
+316,
+6018,
+91,
+29
+]
+},
+{
+"text": "'ve'",
+"parse_special": true,
+"ids": [
+2908,
+6
+]
+},
+{
+"text": "'ve'",
+"parse_special": false,
+"ids": [
+2908,
+6
+]
+},
+{
+"text": "/\u0001\n123!<|endoftext|>]&[}",
+"parse_special": true,
+"ids": [
+14,
+189,
+198,
+16,
+17,
+18,
+0,
+248044,
+60142,
+58,
+92
+]
+},
+{
+"text": "/\u0001\n123!<|endoftext|>]&[}",
+"parse_special": false,
+"ids": [
+14,
+189,
+198,
+16,
+17,
+18,
+83932,
+91,
+8426,
+703,
+419,
+91,
+51733,
+5,
+58,
+92
+]
+},
+{
+"text": "[ \t\n='ll文[<|endoftext|>Привет <tool_call>,<|im_end|>",
+"parse_special": true,
+"ids": [
+58,
+16957,
+1095,
+636,
+95905,
+58,
+248044,
+51844,
+26125,
+7921,
+220,
+248058,
+11,
+248046
+]
+},
+{
+"text": "[ \t\n='ll文[<|endoftext|>Привет <tool_call>,<|im_end|>",
+"parse_special": false,
+"ids": [
+58,
+16957,
+1095,
+636,
+95905,
+58,
+27,
+91,
+8426,
+703,
+419,
+91,
+29,
+51844,
+26125,
+7921,
+220,
+248058,
+66975,
+91,
+316,
+6018,
+91,
+29
+]
+},
+{
+"text": "'veǅ",
+"parse_special": true,
+"ids": [
+2908,
+131,
+227
+]
+},
+{
+"text": "'veǅ",
+"parse_special": false,
+"ids": [
+2908,
+131,
+227
+]
+},
+{
+"text": ";α</think>Привет",
+"parse_special": true,
+"ids": [
+26,
+18374,
+248069,
+51844,
+26125,
+7921
+]
+},
+{
+"text": ";α</think>Привет",
+"parse_special": false,
+"ids": [
+26,
+18374,
+248069,
+51844,
+26125,
+7921
+]
+},
+{
+"text": "'m😀<|im_start|>..\t🎉",
+"parse_special": true,
+"ids": [
+2688,
+169706,
+248045,
+486,
+197,
+9008,
+236,
+231
+]
+},
+{
+"text": "'m😀<|im_start|>..\t🎉",
+"parse_special": false,
+"ids": [
+2688,
+169706,
+27,
+91,
+316,
+4747,
+91,
+29,
+486,
+197,
+9008,
+236,
+231
+]
+},
+{
+"text": "!͸{'m!\r\n@</tool_call>",
+"parse_special": true,
+"ids": [
+0,
+137,
+116,
+13215,
+76,
+0,
+317,
+31,
+248059
+]
+},
+{
+"text": "!͸{'m!\r\n@</tool_call>",
+"parse_special": false,
+"ids": [
+0,
+137,
+116,
+13215,
+76,
+0,
+317,
+31,
+248059
+]
+},
+{
+"text": "Word<tool_call>'s?\r\n?͸",
+"parse_special": true,
+"ids": [
+10561,
+248058,
+579,
+30,
+317,
+30,
+137,
+116
+]
+},
+{
+"text": "Word<tool_call>'s?\r\n?͸",
+"parse_special": false,
+"ids": [
+10561,
+248058,
+579,
+30,
+317,
+30,
+137,
+116
+]
+},
+{
+"text": "β^[<think>word",
+"parse_special": true,
+"ids": [
+49531,
+26837,
+248068,
+1119
+]
+},
+{
+"text": "β^[<think>word",
+"parse_special": false,
+"ids": [
+49531,
+26837,
+248068,
+1119
+]
+},
+{
+"text": "\"本",
+"parse_special": true,
+"ids": [
+1,
+95879
+]
+},
+{
+"text": "\"本",
+"parse_special": false,
+"ids": [
+1,
+95879
+]
+},
+{
+"text": "'ve|</tool_call>_'\u0001\r\n|/",
+"parse_special": true,
+"ids": [
+2908,
+91,
+248059,
+18747,
+189,
+317,
+91,
+14
+]
+},
+{
+"text": "'ve|</tool_call>_'\u0001\r\n|/",
+"parse_special": false,
+"ids": [
+2908,
+91,
+248059,
+18747,
+189,
+317,
+91,
+14
+]
+},
+{
+"text": "'t<|endoftext|>日😀|\tǅ!<tool_call><̈<|im_start|>",
+"parse_special": true,
+"ids": [
+914,
+248044,
+95971,
+169706,
+91,
+197,
+131,
+227,
+0,
+248058,
+27,
+136,
+230,
+248045
+]
+},
+{
+"text": "'t<|endoftext|>日😀|\tǅ!<tool_call><̈<|im_start|>",
+"parse_special": false,
+"ids": [
+914,
+27,
+91,
+8426,
+703,
+419,
+91,
+29,
+95971,
+169706,
+91,
+197,
+131,
+227,
+0,
+248058,
+27,
+136,
+230,
+27,
+91,
+316,
+4747,
+91,
+29
+]
+},
+{
+"text": "~ß'll<|endoftext|>xα本 ",
+"parse_special": true,
+"ids": [
+93,
+7746,
+3172,
+248044,
+87,
+18374,
+95879,
+220
+]
+},
+{
+"text": "~ß'll<|endoftext|>xα本 ",
+"parse_special": false,
+"ids": [
+93,
+7746,
+3172,
+27,
+91,
+8426,
+703,
+419,
+91,
+29,
+87,
+18374,
+95879,
+220
+]
+},
+{
+"text": "'d,}~β",
+"parse_special": true,
+"ids": [
+4035,
+11,
+92,
+93,
+49531
+]
+},
+{
+"text": "'d,}~β",
+"parse_special": false,
+"ids": [
+4035,
+11,
+92,
+93,
+49531
+]
+},
+{
+"text": "<|im_start|>}`",
+"parse_special": true,
+"ids": [
+248045,
+5368
+]
+},
+{
+"text": "<|im_start|>}`",
+"parse_special": false,
+"ids": [
+27,
+91,
+316,
+4747,
+91,
+29,
+5368
+]
+},
+{
+"text": ")本中#(}ü,",
+"parse_special": true,
+"ids": [
+8,
+95879,
+95789,
+2,
+7,
+92,
+2314,
+11
+]
+},
+{
+"text": ")本中#(}ü,",
+"parse_special": false,
+"ids": [
+8,
+95879,
+95789,
+2,
+7,
+92,
+2314,
+11
+]
+},
+{
+"text": "123<<tool_call>%<think>&<α\r\n",
+"parse_special": true,
+"ids": [
+16,
+17,
+18,
+27,
+248058,
+4,
+248068,
+5,
+27,
+18374,
+317
+]
+},
+{
+"text": "123<<tool_call>%<think>&<α\r\n",
+"parse_special": false,
+"ids": [
+16,
+17,
+18,
+27,
+248058,
+4,
+248068,
+5,
+27,
+18374,
+317
+]
+},
+{
+"text": "\r\n@-}##~　=",
+"parse_special": true,
+"ids": [
+317,
+31,
+12,
+92,
+550,
+93,
+21742,
+28
+]
+},
+{
+"text": "\r\n@-}##~　=",
+"parse_special": false,
+"ids": [
+317,
+31,
+12,
+92,
+550,
+93,
+21742,
+28
+]
+},
+{
+"text": "$\n中<|endoftext|><|im_start|> 中{͸ß\\ü?",
+"parse_special": true,
+"ids": [
+3,
+198,
+95789,
+248044,
+248045,
+3966,
+95789,
+90,
+137,
+116,
+7746,
+59,
+2314,
+30
+]
+},
+{
+"text": "$\n中<|endoftext|><|im_start|> 中{͸ß\\ü?",
+"parse_special": false,
+"ids": [
+3,
+198,
+95789,
+27,
+91,
+8426,
+703,
+419,
+91,
+1721,
+91,
+316,
+4747,
+91,
+29,
+3966,
+95789,
+90,
+137,
+116,
+7746,
+59,
+2314,
+30
+]
+},
+{
+"text": ">α ǅ's<function=f>'m",
+"parse_special": true,
+"ids": [
+29,
+18374,
+3966,
+131,
+227,
+579,
+27,
+1628,
+17572,
+5417,
+76
+]
+},
+{
+"text": ">α ǅ's<function=f>'m",
+"parse_special": false,
+"ids": [
+29,
+18374,
+3966,
+131,
+227,
+579,
+27,
+1628,
+17572,
+5417,
+76
+]
+},
+{
+"text": "<|im_end|>'ve\tß'm# ",
+"parse_special": true,
+"ids": [
+248046,
+2908,
+197,
+7746,
+2688,
+2,
+3966
+]
+},
+{
+"text": "<|im_end|>'ve\tß'm# ",
+"parse_special": false,
+"ids": [
+27,
+91,
+316,
+6018,
+91,
+5417,
+571,
+197,
+7746,
+2688,
+2,
+3966
+]
+},
+{
+"text": "'ve<|im_end|>中{β|_\r\n</tool_call>word</tool_call>",
+"parse_special": true,
+"ids": [
+2908,
+248046,
+95789,
+90,
+49531,
+91,
+62,
+317,
+248059,
+1119,
+248059
+]
+},
+{
+"text": "'ve<|im_end|>中{β|_\r\n</tool_call>word</tool_call>",
+"parse_special": false,
+"ids": [
+2908,
+27,
+91,
+316,
+6018,
+91,
+29,
+95789,
+90,
+49531,
+91,
+62,
+317,
+248059,
+1119,
+248059
+]
+},
+{
+"text": "?Word:\u0001",
+"parse_special": true,
+"ids": [
+30,
+10561,
+25,
+189
+]
+},
+{
+"text": "?Word:\u0001",
+"parse_special": false,
+"ids": [
+30,
+10561,
+25,
+189
+]
+},
+{
+"text": "? <think>",
+"parse_special": true,
+"ids": [
+30,
+220,
+248068
+]
+},
+{
+"text": "? <think>",
+"parse_special": false,
+"ids": [
+30,
+220,
+248068
+]
+},
+{
+"text": "!'m~)中Привет)中",
+"parse_special": true,
+"ids": [
+30351,
+76,
+93,
+8,
+95789,
+51844,
+26125,
+7921,
+8,
+95789
+]
+},
+{
+"text": "!'m~)中Привет)中",
+"parse_special": false,
+"ids": [
+30351,
+76,
+93,
+8,
+95789,
+51844,
+26125,
+7921,
+8,
+95789
+]
+},
+{
+"text": "'re%ǅ'll{",
+"parse_special": true,
+"ids": [
+2224,
+4,
+131,
+227,
+3172,
+90
+]
+},
+{
+"text": "'re%ǅ'll{",
+"parse_special": false,
+"ids": [
+2224,
+4,
+131,
+227,
+3172,
+90
+]
+},
+{
+"text": "{😀x<tool_call>=́'llWORD\u0001\u0001%",
+"parse_special": true,
+"ids": [
+90,
+169706,
+87,
+248058,
+28,
+52033,
+3172,
+7001,
+189,
+189,
+4
+]
+},
+{
+"text": "{😀x<tool_call>=́'llWORD\u0001\u0001%",
+"parse_special": false,
+"ids": [
+90,
+169706,
+87,
+248058,
+28,
+52033,
+3172,
+7001,
+189,
+189,
+4
+]
+},
+{
+"text": "\"ß <123<tool_call>'m{'ll's[-'m",
+"parse_special": true,
+"ids": [
+1,
+7746,
+361,
+16,
+17,
+18,
+248058,
+2688,
+13215,
+636,
+579,
+7368,
+6,
+76
+]
+},
+{
+"text": "\"ß <123<tool_call>'m{'ll's[-'m",
+"parse_special": false,
+"ids": [
+1,
+7746,
+361,
+16,
+17,
+18,
+248058,
+2688,
+13215,
+636,
+579,
+7368,
+6,
+76
+]
+},
+{
+"text": "$é%'t<function=f>%α'm<Word",
+"parse_special": true,
+"ids": [
+3,
+933,
+26360,
+83,
+27,
+1628,
+17572,
+27799,
+18374,
+2688,
+27,
+10561
+]
+},
+{
+"text": "$é%'t<function=f>%α'm<Word",
+"parse_special": false,
+"ids": [
+3,
+933,
+26360,
+83,
+27,
+1628,
+17572,
+27799,
+18374,
+2688,
+27,
+10561
+]
+},
+{
+"text": " 🎉<tool_call>'s;'s中'vewordword<|im_start|>+͸",
+"parse_special": true,
+"ids": [
+10838,
+236,
+231,
+248058,
+579,
+34801,
+82,
+95789,
+2908,
+1119,
+1119,
+248045,
+10,
+137,
+116
+]
+},
+{
+"text": " 🎉<tool_call>'s;'s中'vewordword<|im_start|>+͸",
+"parse_special": false,
+"ids": [
+10838,
+236,
+231,
+248058,
+579,
+34801,
+82,
+95789,
+2908,
+1119,
+1119,
+27,
+91,
+316,
+4747,
+91,
+92034,
+137,
+116
+]
+},
+{
+"text": "</tool_call>123<'re`.^'sWORD~β",
+"parse_special": true,
+"ids": [
+248059,
+16,
+17,
+18,
+17747,
+265,
+27653,
+61,
+6,
+82,
+7001,
+93,
+49531
+]
+},
+{
+"text": "</tool_call>123<'re`.^'sWORD~β",
+"parse_special": false,
+"ids": [
+248059,
+16,
+17,
+18,
+17747,
+265,
+27653,
+61,
+6,
+82,
+7001,
+93,
+49531
+]
+},
+{
+"text": "本't!Привет}~ !́<|im_end|>)",
+"parse_special": true,
+"ids": [
+95879,
+914,
+0,
+51844,
+26125,
+7921,
+92,
+93,
+3966,
+0,
+52033,
+248046,
+8
+]
+},
+{
+"text": "本't!Привет}~ !́<|im_end|>)",
+"parse_special": false,
+"ids": [
+95879,
+914,
+0,
+51844,
+26125,
+7921,
+92,
+93,
+3966,
+0,
+52033,
+27,
+91,
+316,
+6018,
+91,
+8958
+]
+},
+{
+"text": "͸>'re",
+"parse_special": true,
+"ids": [
+137,
+116,
+5417,
+265
+]
+},
+{
+"text": "͸>'re",
+"parse_special": false,
+"ids": [
+137,
+116,
+5417,
+265
+]
+},
+{
+"text": "नि</think>'s\"-\"'d",
+"parse_special": true,
+"ids": [
+161520,
+248069,
+579,
+33159,
+19959,
+67
+]
+},
+{
+"text": "नि</think>'s\"-\"'d",
+"parse_special": false,
+"ids": [
+161520,
+248069,
+579,
+33159,
+19959,
+67
+]
+},
+{
+"text": "β.</tool_call>ß</think></tool_call>~]́>  123",
+"parse_special": true,
+"ids": [
+49531,
+13,
+248059,
+7746,
+248069,
+248059,
+93,
+60,
+52033,
+29,
+220,
+220,
+16,
+17,
+18
+]
+},
+{
+"text": "β.</tool_call>ß</think></tool_call>~]́>  123",
+"parse_special": false,
+"ids": [
+49531,
+13,
+248059,
+7746,
+248069,
+248059,
+93,
+60,
+52033,
+29,
+220,
+220,
+16,
+17,
+18
+]
+},
+{
+"text": "<function=f>)\n\n`<|im_start|>^\\ǅ<",
+"parse_special": true,
+"ids": [
+27,
+1628,
+17572,
+8958,
+271,
+63,
+248045,
+61,
+170,
+222,
+222,
+59,
+131,
+227,
+27
+]
+},
+{
+"text": "<function=f>)\n\n`<|im_start|>^\\ǅ<",
+"parse_special": false,
+"ids": [
+27,
+1628,
+17572,
+8958,
+271,
+63,
+27,
+91,
+316,
+4747,
+91,
+29,
+61,
+170,
+222,
+222,
+59,
+131,
+227,
+27
+]
+},
+{
+"text": " Привет中:'s͸'d͸\té",
+"parse_special": true,
+"ids": [
+239029,
+95789,
+4727,
+82,
+137,
+116,
+6,
+67,
+137,
+116,
+197,
+933
+]
+},
+{
+"text": " Привет中:'s͸'d͸\té",
+"parse_special": false,
+"ids": [
+239029,
+95789,
+4727,
+82,
+137,
+116,
+6,
+67,
+137,
+116,
+197,
+933
+]
+},
+{
+"text": "<think><|im_start|>\\,^x́;\t/Привет",
+"parse_special": true,
+"ids": [
+248068,
+248045,
+59,
+11,
+61,
+87,
+52033,
+26,
+197,
+14,
+51844,
+26125,
+7921
+]
+},
+{
+"text": "<think><|im_start|>\\,^x́;\t/Привет",
+"parse_special": false,
+"ids": [
+248068,
+27,
+91,
+316,
+4747,
+91,
+8189,
+11,
+61,
+87,
+52033,
+26,
+197,
+14,
+51844,
+26125,
+7921
+]
+},
+{
+"text": "  'dβ\\🎉\"",
+"parse_special": true,
+"ids": [
+220,
+359,
+67,
+49531,
+59,
+9008,
+236,
+231,
+1
+]
+},
+{
+"text": "  'dβ\\🎉\"",
+"parse_special": false,
+"ids": [
+220,
+359,
+67,
+49531,
+59,
+9008,
+236,
+231,
+1
+]
+},
+{
+"text": "^'m:<|endoftext|><",
+"parse_special": true,
+"ids": [
+61,
+6,
+76,
+25,
+248044,
+27
+]
+},
+{
+"text": "^'m:<|endoftext|><",
+"parse_special": false,
+"ids": [
+61,
+6,
+76,
+30226,
+91,
+8426,
+703,
+419,
+91,
+1721
+]
+},
+{
+"text": "\\β%)<function=f>@",
+"parse_special": true,
+"ids": [
+59,
+49531,
+11007,
+27,
+1628,
+17572,
+49819
+]
+},
+{
+"text": "\\β%)<function=f>@",
+"parse_special": false,
+"ids": [
+59,
+49531,
+11007,
+27,
+1628,
+17572,
+49819
+]
+},
+{
+"text": "~@\r\n/<|endoftext|>_é-<tool_call>Word",
+"parse_special": true,
+"ids": [
+93,
+31,
+317,
+14,
+248044,
+62,
+933,
+12,
+248058,
+10561
+]
+},
+{
+"text": "~@\r\n/<|endoftext|>_é-<tool_call>Word",
+"parse_special": false,
+"ids": [
+93,
+31,
+317,
+22295,
+91,
+8426,
+703,
+419,
+91,
+65621,
+933,
+12,
+248058,
+10561
+]
+},
+{
+"text": "\\$中</tool_call>word　\n\n~>`.",
+"parse_special": true,
+"ids": [
+62842,
+95789,
+248059,
+1119,
+21742,
+271,
+93,
+29,
+27653
+]
+},
+{
+"text": "\\$中</tool_call>word　\n\n~>`.",
+"parse_special": false,
+"ids": [
+62842,
+95789,
+248059,
+1119,
+21742,
+271,
+93,
+29,
+27653
+]
+},
+{
+"text": "ǅ$中\n",
+"parse_special": true,
+"ids": [
+131,
+227,
+3,
+95789,
+198
+]
+},
+{
+"text": "ǅ$中\n",
+"parse_special": false,
+"ids": [
+131,
+227,
+3,
+95789,
+198
+]
+},
+{
+"text": "<think>~123]^'s{'t",
+"parse_special": true,
+"ids": [
+248068,
+93,
+16,
+17,
+18,
+87197,
+6,
+82,
+13215,
+83
+]
+},
+{
+"text": "<think>~123]^'s{'t",
+"parse_special": false,
+"ids": [
+248068,
+93,
+16,
+17,
+18,
+87197,
+6,
+82,
+13215,
+83
+]
+},
+{
+"text": "'s123",
+"parse_special": true,
+"ids": [
+579,
+170,
+222,
+222,
+16,
+17,
+18
+]
+},
+{
+"text": "'s123",
+"parse_special": false,
+"ids": [
+579,
+170,
+222,
+222,
+16,
+17,
+18
+]
+},
+{
+"text": "ü;|'",
+"parse_special": true,
+"ids": [
+2314,
+26,
+91,
+6
+]
+},
+{
+"text": "ü;|'",
+"parse_special": false,
+"ids": [
+2314,
+26,
+91,
+6
+]
+},
+{
+"text": "\"^ü",
+"parse_special": true,
+"ids": [
+83501,
+2314
+]
+},
+{
+"text": "\"^ü",
+"parse_special": false,
+"ids": [
+83501,
+2314
+]
+},
+{
+"text": "<think>　",
+"parse_special": true,
+"ids": [
+248068,
+21742
+]
+},
+{
+"text": "<think>　",
+"parse_special": false,
+"ids": [
+248068,
+21742
+]
+},
+{
+"text": "́͸ß<'d're<think> \t ͸[<function=f><think>",
+"parse_special": true,
+"ids": [
+52033,
+137,
+116,
+7746,
+17747,
+67,
+2224,
+248068,
+6800,
+220,
+137,
+116,
+58,
+27,
+1628,
+17572,
+29,
+248068
+]
+},
+{
+"text": "́͸ß<'d're<think> \t ͸[<function=f><think>",
+"parse_special": false,
+"ids": [
+52033,
+137,
+116,
+7746,
+17747,
+67,
+2224,
+248068,
+6800,
+220,
+137,
+116,
+58,
+27,
+1628,
+17572,
+29,
+248068
+]
+},
+{
+"text": "文̈_`'re'd</tool_call>|~x. ",
+"parse_special": true,
+"ids": [
+95905,
+136,
+230,
+62,
+63,
+6,
+265,
+4035,
+248059,
+91,
+93,
+87,
+13,
+220
+]
+},
+{
+"text": "文̈_`'re'd</tool_call>|~x. ",
+"parse_special": false,
+"ids": [
+95905,
+136,
+230,
+62,
+63,
+6,
+265,
+4035,
+248059,
+91,
+93,
+87,
+13,
+220
+]
+},
+{
+"text": "`",
+"parse_special": true,
+"ids": [
+63
+]
+},
+{
+"text": "`",
+"parse_special": false,
+"ids": [
+63
+]
+},
+{
+"text": "Word!中\r\n<think>Привет,🎉",
+"parse_special": true,
+"ids": [
+10561,
+0,
+95789,
+317,
+248068,
+51844,
+26125,
+7921,
+11,
+9008,
+236,
+231
+]
+},
+{
+"text": "Word!中\r\n<think>Привет,🎉",
+"parse_special": false,
+"ids": [
+10561,
+0,
+95789,
+317,
+248068,
+51844,
+26125,
+7921,
+11,
+9008,
+236,
+231
+]
+},
+{
+"text": "<think>'ve",
+"parse_special": true,
+"ids": [
+170,
+222,
+222,
+248068,
+2908
+]
+},
+{
+"text": "<think>'ve",
+"parse_special": false,
+"ids": [
+170,
+222,
+222,
+248068,
+2908
+]
+},
+{
+"text": "<`>'s,'d!/=+)",
+"parse_special": true,
+"ids": [
+27,
+63,
+5417,
+82,
+2800,
+67,
+0,
+64155,
+35000
+]
+},
+{
+"text": "<`>'s,'d!/=+)",
+"parse_special": false,
+"ids": [
+27,
+63,
+5417,
+82,
+2800,
+67,
+0,
+64155,
+35000
+]
+},
+{
+"text": "\u0001<|endoftext|>?%α$$<!'veWord",
+"parse_special": true,
+"ids": [
+189,
+248044,
+30,
+4,
+18374,
+13682,
+13151,
+6,
+571,
+10561
+]
+},
+{
+"text": "\u0001<|endoftext|>?%α$$<!'veWord",
+"parse_special": false,
+"ids": [
+189,
+27,
+91,
+8426,
+703,
+419,
+91,
+46000,
+4,
+18374,
+13682,
+13151,
+6,
+571,
+10561
+]
+},
+{
+"text": "'s<function=f>%`</think>\\<'d",
+"parse_special": true,
+"ids": [
+170,
+222,
+222,
+6,
+82,
+27,
+1628,
+17572,
+27799,
+63,
+248069,
+5431,
+6,
+67
+]
+},
+{
+"text": "'s<function=f>%`</think>\\<'d",
+"parse_special": false,
+"ids": [
+170,
+222,
+222,
+6,
+82,
+27,
+1628,
+17572,
+27799,
+63,
+248069,
+5431,
+6,
+67
+]
+},
+{
+"text": "[#| 't  ̈WORD🎉'mПриветनि>",
+"parse_special": true,
+"ids": [
+64948,
+91,
+3966,
+914,
+220,
+220,
+136,
+230,
+7001,
+9008,
+236,
+231,
+6,
+76,
+51844,
+26125,
+7921,
+161520,
+29
+]
+},
+{
+"text": "[#| 't  ̈WORD🎉'mПриветनि>",
+"parse_special": false,
+"ids": [
+64948,
+91,
+3966,
+914,
+220,
+220,
+136,
+230,
+7001,
+9008,
+236,
+231,
+6,
+76,
+51844,
+26125,
+7921,
+161520,
+29
+]
+},
+{
+"text": "'s日",
+"parse_special": true,
+"ids": [
+579,
+95971
+]
+},
+{
+"text": "'s日",
+"parse_special": false,
+"ids": [
+579,
+95971
+]
+},
+{
+"text": "</tool_call>  </think>*'t",
+"parse_special": true,
+"ids": [
+248059,
+170,
+222,
+222,
+256,
+248069,
+88110,
+83
+]
+},
+{
+"text": "</tool_call>  </think>*'t",
+"parse_special": false,
+"ids": [
+248059,
+170,
+222,
+222,
+256,
+248069,
+88110,
+83
+]
+},
+{
+"text": "'d/\tword_123Word日文",
+"parse_special": true,
+"ids": [
+4035,
+14,
+64061,
+62,
+16,
+17,
+18,
+10561,
+130850
+]
+},
+{
+"text": "'d/\tword_123Word日文",
+"parse_special": false,
+"ids": [
+4035,
+14,
+64061,
+62,
+16,
+17,
+18,
+10561,
+130850
+]
+},
+{
+"text": "</parameter>++&]β|<think>ü|",
+"parse_special": true,
+"ids": [
+510,
+15704,
+29,
+992,
+5,
+60,
+49531,
+91,
+248068,
+2314,
+91
+]
+},
+{
+"text": "</parameter>++&]β|<think>ü|",
+"parse_special": false,
+"ids": [
+510,
+15704,
+29,
+992,
+5,
+60,
+49531,
+91,
+248068,
+2314,
+91
+]
+},
+{
+"text": "*Word</parameter>ßα>नि ",
+"parse_special": true,
+"ids": [
+9,
+10561,
+510,
+15704,
+29,
+7746,
+18374,
+29,
+161520,
+3966
+]
+},
+{
+"text": "*Word</parameter>ßα>नि ",
+"parse_special": false,
+"ids": [
+9,
+10561,
+510,
+15704,
+29,
+7746,
+18374,
+29,
+161520,
+3966
+]
+},
+{
+"text": "<function=f>%</parameter>+:\\&\\",
+"parse_special": true,
+"ids": [
+27,
+1628,
+17572,
+27799,
+510,
+15704,
+92034,
+6964,
+5,
+59
+]
+},
+{
+"text": "<function=f>%</parameter>+:\\&\\",
+"parse_special": false,
+"ids": [
+27,
+1628,
+17572,
+27799,
+510,
+15704,
+92034,
+6964,
+5,
+59
+]
+},
+{
+"text": "🎉-😀word.'m",
+"parse_special": true,
+"ids": [
+9008,
+236,
+231,
+12,
+169706,
+1119,
+3058,
+76
+]
+},
+{
+"text": "🎉-😀word.'m",
+"parse_special": false,
+"ids": [
+9008,
+236,
+231,
+12,
+169706,
+1119,
+3058,
+76
+]
+},
+{
+"text": "<function=f>WordWordé'Word>β*",
+"parse_special": true,
+"ids": [
+27,
+1628,
+17572,
+29,
+10561,
+10561,
+933,
+6,
+10561,
+29,
+49531,
+9
+]
+},
+{
+"text": "<function=f>WordWordé'Word>β*",
+"parse_special": false,
+"ids": [
+27,
+1628,
+17572,
+29,
+10561,
+10561,
+933,
+6,
+10561,
+29,
+49531,
+9
+]
+},
+{
+"text": "文β'veü@　WORDxβ🎉",
+"parse_special": true,
+"ids": [
+95905,
+49531,
+2908,
+2314,
+31,
+21742,
+7001,
+87,
+49531,
+9008,
+236,
+231
+]
+},
+{
+"text": "文β'veü@　WORDxβ🎉",
+"parse_special": false,
+"ids": [
+95905,
+49531,
+2908,
+2314,
+31,
+21742,
+7001,
+87,
+49531,
+9008,
+236,
+231
+]
+},
+{
+"text": "?& β\u0001,",
+"parse_special": true,
+"ids": [
+30,
+5,
+32115,
+189,
+11
+]
+},
+{
+"text": "?& β\u0001,",
+"parse_special": false,
+"ids": [
+30,
+5,
+32115,
+189,
+11
+]
+},
+{
+"text": "Привет",
+"parse_special": true,
+"ids": [
+51844,
+26125,
+7921
+]
+},
+{
+"text": "Привет",
+"parse_special": false,
+"ids": [
+51844,
+26125,
+7921
+]
+},
+{
+"text": "日/",
+"parse_special": true,
+"ids": [
+95971,
+14
+]
+},
+{
+"text": "日/",
+"parse_special": false,
+"ids": [
+95971,
+14
+]
+},
+{
+"text": "]$　x😀本<|im_start|>",
+"parse_special": true,
+"ids": [
+91027,
+21742,
+87,
+169706,
+95879,
+248045
+]
+},
+{
+"text": "]$　x😀本<|im_start|>",
+"parse_special": false,
+"ids": [
+91027,
+21742,
+87,
+169706,
+95879,
+27,
+91,
+316,
+4747,
+91,
+29
+]
+},
+{
+"text": "\"_",
+"parse_special": true,
+"ids": [
+33928
+]
+},
+{
+"text": "\"_",
+"parse_special": false,
+"ids": [
+33928
+]
+},
+{
+"text": "文<function=f>~\u0001'll(`&ǅनि)é{̈",
+"parse_special": true,
+"ids": [
+95905,
+27,
+1628,
+17572,
+29,
+93,
+189,
+6,
+636,
+5628,
+5,
+131,
+227,
+161520,
+8,
+933,
+90,
+136,
+230
+]
+},
+{
+"text": "文<function=f>~\u0001'll(`&ǅनि)é{̈",
+"parse_special": false,
+"ids": [
+95905,
+27,
+1628,
+17572,
+29,
+93,
+189,
+6,
+636,
+5628,
+5,
+131,
+227,
+161520,
+8,
+933,
+90,
+136,
+230
+]
+},
+{
+"text": "~\\😀",
+"parse_special": true,
+"ids": [
+93,
+59,
+169706
+]
+},
+{
+"text": "~\\😀",
+"parse_special": false,
+"ids": [
+93,
+59,
+169706
+]
+},
+{
+"text": "'ve中ǅ中=$</parameter>,",
+"parse_special": true,
+"ids": [
+2908,
+95789,
+131,
+227,
+95789,
+3085,
+510,
+15704,
+7813
+]
+},
+{
+"text": "'ve中ǅ中=$</parameter>,",
+"parse_special": false,
+"ids": [
+2908,
+95789,
+131,
+227,
+95789,
+3085,
+510,
+15704,
+7813
+]
+},
+{
+"text": "\n🎉<think>文ǅ(<|im_end|>",
+"parse_special": true,
+"ids": [
+198,
+9008,
+236,
+231,
+248068,
+95905,
+131,
+227,
+7,
+248046
+]
+},
+{
+"text": "\n🎉<think>文ǅ(<|im_end|>",
+"parse_special": false,
+"ids": [
+198,
+9008,
+236,
+231,
+248068,
+95905,
+131,
+227,
+22019,
+91,
+316,
+6018,
+91,
+29
+]
+},
+{
+"text": "<|im_end|><tool_call>:word]'\u0001  ",
+"parse_special": true,
+"ids": [
+248046,
+248058,
+25,
+1119,
+29650,
+189,
+256
+]
+},
+{
+"text": "<|im_end|><tool_call>:word]'\u0001  ",
+"parse_special": false,
+"ids": [
+27,
+91,
+316,
+6018,
+91,
+29,
+248058,
+25,
+1119,
+29650,
+189,
+256
+]
+},
+{
+"text": "<\n}#निü'}\u0001*[~",
+"parse_special": true,
+"ids": [
+27,
+198,
+92,
+2,
+161520,
+2314,
+8017,
+189,
+52456,
+93
+]
+},
+{
+"text": "<\n}#निü'}\u0001*[~",
+"parse_special": false,
+"ids": [
+27,
+198,
+92,
+2,
+161520,
+2314,
+8017,
+189,
+52456,
+93
+]
+},
+{
+"text": "<function=f> }",
+"parse_special": true,
+"ids": [
+27,
+1628,
+17572,
+29,
+333
+]
+},
+{
+"text": "<function=f> }",
+"parse_special": false,
+"ids": [
+27,
+1628,
+17572,
+29,
+333
+]
+},
+{
+"text": " \t$~(🎉</think>　=\\ß.#</think>",
+"parse_special": true,
+"ids": [
+220,
+197,
+3,
+93,
+7,
+9008,
+236,
+231,
+248069,
+21742,
+33289,
+7746,
+41895,
+248069
+]
+},
+{
+"text": " \t$~(🎉</think>　=\\ß.#</think>",
+"parse_special": false,
+"ids": [
+220,
+197,
+3,
+93,
+7,
+9008,
+236,
+231,
+248069,
+21742,
+33289,
+7746,
+41895,
+248069
+]
+},
+{
+"text": "<|im_start|>=?'ll{",
+"parse_special": true,
+"ids": [
+248045,
+19279,
+6,
+636,
+90
+]
+},
+{
+"text": "<|im_start|>=?'ll{",
+"parse_special": false,
+"ids": [
+27,
+91,
+316,
+4747,
+91,
+9628,
+19610,
+636,
+90
+]
+},
+{
+"text": "<function=f>文Привет<|endoftext|>\n",
+"parse_special": true,
+"ids": [
+27,
+1628,
+17572,
+29,
+95905,
+51844,
+26125,
+7921,
+248044,
+198
+]
+},
+{
+"text": "<function=f>文Привет<|endoftext|>\n",
+"parse_special": false,
+"ids": [
+27,
+1628,
+17572,
+29,
+95905,
+51844,
+26125,
+7921,
+27,
+91,
+8426,
+703,
+419,
+91,
+29,
+198
+]
+},
+{
+"text": "ß123",
+"parse_special": true,
+"ids": [
+7746,
+16,
+17,
+18
+]
+},
+{
+"text": "ß123",
+"parse_special": false,
+"ids": [
+7746,
+16,
+17,
+18
+]
+},
+{
+"text": "=́文",
+"parse_special": true,
+"ids": [
+28,
+52033,
+95905
+]
+},
+{
+"text": "=́文",
+"parse_special": false,
+"ids": [
+28,
+52033,
+95905
+]
+},
+{
+"text": "'m\\<think>_",
+"parse_special": true,
+"ids": [
+2688,
+59,
+248068,
+62
+]
+},
+{
+"text": "'m\\<think>_",
+"parse_special": false,
+"ids": [
+2688,
+59,
+248068,
+62
+]
+},
+{
+"text": "\r\n\\",
+"parse_special": true,
+"ids": [
+317,
+59
+]
+},
+{
+"text": "\r\n\\",
+"parse_special": false,
+"ids": [
+317,
+59
+]
+},
+{
+"text": "[|!(ǅ}",
+"parse_special": true,
+"ids": [
+58,
+91,
+9991,
+131,
+227,
+92
+]
+},
+{
+"text": "[|!(ǅ}",
+"parse_special": false,
+"ids": [
+58,
+91,
+9991,
+131,
+227,
+92
+]
+},
+{
+"text": "<think>'ve  (<|im_end|>",
+"parse_special": true,
+"ids": [
+248068,
+2908,
+220,
+318,
+248046
+]
+},
+{
+"text": "<think>'ve  (<|im_end|>",
+"parse_special": false,
+"ids": [
+248068,
+2908,
+220,
+21739,
+91,
+316,
+6018,
+91,
+29
+]
+},
+{
+"text": "!?<function=f>Word.Привет]本&WORD;",
+"parse_special": true,
+"ids": [
+55468,
+27,
+1628,
+17572,
+29,
+10561,
+13,
+51844,
+26125,
+7921,
+60,
+95879,
+5,
+7001,
+26
+]
+},
+{
+"text": "!?<function=f>Word.Привет]本&WORD;",
+"parse_special": false,
+"ids": [
+55468,
+27,
+1628,
+17572,
+29,
+10561,
+13,
+51844,
+26125,
+7921,
+60,
+95879,
+5,
+7001,
+26
+]
+},
+{
+"text": "<|im_start|>123'd'β 　<think>'&*",
+"parse_special": true,
+"ids": [
+248045,
+16,
+17,
+18,
+4035,
+6,
+49531,
+220,
+21742,
+248068,
+6,
+5,
+9
+]
+},
+{
+"text": "<|im_start|>123'd'β 　<think>'&*",
+"parse_special": false,
+"ids": [
+27,
+91,
+316,
+4747,
+91,
+29,
+16,
+17,
+18,
+4035,
+6,
+49531,
+220,
+21742,
+248068,
+6,
+5,
+9
+]
+},
+{
+"text": "<function=f>'s=",
+"parse_special": true,
+"ids": [
+27,
+1628,
+17572,
+5417,
+82,
+28
+]
+},
+{
+"text": "<function=f>'s=",
+"parse_special": false,
+"ids": [
+27,
+1628,
+17572,
+5417,
+82,
+28
+]
+},
+{
+"text": "'d\t</think><tool_call>'d<think>-?Привет",
+"parse_special": true,
+"ids": [
+4035,
+197,
+248069,
+248058,
+4035,
+248068,
+12,
+30,
+51844,
+26125,
+7921
+]
+},
+{
+"text": "'d\t</think><tool_call>'d<think>-?Привет",
+"parse_special": false,
+"ids": [
+4035,
+197,
+248069,
+248058,
+4035,
+248068,
+12,
+30,
+51844,
+26125,
+7921
+]
+},
+{
+"text": "'}x}\u0001|>| ü<|im_end|>)",
+"parse_special": true,
+"ids": [
+8017,
+87,
+92,
+189,
+91,
+67479,
+10176,
+248046,
+8
+]
+},
+{
+"text": "'}x}\u0001|>| ü<|im_end|>)",
+"parse_special": false,
+"ids": [
+8017,
+87,
+92,
+189,
+91,
+67479,
+10176,
+27,
+91,
+316,
+6018,
+91,
+8958
+]
+},
+{
+"text": "本<function=f>'re*文'll{WORD本  't@",
+"parse_special": true,
+"ids": [
+95879,
+27,
+1628,
+17572,
+5417,
+265,
+9,
+95905,
+3172,
+90,
+7001,
+95879,
+220,
+359,
+83,
+31
+]
+},
+{
+"text": "本<function=f>'re*文'll{WORD本  't@",
+"parse_special": false,
+"ids": [
+95879,
+27,
+1628,
+17572,
+5417,
+265,
+9,
+95905,
+3172,
+90,
+7001,
+95879,
+220,
+359,
+83,
+31
+]
+},
+{
+"text": "wordü&\t'm",
+"parse_special": true,
+"ids": [
+1119,
+2314,
+5,
+197,
+2688
+]
+},
+{
+"text": "wordü&\t'm",
+"parse_special": false,
+"ids": [
+1119,
+2314,
+5,
+197,
+2688
+]
+},
+{
+"text": "<tool_call>̈('ve'll></think><|im_end|>}'ve\"WORD͸+",
+"parse_special": true,
+"ids": [
+248058,
+136,
+230,
+482,
+571,
+3172,
+29,
+248069,
+248046,
+11325,
+571,
+1,
+7001,
+137,
+116,
+10
+]
+},
+{
+"text": "<tool_call>̈('ve'll></think><|im_end|>}'ve\"WORD͸+",
+"parse_special": false,
+"ids": [
+248058,
+136,
+230,
+482,
+571,
+3172,
+29,
+248069,
+27,
+91,
+316,
+6018,
+91,
+52881,
+571,
+1,
+7001,
+137,
+116,
+10
+]
+},
+{
+"text": "+ǅ\"\u0001_wordWORD🎉'mनि,é͸͸",
+"parse_special": true,
+"ids": [
+10,
+131,
+227,
+1,
+189,
+62,
+1119,
+7001,
+9008,
+236,
+231,
+6,
+76,
+161520,
+11,
+933,
+137,
+116,
+137,
+116
+]
+},
+{
+"text": "+ǅ\"\u0001_wordWORD🎉'mनि,é͸͸",
+"parse_special": false,
+"ids": [
+10,
+131,
+227,
+1,
+189,
+62,
+1119,
+7001,
+9008,
+236,
+231,
+6,
+76,
+161520,
+11,
+933,
+137,
+116,
+137,
+116
+]
+},
+{
+"text": "WORDWord<|im_start|>!éWord",
+"parse_special": true,
+"ids": [
+7001,
+10561,
+248045,
+0,
+933,
+10561
+]
+},
+{
+"text": "WORDWord<|im_start|>!éWord",
+"parse_special": false,
+"ids": [
+7001,
+10561,
+27,
+91,
+316,
+4747,
+91,
+29,
+0,
+933,
+10561
+]
+},
+{
+"text": "x's^",
+"parse_special": true,
+"ids": [
+87,
+579,
+61
+]
+},
+{
+"text": "x's^",
+"parse_special": false,
+"ids": [
+87,
+579,
+61
+]
+},
+{
+"text": "]*,<think> 日{xword̈_ß",
+"parse_special": true,
+"ids": [
+8205,
+11,
+248068,
+3966,
+95971,
+43828,
+1119,
+136,
+230,
+62,
+7746
+]
+},
+{
+"text": "]*,<think> 日{xword̈_ß",
+"parse_special": false,
+"ids": [
+8205,
+11,
+248068,
+3966,
+95971,
+43828,
+1119,
+136,
+230,
+62,
+7746
+]
+},
+{
+"text": "é\\*β<think>[  本)\t!</think>",
+"parse_special": true,
+"ids": [
+933,
+59,
+9,
+49531,
+248068,
+58,
+220,
+220,
+95879,
+8,
+197,
+0,
+248069
+]
+},
+{
+"text": "é\\*β<think>[  本)\t!</think>",
+"parse_special": false,
+"ids": [
+933,
+59,
+9,
+49531,
+248068,
+58,
+220,
+220,
+95879,
+8,
+197,
+0,
+248069
+]
+},
+{
+"text": "<function=f><|im_end|>　('ve*　",
+"parse_special": true,
+"ids": [
+27,
+1628,
+17572,
+29,
+248046,
+21742,
+482,
+571,
+9,
+21742
+]
+},
+{
+"text": "<function=f><|im_end|>　('ve*　",
+"parse_special": false,
+"ids": [
+27,
+1628,
+17572,
+1721,
+91,
+316,
+6018,
+91,
+29,
+21742,
+482,
+571,
+9,
+21742
+]
+},
+{
+"text": "　x",
+"parse_special": true,
+"ids": [
+21742,
+87
+]
+},
+{
+"text": "　x",
+"parse_special": false,
+"ids": [
+21742,
+87
+]
+},
+{
+"text": "üǅПривет're @x[wordǅ<function=f>-\\",
+"parse_special": true,
+"ids": [
+2314,
+131,
+227,
+51844,
+26125,
+7921,
+2224,
+3966,
+31,
+87,
+48063,
+131,
+227,
+27,
+1628,
+17572,
+29,
+29533
+]
+},
+{
+"text": "üǅПривет're @x[wordǅ<function=f>-\\",
+"parse_special": false,
+"ids": [
+2314,
+131,
+227,
+51844,
+26125,
+7921,
+2224,
+3966,
+31,
+87,
+48063,
+131,
+227,
+27,
+1628,
+17572,
+29,
+29533
+]
+},
+{
+"text": "]",
+"parse_special": true,
+"ids": [
+60
+]
+},
+{
+"text": "]",
+"parse_special": false,
+"ids": [
+60
+]
+},
+{
+"text": "/word　&",
+"parse_special": true,
+"ids": [
+14,
+1119,
+21742,
+5
+]
+},
+{
+"text": "/word　&",
+"parse_special": false,
+"ids": [
+14,
+1119,
+21742,
+5
+]
+},
+{
+"text": "x\n'm  Привет?",
+"parse_special": true,
+"ids": [
+87,
+198,
+2688,
+3966,
+239029,
+30
+]
+},
+{
+"text": "x\n'm  Привет?",
+"parse_special": false,
+"ids": [
+87,
+198,
+2688,
+3966,
+239029,
+30
+]
+},
+{
+"text": "<think>@<|im_start|>́ß<think>^  ",
+"parse_special": true,
+"ids": [
+248068,
+31,
+248045,
+52033,
+7746,
+248068,
+61,
+256
+]
+},
+{
+"text": "<think>@<|im_start|>́ß<think>^  ",
+"parse_special": false,
+"ids": [
+248068,
+31,
+27,
+91,
+316,
+4747,
+91,
+29,
+52033,
+7746,
+248068,
+61,
+256
+]
+},
+{
+"text": "α'll😀wordé",
+"parse_special": true,
+"ids": [
+18374,
+3172,
+169706,
+1119,
+933
+]
+},
+{
+"text": "α'll😀wordé",
+"parse_special": false,
+"ids": [
+18374,
+3172,
+169706,
+1119,
+933
+]
+},
+{
+"text": "<|im_end|>́<|im_end|>!WORD%",
+"parse_special": true,
+"ids": [
+248046,
+52033,
+248046,
+0,
+7001,
+4
+]
+},
+{
+"text": "<|im_end|>́<|im_end|>!WORD%",
+"parse_special": false,
+"ids": [
+27,
+91,
+316,
+6018,
+91,
+29,
+52033,
+27,
+91,
+316,
+6018,
+91,
+29,
+0,
+7001,
+4
+]
+},
+{
+"text": "^",
+"parse_special": true,
+"ids": [
+61
+]
+},
+{
+"text": "^",
+"parse_special": false,
+"ids": [
+61
+]
+}
+]
+}

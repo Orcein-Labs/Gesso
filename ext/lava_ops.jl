@@ -181,13 +181,22 @@ end
 function _lava_device_storage!(op::Symbol, t)
     s = t.storage
     Gesso.Inference._storage_root(s) isa Lava.LavaArray && eltype(s) === Float32 && return s
+    # Quantized dense weights keep their bytes in a device LavaArray{UInt8}
+    # (lava_quant.jl); that is device storage at the same boundary.
+    s isa LavaDenseQuant && s.data isa Lava.LavaArray && return s
     throw(gesso_error(ERR_INVALID_PLAN,
-        "$op: LavaBackend requires its own Float32 device storage; host Array, " *
+        "$op: LavaBackend requires its own device storage (Float32 or LavaDenseQuant); host Array, " *
         "host views, other devices and unsupported arithmetic are rejected; call to_device explicitly";
         op=op, storage_type=string(typeof(s))))
 end
-Gesso.Inference._check_device_storage(op::Symbol, backend::LavaBackend, t) =
-    _lava_device_storage!(op, t)
+# Expert banks stay host-resident GgufQuantSlice storage: the MoE route runs
+# them on the host (GESSO_MOE_HOST_EXPERTS=1), the same split as CUDA. Only
+# expert banks are exempt; a dense weight still on the host fails the guard.
+# A device expert bank is refused where it would be used (_moe_topk_swiglu!).
+function Gesso.Inference._check_device_storage(op::Symbol, backend::LavaBackend, t)
+    t isa Gesso.ExpertWeight && t.storage isa Gesso.Inference.GgufQuantSlice && return nothing
+    return _lava_device_storage!(op, t)
+end
 
 # On the tested Vulkan compiler path, the floating `isfinite` predicate
 # reports NaN and Inf as finite. Classify their IEEE exponent bits instead;
@@ -235,17 +244,27 @@ function _lava_embedding_lookup!(dst, table, tokens)
     return dst
 end
 
-# Ordinary single-row decode normalization without reduction temporaries.
-# Matches `_cuda_rmsnorm_row_kernel!`: F32 accumulate, F64 rms, F32 write.
+# Single-row decode normalization. Matches `_cuda_rmsnorm_row_kernel!` in
+# arithmetic: F32 accumulate, F64 rms, F32 write. The sum is split across one
+# workgroup so a feature dim of several thousand is not walked by one lane.
+const _LAVA_RMS_LANES = 64
+
 @kernel cpu=false function _lava_rmsnorm_row_kernel!(dst, xs, scales, eps, d::Int)
-    i = @index(Global)
-    i == 1 || return
+    tl = @index(Local, Linear)
+    part = @localmem Float32 (_LAVA_RMS_LANES,)
     acc = Float32(0)
-    for j in 1:d
+    for j in tl:_LAVA_RMS_LANES:d
         acc += abs2(xs[1, j])
     end
-    rms = sqrt(Float64(acc) / d + Float64(eps))
-    for j in 1:d
+    part[tl] = acc
+    # every lane reads all partials after this barrier, so no lane can see a stale slot
+    @synchronize
+    total = Float32(0)
+    for i in 1:_LAVA_RMS_LANES
+        total += part[i]
+    end
+    rms = sqrt(Float64(total) / d + Float64(eps))
+    for j in tl:_LAVA_RMS_LANES:d
         dst[1, j] = Float32((Float64(xs[1, j]) / rms) * Float64(scales[j]))
     end
 end
@@ -264,7 +283,8 @@ function _lava_rmsnorm!(dst, x, scale; eps = 1e-6, check_finite = true)
         throw(gesso_error(ERR_INVALID_PLAN, "rmsnorm!: scale length $(length(scale.storage)) ≠ feature dim $d"; op = :rmsnorm!))
     if ndims(xs) == 2 && size(xs, 1) == 1
         kern = _lava_rmsnorm_row_kernel!(KA.get_backend(xs))
-        kern(dst.storage, xs, scale.storage, Float64(eps), Int(d); ndrange=1, workgroupsize=_LAVA_WG1)
+        kern(dst.storage, xs, scale.storage, Float64(eps), Int(d);
+            ndrange=_LAVA_RMS_LANES, workgroupsize=(_LAVA_RMS_LANES,))
         if check_finite
             Gesso.Inference._all_finite(dst.storage) || throw(gesso_error(ERR_NUMERICAL_INSTABILITY,
                 "rmsnorm!: nonfinite normalization denominator"))
@@ -297,16 +317,19 @@ end
 # the F64 CPU oracle differs by ~1e-7 relative here, far inside atol=1e-3).
 # On-device RoPE: one (seq, head) thread, angles from theta like
 # `_cuda_rope_kernel!`. Scaled `inv_freq` policies keep the host table.
-@kernel cpu=false function _lava_rope_kernel!(x, positions, theta, interleaved::Bool)
+# `rd` is the rotary width: only the first rd features rotate, and the rest
+# pass through unchanged, as in `_cpu_rope_storage!`. rd == d is the full-head
+# case and reproduces the previous kernels exactly.
+@kernel cpu=false function _lava_rope_kernel!(x, positions, theta, interleaved::Bool, rd::Int)
     idx = @index(Global, Cartesian)
     t = idx[1]
     h = idx[2]
-    seq, nheads, d = size(x)
+    seq, nheads, _ = size(x)
     (t > seq || h > nheads) && return
     m = Float32(positions[t])
-    half = d ÷ 2
+    half = rd ÷ 2
     for i in 0:(half - 1)
-        θv = m * (theta ^ (-2 * i / d))
+        θv = m * (theta ^ (-2 * i / rd))
         c = cos(θv)
         s = sin(θv)
         a = interleaved ? (2 * i + 1) : (i + 1)
@@ -320,14 +343,14 @@ end
 
 # Decode seq=1: position is a kernel scalar so we do not allocate a 4-byte
 # device buffer 30 times per token (arm 5c: that upload ate the kernel win).
-@kernel cpu=false function _lava_rope_decode_kernel!(x, pos::Int32, theta, interleaved::Bool)
+@kernel cpu=false function _lava_rope_decode_kernel!(x, pos::Int32, theta, interleaved::Bool, rd::Int)
     h = @index(Global)
-    _, nheads, d = size(x)
+    _, nheads, _ = size(x)
     h > nheads && return
     m = Float32(pos)
-    half = d ÷ 2
+    half = rd ÷ 2
     for i in 0:(half - 1)
-        θv = m * (theta ^ (-2 * i / d))
+        θv = m * (theta ^ (-2 * i / rd))
         c = cos(θv)
         s = sin(θv)
         a = interleaved ? (2 * i + 1) : (i + 1)
@@ -339,19 +362,21 @@ end
     end
 end
 
-function _lava_rope!(q, k, positions; theta = 10000.0, inv_freq = nothing, interleaved = true)
+function _lava_rope!(q, k, positions; theta = 10000.0, inv_freq = nothing, interleaved = true, rotary_dim = 0)
     a = _LAVA_DECODE_AUDIT
     t0 = a.enabled ? time_ns() : UInt64(0)
     size(q.storage, 3) == size(k.storage, 3) ||
         throw(gesso_error(ERR_INVALID_PLAN, "rope!: q d_head ≠ k d_head"; op = :rope!))
-    Gesso._validate_rope_inputs(q,k,positions,theta,inv_freq)
+    Gesso._validate_rope_inputs(q,k,positions,theta,inv_freq,rotary_dim)
     tθ = Float64(theta)
+    d = size(q.storage, 3)
+    rd = rotary_dim == 0 ? d : Int(rotary_dim)
     if inv_freq === nothing && length(positions) == 1 && size(q.storage, 1) == 1
         pos = Int32(positions[1])
         for x in (q.storage, k.storage)
             nheads = size(x, 2)
             kern = _lava_rope_decode_kernel!(KA.get_backend(x))
-            kern(x, pos, tθ, interleaved; ndrange=nheads, workgroupsize=_LAVA_WG1)
+            kern(x, pos, tθ, interleaved, rd; ndrange=nheads, workgroupsize=_LAVA_WG1)
         end
         a.enabled && _lava_note_op!(:rope, time_ns() - t0)
         return q
@@ -361,13 +386,13 @@ function _lava_rope!(q, k, positions; theta = 10000.0, inv_freq = nothing, inter
         for x in (q.storage, k.storage)
             seq, nheads, _ = size(x)
             kern = _lava_rope_kernel!(KA.get_backend(x))
-            kern(x, pos, tθ, interleaved; ndrange=(seq, nheads), workgroupsize=_LAVA_WG2)
+            kern(x, pos, tθ, interleaved, rd; ndrange=(seq, nheads), workgroupsize=_LAVA_WG2)
         end
         a.enabled && _lava_note_op!(:rope, time_ns() - t0)
         return q
     end
-    seq, _, d = size(q.storage)
-    half = d ÷ 2
+    seq = size(q.storage, 1)
+    half = rd ÷ 2
     freq = Float32.(inv_freq)
     # Match the native Float32 phase, then reduce metadata angles accurately.
     # Only derived constants are uploaded; Q/K and their rotations stay GPU.
@@ -377,8 +402,8 @@ function _lava_rope!(q, k, positions; theta = 10000.0, inv_freq = nothing, inter
     c = cos.(ang)
     s = sin.(ang)
     for x in (q.storage, k.storage)
-        x1 = view(x, :, :, interleaved ? (1:2:d) : (1:half))                                      # odd features  (2i+1)
-        x2 = view(x, :, :, interleaved ? (2:2:d) : ((half+1):d))                                      # even features (2i+2)
+        x1 = view(x, :, :, interleaved ? (1:2:rd) : (1:half))          # odd features  (2i+1)
+        x2 = view(x, :, :, interleaved ? (2:2:rd) : ((half+1):rd))     # even features (2i+2)
         n2 = x1 .* s .+ x2 .* c                                        # staged: reads ORIGINAL x1, x2
         x1 .= x1 .* c .- x2 .* s
         x2 .= n2
@@ -467,6 +492,11 @@ end
 function _lava_matmul!(dst, x, w)
     a = _LAVA_DECODE_AUDIT
     t0 = a.enabled ? time_ns() : UInt64(0)
+    if w.storage isa LavaDenseQuant
+        _lq_matmul!(dst.storage, x.storage, w.storage)
+        a.enabled && _lava_note_op!(:matmul, time_ns() - t0)
+        return dst
+    end
     T = eltype(dst.storage)
     mul!(dst.storage, x.storage, transpose(w.storage), one(T), zero(T))
     a.enabled && _lava_note_op!(:matmul, time_ns() - t0)
@@ -542,13 +572,14 @@ function rope!(
     theta::Real = 10000.0,
     inv_freq = nothing,
     interleaved::Bool = true,
+    rotary_dim::Integer = 0,
 )
     # Imported default, linear and Llama3 frequency metadata travels with Q/K.
     # Validate and rotate on the requested Lava storage (§LXX: no silent
-    # representation change). The CPU oracle implements these policies today.
+    # representation change).
     _lava_device_storage!(:rope!, q)
     _lava_device_storage!(:rope!, k)
-    r = _lava_rope!(q, k, positions; theta, inv_freq, interleaved)
+    r = _lava_rope!(q, k, positions; theta, inv_freq, interleaved, rotary_dim)
     _lava_after_op!(workload)
     return r
 end
@@ -562,13 +593,14 @@ function rope!(
     theta::Real = 10000.0,
     inv_freq = nothing,
     interleaved::Bool = true,
+    rotary_dim::Integer = 0,
 )
     # Imported default, linear and Llama3 frequency metadata travels with Q/K.
     # Validate and rotate on the requested Lava storage (§LXX: no silent
-    # representation change). The CPU oracle implements these policies today.
+    # representation change).
     _lava_device_storage!(:rope!, q)
     _lava_device_storage!(:rope!, k)
-    r = _lava_rope!(q, k, positions; theta, inv_freq, interleaved)
+    r = _lava_rope!(q, k, positions; theta, inv_freq, interleaved, rotary_dim)
     _lava_after_op!(workload)
     return r
 end
@@ -908,22 +940,60 @@ the lowering) and return a new named tuple of the same shape — `embedding`,
 tensors. Tied heads stay tied on device: `lm_head === embedding`.
 """
 function _lava_to_device(tensors)
-    _to_f32(s) = s isa Lava.LavaArray ? s : Lava.LavaArray{Float32}(s)
+    # GGUF quant matrices dequantize to F32 here (embedding rows are gathered
+    # from F32 storage). Projection weights stay as GGUF bytes when they are
+    # eligible and fit the dense budget (the CUDA rule, GESSO_GPU_BUDGET_MIB).
+    budget = Ref(Gesso.Inference._gpu_budget_bytes())
+    _to_f32(s) = s isa Lava.LavaArray ? s :
+        s isa Gesso.Inference.QuantMatrix ? Lava.LavaArray{Float32}(Gesso.Inference._quant_host_f32(s)) :
+        Lava.LavaArray{Float32}(s)
+    _to_proj(s) = begin
+        if s isa Gesso.Inference.QuantMatrix && _lq_eligible(s) && _lq_device_bytes(s) <= budget[]
+            budget[] -= _lq_device_bytes(s)
+            return _lq_upload(s)
+        end
+        return _to_f32(s)
+    end
     # tensors in the map carry (shape, storage); blocks are NAMED TUPLES of
     # tensors, so their fields convert field-wise
-    _conv_t(t) = begin
+    _conv_t(t; proj::Bool = false) = begin
+        hasproperty(t, :storage) || return t         # mixer tags and other metadata
         t.storage === nothing && return t            # unset storage stays unset
-        typeof(t)(; shape = t.shape, storage = _to_f32(t.storage))
+        st = proj && t isa Gesso.ProjectionWeight ? _to_proj(t.storage) : _to_f32(t.storage)
+        typeof(t)(; shape = t.shape, storage = st)
     end
-    _conv_blk(b) = NamedTuple{keys(b)}(map(_conv_t, values(b)))
+    # Routed expert banks stay on the host (the CUDA GESSO_MOE_HOST_EXPERTS
+    # split): a GGUF slab is never dequantized to device F32 here. The host
+    # MoE route in lava_hybrid.jl reads these banks in place.
+    _host_expert_key(k) = k in (:wexp_gate, :wexp_up, :wexp_down)
+    _host_expert_t(t) = hasproperty(t, :storage) && t.storage isa Gesso.Inference.GgufQuantSlice
+    _conv_blk(b) = NamedTuple{keys(b)}(map(keys(b)) do k
+        t = getproperty(b, k)
+        _host_expert_key(k) && _host_expert_t(t) ? t : _conv_t(t; proj = true)
+    end)
     embedding = _conv_t(tensors.embedding)
     blocks = [_conv_blk(b) for b in tensors.blocks]
-    lm_head = tensors.lm_head === tensors.embedding ? embedding : _conv_t(tensors.lm_head)
+    lm_head = tensors.lm_head === tensors.embedding ? embedding : _conv_t(tensors.lm_head; proj = true)
     fr = haskey(tensors, :final_rms) ? tensors.final_rms : nothing
     final_rms = fr === nothing ? nothing : _conv_t(fr)
     _lava_sync!()
     result = (; embedding, blocks, lm_head, final_rms)
-    return haskey(tensors, :rope) ? merge(result, (; rope = tensors.rope)) : result
+    return merge(result, _keep_tensor_meta(tensors))
+end
+
+# ArchitectureSpec, RoPEPolicy, mixer tags — anything without .storage.
+const _TO_DEVICE_STORAGE_KEYS = (:embedding, :blocks, :lm_head, :final_rms)
+
+function _keep_tensor_meta(tensors)
+    ks = Symbol[]
+    vs = Any[]
+    for k in keys(tensors)
+        k in _TO_DEVICE_STORAGE_KEYS && continue
+        push!(ks, k)
+        push!(vs, getproperty(tensors, k))
+    end
+    isempty(ks) && return (;)
+    return NamedTuple{Tuple(ks)}(Tuple(vs))
 end
 
 # ext-local dispatch wrapper (bound as Gesso.to_device when this extension is

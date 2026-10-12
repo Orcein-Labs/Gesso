@@ -91,9 +91,18 @@ end
                 :matmul,
                 :embedding_lookup,
                 :rope_none,
+                :rope_linear,
+                :rope_llama3,
+                :qk_norm,
+                :attn_output_gate,
+                :linear_attention,
+                :mrope,
+                :rope_partial_dim,
+                :rope_interleaved,
             )
                 @test Gesso.supports(b, cap) == true
             end
+            @test Gesso.supports(b, :moe_routing) == true
             @test Gesso.supports(b, :quantize) == false
             @test Gesso.supports(b, :dequantize) == false
             @test Gesso.supports(b, :definitely_unknown_capability) == false

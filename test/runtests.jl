@@ -37,6 +37,7 @@ using Gesso: reference_prefill, reference_generate
     include("test_cpu_ops.jl")
     include("test_rope_layout.jl")
     include("test_attention_heads.jl")
+    include("test_kv_tier.jl")
 
     # CAPABILITY-0a: `supports(backend, cap)` is a hand-written Set, so the
     # declaration is tied to EXECUTION here — every claimed capability must
@@ -55,6 +56,14 @@ using Gesso: reference_prefill, reference_generate
     # generation with a real KV append
     include("test_reference_prefill.jl")
     include("test_reference_generate.jl")
+    include("test_generate_state_io.jl")
+    include("test_generate_hooks.jl")
+    include("test_verify_window.jl")
+    include("test_verify_window_batch.jl")
+    include("test_ctx_checkpoints.jl")
+    include("test_serve.jl")
+    include("test_serve_engine.jl")
+    include("test_sampling.jl")
     include("test_batch.jl")
     include("test_containment.jl")
     include("test_observability.jl")
@@ -75,6 +84,43 @@ using Gesso: reference_prefill, reference_generate
     # it asserts the Llama path is UNCHANGED and pushes a second family
     # through the same CPU oracle.
     include("test_breadth0.jl")
+    include("test_qwen35_hybrid.jl")
+    include("test_moe_routing.jl")
+    include("test_decode_profile.jl")
+    include("test_prefill_profile.jl")
+    include("test_gguf_import.jl")
+    include("test_gguf_llama.jl")
+    include("test_qwen35_dense.jl")
+
+    # Native CPU Q8_K x IQ dot products: quantizer vs port, AVX2 bit-exact vs
+    # scalar, GEMV threading invariance, Ornith slices (env-gated)
+    include("test_quant_cpu_simd.jl")
+    include("test_cpu_pool.jl")
+
+    # Native CPU K-quant (Q2_K..Q6_K) and Q8_0 dot products: Q8_0 quantizer vs
+    # port, F32 dequant references (bit-equal to ggml to_float when GESSO_GGML_DIR
+    # is set), AVX2 bit-exact vs scalar, real Ornith / Qwen3.8-27B tensors (env-gated)
+    include("test_quant_cpu_kquants.jl")
+
+    # Native CPU IQ2_S / IQ3_S / IQ1_M dot products: scalar vs F32 dequant,
+    # AVX2 bit-exact vs scalar, real Qwen3.8-27B UD-IQ2_M rows (env-gated)
+    include("test_quant_cpu_iq_s.jl")
+
+    # Multi-column Q8_K dots (K = 1..8 activation tiles) bit-equal to the
+    # single-column kernel for every type; prefill on/off through _quant_matmul!;
+    # real Saluki rows (env-gated)
+    include("test_quant_cpu_multi.jl")
+
+    # K-quant and Q8_0 MoE expert GEMV and top-k SwiGLU vs dequant + F32;
+    # real Kolibri-1 Q2_K expert rows (env-gated)
+    include("test_moe_kquant_experts.jl")
+
+    # Batched Q8_K host MoE (one quantization per token, two pool dispatches)
+    # vs the per-expert path; red control on permuted routing weights
+    include("test_moe_host_batched.jl")
+
+    # Token-batched host MoE prefill vs the token loop it replaces, bit for bit
+    include("test_moe_host_prefill.jl")
 
     # BREADTH-0 Pass C: the tokenizer PROTOCOL — GPT-2 BPE is one
     # implementation, metaspace byte-level BPE is a materially different
@@ -84,6 +130,14 @@ using Gesso: reference_prefill, reference_generate
     # Phase 3 (§LXXVI item C): GPT-2 byte-level BPE against a tiny data-only
     # fixture (golden ids traced from the merge table in the file header)
     include("test_tokenizer_gpt2.jl")
+
+    # Qwen3.5 chat template (hand-ported XML renderer, no Jinja): gate 3 byte-for-byte
+    # vs llama-server /apply-template on committed fixtures; no server or GGUF needed
+    include("test_chat_template.jl")
+
+    # Qwen3.5 GGUF BPE tokenizer: gate 1 id parity vs llama-server /tokenize, gate 2
+    # round trip and streaming equality, 200 KB speed gate; GGUF-gated (skips without it)
+    include("test_gguf_tokenizer.jl")
 
     # Phase 3 (§LXXVI item D): the REAL-model gate — one named skip unless
     # GESSO_SMOLLM2_DIR points at a local snapshot; it never downloads
@@ -98,6 +152,14 @@ using Gesso: reference_prefill, reference_generate
     # Phase 4 (§LXXVII item B): CUDA operator methods on CuArray{Float32} vs
     # the CPU oracle at declared atol — one named skip without a device
     include("test_cuda_ops.jl")
+    include("test_cuda_hybrid.jl")
+    include("test_gdn_decode_fused.jl")
+    include("test_cuda_moe.jl")
+    include("test_expert_cache.jl")
+    include("test_cuda_quant_dense.jl")
+    include("test_cuda_attention_decode.jl")
+    include("test_cuda_kv_tier.jl")
+    include("test_kv_format.jl")
 
     # Phase 4 (§LXXVII item C): full prefill + generate on device vs the CPU
     # oracle — logits at declared atol, token ids EXACT (argmax is the gate)
@@ -122,6 +184,23 @@ using Gesso: reference_prefill, reference_generate
     # the CPU F64 oracle at declared atol — named skip without a device. The
     # LAVA_LOADED / VULKAN_OK consts come from the seam file above.
     include("test_lava_ops.jl")
+
+    # Lava fused single-query decode attention (GQA read in place) vs the F64
+    # oracle; named skip without a device.
+    include("test_lava_attention_decode.jl")
+
+    # Lava single-row rmsnorm workgroup reduction vs the serial kernel it
+    # replaced; named skip without a device.
+    include("test_lava_rmsnorm_reduce.jl")
+
+    # Phase 8 L1: Lava dense quant GEMV (GGUF bytes on device, in-kernel
+    # dequant) vs the host F64 reference; named skip without a device.
+    include("test_lava_quant.jl")
+
+    # Phase 8 L2: Lava hybrid seams (conv1d, GDN gates and delta rule with
+    # carried state, host-storage refusal) vs the F64 CPU oracle; named skip
+    # without a device.
+    include("test_lava_hybrid.jl")
 
     # Phase 8 (§LXXXI item C): Lava inference — prefill + greedy generate vs
     # the CPU oracle, ids EXACT, logits at declared atol; no-copy law.
@@ -178,6 +257,13 @@ using Gesso: reference_prefill, reference_generate
     # torch, a snapshot, or a device (CI never requires any of them).
     include("test_speed_floor_harness.jl")
 
+    # Phase 20 (§XCIII; docs/design/SPECULATION_SEAM.md): the host-side draft
+    # seam and its sources, ported from GessoSymbolicDrafts 59553aa. No verifier.
+    include("test_speculation.jl")
+
+    # Context budget + compaction policy: pure CPU, no device.
+    include("test_context_budget.jl")
+
     # Phase 10D (foundation hardening item A): every public name has a home —
     # export inventory + parked-empty fence. Always-on, no device/snapshot.
     include("test_export_inventory.jl")
@@ -212,8 +298,10 @@ using Gesso: reference_prefill, reference_generate
         stdlib_allowlist = Dict{String, String}( # name => justification
             "Dates" => "timestamps for structured log events (§XLII)",
             "LinearAlgebra" => "CPU reference matmul (§LXXV Phase 2)",
+            "Libdl" => "ggml to_float for GGUF dequant (qwen35moe)",
             "Mmap" => "safetensors byte region (§LXXVI)",
             "JSON" => "config.json + safetensors header parsing (§LXXVI)",
+            "Sockets" => "TCP listener for the OpenAI-compatible server (src/serve)",
         )
         project = joinpath(pkgdir(Gesso), "Project.toml")
         section = ""
