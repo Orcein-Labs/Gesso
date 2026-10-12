@@ -65,12 +65,21 @@ _q8k_dmin_offset(ggml_type::Int32) = ggml_type == GGML_TYPE_Q2_K ? 82 :
     (UInt32(_kq_u8(w, off0 + 3)) << 24)
 @inline _kq_f16(w, off0::Int) = Float32(reinterpret(Float16, _kq_u16(w, off0)))
 
-# w must hold nbytes from byte woff (0-based); x must hold the same blocks.
-function _kq_check_row(w::AbstractVector{UInt8}, woff::Int, nbytes::Int, x)
+# w must hold nb blocks of bytes_per_block from byte woff (0-based); x must hold
+# the same nb blocks in every field the loop reads, because the loops index x
+# without a check.
+function _kq_check_row(w::AbstractVector{UInt8}, woff::Int, nb::Int, bytes_per_block::Int, x)
+    nbytes = nb * bytes_per_block
     woff >= 0 && woff + nbytes <= length(w) ||
         throw(BoundsError(w, (woff + 1):(woff + nbytes)))
+    _kq_x_holds(x, nb) ||
+        throw(DimensionMismatch("activation vector does not hold $nb blocks"))
     return nothing
 end
+
+_kq_x_holds(x::Q8KVec, nb::Int) =
+    length(x.d) >= nb && length(x.qs) >= QK_K * nb && length(x.bsums) >= (QK_K ÷ 16) * nb
+_kq_x_holds(x::Q80Vec, nb::Int) = length(x.d) >= nb && length(x.qs) >= 32 * nb
 
 # -------------------------------------------------------- scale and min decode
 
@@ -600,7 +609,7 @@ end
 
 function _dot_q4k_q8k(w::AbstractVector{UInt8}, woff::Int, x::Q8KVec, simd::Bool)::Float32
     nb = length(x.d)
-    _kq_check_row(w, woff, nb * 144, x)
+    _kq_check_row(w, woff, nb, 144, x)
     sumf = 0.0f0
     sums = ntuple(_ -> 0.0f0, Val(8))
     @inbounds for ib in 0:(nb - 1)
@@ -620,7 +629,7 @@ end
 
 function _dot_q5k_q8k(w::AbstractVector{UInt8}, woff::Int, x::Q8KVec, simd::Bool)::Float32
     nb = length(x.d)
-    _kq_check_row(w, woff, nb * 176, x)
+    _kq_check_row(w, woff, nb, 176, x)
     sumf = 0.0f0
     sums = ntuple(_ -> 0.0f0, Val(8))
     @inbounds for ib in 0:(nb - 1)
@@ -640,7 +649,7 @@ end
 
 function _dot_q6k_q8k(w::AbstractVector{UInt8}, woff::Int, x::Q8KVec, simd::Bool)::Float32
     nb = length(x.d)
-    _kq_check_row(w, woff, nb * 210, x)
+    _kq_check_row(w, woff, nb, 210, x)
     sumf = 0.0f0
     sums = ntuple(_ -> 0.0f0, Val(8))
     @inbounds for ib in 0:(nb - 1)
@@ -657,7 +666,7 @@ end
 
 function _dot_q3k_q8k(w::AbstractVector{UInt8}, woff::Int, x::Q8KVec, simd::Bool)::Float32
     nb = length(x.d)
-    _kq_check_row(w, woff, nb * 110, x)
+    _kq_check_row(w, woff, nb, 110, x)
     sumf = 0.0f0
     sums = ntuple(_ -> 0.0f0, Val(8))
     @inbounds for ib in 0:(nb - 1)
@@ -675,7 +684,7 @@ end
 
 function _dot_q2k_q8k(w::AbstractVector{UInt8}, woff::Int, x::Q8KVec, simd::Bool)::Float32
     nb = length(x.d)
-    _kq_check_row(w, woff, nb * 84, x)
+    _kq_check_row(w, woff, nb, 84, x)
     sumf = 0.0f0
     @inbounds for ib in 0:(nb - 1)
         b = woff + ib * 84
@@ -697,7 +706,7 @@ end
 
 function _dot_q8_0_q8_0(w::AbstractVector{UInt8}, woff::Int, x::Q80Vec, simd::Bool)::Float32
     nb = length(x.d)
-    _kq_check_row(w, woff, nb * 34, x)
+    _kq_check_row(w, woff, nb, 34, x)
     sumf = 0.0f0
     @inbounds for ib in 0:(nb - 1)
         b = woff + ib * 34

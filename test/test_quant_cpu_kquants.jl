@@ -294,6 +294,24 @@ end
     @test _KQ._qgemv_q8k_f32!(y, zeros(Float32, 64), zeros(UInt8, 34 * 2 * 2), _KQ.GGML_TYPE_Q8_0, 64, 2; threaded=false) === y
 end
 
+@testset "K-quant dots reject an activation shorter than the row" begin
+    # d holds 2 blocks but qs holds only 1: the loop would index qs past its end
+    short_k = _KQ.Q8KVec(zeros(Float32, 2), zeros(Int8, 256), zeros(Int16, 16))
+    short_q80 = _KQ.Q80Vec(zeros(Float32, 2), zeros(Int8, 32))
+    for (ty, bpb) in ((_KQ.GGML_TYPE_Q2_K, 84), (_KQ.GGML_TYPE_Q3_K, 110),
+                      (_KQ.GGML_TYPE_Q4_K, 144), (_KQ.GGML_TYPE_Q5_K, 176),
+                      (_KQ.GGML_TYPE_Q6_K, 210))
+        W = zeros(UInt8, bpb * 2)
+        @test_throws DimensionMismatch _KQ._dot_q8k(ty, W, 0, short_k, false)
+        @test_throws DimensionMismatch _KQ._dot_q8k(ty, W, 0, short_k, true)
+    end
+    W = zeros(UInt8, 34 * 2)
+    @test_throws DimensionMismatch _KQ._dot_q8_0_q8_0(W, 0, short_q80, false)
+    @test_throws DimensionMismatch _KQ._dot_q8_0_q8_0(W, 0, short_q80, true)
+    # a row that runs past the end of the weights still fails as a BoundsError
+    @test_throws BoundsError _KQ._dot_q4k_q8k(zeros(UInt8, 144), 1, _KQ.Q8KVec(2), false)
+end
+
 # Real tensors. Header and row reads only: the rows tested are mapped from the
 # file, and the rest of the model is never touched.
 function _kq_real_tensors(path::AbstractString)
