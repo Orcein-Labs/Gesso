@@ -1249,6 +1249,12 @@ function reference_generate(
         hidden_ffn = model.blocks[1].ffn.hidden
         hybrid = any(bt -> _block_mixer(bt) === :linear_attention, tensors.blocks)
         n0 = _generate_resume!(st, prompt, hybrid)
+        # a call without a state keeps nothing, so it takes no interior checkpoints
+        # and its end-of-prompt snapshot is skipped
+        ckpt_on = hybrid && state !== nothing
+        ckpt_slots = ckpt_on ? _ctx_checkpoint_slots() : 0
+        ckpt_every = ckpt_slots > 0 ? _ctx_checkpoint_stride() : 0
+        ckpt_on && _ckpt_fit!(st, max(ckpt_slots, 1))
 
         # BREADTH-0 Pass D — see reference_prefill. `nothing` = unscaled model.
         inv_freq = tensors_rope_inv_freq(tensors, d_head; theta)
@@ -1258,7 +1264,10 @@ function reference_generate(
         s1 = n0
         while s1 < P
             s0 = s1 + 1
-            s1 += _prefill_pass_rows(cpu, P - s1, s1, chunk, qdim, group)
+            # a pass ends at the next stride boundary, so the GDN state there is
+            # the state after exactly those rows
+            lim = ckpt_every > 0 ? min(P, (s1 ÷ ckpt_every + 1) * ckpt_every) : P
+            s1 += _prefill_pass_rows(cpu, lim - s1, s1, chunk, qdim, group)
             n = s1 - s0 + 1
             ptok = _prefill_pass_begin(cpu, s0, n, P)
             if win_ok
@@ -1269,6 +1278,9 @@ function reference_generate(
                     gdn_conv, gdn_rec, cpu_scratch; vocab, n_heads, n_kv_heads, d_head, group, eps,
                     theta, inv_freq, rotary_dim, head=false)
                 _commit_window!(win, n, gdn_conv, gdn_rec, h)
+                if ckpt_every > 0 && s1 < P && s1 % ckpt_every == 0
+                    _generate_checkpoint!(st, s1, ckpt_slots)
+                end
                 _prefill_pass_end(ptok)
                 continue
             end
@@ -1392,13 +1404,17 @@ function reference_generate(
                 hp.storage .+= down.storage
                 _arena_release!(block_tmp)
             end
-            s1 == P && (h.storage .= @view hp.storage[n:n, :])
+            # every pass, not only the last: a stride checkpoint copies h at its boundary
+            h.storage .= @view hp.storage[n:n, :]
+            if ckpt_every > 0 && s1 < P && s1 % ckpt_every == 0
+                _generate_checkpoint!(st, s1, ckpt_slots)
+            end
             _arena_release!(pass_tmp)
             _prefill_pass_end(ptok)
         end
         _prefill_end!(cpu)
         append!(st.ids, @view prompt[(n0 + 1):P])
-        hybrid && state !== nothing && _generate_snapshot!(st, P)
+        ckpt_on && _generate_snapshot!(st, P, max(ckpt_slots, 1))
 
         ids = collect(prompt)
         steps = 0

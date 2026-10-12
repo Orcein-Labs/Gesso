@@ -3,9 +3,23 @@
 #
 # The GDN recurrent state folds every token it has seen into one matrix and
 # cannot be rewound, so on a hybrid model a prompt that leaves `ids` early can
-# resume only from a snapshot. One is taken where each call's prefill ends,
-# which is the point a regenerate or an edit of the last reply goes back to.
+# resume only from a checkpoint: a copy of the GDN states and the hidden row at
+# some prompt position. One is taken where each call's prefill ends, which is
+# the point a regenerate or an edit of the last reply goes back to, and others
+# at fixed strides inside the prefill, so a new conversation that shares only a
+# system prompt resumes at the last stride inside it.
 # An attention-only model rewinds to any row: readers take K rows explicitly.
+
+# Checkpoint slots per state and the prompt-row stride they are taken at. Each
+# checkpoint holds the GDN states and the hidden row after `pos` prompt rows, so
+# its size is the GDN state, not the context length. GESSO_CTX_CHECKPOINTS=0
+# keeps only the end-of-prompt snapshot, the single-snapshot behaviour. Stride
+# positions count from row 0 so two sessions sharing a system prompt take their
+# checkpoints at the same rows.
+_ctx_checkpoint_slots() = max(0, something(tryparse(Int,
+    get(ENV, "GESSO_CTX_CHECKPOINTS", "8")), 8))
+_ctx_checkpoint_stride() = max(0, something(tryparse(Int,
+    get(ENV, "GESSO_CTX_CHECKPOINT_EVERY", "512")), 512))
 
 """
     GenerateState(ctx)
@@ -29,30 +43,31 @@ mutable struct GenerateState
     gdn_scratch::Any
     cpu_scratch::Any
     ids::Vector{Int}  # tokens whose K/V rows and GDN state the buffers hold
-    snap::Any         # (conv, rec, h) copies at snap_len
-    snap_len::Int     # -1: no snapshot
+    ckpts::Vector{Any}      # checkpoints by ascending pos; the newest ends the last prompt
+    ckpt_free::Vector{Any}  # buffers of dropped checkpoints, reused by the next capture
     pending::Any      # host payload of a loaded state, copied in by its first call
     fingerprint::Any  # model identity, stable across processes; nothing until bound
 end
 
 GenerateState(ctx::Integer) = (ctx > 0 || throw(ArgumentError("GenerateState: ctx must be positive, got $ctx"));
     GenerateState(Int(ctx), nothing, nothing, nothing, nothing, nothing, nothing, nothing,
-        nothing, nothing, Int[], nothing, -1, nothing, nothing))
+        nothing, nothing, Int[], Any[], Any[], nothing, nothing))
 
 function Base.close(st::GenerateState)
     st.arena === nothing || _arena_release!(st.arena)
     st.arena = st.key = st.kc = st.vc = st.h = nothing
-    st.gdn_conv = st.gdn_rec = st.gdn_scratch = st.cpu_scratch = st.snap = nothing
+    st.gdn_conv = st.gdn_rec = st.gdn_scratch = st.cpu_scratch = nothing
     st.pending = st.fingerprint = nothing
     empty!(st.ids)
-    st.snap_len = -1
+    empty!(st.ckpts)
+    empty!(st.ckpt_free)
     return nothing
 end
 
 # A call that throws leaves the buffers half written.
 function _generate_invalidate!(st::GenerateState)
     empty!(st.ids)
-    st.snap_len = -1
+    _ckpt_clear!(st)
     return nothing
 end
 
@@ -62,6 +77,51 @@ _common_prefix(a, b) = something(findfirst(i -> a[i] != b[i], 1:min(length(a), l
 function _gdn_copy!(dst, src)
     for (d, s) in zip(dst, src)
         d === nothing || copyto!(d, s)
+    end
+    return nothing
+end
+
+# Checkpoints are kept in ascending pos, and the victim is chosen to keep the
+# resume points a later conversation is likeliest to hit. The oldest stays: it
+# sits in the shared system prompt, which every session reuses. The newest stays:
+# it is the tip of the current conversation. Of the interior entries, the one
+# whose neighbours sit closest together goes, since removing it opens the
+# smallest hole in the resume coverage. With two entries the oldest goes, so a
+# single slot keeps only the newest. `ps` is ascending with at least two entries
+# and the victim is never its last index.
+function _ckpt_victim(ps::AbstractVector{Int})
+    n = length(ps)
+    n == 2 && return 1
+    best, gap_best = 2, typemax(Int)
+    for j in 2:(n - 1)
+        gap = ps[j + 1] - ps[j - 1]
+        gap < gap_best && ((best, gap_best) = (j, gap))
+    end
+    return best
+end
+
+# Drops checkpoints that describe history a call is about to overwrite.
+function _ckpt_truncate!(st::GenerateState, n0::Int)
+    while !isempty(st.ckpts) && last(st.ckpts).pos > n0
+        push!(st.ckpt_free, pop!(st.ckpts))
+    end
+    return nothing
+end
+
+function _ckpt_clear!(st::GenerateState)
+    append!(st.ckpt_free, st.ckpts)
+    empty!(st.ckpts)
+    return nothing
+end
+
+# Brings the held checkpoints within `cap` when the slot count has been lowered
+# since they were taken.
+function _ckpt_fit!(st::GenerateState, cap::Int)
+    cap == 0 && return _ckpt_clear!(st)
+    while length(st.ckpts) > cap
+        i = _ckpt_victim([c.pos for c in st.ckpts])
+        push!(st.ckpt_free, st.ckpts[i])
+        deleteat!(st.ckpts, i)
     end
     return nothing
 end
@@ -76,14 +136,21 @@ function _generate_resume!(st::GenerateState, prompt::AbstractVector{Int}, hybri
     elseif !hybrid
         # at least one row re-prefilled, so h is the hidden row of prompt[n0]
         min(_common_prefix(st.ids, prompt), P - 1)
-    elseif 0 < st.snap_len <= _common_prefix(st.ids, prompt)
-        _gdn_copy!(st.gdn_conv, st.snap.conv)
-        _gdn_copy!(st.gdn_rec, st.snap.rec)
-        copyto!(st.h.storage, st.snap.h)
-        st.snap_len
     else
-        0
+        # the newest checkpoint inside the shared prefix; rows past it are prefilled
+        cp = _common_prefix(st.ids, prompt)
+        j = findlast(c -> c.pos <= cp, st.ckpts)
+        if j === nothing
+            0
+        else
+            c = st.ckpts[j]
+            _gdn_copy!(st.gdn_conv, c.conv)
+            _gdn_copy!(st.gdn_rec, c.rec)
+            copyto!(st.h.storage, c.h)
+            c.pos
+        end
     end
+    _ckpt_truncate!(st, n0)
     if n0 == 0
         for x in Iterators.flatten((st.gdn_conv, st.gdn_rec))
             x === nothing || fill!(x, 0)
@@ -93,20 +160,41 @@ function _generate_resume!(st::GenerateState, prompt::AbstractVector{Int}, hybri
     return n0
 end
 
-function _generate_snapshot_buffers!(st::GenerateState)
-    if st.snap === nothing
-        like(xs) = [x === nothing ? nothing : st.arena(size(x)) for x in xs]
-        st.snap = (conv=like(st.gdn_conv), rec=like(st.gdn_rec), h=st.arena(size(st.h.storage)))
+# Buffers for one checkpoint: a dropped checkpoint's, else fresh from the arena.
+function _ckpt_buffers(st::GenerateState)
+    if !isempty(st.ckpt_free)
+        c = pop!(st.ckpt_free)
+        return (conv=c.conv, rec=c.rec, h=c.h)
     end
+    like(xs) = [x === nothing ? nothing : st.arena(size(x)) for x in xs]
+    return (conv=like(st.gdn_conv), rec=like(st.gdn_rec), h=st.arena(size(st.h.storage)))
+end
+
+# Copies the current GDN states and hidden row in as the checkpoint at `pos`,
+# which is always the newest: prefill only moves forward from the truncated
+# history. With `cap` slots full, the victim's buffers are the ones written, so
+# the buffer count never exceeds `cap`.
+function _generate_checkpoint!(st::GenerateState, pos::Int, cap::Int)
+    cap >= 1 || return nothing
+    ck = st.ckpts
+    if length(ck) < cap
+        bufs = _ckpt_buffers(st)
+    else
+        i = _ckpt_victim(push!([c.pos for c in ck], pos))
+        bufs = (conv=ck[i].conv, rec=ck[i].rec, h=ck[i].h)
+        deleteat!(ck, i)
+    end
+    _gdn_copy!(bufs.conv, st.gdn_conv)
+    _gdn_copy!(bufs.rec, st.gdn_rec)
+    copyto!(bufs.h, st.h.storage)
+    push!(ck, merge((pos=pos,), bufs))
     return nothing
 end
 
-function _generate_snapshot!(st::GenerateState, P::Int)
-    _generate_snapshot_buffers!(st)
-    _gdn_copy!(st.snap.conv, st.gdn_conv)
-    _gdn_copy!(st.snap.rec, st.gdn_rec)
-    copyto!(st.snap.h, st.h.storage)
-    st.snap_len = P
+# The end-of-prompt checkpoint. One already at P holds these same rows.
+function _generate_snapshot!(st::GenerateState, P::Int, cap::Int)
+    isempty(st.ckpts) || last(st.ckpts).pos != P || return nothing
+    _generate_checkpoint!(st, P, cap)
     return nothing
 end
 
@@ -261,15 +349,18 @@ _state_copy!(dst, src) = (copyto!(dst, src); nothing)
 
 # What a save writes: the live buffers, or the payload of a loaded state that no
 # call has consumed yet, so a state can be saved again before it runs.
+# The format keeps one checkpoint: the newest, which is the end of the last
+# prompt. The others are not parked and the next prefill rebuilds them.
 function _state_payload(st::GenerateState)
     st.pending === nothing || return merge((ctx=st.ctx, fingerprint=st.fingerprint), st.pending)
     st.key === nothing && throw(gesso_error(ERR_INVALID_PLAN,
         "save_state: the state holds no generation to save"))
+    newest = isempty(st.ckpts) ? nothing : last(st.ckpts)
     return (ctx=st.ctx, fingerprint=st.fingerprint, fmt=st.key[3], ids=st.ids,
-        snap_len=st.snap_len, h=st.h.storage,
+        snap_len=newest === nothing ? -1 : newest.pos, h=st.h.storage,
         kc=[a.storage for a in st.kc], vc=[a.storage for a in st.vc],
         gdn_conv=st.gdn_conv, gdn_rec=st.gdn_rec,
-        snap=st.snap_len > 0 ? st.snap : nothing)
+        snap=newest === nothing ? nothing : (conv=newest.conv, rec=newest.rec, h=newest.h))
 end
 
 """
@@ -389,14 +480,15 @@ function _restore_pending!(st::GenerateState)
     _state_copy!(st.h.storage, p.h)
     _gdn_copy!(st.gdn_conv, p.gdn_conv)
     _gdn_copy!(st.gdn_rec, p.gdn_rec)
+    empty!(st.ckpts)
     if p.snap !== nothing
-        _generate_snapshot_buffers!(st)
-        _gdn_copy!(st.snap.conv, p.snap.conv)
-        _gdn_copy!(st.snap.rec, p.snap.rec)
-        _state_copy!(st.snap.h, p.snap.h)
+        bufs = _ckpt_buffers(st)
+        _gdn_copy!(bufs.conv, p.snap.conv)
+        _gdn_copy!(bufs.rec, p.snap.rec)
+        _state_copy!(bufs.h, p.snap.h)
+        push!(st.ckpts, merge((pos=p.snap_len,), bufs))
     end
     empty!(st.ids)
     append!(st.ids, p.ids)
-    st.snap_len = p.snap_len
     return nothing
 end
