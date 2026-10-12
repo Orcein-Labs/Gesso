@@ -324,7 +324,71 @@ function _lq_matmul!(Y, X, q::LavaDenseQuant)
     ntok = size(X, 1)
     size(X, 2) == q.ne0 || throw(DimensionMismatch("lava quant GEMV: x has $(size(X, 2)) columns, weight has $(q.ne0)"))
     size(Y) == (ntok, q.nrows) || throw(DimensionMismatch("lava quant GEMV: dst is $(size(Y)), want $((ntok, q.nrows))"))
+    ntok >= _lq_gemm_min() && return _lq_gemm_prefill!(Y, X, q)
     return _lq_launch!(Y, X, q.data, 0, q.kind, ntok, q.ne0, q.nrows, q.row_bytes, 1.0f0, 0.0f0)
+end
+
+# --- prefill GEMM ----------------------------------------------------------------
+# The GEMV decodes each weight once per token, so a 256-token prefill decodes
+# every weight 256 times. From GESSO_DQ_GEMM_MIN tokens on (the CUDA default),
+# W is dequantized to F16 in row chunks, capped by GESSO_DQ_GEMM_SCRATCH_MIB,
+# and Lava's mul! multiplies it with an F16 copy of X into an F32 result. That
+# is the cooperative-matrix path when the shape tiles, and the staged GEMM
+# otherwise.
+_lq_gemm_min() = parse(Int, get(ENV, "GESSO_DQ_GEMM_MIN", "32"))
+_lq_gemm_scratch_mib() = parse(Int, get(ENV, "GESSO_DQ_GEMM_SCRATCH_MIB", "32"))
+
+# Element e of row r0 + r goes to Wt[r * ne0 + e + 1], so Wt is the (ne0 x rc)
+# column-major matrix whose columns are the chunk's rows.
+@kernel cpu=false function _lq_dequant_f16_kernel!(Wt, W, kv, g2, g3, ks, kind::Int,
+                                                   ne0::Int, row_bytes::Int, r0::Int, total::Int)
+    idx = @index(Global, Linear)
+    if idx <= total
+        q = idx - 1
+        r = q ÷ ne0
+        e = q - r * ne0
+        rowoff = (r0 + r) * row_bytes
+        Wt[idx] = Float16(_lq_elem(kind, W, kv, g2, g3, ks, rowoff, e))
+    end
+end
+
+# Copies a chunk's F32 columns into Y at flat offset `off`.
+@kernel cpu=false function _lq_scatter_kernel!(Y, C, off::Int, total::Int)
+    idx = @index(Global, Linear)
+    if idx <= total
+        Y[off + idx] = C[idx]
+    end
+end
+
+function _lq_gemm_prefill!(Y, X, q::LavaDenseQuant)
+    ntok = size(X, 1)
+    k = q.ne0
+    nrows = q.nrows
+    backend = Lava.KernelAbstractions.get_backend(X)
+    tb = _lq_tables()
+    x16 = Lava.LavaArray{Float16}(undef, ntok, k)
+    x16 .= Float16.(X)
+    rc_max = min(nrows, max(1, (_lq_gemm_scratch_mib() << 20) ÷ (2 * k)))
+    wt_full = Lava.LavaArray{Float16}(undef, k, rc_max)
+    dequant = _lq_dequant_f16_kernel!(backend)
+    scatter = _lq_scatter_kernel!(backend)
+    r0 = 0
+    while r0 < nrows
+        rc = min(rc_max, nrows - r0)
+        wt = rc == rc_max ? wt_full : Lava.LavaArray{Float16}(undef, k, rc)
+        total = k * rc
+        dequant(wt, q.data, tb.kv, tb.g2, tb.g3, tb.ks, q.kind, k, q.row_bytes, r0, total;
+            ndrange=total, workgroupsize=(256,))
+        if rc == nrows
+            mul!(Y, x16, wt, one(Float32), zero(Float32))
+        else
+            yc = Lava.LavaArray{Float32}(undef, ntok, rc)
+            mul!(yc, x16, wt, one(Float32), zero(Float32))
+            scatter(Y, yc, r0 * ntok, ntok * rc; ndrange=ntok * rc, workgroupsize=(256,))
+        end
+        r0 += rc
+    end
+    return Y
 end
 
 # Single-token expert GEMV: y = alpha * W_e * x + beta * y, with W_e the

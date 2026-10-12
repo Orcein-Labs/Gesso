@@ -80,7 +80,7 @@ else
     end
 
     # Per-element error against the F32-activation bound, host F64 accumulation.
-    function _lq_check(qm, X, dev; label::AbstractString)
+    function _lq_check(qm, X, dev; label::AbstractString, rtol::Float64=5.0e-5)
         if !isfile(joinpath(get(ENV, "GESSO_GGML_DIR", ""), "libggml-base.so"))
             _skip("set GESSO_GGML_DIR to a directory with libggml-base.so — $label host reference skipped")
             return nothing
@@ -89,7 +89,7 @@ else
         X64 = Float64.(X)
         ref = X64 * transpose(W)
         A = abs.(X64) * transpose(abs.(W))
-        tol = 5.0e-5 .* A .+ 1.0e-9
+        tol = rtol .* A .+ 1.0e-9
         err = abs.(Float64.(dev) .- ref)
         ratio = maximum(err ./ tol)
         @info "lava dense quant GEMV" label maxerr = maximum(err) max_ref = maximum(abs, ref) worst_err_over_tol = ratio
@@ -107,6 +107,32 @@ else
                 qm = _lq_random_matrix(rng, kind, nrows, k)
                 X = randn(rng, Float32, ntok, k)
                 _lq_check(qm, X, _lq_device_matmul(qm, X); label=string(kind))
+            end
+        end
+    end
+
+    # Prefill (ntok >= GESSO_DQ_GEMM_MIN, default 32): W is dequantized to F16
+    # and multiplied with an F16 copy of X, so each value carries two F16 roundings.
+    # Bound: 2e-3 times the absolute sum, against the same F64 host reference.
+    @testset "LavaDenseQuant: prefill GEMM vs host dequant" begin
+        rng = MersenneTwister(20261012)
+        for kind in (:q4_k, :q5_k, :q6_k)
+            @testset "$kind staged shape" begin
+                qm = _lq_random_matrix(rng, kind, 37, 512)
+                X = randn(rng, Float32, 40, 512)
+                _lq_check(qm, X, _lq_device_matmul(qm, X); label="prefill $kind 37x512 n40", rtol=2.0e-3)
+            end
+        end
+        @testset "cooperative-matrix shape" begin
+            qm = _lq_random_matrix(rng, :q5_k, 64, 512)
+            X = randn(rng, Float32, 32, 512)
+            _lq_check(qm, X, _lq_device_matmul(qm, X); label="prefill q5_k 64x512 n32", rtol=2.0e-3)
+        end
+        @testset "chunked scratch with a partial last chunk" begin
+            withenv("GESSO_DQ_GEMM_SCRATCH_MIB" => "1") do
+                qm = _lq_random_matrix(rng, :q5_k, 2300, 512)
+                X = randn(rng, Float32, 40, 512)
+                _lq_check(qm, X, _lq_device_matmul(qm, X); label="prefill q5_k 2300x512 n40 chunked", rtol=2.0e-3)
             end
         end
     end
