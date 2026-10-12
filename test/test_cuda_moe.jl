@@ -255,6 +255,117 @@ else
         end
     end
 
+    @testset "cuda K-quant expert qgemv matches CPU dequantize reference" begin
+        # Q2_K, Q3_K and Q4_K expert blocks on the device, against libggml's F32
+        # dequantize followed by an F64 matvec. The device quantizes activations
+        # to Q8_1, so each row is held to the bound that rounding implies: half
+        # a quantization step per 32-value block, times that row's weight mass.
+        ext = Base.get_extension(Gesso, :GessoCUDAExt)
+        rng = deterministic_rng(73)
+
+        # Payload bytes are random; only the super-scales are written, as valid
+        # fp16, because a random fp16 can be NaN or Inf and the check would then
+        # say nothing about the kernel.
+        function kq_synth_slice(ggml_type, bsz::Int, dpos, ne0::Int, ne1::Int, n_exp::Int)
+            nsb = div(ne0, 256)
+            bpe = ne1 * nsb * bsz
+            data = rand(rng, UInt8, n_exp * bpe)
+            for e in 0:(n_exp - 1), r in 0:(ne1 - 1), s in 0:(nsb - 1)
+                base = e * bpe + (r * nsb + s) * bsz
+                for p in dpos
+                    v = Float16((rand(rng) < 0.5 ? -1 : 1) * (0.01 + 0.05 * rand(rng)))
+                    data[(base + p + 1):(base + p + 2)] .= reinterpret(UInt8, [v])
+                end
+            end
+            return Gesso.GgufQuantSlice(data, 0, ggml_type, n_exp, ne0, ne1, bpe, C_NULL, Int64(1))
+        end
+
+        # `host` is the slice the reference is decoded from; `dev` is the slice
+        # the kernel reads (host or packed device form of the same bytes).
+        function kq_expert_check(host, dev, e::Int, x::Vector{Float32})
+            ne0, ne1 = host.ne0, host.ne1
+            bytes = Vector{UInt8}(Inf_._quant_expert_bytes(host, e))
+            W = Float64.(permutedims(reshape(
+                Inf_._dequant_f32(bytes, 0, host.ggml_type, ne0 * ne1), ne0, ne1)))
+            x64 = Float64.(x)
+            ref = W * x64
+            bound = zeros(Float64, ne1)
+            for b in 1:div(ne0, 32)
+                cols = (32 * (b - 1) + 1):(32 * b)
+                bound .+= maximum(abs, view(x64, cols)) / 254.0 .* vec(sum(abs, view(W, :, cols); dims=2))
+            end
+            yg = CUDA.zeros(Float32, ne1)
+            Inf_._qgemv_expert!(yg, CuArray{Float32}(x), dev, e)
+            err = abs.(Float64.(Array(yg)) .- ref)
+            tol = bound .+ 5.0e-5 .* (abs.(W) * abs.(x64)) .+ 1.0e-9
+            return all(err .<= tol), maximum(err) / maximum(abs, ref)
+        end
+
+        # block bytes, and the offsets of the fp16 super-scales inside a block
+        kq_types = (
+            (Inf_.GGML_TYPE_Q2_K, 84, (80, 82), "Q2_K"),
+            (Inf_.GGML_TYPE_Q3_K, 110, (108,), "Q3_K"),
+            (Inf_.GGML_TYPE_Q4_K, 144, (0, 2), "Q4_K"),
+        )
+        ne0, ne1, n_exp = 512, 6, 3
+        for (ggml_type, bsz, dpos, label) in kq_types
+            slice = kq_synth_slice(ggml_type, bsz, dpos, ne0, ne1, n_exp)
+            packed = Inf_.gpu_quant_slice(slice, CuArray{UInt8}(Inf_.packed_quant_bytes(slice)))
+            worst = 0.0
+            for e in 1:n_exp
+                x = randn(rng, Float32, ne0)
+                ok, rel = kq_expert_check(slice, slice, e, x)
+                @test ok
+                worst = max(worst, rel)
+            end
+            ok_p, _ = kq_expert_check(slice, packed, 2, randn(rng, Float32, ne0))
+            @test ok_p
+            @info "cuda K-quant synthetic qgemv" type = label max_rel_err = worst
+        end
+
+        # Multi-column: pairs read their own token's column through the table,
+        # so each must match a one-column launch bit for bit.
+        for (ggml_type, bsz, dpos, label) in kq_types
+            slice = kq_synth_slice(ggml_type, bsz, dpos, ne0, ne1, n_exp)
+            bpe = slice.bytes_per_expert
+            q = CuArray{UInt8}(slice.data)
+            experts = [2, 1, 3, 2]
+            tokens = [3, 1, 2, 3]
+            n = length(experts)
+            x = CuArray(randn(rng, Float32, ne0, 3))
+            meta = CuArray(Int32[(experts .- 1) .* bpe; 1:n; tokens])
+            y = CUDA.fill(NaN32, ne1, n)
+            ext._cuda_launch_qgemv!(y, x, q, ggml_type, meta, n, n, ne0, ne1, 1.0f0, 0.0f0; xcoloff=2n)
+            ref = similar(Array(y))
+            for i in 1:n
+                yi = CUDA.fill(NaN32, ne1, 1)
+                mi = CuArray(Int32[(experts[i] - 1) * bpe, 1])
+                ext._cuda_launch_qgemv!(yi, x[:, tokens[i]:tokens[i]], q, ggml_type, mi, 1, 1, ne0, ne1,
+                    1.0f0, 0.0f0)
+                ref[:, i] .= vec(Array(yi))
+            end
+            @test Array(y) == ref
+        end
+
+        live_gguf = get(ENV, "GESSO_GSQ_GGUF", "")
+        if isempty(live_gguf) || !isfile(live_gguf)
+            _skip("GESSO_GSQ_GGUF not set to a GGUF file — live Q2_K/Q3_K expert qgemv skipped")
+        else
+            hdr = Gesso.gguf_header(live_gguf)
+            for (ggml_type, label) in ((Inf_.GGML_TYPE_Q2_K, "Q2_K"), (Inf_.GGML_TYPE_Q3_K, "Q3_K"))
+                infos = [t for t in hdr.tensors if length(t.dims) == 3 && t.ggml_type == ggml_type]
+                if isempty(infos)
+                    _skip("GSQ GGUF has no 3D $label expert tensor — live $label check skipped")
+                    continue
+                end
+                live = Inf_._expert_slice(hdr, first(infos))
+                ok, rel = kq_expert_check(live, live, 1, randn(deterministic_rng(79), Float32, live.ne0))
+                @test ok
+                @info "cuda K-quant live qgemv" type = label max_rel_err = rel
+            end
+        end
+    end
+
     @testset "cuda qgemv activation-column table gathers each pair's token" begin
         # Hot-layer prefill runs (token, expert) pairs in one launch, each pair
         # reading its token's column of x. Activations quantize per column in

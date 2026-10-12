@@ -211,8 +211,140 @@ end
     end
 end
 
+# --- K-quant blocks (256-value superblocks, 8 of these 32-value blocks) -------
+# Sub-block s = b & 7 of the superblock. Their scales and mins apply per 16
+# values, so each 32-value block keeps two half-block dot products and two
+# activation sums. The expert activation carries no per-block sums, so the
+# sums come from dp4a against ones.
+
+@inline _eq_asum(acc::Int32, x::Int32) = CUDA.dp4a(Int32(0x01010101), x, acc)
+
+# Q2_K (84 B): scales[16]@0 (low nibble scale, high nibble min), qs[64]@16,
+# d@80, dmin@82. Sub-block s reads qs[32(s>>2)..] at shift 2(s&3); its two
+# halves take scale bytes 2s and 2s+1. Value = d*sc*q - dmin*m.
+@inline function _eq_q2k(Q, boff::Int, b::Int, gb::Int, qx, dx)
+    @inbounds begin
+        s = b & 7
+        qs0 = boff + 16 + 32 * (s >> 2)
+        sh = UInt32(2 * (s & 3))
+        d = _cu_f16a(Q, boff + 80)
+        dmin = _cu_f16a(Q, boff + 82)
+        sa = Q[boff + 2 * s + 1]
+        sb = Q[boff + 2 * s + 2]
+        ia = Int32(0)
+        ib = Int32(0)
+        xa = Int32(0)
+        xb = Int32(0)
+        for w in 0:7
+            v = reinterpret(Int32, (_cu_u32a(Q, qs0 + 4 * w) >> sh) & 0x03030303)
+            xw = qx[gb * 8 + w + 1]
+            if w < 4
+                ia = CUDA.dp4a(v, xw, ia)
+                xa = _eq_asum(xa, xw)
+            else
+                ib = CUDA.dp4a(v, xw, ib)
+                xb = _eq_asum(xb, xw)
+            end
+        end
+        return dx[gb + 1] * (
+            d * Float32(sa & 0x0f) * Float32(ia) - dmin * Float32(sa >> 4) * Float32(xa) +
+            d * Float32(sb & 0x0f) * Float32(ib) - dmin * Float32(sb >> 4) * Float32(xb)
+        )
+    end
+end
+
+# Q3_K (110 B): hmask[32]@0, qs[64]@32, scales[12]@96 (16 six-bit scales, minus
+# 32), d@108. Value = d*sc*(q - 4) with q = 2 low bits + 4 when hmask bit s is
+# set, so the block bit index is the block index s. The superblock is 110
+# bytes: every field is only 2-aligned.
+@inline function _eq_q3k_scale(Q, sb::Int, i::Int)::Int32
+    a0 = _cu_u32h(Q, sb)
+    a1 = _cu_u32h(Q, sb + 4)
+    a2 = _cu_u32h(Q, sb + 8)
+    k1 = UInt32(0x03030303)
+    k2 = UInt32(0x0f0f0f0f)
+    n0 = (a0 & k2) | ((a2 & k1) << 4)
+    n1 = (a1 & k2) | (((a2 >> 2) & k1) << 4)
+    n2 = ((a0 >> 4) & k2) | (((a2 >> 4) & k1) << 4)
+    n3 = ((a1 >> 4) & k2) | (((a2 >> 6) & k1) << 4)
+    j = i >> 2
+    ws = j == 0 ? n0 : (j == 1 ? n1 : (j == 2 ? n2 : n3))
+    return Int32((ws >> (8 * (i & 3))) & 0xff) - Int32(32)
+end
+
+@inline function _eq_q3k(Q, boff::Int, b::Int, gb::Int, qx, dx)
+    @inbounds begin
+        s = b & 7
+        h = s >> 2
+        qs0 = boff + 32 + 32 * h
+        sh = UInt32(2 * (s & 3))
+        hb = UInt32(s)
+        d = _cu_f16a(Q, boff + 108)
+        sca = Float32(_eq_q3k_scale(Q, boff + 96, 2 * s))
+        scb = Float32(_eq_q3k_scale(Q, boff + 96, 2 * s + 1))
+        ia = Int32(0)
+        ib = Int32(0)
+        xa = Int32(0)
+        xb = Int32(0)
+        for w in 0:7
+            qv = (_cu_u32h(Q, qs0 + 4 * w) >> sh) & 0x03030303
+            hv = (_cu_u32h(Q, boff + 4 * w) >> hb) & 0x01010101
+            v = reinterpret(Int32, qv | (hv << 2))
+            xw = qx[gb * 8 + w + 1]
+            if w < 4
+                ia = CUDA.dp4a(v, xw, ia)
+                xa = _eq_asum(xa, xw)
+            else
+                ib = CUDA.dp4a(v, xw, ib)
+                xb = _eq_asum(xb, xw)
+            end
+        end
+        return dx[gb + 1] * d * (sca * Float32(ia - Int32(4) * xa) + scb * Float32(ib - Int32(4) * xb))
+    end
+end
+
+# Q4_K (144 B): d@0 and dmin@2 (Float16), scales[12]@4 (eight 6-bit scales and
+# eight 6-bit mins), qs[128]@16. Sub-block s takes nibble (s&1) of qs chunk
+# s>>1. The scale unpacking is the one the dense path uses (cuda_quant_dense.jl).
+@inline function _eq_q4k(Q, boff::Int, b::Int, gb::Int, qx, dx)
+    @inbounds begin
+        s = b & 7
+        dd = _cu_u32a(Q, boff)
+        d = Float32(reinterpret(Float16, UInt16(dd & 0xffff)))
+        dmin = Float32(reinterpret(Float16, UInt16(dd >> 16)))
+        sbase = boff + 4
+        if s < 4
+            sc = Float32(Q[sbase + s + 1] & 0x3f)
+            mn = Float32(Q[sbase + s + 5] & 0x3f)
+        else
+            sc = Float32((Q[sbase + s + 5] & 0x0f) | ((Q[sbase + s - 3] >> 6) << 4))
+            mn = Float32((Q[sbase + s + 5] >> 4) | ((Q[sbase + s + 1] >> 6) << 4))
+        end
+        qs0 = boff + 16 + 32 * (s >> 1)
+        sh = UInt32(4 * (s & 1))
+        isum = Int32(0)
+        xs = Int32(0)
+        for w in 0:7
+            v = reinterpret(Int32, (_cu_u32a(Q, qs0 + 4 * w) >> sh) & 0x0f0f0f0f)
+            xw = qx[gb * 8 + w + 1]
+            isum = CUDA.dp4a(v, xw, isum)
+            xs = _eq_asum(xs, xw)
+        end
+        return dx[gb + 1] * (d * sc * Float32(isum) - dmin * mn * Float32(xs))
+    end
+end
+
 @inline function _eq_block(::Val{:iq2_xs}, Q, boff::Int, b::Int, gb::Int, qx, dx, grid, kv, ksigns, kmask)
     return _eq_iq2xs(Q, boff, b, gb, qx, dx, grid, ksigns, kmask)
+end
+@inline function _eq_block(::Val{:q2_k}, Q, boff::Int, b::Int, gb::Int, qx, dx, grid, kv, ksigns, kmask)
+    return _eq_q2k(Q, boff, b, gb, qx, dx)
+end
+@inline function _eq_block(::Val{:q3_k}, Q, boff::Int, b::Int, gb::Int, qx, dx, grid, kv, ksigns, kmask)
+    return _eq_q3k(Q, boff, b, gb, qx, dx)
+end
+@inline function _eq_block(::Val{:q4_k}, Q, boff::Int, b::Int, gb::Int, qx, dx, grid, kv, ksigns, kmask)
+    return _eq_q4k(Q, boff, b, gb, qx, dx)
 end
 @inline function _eq_block(::Val{:iq3_xxs}, Q, boff::Int, b::Int, gb::Int, qx, dx, grid, kv, ksigns, kmask)
     return _eq_iq3xxs(Q, boff, b, gb, qx, dx, grid, ksigns, kmask)
@@ -326,8 +458,10 @@ function _cuda_launch_qgemv!(
         )
         return y
     end
-    ggml_type in (I.GGML_TYPE_IQ2_XS, I.GGML_TYPE_IQ3_XXS, I.GGML_TYPE_IQ4_XS) ||
-        error("cuda qgemv: unsupported ggml type $ggml_type")
+    ggml_type in (
+        I.GGML_TYPE_IQ2_XS, I.GGML_TYPE_IQ3_XXS, I.GGML_TYPE_IQ4_XS,
+        I.GGML_TYPE_Q2_K, I.GGML_TYPE_Q3_K, I.GGML_TYPE_Q4_K,
+    ) || error("cuda qgemv: unsupported ggml type $ggml_type")
     _cu_aligned(q, 4) || error("cuda qgemv: expert bytes not 4-byte aligned")
     tables = _cuda_q_tables()
     nbk = ne0 ÷ 32
@@ -342,6 +476,12 @@ function _cuda_launch_qgemv!(
         _cuda_eqgemv_launch!(Val(:iq2_xs), 74, tables.iq2grid, args...)
     elseif ggml_type == I.GGML_TYPE_IQ3_XXS
         _cuda_eqgemv_launch!(Val(:iq3_xxs), 98, tables.iq3grid, args...)
+    elseif ggml_type == I.GGML_TYPE_Q2_K
+        _cuda_eqgemv_launch!(Val(:q2_k), 84, tables.kv4, args...)
+    elseif ggml_type == I.GGML_TYPE_Q3_K
+        _cuda_eqgemv_launch!(Val(:q3_k), 110, tables.kv4, args...)
+    elseif ggml_type == I.GGML_TYPE_Q4_K
+        _cuda_eqgemv_launch!(Val(:q4_k), 144, tables.kv4, args...)
     else
         _cuda_eqgemv_launch!(Val(:iq4_xs), 136, tables.kv4, args...)
     end
