@@ -2,10 +2,13 @@
 #
 #   GESSO_ORNITH35_GGUF=/path/to/Unsloth-Ornith-1.5-35B-A3B-UD-Q2_K_XL.gguf \
 #   GESSO_GGML_DIR=/path/to/llama.cpp/build/bin \
-#   julia --project=benchmark -t 16 scripts/gate_35b.jl [cuda|cpu]
+#   GESSO_BACKEND=lava|cuda|cpu \
+#   julia --project=benchmark -t 16 scripts/gate_35b.jl
 #
-# The benchmark workspace env carries CUDA; the root project only lists it as
-# a weak dependency, so `--project=.` cannot load it.
+# GESSO_BACKEND defaults to lava. Only the requested GPU package is loaded:
+# CUDA is never pulled in unless it is asked for. The benchmark workspace env
+# carries both GPU packages; the root project lists them as weak dependencies,
+# so `--project=.` cannot load either.
 #
 # Prints one RECEIPT line. Exit 1 if the greedy ids do not match.
 # Decode rate excludes prefill: (t(8 tokens) - t(1 token)) / 7, on a warmed
@@ -18,17 +21,22 @@ isfile(GGUF) || error("gate_35b: set GESSO_ORNITH35_GGUF to the Ornith 35B GGUF 
 const EXPECTED = [9419, 11, 271, 40, 2688, 4313, 310, 958, 279]
 const NEW = length(EXPECTED) - 1
 
-which = isempty(ARGS) ? "cuda" : ARGS[1]
-if which == "cuda"
+which = get(ENV, "GESSO_BACKEND", "lava")
+if which == "lava"
+    using Lava
+    backend = Gesso.LavaBackend()
+elseif which == "cuda"
     using CUDA
     backend = Gesso.CUDABackend()
-else
+elseif which == "cpu"
     backend = Gesso.CPUBackend()
+else
+    error("gate_35b: GESSO_BACKEND must be lava, cuda or cpu, got '$which'")
 end
 
 t_load = @elapsed begin
     model, tensors, spec = Gesso.load_gguf(GGUF)
-    dev = which == "cuda" ? Gesso.to_device(backend, tensors) : tensors
+    dev = which == "cpu" ? tensors : Gesso.to_device(backend, tensors)
 end
 
 gen(n) = Gesso.reference_generate(

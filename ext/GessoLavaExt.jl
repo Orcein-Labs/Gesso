@@ -92,7 +92,8 @@ struct LavaBackend <: AbstractGessoBackend
         ok = true
         try
             Lava.vk_context()
-        catch
+        catch err
+            @warn "LavaBackend: Lava.vk_context() threw; the cause is below" exception=(err, catch_backtrace())
             ok = false
         end
         ok || throw(
@@ -135,14 +136,24 @@ const LAVA_SUPPORTED_CAPS = Set([
     :rope_none,
     :rope_linear,
     :rope_llama3,
+    :rope_partial_dim,
 ])
 
 supports(::LavaBackend, cap::Symbol) = cap in LAVA_SUPPORTED_CAPS
 supports(::Type{LavaBackend}, cap::Symbol) = cap in LAVA_SUPPORTED_CAPS
 
+# Dense quant GEMV (LavaDenseQuant) must load before lava_ops.jl, which routes
+# to it from _lava_matmul! and _lava_to_device.
+include("lava_quant.jl")
+
 # Phase 8 item B (§LXXXI): the Lava operator methods on LavaArray{Float32}
 # + explicit to_device transfer. Same op names, more-specific methods (§CIX).
 include("lava_ops.jl")
+include("lava_attention.jl")
+
+# L2 hybrid decode seams for qwen35moe: the gated-delta-net mixer, its gating
+# ops, and the host-expert MoE route. Needs lava_ops.jl for the device helpers.
+include("lava_hybrid.jl")
 
 # Bind the backend into the package's namespace: after this ext triggers,
 # `Gesso.LavaBackend` resolves to the type defined HERE — while a Lava-less

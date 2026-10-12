@@ -25,7 +25,9 @@ const _FAST_KERNELS = IdDict{Any,Any}()
 const _FAST_KERNELS_LOCK = ReentrantLock()
 
 # CUDACore 6.3.x does not export `argument_types`; this is its 6.4 definition,
-# kept local so the kernel-type key matches what CUDACore compiles.
+# kept local so the kernel-type key matches what CUDACore compiles. 6.3 stays
+# reachable: the pinned Lava caps GPUCompiler below what 6.4 requires, so a test
+# env that loads both extensions resolves 6.3.
 @inline @generated function _arg_types(args::Tuple)
     :(Tuple{$((:(Core.Typeof(args[$i])) for i in 1:fieldcount(args))...)})
 end

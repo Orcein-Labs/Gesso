@@ -117,8 +117,8 @@ else
     )
 
     # uncached reference: plain host GgufQuantSlice banks, the existing quant path.
-    # Host banks otherwise run the MoE on the CPU, whose rounding differs from the
-    # device kernels by an ulp and would void the exact comparisons below.
+    # Host experts are the default for GgufQuantSlice banks since bb1b15b; the
+    # cached path runs on device, so the reference must too for `==` to hold.
     y_ref = CUDA.zeros(Float32, seq, h)
     withenv("GESSO_MOE_HOST_EXPERTS" => "0") do
         Gesso.Inference._moe_topk_swiglu!(

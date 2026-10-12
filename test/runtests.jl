@@ -185,6 +185,23 @@ using Gesso: reference_prefill, reference_generate
     # LAVA_LOADED / VULKAN_OK consts come from the seam file above.
     include("test_lava_ops.jl")
 
+    # Lava fused single-query decode attention (GQA read in place) vs the F64
+    # oracle; named skip without a device.
+    include("test_lava_attention_decode.jl")
+
+    # Lava single-row rmsnorm workgroup reduction vs the serial kernel it
+    # replaced; named skip without a device.
+    include("test_lava_rmsnorm_reduce.jl")
+
+    # Phase 8 L1: Lava dense quant GEMV (GGUF bytes on device, in-kernel
+    # dequant) vs the host F64 reference; named skip without a device.
+    include("test_lava_quant.jl")
+
+    # Phase 8 L2: Lava hybrid seams (conv1d, GDN gates and delta rule with
+    # carried state, host-storage refusal) vs the F64 CPU oracle; named skip
+    # without a device.
+    include("test_lava_hybrid.jl")
+
     # Phase 8 (§LXXXI item C): Lava inference — prefill + greedy generate vs
     # the CPU oracle, ids EXACT, logits at declared atol; no-copy law.
     include("test_lava_inference.jl")

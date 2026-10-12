@@ -12,13 +12,16 @@
 # Decode per token = (genN - ttft2) / (N - 1). Prefill cancels in that
 # difference, as in scripts/bench_qwen38_27b.jl.
 #
-#   julia --project=<env> -t 16 scripts/julia_runtime/ttft_probe.jl cpu27b
-#   julia --project=<env> -t 16 scripts/julia_runtime/ttft_probe.jl cuda35b
+#   GESSO_BACKEND=lava|cuda julia --project=<env> -t 16 scripts/julia_runtime/ttft_probe.jl
+#   GESSO_BACKEND=cpu      julia --project=<env> -t 16 scripts/julia_runtime/ttft_probe.jl
+#
+# GESSO_BACKEND defaults to lava. lava and cuda run the 35B; cpu runs the 27B.
+# A GPU package is loaded only when its backend is asked for.
 #
 # Env: GESSO_QWEN38_27B_GGUF, GESSO_ORNITH35_GGUF, GESSO_BENCH_N (default 8).
 # Process startup and package load are measured by the shell wrapper.
 
-which = isempty(ARGS) ? "cpu27b" : ARGS[1]
+which = get(ENV, "GESSO_BACKEND", "lava")
 t_pkg0 = time()
 using Gesso
 const PKG_LOAD_S = time() - t_pkg0
@@ -26,18 +29,27 @@ const PKG_LOAD_S = time() - t_pkg0
 const N = parse(Int, get(ENV, "GESSO_BENCH_N", "8"))
 const PROMPT = [9419]
 
-if which == "cuda35b"
+if which == "lava"
+    const GGUF = get(ENV, "GESSO_ORNITH35_GGUF", "")
+    isfile(GGUF) || error("set GESSO_ORNITH35_GGUF")
+    t_gpu0 = time()
+    using Lava
+    const CUDA_PKG_LOAD_S = time() - t_gpu0
+    backend = Gesso.LavaBackend()
+elseif which == "cuda"
     const GGUF = get(ENV, "GESSO_ORNITH35_GGUF", "")
     isfile(GGUF) || error("set GESSO_ORNITH35_GGUF")
     t_cuda0 = time()
     using CUDA
     const CUDA_PKG_LOAD_S = time() - t_cuda0
     backend = Gesso.CUDABackend()
-else
+elseif which == "cpu"
     const GGUF = get(ENV, "GESSO_QWEN38_27B_GGUF", "")
     isfile(GGUF) || error("set GESSO_QWEN38_27B_GGUF")
     backend = Gesso.CPUBackend()
     const CUDA_PKG_LOAD_S = 0.0
+else
+    error("ttft_probe: GESSO_BACKEND must be lava, cuda or cpu, got '$which'")
 end
 
 function row(name, r)
@@ -57,7 +69,7 @@ println("pkg_load_s=", round(PKG_LOAD_S; digits=3), " cuda_pkg_load_s=", round(C
 
 rl = @timed Gesso.load_gguf(GGUF)
 model, tensors, spec = rl.value
-dev = which == "cuda35b" ? Gesso.to_device(backend, tensors) : tensors
+dev = which == "cpu" ? tensors : Gesso.to_device(backend, tensors)
 row("load", rl)
 
 gen(n) = Gesso.reference_generate(

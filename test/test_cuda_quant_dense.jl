@@ -23,7 +23,8 @@ end
 if !CUDA_LOADED || !CUDA.functional()
     _skip("no NVIDIA device — CUDA dense quant GEMV tests skipped (§LXXVII skip law)")
 elseif !isfile(joinpath(get(ENV, "GESSO_GGML_DIR", ""), "libggml-base.so"))
-    # the host dequant reference is ggml's to_float
+    # Every set here needs ggml's to_float: the host reference directly, and the
+    # placement fallback through the F32 dequant in to_device.
     _skip("set GESSO_GGML_DIR to a directory with libggml-base.so — CUDA dense quant GEMV tests skipped")
 else
     _dq_ext = Base.get_extension(Gesso, :GessoCUDAExt)
