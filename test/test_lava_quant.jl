@@ -77,6 +77,10 @@ else
 
     # Per-element error against the F32-activation bound, host F64 accumulation.
     function _lq_check(qm, X, dev; label::AbstractString)
+        if !isfile(joinpath(get(ENV, "GESSO_GGML_DIR", ""), "libggml-base.so"))
+            _skip("set GESSO_GGML_DIR to a directory with libggml-base.so — $label host reference skipped")
+            return nothing
+        end
         W = Float64.(_lq_inf._quant_host_f32(qm))
         X64 = Float64.(X)
         ref = X64 * transpose(W)

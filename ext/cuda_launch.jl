@@ -43,6 +43,13 @@ const _FAST_MANAGED_BUSY = Threads.Atomic{Bool}(false)
 @inline _fast_owned(m::_CC.Managed{_CC.DeviceMemory}, s) = m.stream == s
 @inline _fast_owned(::_CC.Managed, s) = false
 
+# CUDACore 6.4 exports this as `argument_types`; 6.3 inlines the same
+# expression at its call sites. The pinned Lava caps GPUCompiler below what 6.4
+# requires, so a test env that loads both extensions resolves 6.3.
+@inline @generated function _fast_argtypes(args::Tuple)
+    :(Tuple{$((:(Core.Typeof(args[$i])) for i in 1:fieldcount(args))...)})
+end
+
 # Kernel parameters for `_raw_launch`. cuLaunchKernel copies the values before
 # it returns, so one buffer serves every launch made while holding
 # `_FAST_MANAGED_BUSY`. CUDACore instead boxes each argument on the heap, about
@@ -119,7 +126,7 @@ function _fast_launch(f::F, args::Tuple, threads, blocks, shmem::Integer) where 
         GC.@preserve args begin
             ad = _CC.KernelAdaptor(managed)
             conv = map(a -> _CC.adapt(ad, a), args)
-            kernel = _fast_kernel(f, _CC.argument_types(conv), state.context)
+            kernel = _fast_kernel(f, _fast_argtypes(conv), state.context)
             fast = true
             @inbounds for m in managed
                 fast &= _fast_owned(m, s)
