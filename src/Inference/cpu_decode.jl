@@ -17,7 +17,7 @@ Preallocated per-generate buffers for the CPU seq = 1 GDN decode path. The
 delta rule is threaded over value-dim slabs; slab `c` owns column `c` of
 `kvm`, so no buffer is indexed by thread id.
 """
-struct CPUDecodeScratch
+struct CPUDecodeScratch{R<:AbstractFloat}
     nk::Int
     nv::Int
     dk::Int
@@ -36,6 +36,9 @@ struct CPUDecodeScratch
     beta::Vector{Float32}         # (nv,)
     delta::Matrix{Float32}        # (nv, nslab) per-slab delta / kv_mem buffer
     nslab::Int
+    # True for a model with a GDN mixer. Only then do the decode projections
+    # take the Q8_K route read through `_decode_xq`.
+    hybrid::Bool
     # Q8_K quantizations of the shared decode inputs, one per input width:
     # residual stream (dim), attention merged (qdim), GDN merged (value_dim),
     # FFN hidden (ff). Each is filled once per input and read by every
@@ -47,37 +50,40 @@ struct CPUDecodeScratch
     # Decode activations, reused by every token. The residual stream, the
     # normed inputs, the projection outputs and the attention heads all live
     # here, so a decode step allocates nothing for them.
-    hp::Matrix{Float32}           # (1, dim) residual stream
-    normed::Matrix{Float32}       # (1, dim)
-    normed2::Matrix{Float32}      # (1, dim)
-    sub::Matrix{Float32}          # (1, dim) sublayer output
-    down::Matrix{Float32}         # (1, dim) FFN output
-    q::Matrix{Float32}            # (1, qdim)
-    gate_attn::Matrix{Float32}    # (1, qdim) attention output gate
-    k::Matrix{Float32}            # (1, kdim)
-    v::Matrix{Float32}            # (1, kdim)
-    qh::Array{Float32,3}          # (1, n_heads, d_head)
-    kh::Array{Float32,3}          # (1, n_kv_heads, d_head)
-    vh::Array{Float32,3}          # (1, n_kv_heads, d_head)
-    attn::Array{Float32,3}        # (1, n_heads, d_head)
-    merged_attn::Matrix{Float32}  # (1, qdim)
-    gate::Matrix{Float32}         # (1, ff)
-    up::Matrix{Float32}           # (1, ff)
-    act::Matrix{Float32}          # (1, ff)
-    probs::Vector{Float32}        # (ctx,) one head's scores, then probabilities
-    pos1::Vector{Int}             # (1,) RoPE position of the decode token
-    logits::Matrix{Float32}       # (1, vocab)
-    lastrow::Matrix{Float32}      # (1, dim) final hidden row before the head
-    final_normed::Matrix{Float32} # (1, dim) final RMSNorm output
+    hp::Matrix{R}           # (1, dim) residual stream
+    normed::Matrix{R}       # (1, dim)
+    normed2::Matrix{R}      # (1, dim)
+    sub::Matrix{R}          # (1, dim) sublayer output
+    down::Matrix{R}         # (1, dim) FFN output
+    q::Matrix{R}            # (1, qdim)
+    gate_attn::Matrix{R}    # (1, qdim) attention output gate
+    k::Matrix{R}            # (1, kdim)
+    v::Matrix{R}            # (1, kdim)
+    qh::Array{R,3}          # (1, n_heads, d_head)
+    kh::Array{R,3}          # (1, n_kv_heads, d_head)
+    vh::Array{R,3}          # (1, n_kv_heads, d_head)
+    attn::Array{R,3}        # (1, n_heads, d_head)
+    merged_attn::Matrix{R}  # (1, qdim)
+    gate::Matrix{R}         # (1, ff)
+    up::Matrix{R}           # (1, ff)
+    act::Matrix{R}          # (1, ff)
+    probs::Vector{R}        # (ctx,) one head's scores, then probabilities
+    pos1::Vector{Int}       # (1,) RoPE position of the decode token
+    logits::Matrix{R}       # (1, vocab)
+    lastrow::Matrix{R}      # (1, dim) final hidden row before the head
+    final_normed::Matrix{R} # (1, dim) final RMSNorm output
 end
 
 # Sizes come from the model. Attention and FFN widths default to 0 for a
 # model without that layer; `ctx` is the KV capacity (prompt + new tokens).
+# A dense model has no GDN mixer (`mx === nothing`), so its GDN buffers are
+# zero-width and the one scratch type serves both kinds of model.
 function _cpu_decode_scratch(mx, dim::Integer; qdim::Integer=0, ff::Integer=0,
     kdim::Integer=0, n_heads::Integer=0, n_kv_heads::Integer=0, d_head::Integer=0,
-    vocab::Integer=0, ctx::Integer=0)
-    nk, nv = mx.num_key_heads, mx.num_value_heads
-    dk, dv = mx.key_head_dim, mx.value_head_dim
+    vocab::Integer=0, ctx::Integer=0,
+    row::Type{R}=Float32) where {R<:AbstractFloat}
+    nk, nv, dk, dv = mx === nothing ? (0, 0, 0, 0) :
+        (mx.num_key_heads, mx.num_value_heads, mx.key_head_dim, mx.value_head_dim)
     key_dim = nk * dk
     value_dim = nv * dv
     conv_dim = 2 * key_dim + value_dim
@@ -98,33 +104,44 @@ function _cpu_decode_scratch(mx, dim::Integer; qdim::Integer=0, ff::Integer=0,
         zeros(Float32, nv),
         zeros(Float32, nv, nslab),
         nslab,
+        mx !== nothing,
         Q8KVec(div(Int(dim), QK_K)),
         Q8KVec(div(max(Int(qdim), 1), QK_K)),
         Q8KVec(div(value_dim, QK_K)),
         Q8KVec(div(max(Int(ff), 1), QK_K)),
-        zeros(Float32, 1, dim),
-        zeros(Float32, 1, dim),
-        zeros(Float32, 1, dim),
-        zeros(Float32, 1, dim),
-        zeros(Float32, 1, dim),
-        zeros(Float32, 1, qdim),
-        zeros(Float32, 1, qdim),
-        zeros(Float32, 1, kdim),
-        zeros(Float32, 1, kdim),
-        zeros(Float32, 1, n_heads, d_head),
-        zeros(Float32, 1, n_kv_heads, d_head),
-        zeros(Float32, 1, n_kv_heads, d_head),
-        zeros(Float32, 1, n_heads, d_head),
-        zeros(Float32, 1, qdim),
-        zeros(Float32, 1, ff),
-        zeros(Float32, 1, ff),
-        zeros(Float32, 1, ff),
-        zeros(Float32, ctx),
+        zeros(R, 1, dim),
+        zeros(R, 1, dim),
+        zeros(R, 1, dim),
+        zeros(R, 1, dim),
+        zeros(R, 1, dim),
+        zeros(R, 1, qdim),
+        zeros(R, 1, qdim),
+        zeros(R, 1, kdim),
+        zeros(R, 1, kdim),
+        zeros(R, 1, n_heads, d_head),
+        zeros(R, 1, n_kv_heads, d_head),
+        zeros(R, 1, n_kv_heads, d_head),
+        zeros(R, 1, n_heads, d_head),
+        zeros(R, 1, qdim),
+        zeros(R, 1, ff),
+        zeros(R, 1, ff),
+        zeros(R, 1, ff),
+        zeros(R, ctx),
         [0],
-        zeros(Float32, 1, vocab),
-        zeros(Float32, 1, dim),
-        zeros(Float32, 1, dim),
+        zeros(R, 1, vocab),
+        zeros(R, 1, dim),
+        zeros(R, 1, dim),
     )
+end
+
+# Element type of the decode row buffers. A hybrid model's rows stay F32, as
+# its GDN mixer does. A dense model's rows take the tensors' element type, the
+# type `_decode_row_buffers` gives a fresh buffer without scratch, so the dense
+# residual stream and projections run at the same precision either way.
+function _decode_row_type(mx, tensors)
+    mx !== nothing && return Float32
+    s = _first_array_storage(tensors)
+    return s === nothing ? Float32 : eltype(s)
 end
 
 # Storage for one decode activation: the scratch buffer when there is one,
@@ -132,13 +149,19 @@ end
 @inline _decode_buf(::Nothing, ::Val, zl, dims::Tuple) = zl(dims)
 @inline _decode_buf(sc::CPUDecodeScratch, ::Val{N}, zl, dims::Tuple) where {N} = getfield(sc, N)
 
+# The Q8_K input of one decode projection group, or `nothing` for the generic
+# matmul. Only a hybrid model takes the Q8_K route. A dense model keeps the
+# generic route it had before the scratch covered it, so its numerics do not move.
+_decode_xq(::Nothing, ::Val) = nothing
+_decode_xq(sc::CPUDecodeScratch, ::Val{N}) where {N} = sc.hybrid ? getfield(sc, N) : nothing
+
 # RoPE position argument for one decode token: the scratch's one-element
 # vector on the CPU path, a fresh vector otherwise.
 _decode_pos(::Nothing, p::Int) = [p]
 _decode_pos(sc::CPUDecodeScratch, p::Int) = (sc.pos1[1] = p; sc.pos1)
 
 # Row `row` of `src` into the one-row matrix `dst`, without a copied slice.
-function _copy_row!(dst::Matrix{Float32}, src::AbstractMatrix, row::Int)
+function _copy_row!(dst::AbstractMatrix, src::AbstractMatrix, row::Int)
     @inbounds for i in axes(dst, 2)
         dst[1, i] = src[row, i]
     end
@@ -413,7 +436,7 @@ end
 # is the `_cpu_softmax_storage!` sequence (max, exp, Float64 sum, divide), and
 # values accumulate per output over the keys in order. The outputs are
 # therefore bit-identical to the reference, not just within tolerance.
-function _attention_decode_cpu!(attn, q, kc, vc, probs::Vector{Float32},
+function _attention_decode_cpu!(attn, q, kc, vc, probs::AbstractVector,
     n_heads::Int, d_head::Int, group::Int, K::Int)
     fill!(attn, 0.0f0)
     sqd = sqrt(d_head)

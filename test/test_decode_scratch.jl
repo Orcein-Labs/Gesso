@@ -86,6 +86,17 @@ end
         @test _ptrs(s) == before
     end
 
+    @testset "toy2 dense: GenerateState carries the decode scratch" begin
+        # the pinned ids are the reference output before the scratch existed:
+        # the dense path must not move a token
+        model = toy2_modelir()
+        ts = toy2_tensors()
+        st = Gesso.GenerateState(128)
+        ids = Gesso.reference_generate(model, ts, [1, 3, 4, 5]; max_new_tokens=8, state=st)
+        @test st.cpu_scratch !== nothing
+        @test ids == [1, 3, 4, 5, 12, 20, 27, 0, 7, 12, 12, 20]
+    end
+
     @testset "llama_micro CPU: ≤ 16 KiB, and NOT growing with seqlen" begin
         dir = mktempdir()
         make_micro_checkpoint(dir)
@@ -238,5 +249,31 @@ end
             # stays a named skip until one exists.
             @test a ≤ 1024 * 1024
         end
+    end
+end
+
+@testset "decode scratch: Q8_K input and row eltype follow the model kind (V3)" begin
+    I = Gesso.Inference
+    rowfields = (:hp, :normed, :normed2, :sub, :down, :q, :gate_attn, :k, :v,
+        :qh, :kh, :vh, :attn, :merged_attn, :gate, :up, :act, :probs, :logits,
+        :lastrow, :final_normed)
+    shape = (; qdim=8, ff=16, kdim=4, n_heads=2, n_kv_heads=1, d_head=4, vocab=10, ctx=16)
+    # the constructor reads only these four fields of a GDN mixer
+    mixer = (; num_key_heads=2, num_value_heads=4, key_head_dim=4, value_head_dim=4)
+
+    @testset "dense (mx === nothing): no Q8_K route, rows take the tensor eltype" begin
+        for R in (Float64, Float32)
+            sc = I._cpu_decode_scratch(nothing, 8; row=R, shape...)
+            @test sc.hybrid == false
+            @test I._decode_xq(sc, Val(:xq_dim)) === nothing
+            @test all(eltype(getfield(sc, f)) === R for f in rowfields)
+        end
+    end
+
+    @testset "hybrid (GDN mixer): Q8_K route, rows stay Float32" begin
+        sc = I._cpu_decode_scratch(mixer, 8; shape...)
+        @test sc.hybrid == true
+        @test I._decode_xq(sc, Val(:xq_dim)) isa I.Q8KVec
+        @test all(eltype(getfield(sc, f)) === Float32 for f in rowfields)
     end
 end

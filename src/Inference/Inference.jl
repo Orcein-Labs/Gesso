@@ -927,10 +927,13 @@ end
 _prefill_window_enabled() = get(ENV, "GESSO_PREFILL_WINDOW", "1") != "0"
 
 # The window's GDN blocks run only on the CPU Float32 fast path; any other state
-# keeps the per-row prefill.
+# keeps the per-row prefill. A dense model has no GDN block to window, and its
+# per-row prefill is the reference the dense decode is checked against, so it
+# stays on that path even though it now has a decode scratch.
 function _prefill_window_ok(tensors, gdn_conv, gdn_rec, h, cpu_scratch)
     cpu_scratch === nothing && return false
     _prefill_window_enabled() || return false
+    any(bt -> _block_mixer(bt) === :linear_attention, tensors.blocks) || return false
     for (bi, bt) in enumerate(tensors.blocks)
         _block_mixer(bt) === :linear_attention || continue
         _cpu_gdn_fast_ok(bt, gdn_conv[bi], gdn_rec[bi], h) || return false
@@ -1236,9 +1239,10 @@ function reference_generate(
             st.gdn_conv, st.gdn_rec = _gdn_states(tensors, zeros_like)
             st.gdn_scratch = _gdn_decode_scratch(zeros_like, tensors)
             mx = haskey(tensors, :spec) && tensors.spec !== nothing ? tensors.spec.mixer : nothing
-            st.cpu_scratch = on_cpu && mx !== nothing ? _cpu_decode_scratch(
+            st.cpu_scratch = on_cpu ? _cpu_decode_scratch(
                 mx, dim; qdim=n_heads * d_head, ff=_dense_ffn_hidden(model),
                 kdim=n_kv_heads * d_head, n_heads, n_kv_heads, d_head, vocab, ctx=st.ctx,
+                row=_decode_row_type(mx, tensors),
             ) : nothing
             st.pending === nothing || _restore_pending!(st)
         end
@@ -1562,7 +1566,7 @@ function _last_logits(model, tensors, h, cpu, wl, vocab, row::Int; eps::Real=1e-
             fill!(similar(h.storage, eltype(T), (1, vocab)), zero(eltype(h.storage))) :
             fill!(buf.logits, zero(eltype(h.storage))),
     )
-    _dec_matmul_group!(cpu, (out,), buf === nothing ? nothing : buf.xq_dim, lastrow, (tensors.lm_head,), wl)
+    _dec_matmul_group!(cpu, (out,), _decode_xq(buf, Val(:xq_dim)), lastrow, (tensors.lm_head,), wl)
     return vec(out.storage)
 end
 
@@ -1595,9 +1599,9 @@ function _decode_row_buffers(cpu_scratch, zeros_like, dim::Int, kdim::Int, qdim:
     up = Activation(; shape=(1, hidden_ffn), storage=_decode_buf(cpu_scratch, Val(:up), zeros_like, (1, hidden_ffn)))
     act = Activation(; shape=(1, hidden_ffn), storage=_decode_buf(cpu_scratch, Val(:act), zeros_like, (1, hidden_ffn)))
     down = Activation(; shape=(1, dim), storage=_decode_buf(cpu_scratch, Val(:down), zeros_like, (1, dim)))
-    xq_dim = cpu_scratch === nothing ? nothing : cpu_scratch.xq_dim
-    xq_qdim = cpu_scratch === nothing ? nothing : cpu_scratch.xq_qdim
-    xq_ff = cpu_scratch === nothing ? nothing : cpu_scratch.xq_ff
+    xq_dim = _decode_xq(cpu_scratch, Val(:xq_dim))
+    xq_qdim = _decode_xq(cpu_scratch, Val(:xq_qdim))
+    xq_ff = _decode_xq(cpu_scratch, Val(:xq_ff))
     return (; hp, normed, q, gate_attn, k, v, qh, kh, vh, attn, merged, sub, normed2,
         gate, up, act, down, xq_dim, xq_qdim, xq_ff)
 end
