@@ -251,8 +251,13 @@ function materialize_architecture(
                 "it is not an identity the interpreter consumes",
             )
             want = expected_shape(spec, ref.id.role)
+            # Some converters write 1-D roles as a 2-D tensor with a unit axis
+            # (GSQ Ornith stores ffn_gate_inp_shexp as 1x2048); the values are the same.
+            if length(want) == 1 && slice isa AbstractMatrix && length(slice) == want[1] && 1 in size(slice)
+                slice = vec(slice)
+            end
             size(slice) == want || error(
-                "materialize_architecture: $(canonical_name(SemanticParamId(ref.id.role, layer))) " *
+                "materialize_architecture: $(canonical_name(SemanticParamId(ref.id.role, layer, ref.id.param_family))) " *
                 "expects shape $want but $external" *
                 (ref.rows === nothing ? "" : " rows $(ref.rows)") *
                 " has $(size(slice))",
