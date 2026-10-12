@@ -148,6 +148,10 @@ include("lava_quant.jl")
 # + explicit to_device transfer. Same op names, more-specific methods (§CIX).
 include("lava_ops.jl")
 
+# L2 hybrid decode seams for qwen35moe: the gated-delta-net mixer, its gating
+# ops, and the host-expert MoE route. Needs lava_ops.jl for the device helpers.
+include("lava_hybrid.jl")
+
 # Bind the backend into the package's namespace: after this ext triggers,
 # `Gesso.LavaBackend` resolves to the type defined HERE — while a Lava-less
 # load of core leaves the name entirely absent (both directions are pinned

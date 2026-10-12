@@ -163,6 +163,11 @@ using Gesso: reference_prefill, reference_generate
     # dequant) vs the host F64 reference; named skip without a device.
     include("test_lava_quant.jl")
 
+    # Phase 8 L2: Lava hybrid seams (conv1d, GDN gates and delta rule with
+    # carried state, host-storage refusal) vs the F64 CPU oracle; named skip
+    # without a device.
+    include("test_lava_hybrid.jl")
+
     # Phase 8 (§LXXXI item C): Lava inference — prefill + greedy generate vs
     # the CPU oracle, ids EXACT, logits at declared atol; no-copy law.
     include("test_lava_inference.jl")

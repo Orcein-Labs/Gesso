@@ -940,7 +940,15 @@ function _lava_to_device(tensors)
         st = proj && t isa Gesso.ProjectionWeight ? _to_proj(t.storage) : _to_f32(t.storage)
         typeof(t)(; shape = t.shape, storage = st)
     end
-    _conv_blk(b) = NamedTuple{keys(b)}(map(t -> _conv_t(t; proj = true), values(b)))
+    # Routed expert banks stay on the host (the CUDA GESSO_MOE_HOST_EXPERTS
+    # split): a GGUF slab is never dequantized to device F32 here. The host
+    # MoE route in lava_hybrid.jl reads these banks in place.
+    _host_expert_key(k) = k in (:wexp_gate, :wexp_up, :wexp_down)
+    _host_expert_t(t) = hasproperty(t, :storage) && t.storage isa Gesso.Inference.GgufQuantSlice
+    _conv_blk(b) = NamedTuple{keys(b)}(map(keys(b)) do k
+        t = getproperty(b, k)
+        _host_expert_key(k) && _host_expert_t(t) ? t : _conv_t(t; proj = true)
+    end)
     embedding = _conv_t(tensors.embedding)
     blocks = [_conv_blk(b) for b in tensors.blocks]
     lm_head = tensors.lm_head === tensors.embedding ? embedding : _conv_t(tensors.lm_head; proj = true)
