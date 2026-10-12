@@ -244,17 +244,27 @@ function _lava_embedding_lookup!(dst, table, tokens)
     return dst
 end
 
-# Ordinary single-row decode normalization without reduction temporaries.
-# Matches `_cuda_rmsnorm_row_kernel!`: F32 accumulate, F64 rms, F32 write.
+# Single-row decode normalization. Matches `_cuda_rmsnorm_row_kernel!` in
+# arithmetic: F32 accumulate, F64 rms, F32 write. The sum is split across one
+# workgroup so a feature dim of several thousand is not walked by one lane.
+const _LAVA_RMS_LANES = 64
+
 @kernel cpu=false function _lava_rmsnorm_row_kernel!(dst, xs, scales, eps, d::Int)
-    i = @index(Global)
-    i == 1 || return
+    tl = @index(Local, Linear)
+    part = @localmem Float32 (_LAVA_RMS_LANES,)
     acc = Float32(0)
-    for j in 1:d
+    for j in tl:_LAVA_RMS_LANES:d
         acc += abs2(xs[1, j])
     end
-    rms = sqrt(Float64(acc) / d + Float64(eps))
-    for j in 1:d
+    part[tl] = acc
+    # every lane reads all partials after this barrier, so no lane can see a stale slot
+    @synchronize
+    total = Float32(0)
+    for i in 1:_LAVA_RMS_LANES
+        total += part[i]
+    end
+    rms = sqrt(Float64(total) / d + Float64(eps))
+    for j in tl:_LAVA_RMS_LANES:d
         dst[1, j] = Float32((Float64(xs[1, j]) / rms) * Float64(scales[j]))
     end
 end
@@ -273,7 +283,8 @@ function _lava_rmsnorm!(dst, x, scale; eps = 1e-6, check_finite = true)
         throw(gesso_error(ERR_INVALID_PLAN, "rmsnorm!: scale length $(length(scale.storage)) ≠ feature dim $d"; op = :rmsnorm!))
     if ndims(xs) == 2 && size(xs, 1) == 1
         kern = _lava_rmsnorm_row_kernel!(KA.get_backend(xs))
-        kern(dst.storage, xs, scale.storage, Float64(eps), Int(d); ndrange=1, workgroupsize=_LAVA_WG1)
+        kern(dst.storage, xs, scale.storage, Float64(eps), Int(d);
+            ndrange=_LAVA_RMS_LANES, workgroupsize=(_LAVA_RMS_LANES,))
         if check_finite
             Gesso.Inference._all_finite(dst.storage) || throw(gesso_error(ERR_NUMERICAL_INSTABILITY,
                 "rmsnorm!: nonfinite normalization denominator"))

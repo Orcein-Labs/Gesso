@@ -163,6 +163,10 @@ using Gesso: reference_prefill, reference_generate
     # oracle; named skip without a device.
     include("test_lava_attention_decode.jl")
 
+    # Lava single-row rmsnorm workgroup reduction vs the serial kernel it
+    # replaced; named skip without a device.
+    include("test_lava_rmsnorm_reduce.jl")
+
     # Phase 8 L1: Lava dense quant GEMV (GGUF bytes on device, in-kernel
     # dequant) vs the host F64 reference; named skip without a device.
     include("test_lava_quant.jl")
