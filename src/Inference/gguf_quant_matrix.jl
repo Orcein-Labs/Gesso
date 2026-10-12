@@ -117,6 +117,9 @@ function _quant_matmul!(dst::AbstractMatrix, x::AbstractMatrix, q::QuantMatrix)
     size(dst) == (seq, q.nrows) ||
         error("quant matmul: dst $(size(dst)) ≠ ($seq, $(q.nrows))")
     if _quant_native(q.ggml_type)
+        if seq > 1 && _quant_q8k_native(q.ggml_type) && _prefill_multi_enabled()
+            return _quant_matmul_multi!(dst, x, q)
+        end
         xf = Vector{Float32}(undef, q.ne0)
         y = Vector{Float32}(undef, q.nrows)
         bytes = _quant_bytes(q)
@@ -152,6 +155,63 @@ function _quant_matmul!(dst::AbstractMatrix, x::AbstractMatrix, q::QuantMatrix)
         r0 = r1 + 1
     end
     return dst
+end
+
+# Prefill (seq > 1) of a Q8_K-kind weight: each token row is quantized once, and
+# the weight rows are split across threads. A chunk walks its rows and, for each
+# row, runs all tokens in tiles of _MULTI_TILE columns, so the row's sub-block
+# unpacking is shared across the tile.
+function _quant_matmul_multi!(dst::AbstractMatrix, x::AbstractMatrix, q::QuantMatrix)
+    seq = size(x, 1)
+    xqs = _prefill_quantize(q.ggml_type, x, seq, q.ne0)
+    nc = max(1, min(Threads.nthreads(), cld(q.nrows, _QGEMV_MIN_ROWS)))
+    chunk = _PrefillChunk(dst, _quant_bytes(q), xqs, q.ggml_type, q.ne0, q.nrows, nc, q8k_simd_enabled())
+    _run_row_chunks!(chunk, nc, q.nrows * q.ne0 * seq)
+    return dst
+end
+
+function _prefill_quantize(ggml_type::Int32, x::AbstractMatrix, seq::Int, ne0::Int)
+    xf = Vector{Float32}(undef, ne0)
+    return [begin
+        @inbounds for i in 1:ne0
+            xf[i] = Float32(x[t, i])
+        end
+        _q8k_quantize_act(ggml_type, xf)
+    end for t in 1:seq]
+end
+
+# One row chunk of _quant_matmul_multi!, as a callable struct (see _GroupChunk).
+struct _PrefillChunk{D<:AbstractMatrix,B<:AbstractVector{UInt8},X<:AbstractVector}
+    dst::D
+    bytes::B
+    xqs::X
+    ggml_type::Int32
+    ne0::Int
+    nrows::Int
+    nc::Int
+    simd::Bool
+end
+
+function (p::_PrefillChunk)(c::Int)
+    j0 = div((c - 1) * p.nrows, p.nc) + 1
+    j1 = div(c * p.nrows, p.nc)
+    rb = _qrow_bytes(p.ggml_type, p.ne0)
+    seq = length(p.xqs)
+    buf = Vector{Float32}(undef, seq)
+    @inbounds for j in j0:j1
+        woff = (j - 1) * rb
+        t0 = 1
+        while t0 <= seq
+            K = min(_MULTI_TILE, seq - t0 + 1)
+            _dot_q8k_multi!(buf, p.ggml_type, p.bytes, woff, p.xqs, t0, K, p.simd)
+            for t in t0:(t0 + K - 1)
+                # Same expression as the per-token path, so -0.0 becomes +0.0 identically.
+                p.dst[t, j] = 1.0f0 * buf[t] + 0.0f0
+            end
+            t0 += K
+        end
+    end
+    return nothing
 end
 
 function _quant_embedding_rows!(dst::AbstractMatrix, q::QuantMatrix, tokens)
