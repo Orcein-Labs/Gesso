@@ -121,4 +121,46 @@ else
             zeros(Float32, 2, 4), zeros(Float32, 2, 4), zeros(Float32, 4, 1, 4),
             zeros(Float32, 4, 3))
     end
+
+    @testset "Lava rope! partial rotary and inv_freq match CPU" begin
+        # rotary_dim < d: only the first rd features rotate and the tail passes
+        # through. Covers the decode kernel (seq=1), the prefill kernel, the
+        # scaled inv_freq table, and both pair layouts. rd == d is the
+        # full-head regression case.
+        cpu_b = Gesso.CPUBackend()
+        pf = Gesso.PrefillWorkload()
+        dc = Gesso.DecodeWorkload()
+        _lh_act(a) = Gesso.Activation(; shape=size(a), storage=a)
+        rng = MersenneTwister(0x1a4)
+        d = 8
+        cases = (
+            (3, pf, 4, false, false),
+            (3, pf, 4, true, false),
+            (3, pf, 4, false, true),
+            (1, dc, 4, false, false),
+            (1, dc, 4, true, true),
+            (3, pf, 8, true, false),
+        )
+        for (seq, wl_, rd, interleaved, scaled) in cases
+            q0 = randn(rng, Float64, seq, 2, d)
+            k0 = randn(rng, Float64, seq, 2, d)
+            pos = seq == 1 ? [7] : collect(0:(seq - 1))
+            inv = scaled ? Gesso.rope_inv_freq(Gesso.RoPEPolicy(; rotary_dim=rd, theta=10000.0), d) : nothing
+            scaled && @test inv !== nothing
+            cq, ck = _lh_act(copy(q0)), _lh_act(copy(k0))
+            Gesso.rope!(cpu_b, cq, ck, pos, wl_;
+                theta=10000.0, inv_freq=inv, interleaved, rotary_dim=rd)
+            q = _lh_act(_lh_dev(q0))
+            k = _lh_act(_lh_dev(k0))
+            Gesso.rope!(_lh_lava, q, k, pos, wl_;
+                theta=10000.0, inv_freq=inv, interleaved, rotary_dim=rd)
+            tag = "rope seq=$seq rd=$rd interleaved=$interleaved scaled=$scaled"
+            _lh_check("$tag q", q.storage, cq.storage)
+            _lh_check("$tag k", k.storage, ck.storage)
+            if rd < d
+                @test Array(q.storage)[:, :, (rd + 1):d] == Float32.(q0[:, :, (rd + 1):d])
+                @test Array(k.storage)[:, :, (rd + 1):d] == Float32.(k0[:, :, (rd + 1):d])
+            end
+        end
+    end
 end

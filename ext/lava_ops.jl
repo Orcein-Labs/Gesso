@@ -306,16 +306,19 @@ end
 # the F64 CPU oracle differs by ~1e-7 relative here, far inside atol=1e-3).
 # On-device RoPE: one (seq, head) thread, angles from theta like
 # `_cuda_rope_kernel!`. Scaled `inv_freq` policies keep the host table.
-@kernel cpu=false function _lava_rope_kernel!(x, positions, theta, interleaved::Bool)
+# `rd` is the rotary width: only the first rd features rotate, and the rest
+# pass through unchanged, as in `_cpu_rope_storage!`. rd == d is the full-head
+# case and reproduces the previous kernels exactly.
+@kernel cpu=false function _lava_rope_kernel!(x, positions, theta, interleaved::Bool, rd::Int)
     idx = @index(Global, Cartesian)
     t = idx[1]
     h = idx[2]
-    seq, nheads, d = size(x)
+    seq, nheads, _ = size(x)
     (t > seq || h > nheads) && return
     m = Float32(positions[t])
-    half = d ÷ 2
+    half = rd ÷ 2
     for i in 0:(half - 1)
-        θv = m * (theta ^ (-2 * i / d))
+        θv = m * (theta ^ (-2 * i / rd))
         c = cos(θv)
         s = sin(θv)
         a = interleaved ? (2 * i + 1) : (i + 1)
@@ -329,14 +332,14 @@ end
 
 # Decode seq=1: position is a kernel scalar so we do not allocate a 4-byte
 # device buffer 30 times per token (arm 5c: that upload ate the kernel win).
-@kernel cpu=false function _lava_rope_decode_kernel!(x, pos::Int32, theta, interleaved::Bool)
+@kernel cpu=false function _lava_rope_decode_kernel!(x, pos::Int32, theta, interleaved::Bool, rd::Int)
     h = @index(Global)
-    _, nheads, d = size(x)
+    _, nheads, _ = size(x)
     h > nheads && return
     m = Float32(pos)
-    half = d ÷ 2
+    half = rd ÷ 2
     for i in 0:(half - 1)
-        θv = m * (theta ^ (-2 * i / d))
+        θv = m * (theta ^ (-2 * i / rd))
         c = cos(θv)
         s = sin(θv)
         a = interleaved ? (2 * i + 1) : (i + 1)
@@ -348,19 +351,21 @@ end
     end
 end
 
-function _lava_rope!(q, k, positions; theta = 10000.0, inv_freq = nothing, interleaved = true)
+function _lava_rope!(q, k, positions; theta = 10000.0, inv_freq = nothing, interleaved = true, rotary_dim = 0)
     a = _LAVA_DECODE_AUDIT
     t0 = a.enabled ? time_ns() : UInt64(0)
     size(q.storage, 3) == size(k.storage, 3) ||
         throw(gesso_error(ERR_INVALID_PLAN, "rope!: q d_head ≠ k d_head"; op = :rope!))
-    Gesso._validate_rope_inputs(q,k,positions,theta,inv_freq)
+    Gesso._validate_rope_inputs(q,k,positions,theta,inv_freq,rotary_dim)
     tθ = Float64(theta)
+    d = size(q.storage, 3)
+    rd = rotary_dim == 0 ? d : Int(rotary_dim)
     if inv_freq === nothing && length(positions) == 1 && size(q.storage, 1) == 1
         pos = Int32(positions[1])
         for x in (q.storage, k.storage)
             nheads = size(x, 2)
             kern = _lava_rope_decode_kernel!(KA.get_backend(x))
-            kern(x, pos, tθ, interleaved; ndrange=nheads, workgroupsize=_LAVA_WG1)
+            kern(x, pos, tθ, interleaved, rd; ndrange=nheads, workgroupsize=_LAVA_WG1)
         end
         a.enabled && _lava_note_op!(:rope, time_ns() - t0)
         return q
@@ -370,13 +375,13 @@ function _lava_rope!(q, k, positions; theta = 10000.0, inv_freq = nothing, inter
         for x in (q.storage, k.storage)
             seq, nheads, _ = size(x)
             kern = _lava_rope_kernel!(KA.get_backend(x))
-            kern(x, pos, tθ, interleaved; ndrange=(seq, nheads), workgroupsize=_LAVA_WG2)
+            kern(x, pos, tθ, interleaved, rd; ndrange=(seq, nheads), workgroupsize=_LAVA_WG2)
         end
         a.enabled && _lava_note_op!(:rope, time_ns() - t0)
         return q
     end
-    seq, _, d = size(q.storage)
-    half = d ÷ 2
+    seq = size(q.storage, 1)
+    half = rd ÷ 2
     freq = Float32.(inv_freq)
     # Match the native Float32 phase, then reduce metadata angles accurately.
     # Only derived constants are uploaded; Q/K and their rotations stay GPU.
@@ -386,8 +391,8 @@ function _lava_rope!(q, k, positions; theta = 10000.0, inv_freq = nothing, inter
     c = cos.(ang)
     s = sin.(ang)
     for x in (q.storage, k.storage)
-        x1 = view(x, :, :, interleaved ? (1:2:d) : (1:half))                                      # odd features  (2i+1)
-        x2 = view(x, :, :, interleaved ? (2:2:d) : ((half+1):d))                                      # even features (2i+2)
+        x1 = view(x, :, :, interleaved ? (1:2:rd) : (1:half))          # odd features  (2i+1)
+        x2 = view(x, :, :, interleaved ? (2:2:rd) : ((half+1):rd))     # even features (2i+2)
         n2 = x1 .* s .+ x2 .* c                                        # staged: reads ORIGINAL x1, x2
         x1 .= x1 .* c .- x2 .* s
         x2 .= n2
@@ -560,11 +565,10 @@ function rope!(
 )
     # Imported default, linear and Llama3 frequency metadata travels with Q/K.
     # Validate and rotate on the requested Lava storage (§LXX: no silent
-    # representation change). The CPU oracle implements these policies today.
-    rotary_dim == 0 || Gesso.lowering_not_implemented(:rope_partial_dim, Gesso.LavaBackend())
+    # representation change).
     _lava_device_storage!(:rope!, q)
     _lava_device_storage!(:rope!, k)
-    r = _lava_rope!(q, k, positions; theta, inv_freq, interleaved)
+    r = _lava_rope!(q, k, positions; theta, inv_freq, interleaved, rotary_dim)
     _lava_after_op!(workload)
     return r
 end
@@ -582,12 +586,10 @@ function rope!(
 )
     # Imported default, linear and Llama3 frequency metadata travels with Q/K.
     # Validate and rotate on the requested Lava storage (§LXX: no silent
-    # representation change). Partial rotary is a CUDA/CPU lowering this
-    # sprint; Lava refuses rather than rotating the full head.
-    rotary_dim == 0 || Gesso.lowering_not_implemented(:rope_partial_dim, Gesso.LavaBackend())
+    # representation change).
     _lava_device_storage!(:rope!, q)
     _lava_device_storage!(:rope!, k)
-    r = _lava_rope!(q, k, positions; theta, inv_freq, interleaved)
+    r = _lava_rope!(q, k, positions; theta, inv_freq, interleaved, rotary_dim)
     _lava_after_op!(workload)
     return r
 end

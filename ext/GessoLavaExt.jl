@@ -135,6 +135,7 @@ const LAVA_SUPPORTED_CAPS = Set([
     :rope_none,
     :rope_linear,
     :rope_llama3,
+    :rope_partial_dim,
 ])
 
 supports(::LavaBackend, cap::Symbol) = cap in LAVA_SUPPORTED_CAPS
