@@ -2,7 +2,10 @@
 #
 #   GESSO_ORNITH35_GGUF=/path/to/Unsloth-Ornith-1.5-35B-A3B-UD-Q2_K_XL.gguf \
 #   GESSO_GGML_DIR=/path/to/llama.cpp/build/bin \
-#   julia --project=benchmark -t 16 scripts/profile_35b.jl [cuda|cpu]
+#   GESSO_BACKEND=lava|cuda|cpu \
+#   julia --project=benchmark -t 16 scripts/profile_35b.jl
+#
+# GESSO_BACKEND defaults to lava; CUDA is loaded only when it is asked for.
 #
 # Optional env: GESSO_PROFILE_TOKENS (decode tokens to measure, default 8).
 # The engine switches are read as usual: GESSO_GPU_WEIGHT_DTYPE (f16 default),
@@ -29,19 +32,24 @@ const EXPECTED = [9419, 11, 271, 40, 2688, 4313, 310, 958, 279]
 const N = parse(Int, get(ENV, "GESSO_PROFILE_TOKENS", "8"))
 N >= 1 || error("profile_35b: GESSO_PROFILE_TOKENS must be >= 1")
 
-which = isempty(ARGS) ? "cuda" : ARGS[1]
-if which == "cuda"
+which = get(ENV, "GESSO_BACKEND", "lava")
+if which == "lava"
+    using Lava
+    backend = Gesso.LavaBackend()
+elseif which == "cuda"
     using CUDA
     backend = Gesso.CUDABackend()
-else
+elseif which == "cpu"
     backend = Gesso.CPUBackend()
+else
+    error("profile_35b: GESSO_BACKEND must be lava, cuda or cpu, got '$which'")
 end
 
 const INF = Gesso.Inference
 
 t_load = @elapsed begin
     model, tensors, spec = Gesso.load_gguf(GGUF)
-    dev = which == "cuda" ? Gesso.to_device(backend, tensors) : tensors
+    dev = which == "cpu" ? tensors : Gesso.to_device(backend, tensors)
 end
 
 gen(n) = Gesso.reference_generate(
