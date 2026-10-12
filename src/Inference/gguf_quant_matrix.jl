@@ -112,15 +112,18 @@ end
 const _QUANT_FALLBACK_CHUNK_ELEMS = 1 << 24
 
 # Activation and output rows for the single-column loop in `_quant_matmul!`.
-# No scratch reaches that call, so the buffers live here. Only the driver
-# thread calls it, since the pool workers run the chunks and never get here.
-# The buffers grow to the largest shape seen and are not shrunk, so steady
-# decode allocates nothing on this path.
+# No scratch reaches that call, so the buffers live here. Pool workers run
+# only the chunks and never get here, but two generations on two threads can
+# both be drivers: the pool itself allows concurrent callers. A caller that
+# finds the buffers claimed allocates its own, as every call did before. The
+# buffers grow to the largest shape seen and are not shrunk, so steady decode
+# allocates nothing on this path.
 mutable struct _QuantGemvScratch
     xf::Vector{Float32}
     y::Vector{Float32}
 end
 const _QUANT_GEMV_SCRATCH = _QuantGemvScratch(Float32[], Float32[])
+const _QUANT_GEMV_BUSY = Threads.Atomic{Int}(0)
 
 function _quant_gemv_scratch(ne0::Int, nrows::Int)
     s = _QUANT_GEMV_SCRATCH
@@ -138,22 +141,32 @@ function _quant_matmul!(dst::AbstractMatrix, x::AbstractMatrix, q::QuantMatrix)
         if seq > 1 && _quant_q8k_native(q.ggml_type) && _prefill_multi_enabled()
             return _quant_matmul_multi!(dst, x, q)
         end
-        s = _quant_gemv_scratch(q.ne0, q.nrows)
-        xf = view(s.xf, 1:q.ne0)
-        y = view(s.y, 1:q.nrows)
-        bytes = _quant_bytes(q)
-        for t in 1:seq
-            @inbounds for i in 1:q.ne0
-                xf[i] = Float32(x[t, i])
-            end
-            if _quant_q8k_native(q.ggml_type)
-                _qgemv_q8k_f32!(y, xf, bytes, q.ggml_type, q.ne0, q.nrows; threaded=true)
+        owned = Threads.atomic_cas!(_QUANT_GEMV_BUSY, 0, 1) == 0
+        try
+            if owned
+                s = _quant_gemv_scratch(q.ne0, q.nrows)
+                xf = view(s.xf, 1:q.ne0)
+                y = view(s.y, 1:q.nrows)
             else
-                _qgemv_bytes_threaded!(y, xf, bytes, q.ggml_type, q.ne0, q.nrows, 1.0f0, 0.0f0)
+                xf = view(Vector{Float32}(undef, q.ne0), 1:q.ne0)
+                y = view(Vector{Float32}(undef, q.nrows), 1:q.nrows)
             end
-            @inbounds for r in 1:q.nrows
-                dst[t, r] = y[r]
+            bytes = _quant_bytes(q)
+            for t in 1:seq
+                @inbounds for i in 1:q.ne0
+                    xf[i] = Float32(x[t, i])
+                end
+                if _quant_q8k_native(q.ggml_type)
+                    _qgemv_q8k_f32!(y, xf, bytes, q.ggml_type, q.ne0, q.nrows; threaded=true)
+                else
+                    _qgemv_bytes_threaded!(y, xf, bytes, q.ggml_type, q.ne0, q.nrows, 1.0f0, 0.0f0)
+                end
+                @inbounds for r in 1:q.nrows
+                    dst[t, r] = y[r]
+                end
             end
+        finally
+            owned && Threads.atomic_xchg!(_QUANT_GEMV_BUSY, 0)
         end
         return dst
     end

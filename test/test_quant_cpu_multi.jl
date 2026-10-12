@@ -207,3 +207,33 @@ end
         end
     end
 end
+
+@testset "single-column scratch: concurrent drivers do not share buffers" begin
+    rng = Xoshiro(0x5c4b)
+    ty = _MQ.GGML_TYPE_Q4_K
+    nrows, nb = 64, 8
+    ne0 = 256 * nb
+    rb = _MQ._qrow_bytes(ty, ne0)
+    w = _mq_random_rows(rng, ty, nrows, nb)
+    q = _MQ.QuantMatrix(w, 0, ty, ne0, nrows, rb, C_NULL, Int64(256))
+    ntask = 4
+    xs = [randn(rng, Float32, 1, ne0) for _ in 1:ntask]
+    refs = map(xs) do x
+        d = zeros(Float32, 1, nrows)
+        _MQ._quant_matmul!(d, x, q)
+        d
+    end
+    # Each task repeats its own input; a shared activation row shows up as a
+    # result that matches another task's input instead of its own.
+    bad = Threads.Atomic{Int}(0)
+    @sync for k in 1:ntask
+        Threads.@spawn begin
+            d = zeros(Float32, 1, nrows)
+            for _ in 1:400
+                _MQ._quant_matmul!(d, xs[k], q)
+                d == refs[k] || Threads.atomic_add!(bad, 1)
+            end
+        end
+    end
+    @test bad[] == 0
+end
