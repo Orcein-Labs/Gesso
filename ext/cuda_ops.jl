@@ -1333,7 +1333,13 @@ function _to_device_cuda(tensors)
         foreach(x -> push!(qseen, objectid(x)), grp)
         sizes = map(Gesso.Inference._quant_nbytes, grp)
         nbytes = sum(sizes)
-        if nbytes <= remaining && all(>(0), sizes)
+        # The CUDA expert qgemv has kernels for these types only. A slab of any
+        # other type (the GSQ file's Q2_K and Q3_K experts) stays host-resident
+        # and runs on the CPU expert path, instead of failing at the first MoE.
+        cuda_expert_types = (Gesso.Inference.GGML_TYPE_IQ2_XS,
+            Gesso.Inference.GGML_TYPE_IQ3_XXS, Gesso.Inference.GGML_TYPE_IQ4_XS)
+        if nbytes <= remaining && all(>(0), sizes) &&
+           all(x -> x.ggml_type in cuda_expert_types, grp)
             for x in grp
                 packed = Gesso.Inference.packed_quant_bytes(x)
                 conv[x] = Gesso.Inference.gpu_quant_slice(x, CuArray{UInt8}(packed))
