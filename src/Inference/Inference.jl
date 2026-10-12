@@ -923,6 +923,21 @@ function _prefill_chunk(P::Int)
     return c <= 0 ? P : min(c, P)
 end
 
+# GESSO_PREFILL_WINDOW=0 keeps the per-row prefill for A/B timing and oracle checks.
+_prefill_window_enabled() = get(ENV, "GESSO_PREFILL_WINDOW", "1") != "0"
+
+# The window's GDN blocks run only on the CPU Float32 fast path; any other state
+# keeps the per-row prefill.
+function _prefill_window_ok(tensors, gdn_conv, gdn_rec, h, cpu_scratch)
+    cpu_scratch === nothing && return false
+    _prefill_window_enabled() || return false
+    for (bi, bt) in enumerate(tensors.blocks)
+        _block_mixer(bt) === :linear_attention || continue
+        _cpu_gdn_fast_ok(bt, gdn_conv[bi], gdn_rec[bi], h) || return false
+    end
+    return true
+end
+
 _fallback_zeros_factory(::CPUBackend) = (dims::Tuple{Vararg{Int}}) -> zeros(Float32, dims)
 function _fallback_zeros_factory(backend)
     error(
@@ -1239,12 +1254,24 @@ function reference_generate(
         inv_freq = tensors_rope_inv_freq(tensors, d_head; theta)
         t_prefill = time_ns()
         chunk = _prefill_chunk(P)
+        win_ok = _prefill_window_ok(tensors, gdn_conv, gdn_rec, h, cpu_scratch)
         s1 = n0
         while s1 < P
             s0 = s1 + 1
             s1 += _prefill_pass_rows(cpu, P - s1, s1, chunk, qdim, group)
             n = s1 - s0 + 1
             ptok = _prefill_pass_begin(cpu, s0, n, P)
+            if win_ok
+                # CPU hybrid prefill is the verify window's T-row forward: one
+                # weight pass per block and the fused Float32 GDN slab, so the
+                # prompt state is built by the arithmetic decode uses.
+                win = _decode_window!(model, tensors, kc, vc, collect(prompt[s0:s1]), s0, cpu, wd,
+                    gdn_conv, gdn_rec, cpu_scratch; vocab, n_heads, n_kv_heads, d_head, group, eps,
+                    theta, inv_freq, rotary_dim, head=false)
+                _commit_window!(win, n, gdn_conv, gdn_rec, h)
+                _prefill_pass_end(ptok)
+                continue
+            end
             K = s1                                   # keys: every cached row so far
             positions = collect((s0-1):(s1-1))
             tmp = pass_tmp

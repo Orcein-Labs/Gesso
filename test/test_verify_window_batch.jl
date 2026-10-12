@@ -75,3 +75,55 @@ end
         end
     end
 end
+
+# The prompt is built by the window's T-row forward. Its state must be the bits
+# that decode leaves when it consumes the same tokens one row at a time. Row 1
+# has no earlier state to decode from, so the state is initialised by a one-token
+# prefill (a T=1 window); rows 2..P go through `_decode_step!`, the decode path.
+function _vw_decode_one_by_one(ts, prompt::Vector{Int})
+    model = ts.model
+    st = GenerateState(_VW_CTX)
+    reference_generate(model, ts, prompt[1:1]; max_new_tokens=0, state=st)
+    cpu = Gesso.CPUBackend()
+    wd = _GIB.DecodeWorkload()
+    n_heads = model.blocks[1].attention.n_heads
+    n_kv_heads = model.blocks[1].attention.n_kv_heads
+    d_head = _GIB._tensor_head_dim(model, ts)
+    group = div(n_heads, n_kv_heads)
+    theta = _GIB._resolved_rope_theta(ts, nothing)
+    inv_freq = _GIB.tensors_rope_inv_freq(ts, d_head; theta)
+    rotary_dim = _GIB._tensor_rotary_dim(ts)
+    for k in 2:length(prompt)
+        _GIB._decode_step!(model, ts, st.kc, st.vc, prompt[k], k, cpu, wd, st.h;
+            on_cpu=true, n_heads, n_kv_heads, d_head, group, eps=1e-6, theta, inv_freq, rotary_dim,
+            gdn_conv=st.gdn_conv, gdn_rec=st.gdn_rec, gdn_scratch=st.gdn_scratch,
+            cpu_scratch=st.cpu_scratch, hrow=1)
+        push!(st.ids, prompt[k])
+    end
+    return st
+end
+
+@testset "prefill window: state equals decode one row at a time" begin
+    ts = _vw_hybrid_f32()
+    vocab = size(ts.embedding.storage, 1)
+    prompt = Int[mod(7 * i + 3, vocab) for i in 0:8]   # 0-based token ids
+    oracle = _vw_decode_one_by_one(ts, prompt)
+    try
+        # one pass, then several passes of 3 rows each, which exercises the commit
+        # of a window that does not start at row 1
+        for chunk in ("1024", "3")
+            withenv("GESSO_PREFILL_CHUNK" => chunk) do
+                st = GenerateState(_VW_CTX)
+                try
+                    reference_generate(ts.model, ts, prompt; max_new_tokens=0, state=st)
+                    @test st.cpu_scratch !== nothing
+                    @test _vw_state_diff(st, oracle) == String[]
+                finally
+                    close(st)
+                end
+            end
+        end
+    finally
+        close(oracle)
+    end
+end
