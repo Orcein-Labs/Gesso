@@ -433,6 +433,12 @@ function _cuda_meta_upload(offs::AbstractVector{Int32}, cols, n::Int)
     return dev
 end
 
+# Expert types the launcher below has a kernel for. Whole-slab placement in
+# to_device reads this too, so a bank is only uploaded when a kernel can run it.
+const _CUDA_QGEMV_TYPES = (Gesso.Inference.GGML_TYPE_F32,
+    Gesso.Inference.GGML_TYPE_IQ2_XS, Gesso.Inference.GGML_TYPE_IQ3_XXS, Gesso.Inference.GGML_TYPE_IQ4_XS,
+    Gesso.Inference.GGML_TYPE_Q2_K, Gesso.Inference.GGML_TYPE_Q3_K, Gesso.Inference.GGML_TYPE_Q4_K)
+
 function _cuda_launch_qgemv!(
     y::CuMatrix{Float32},
     x::CuArray{Float32},
@@ -458,10 +464,7 @@ function _cuda_launch_qgemv!(
         )
         return y
     end
-    ggml_type in (
-        I.GGML_TYPE_IQ2_XS, I.GGML_TYPE_IQ3_XXS, I.GGML_TYPE_IQ4_XS,
-        I.GGML_TYPE_Q2_K, I.GGML_TYPE_Q3_K, I.GGML_TYPE_Q4_K,
-    ) || error("cuda qgemv: unsupported ggml type $ggml_type")
+    ggml_type in _CUDA_QGEMV_TYPES || error("cuda qgemv: unsupported ggml type $ggml_type")
     _cu_aligned(q, 4) || error("cuda qgemv: expert bytes not 4-byte aligned")
     tables = _cuda_q_tables()
     nbk = ne0 ÷ 32

@@ -80,6 +80,26 @@ else
         @test all(x -> x isa Gesso.GpuQuantSlice, slabs(g2))
     end
 
+    @testset "cuda to_device keeps expert slabs without a qgemv kernel on the host" begin
+        # Relabelled bytes: placement must decide on type alone, before any
+        # kernel reads them. Q6_K has no CUDA expert qgemv.
+        mk() = _pack_f32_slice(ones(Float32, 2, 8, 8), 8, 8)
+        emb = Gesso.EmbeddingTable(; shape=(4, 2), storage=ones(Float32, 4, 2))
+        ew(s) = Gesso.ExpertWeight(; shape=size(s), storage=s)
+        ts_of(ty) = begin
+            sl = (mk(), mk(), mk())
+            foreach(s -> s.ggml_type = ty, sl)
+            bt = (; mixer=:full_attention, n_expert_used=2,
+                wexp_gate=ew(sl[1]), wexp_up=ew(sl[2]), wexp_down=ew(sl[3]))
+            (; embedding=emb, blocks=[bt], lm_head=emb)
+        end
+        slabs(g) = map(k -> g.blocks[1][k].storage, (:wexp_gate, :wexp_up, :wexp_down))
+        @test all(x -> x isa Gesso.GgufQuantSlice,
+            slabs(Gesso.to_device(cuda, ts_of(Inf_.GGML_TYPE_Q6_K))))
+        @test all(x -> x isa Gesso.GpuQuantSlice,
+            slabs(Gesso.to_device(cuda, ts_of(Inf_.GGML_TYPE_Q2_K))))
+    end
+
     @testset "cuda to_device wraps overflow as HostOffload, small-first" begin
         small = ones(Float32, 8, 8)            # 256 B
         large = ones(Float32, 1024, 1024)      # 4 MiB
