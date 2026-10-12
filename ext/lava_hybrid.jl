@@ -281,3 +281,28 @@ function Gesso.Inference._moe_topk_swiglu!(
     copyto!(y, yh)
     return y
 end
+
+# Shared-expert sigmoid gate. The generic body indexes element by element, and
+# on a device array each read is a scalar fetch (GPUArrays refuses it). The
+# gate is one dot product per token, so it runs on the host with the same
+# round trip as the MoE route. CUDA has a device kernel for this; Lava does not
+# yet.
+function Gesso.Inference._shared_gate_add!(::LavaBackend, y, x, sd, gvec)
+    xh = _lh_host(x)
+    sdh = _lh_host(sd)
+    g = _lh_host(gvec)
+    yh = _lh_host(y)
+    seq, h = size(xh)
+    for t in 1:seq
+        acc = zero(eltype(xh))
+        for i in 1:h
+            acc += xh[t, i] * g[i]
+        end
+        s = one(acc) / (one(acc) + exp(-acc))
+        for i in 1:h
+            yh[t, i] += s * sdh[t, i]
+        end
+    end
+    copyto!(y, yh)
+    return y
+end

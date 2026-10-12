@@ -181,13 +181,22 @@ end
 function _lava_device_storage!(op::Symbol, t)
     s = t.storage
     Gesso.Inference._storage_root(s) isa Lava.LavaArray && eltype(s) === Float32 && return s
+    # Quantized dense weights keep their bytes in a device LavaArray{UInt8}
+    # (lava_quant.jl); that is device storage at the same boundary.
+    s isa LavaDenseQuant && s.data isa Lava.LavaArray && return s
     throw(gesso_error(ERR_INVALID_PLAN,
-        "$op: LavaBackend requires its own Float32 device storage; host Array, " *
+        "$op: LavaBackend requires its own device storage (Float32 or LavaDenseQuant); host Array, " *
         "host views, other devices and unsupported arithmetic are rejected; call to_device explicitly";
         op=op, storage_type=string(typeof(s))))
 end
-Gesso.Inference._check_device_storage(op::Symbol, backend::LavaBackend, t) =
-    _lava_device_storage!(op, t)
+# Expert banks stay host-resident GgufQuantSlice storage: the MoE route runs
+# them on the host (GESSO_MOE_HOST_EXPERTS=1), the same split as CUDA. Only
+# expert banks are exempt; a dense weight still on the host fails the guard.
+# A device expert bank is refused where it would be used (_moe_topk_swiglu!).
+function Gesso.Inference._check_device_storage(op::Symbol, backend::LavaBackend, t)
+    t isa Gesso.ExpertWeight && t.storage isa Gesso.Inference.GgufQuantSlice && return nothing
+    return _lava_device_storage!(op, t)
+end
 
 # On the tested Vulkan compiler path, the floating `isfinite` predicate
 # reports NaN and Inf as finite. Classify their IEEE exponent bits instead;
