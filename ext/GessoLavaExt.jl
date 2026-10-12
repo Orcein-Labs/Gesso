@@ -92,7 +92,8 @@ struct LavaBackend <: AbstractGessoBackend
         ok = true
         try
             Lava.vk_context()
-        catch
+        catch err
+            @warn "LavaBackend: Lava.vk_context() threw; the cause is below" exception=(err, catch_backtrace())
             ok = false
         end
         ok || throw(
