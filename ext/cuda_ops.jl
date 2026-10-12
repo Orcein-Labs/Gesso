@@ -3091,7 +3091,10 @@ function _moe_device_prefill_ok(y, x, router, gate, up, down, n_used::Int)
     (gate isa G && up isa G && down isa G) || return false
     (gate.data isa CuVector && up.data isa CuVector && down.data isa CuVector) || return false
     for sl in (gate, up, down)
-        sl.ggml_type in (I.GGML_TYPE_IQ2_XS, I.GGML_TYPE_IQ3_XXS, I.GGML_TYPE_IQ4_XS) || return false
+        sl.ggml_type in (
+            I.GGML_TYPE_IQ2_XS, I.GGML_TYPE_IQ3_XXS, I.GGML_TYPE_IQ4_XS,
+            I.GGML_TYPE_Q2_K, I.GGML_TYPE_Q3_K, I.GGML_TYPE_Q4_K,
+        ) || return false
         sl.n_exp * sl.bytes_per_expert <= typemax(Int32) || return false
     end
     # up reuses the q8_1 activations gate quantized
