@@ -16,6 +16,8 @@
 # IQ4_XS is the exception to shared unpacking: its nibble-to-table lookup lives
 # inside the llvmcall, so each column repeats that step. Its scale decode and
 # the row pointers are still shared.
+#
+# K-quants (Q4_K, Q2_K) run the per-column single dot in every tile; see below.
 
 const _MULTI_TILE = 4
 
@@ -450,166 +452,9 @@ end
 
 # ---------------------------------------------------------------- K-quants (Q4_K, Q2_K)
 #
-# The integer lane sums are exact, so their order does not matter. The float
-# steps follow _dot_q4k_q8k and _dot_q2k_q8k for each column: Q4_K folds each
-# block into eight lane sums and subtracts the mins term block by block, and
-# Q2_K adds dall*isum - dmin*summs. Each packed nibble or 2-bit value is
-# unpacked once per tile and used by all K columns. Closures take their state
-# as arguments, so no captured variable is reassigned in a loop.
-
-@inline _q4_acc(acc::NTuple{K,Int32}, scs::Int32, nib::NTuple{4,Int32},
-    pq::NTuple{K,Ptr{Int8}}, ko::Int) where {K} =
-    ntuple(c -> acc[c] + scs * (nib[1] * Int32(unsafe_load(pq[c], ko)) +
-        nib[2] * Int32(unsafe_load(pq[c], ko + 8)) +
-        nib[3] * Int32(unsafe_load(pq[c], ko + 16)) +
-        nib[4] * Int32(unsafe_load(pq[c], ko + 24))), Val(K))
-
-@inline _q4_nibs(qsb::Ptr{UInt8}, bo::Int, sh::Int) =
-    ntuple(j -> Int32((unsafe_load(qsb, bo + 8 * (j - 1)) >> sh) & 0x0f), Val(4))
-
-# Lane l (0-based) of one Q4_K block for every column: sum over sub-blocks s of
-# sc[s] * sum_j nib(k) * q8_c[k], with k = 32s + l + 8j.
-@inline function _q4_lane_cols(pq::NTuple{K,Ptr{Int8}}, qsb::Ptr{UInt8}, l::Int,
-    sc::NTuple{8,Int32}) where {K}
-    acc = ntuple(_ -> Int32(0), Val(K))
-    for s in 0:7
-        nib = _q4_nibs(qsb, 32 * (s >> 1) + l + 1, 4 * (s & 1))
-        acc = _q4_acc(acc, sc[s + 1], nib, pq, 32 * s + l + 1)
-    end
-    return acc
-end
-
-# All eight lanes for every column: NTuple{8,NTuple{K,Int32}}.
-@inline _q4_block_aux(pq::NTuple{K,Ptr{Int8}}, qsb::Ptr{UInt8}, ib::Int, sc::NTuple{8,Int32}) where {K} =
-    ntuple(l -> _q4_lane_cols(ntuple(c -> pq[c] + ib * QK_K, Val(K)), qsb, l - 1, sc), Val(8))
-
-@inline _q4_fold(sums::NTuple{K,NTuple{8,Float32}}, d::NTuple{K,Float32},
-    aux::NTuple{8,NTuple{K,Int32}}) where {K} =
-    ntuple(c -> _kq_fsum(sums[c], d[c], ntuple(l -> aux[l][c], Val(8))), Val(K))
-
-@inline _q4_mins(xs::NTuple{K,Q8KVec}, ib::Int, mn::NTuple{8,Int32}) where {K} =
-    ntuple(c -> _kq_mins_dot(xs[c], ib, mn), Val(K))
-
-@inline _q4_scaled(w, off::Int, dv::NTuple{K,Vector{Float32}}, ib::Int) where {K} =
-    ntuple(c -> _kq_f16(w, off) * dv[c][ib + 1], Val(K))
-
-@inline _q4_sub_mins(sumf::NTuple{K,Float32}, dmin::NTuple{K,Float32}, mm::NTuple{K,Int32}) where {K} =
-    ntuple(c -> sumf[c] - dmin[c] * Float32(mm[c]), Val(K))
-
-@inline _q4_final(sumf::NTuple{K,Float32}, sums::NTuple{K,NTuple{8,Float32}}) where {K} =
-    ntuple(c -> begin
-        s = sumf[c]
-        for l in 1:8
-            s += sums[c][l]
-        end
-        s
-    end, Val(K))
-
-@noinline function _dot_q4k_multi!(out::AbstractVector{Float32}, w::AbstractVector{UInt8},
-    woff::Int, xqs, t0::Int, v::Val{K}) where {K}
-    nb = length(xqs[t0].d)
-    _kq_check_row(w, woff, 144 * nb, nothing)
-    _multi_check(xqs, t0, K, nb)
-    nb == 0 && return _multi_zero!(out, t0, K)
-    xs = ntuple(c -> xqs[t0 + c - 1], Val(K))
-    dv = ntuple(c -> xs[c].d, Val(K))
-    GC.@preserve w xqs begin
-        pw = pointer(w, woff + 1)
-        pq = ntuple(c -> pointer(xs[c].qs), Val(K))
-        sumf = ntuple(_ -> 0.0f0, Val(K))
-        sums = ntuple(_ -> ntuple(_ -> 0.0f0, Val(8)), Val(K))
-        @inbounds for ib in 0:(nb - 1)
-            b = woff + 144 * ib
-            sc, mn = _kq_scale_min_k4(w, b + 4)
-            aux = _q4_block_aux(pq, pw + 144 * ib + 16, ib, sc)
-            d = _q4_scaled(w, b, dv, ib)
-            dmin = _q4_scaled(w, b + 2, dv, ib)
-            mm = _q4_mins(xs, ib, mn)
-            sums = _q4_fold(sums, d, aux)
-            sumf = _q4_sub_mins(sumf, dmin, mm)
-        end
-        res = _q4_final(sumf, sums)
-        for c in 1:K
-            out[t0 + c - 1] = res[c]
-        end
-    end
-    return out
-end
-
-# Q2_K: the 2-bit value of k = 16j + i lives in byte 32h + l of qs, shift 2t,
-# with h = k >> 7, t = (k & 127) >> 5, l = k & 31. Sub-block j is scaled by the
-# low nibble of scale byte j.
-@inline _q2_acc(sub::NTuple{K,Int32}, v::Int32, pq::NTuple{K,Ptr{Int8}}, kk::Int) where {K} =
-    ntuple(c -> sub[c] + v * Int32(unsafe_load(pq[c], kk)), Val(K))
-
-@inline _q2_add(total::NTuple{K,Int32}, sc::Int32, sub::NTuple{K,Int32}) where {K} =
-    ntuple(c -> total[c] + sc * sub[c], Val(K))
-
-@inline function _q2_sub_cols(pq::NTuple{K,Ptr{Int8}}, qsb::Ptr{UInt8}, j::Int) where {K}
-    sub = ntuple(_ -> Int32(0), Val(K))
-    for i in 0:15
-        k = 16 * j + i
-        h = k >> 7
-        r = k & 127
-        t = r >> 5
-        l = r & 31
-        v = Int32((unsafe_load(qsb, 32 * h + l + 1) >> (2 * t)) & 0x03)
-        sub = _q2_acc(sub, v, pq, k + 1)
-    end
-    return sub
-end
-
-@inline function _q2_block_isum(pq::NTuple{K,Ptr{Int8}}, ib::Int, qsb::Ptr{UInt8}, sb::Ptr{UInt8}) where {K}
-    pb = ntuple(c -> pq[c] + ib * QK_K, Val(K))
-    total = ntuple(_ -> Int32(0), Val(K))
-    for j in 0:15
-        sc = Int32(unsafe_load(sb, j + 1) & 0x0f)
-        total = _q2_add(total, sc, _q2_sub_cols(pb, qsb, j))
-    end
-    return total
-end
-
-@inline function _q2_summs(w, b::Int, bs::Vector{Int16}, ib::Int)::Int32
-    s = Int32(0)
-    @inbounds for j in 0:15
-        s += Int32(bs[16 * ib + j + 1]) * Int32(_kq_u8(w, b + j) >> 4)
-    end
-    return s
-end
-
-@inline _q2_summs_cols(w, b::Int, xs::NTuple{K,Q8KVec}, ib::Int) where {K} =
-    ntuple(c -> _q2_summs(w, b, xs[c].bsums, ib), Val(K))
-
-@inline _q2_fold(sumf::NTuple{K,Float32}, dall::NTuple{K,Float32}, dmin::NTuple{K,Float32},
-    isum::NTuple{K,Int32}, summs::NTuple{K,Int32}) where {K} =
-    ntuple(c -> sumf[c] + (dall[c] * Float32(isum[c]) - dmin[c] * Float32(summs[c])), Val(K))
-
-@noinline function _dot_q2k_multi!(out::AbstractVector{Float32}, w::AbstractVector{UInt8},
-    woff::Int, xqs, t0::Int, v::Val{K}) where {K}
-    nb = length(xqs[t0].d)
-    _kq_check_row(w, woff, 84 * nb, nothing)
-    _multi_check(xqs, t0, K, nb)
-    nb == 0 && return _multi_zero!(out, t0, K)
-    xs = ntuple(c -> xqs[t0 + c - 1], Val(K))
-    dv = ntuple(c -> xs[c].d, Val(K))
-    GC.@preserve w xqs begin
-        pw = pointer(w, woff + 1)
-        pq = ntuple(c -> pointer(xs[c].qs), Val(K))
-        sumf = ntuple(_ -> 0.0f0, Val(K))
-        @inbounds for ib in 0:(nb - 1)
-            b = woff + 84 * ib
-            dall = _q4_scaled(w, b + 80, dv, ib)
-            dmin = _q4_scaled(w, b + 82, dv, ib)
-            isum = _q2_block_isum(pq, ib, pw + 84 * ib + 16, pw + 84 * ib)
-            summs = _q2_summs_cols(w, b, xs, ib)
-            sumf = _q2_fold(sumf, dall, dmin, isum, summs)
-        end
-        for c in 1:K
-            out[t0 + c - 1] = sumf[c]
-        end
-    end
-    return out
-end
+# K-quants take the per-column single AVX2 dot (_dot_q8k) in every tile. Their
+# unpacking is cheap relative to the dot, so sharing it across columns gained
+# nothing; a measured multi kernel was slower than the single path.
 
 # ---------------------------------------------------------------- dispatch
 
@@ -618,12 +463,10 @@ end
 _q8k_multi_type(t::Int32) =
     t == GGML_TYPE_IQ2_XXS || t == GGML_TYPE_IQ3_S || t == GGML_TYPE_IQ2_S ||
     t == GGML_TYPE_IQ2_XS || t == GGML_TYPE_IQ3_XXS || t == GGML_TYPE_IQ1_S ||
-    t == GGML_TYPE_IQ1_M || t == GGML_TYPE_IQ4_XS || t == GGML_TYPE_Q2_K || t == GGML_TYPE_Q4_K
+    t == GGML_TYPE_IQ1_M || t == GGML_TYPE_IQ4_XS
 
 function _dot_q8k_multi_kernel!(out::AbstractVector{Float32}, ggml_type::Int32,
     w::AbstractVector{UInt8}, woff::Int, xqs, t0::Int, v::Val)
-    ggml_type == GGML_TYPE_Q4_K && return _dot_q4k_multi!(out, w, woff, xqs, t0, v)
-    ggml_type == GGML_TYPE_Q2_K && return _dot_q2k_multi!(out, w, woff, xqs, t0, v)
     ggml_type == GGML_TYPE_IQ2_XXS && return _dot_iq2xxs_multi!(out, w, woff, xqs, t0, v)
     ggml_type == GGML_TYPE_IQ3_S && return _dot_iq3s_multi!(out, w, woff, xqs, t0, v)
     ggml_type == GGML_TYPE_IQ2_S && return _dot_iq2s_multi!(out, w, woff, xqs, t0, v)
