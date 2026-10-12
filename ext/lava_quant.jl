@@ -360,29 +360,50 @@ end
     end
 end
 
+# Scratch outlives the call. A LavaArray allocated per call leaves a GC finalizer
+# that runs inside a later call's timed region: the composed prefill measured
+# 7.2 ms with the GC inside the timer and 1.2 ms with it outside. The cache is
+# emptied once it holds _LQ_SCRATCH_MAX shapes, so a run over many prompt
+# lengths cannot grow VRAM without bound.
+const _LQ_SCRATCH = Dict{Tuple{DataType,Symbol,Tuple{Vararg{Int}}},Any}()
+const _LQ_SCRATCH_MAX = 24
+
+function _lq_scratch(::Type{T}, tag::Symbol, dims::Tuple{Vararg{Int}}) where {T}
+    key = (T, tag, dims)
+    a = get(_LQ_SCRATCH, key, nothing)
+    if a === nothing
+        length(_LQ_SCRATCH) >= _LQ_SCRATCH_MAX && empty!(_LQ_SCRATCH)
+        a = Lava.LavaArray{T}(undef, dims...)
+        _LQ_SCRATCH[key] = a
+    end
+    return a
+end
+
 function _lq_gemm_prefill!(Y, X, q::LavaDenseQuant)
     ntok = size(X, 1)
     k = q.ne0
     nrows = q.nrows
     backend = Lava.KernelAbstractions.get_backend(X)
     tb = _lq_tables()
-    x16 = Lava.LavaArray{Float16}(undef, ntok, k)
+    x16 = _lq_scratch(Float16, :x16, (ntok, k))
     x16 .= Float16.(X)
     rc_max = min(nrows, max(1, (_lq_gemm_scratch_mib() << 20) ÷ (2 * k)))
-    wt_full = Lava.LavaArray{Float16}(undef, k, rc_max)
     dequant = _lq_dequant_f16_kernel!(backend)
     scatter = _lq_scatter_kernel!(backend)
     r0 = 0
     while r0 < nrows
         rc = min(rc_max, nrows - r0)
-        wt = rc == rc_max ? wt_full : Lava.LavaArray{Float16}(undef, k, rc)
         total = k * rc
-        dequant(wt, q.data, tb.kv, tb.g2, tb.g3, tb.ks, q.kind, k, q.row_bytes, r0, total;
+        # The dequant writes flat indices, so it takes the flat buffer. mul! takes
+        # the reshape, which Lava's gemm reads as a dense strided operand.
+        wtf = _lq_scratch(Float16, :wt, (total,))
+        dequant(wtf, q.data, tb.kv, tb.g2, tb.g3, tb.ks, q.kind, k, q.row_bytes, r0, total;
             ndrange=total, workgroupsize=(256,))
+        wt = reshape(wtf, k, rc)
         if rc == nrows
             mul!(Y, x16, wt, one(Float32), zero(Float32))
         else
-            yc = Lava.LavaArray{Float32}(undef, ntok, rc)
+            yc = _lq_scratch(Float32, :yc, (ntok, rc))
             mul!(yc, x16, wt, one(Float32), zero(Float32))
             scatter(Y, yc, r0 * ntok, ntok * rc; ndrange=ntok * rc, workgroupsize=(256,))
         end
