@@ -24,6 +24,12 @@ const _CuVec{T} = CuArray{T,1,_CC.DeviceMemory}
 const _FAST_KERNELS = IdDict{Any,Any}()
 const _FAST_KERNELS_LOCK = ReentrantLock()
 
+# CUDACore 6.3.x does not export `argument_types`; this is its 6.4 definition,
+# kept local so the kernel-type key matches what CUDACore compiles.
+@inline @generated function _arg_types(args::Tuple)
+    :(Tuple{$((:(Core.Typeof(args[$i])) for i in 1:fieldcount(args))...)})
+end
+
 @inline function _fast_kernel(f::F, ::Type{TT}, ctx) where {F,TT}
     key = Tuple{F,TT}
     k = get(_FAST_KERNELS, key, nothing)
@@ -119,7 +125,7 @@ function _fast_launch(f::F, args::Tuple, threads, blocks, shmem::Integer) where 
         GC.@preserve args begin
             ad = _CC.KernelAdaptor(managed)
             conv = map(a -> _CC.adapt(ad, a), args)
-            kernel = _fast_kernel(f, _CC.argument_types(conv), state.context)
+            kernel = _fast_kernel(f, _arg_types(conv), state.context)
             fast = true
             @inbounds for m in managed
                 fast &= _fast_owned(m, s)
