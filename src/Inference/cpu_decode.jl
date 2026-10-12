@@ -154,6 +154,9 @@ end
 # generic route it had before the scratch covered it, so its numerics do not move.
 _decode_xq(::Nothing, ::Val) = nothing
 _decode_xq(sc::CPUDecodeScratch, ::Val{N}) where {N} = sc.hybrid ? getfield(sc, N) : nothing
+# A device backend's head scratch (`_head_scratch`) is a NamedTuple that
+# carries its own `xq_dim`, as it did before the CPU scratch took this route.
+_decode_xq(buf::NamedTuple, ::Val{N}) where {N} = getfield(buf, N)
 
 # RoPE position argument for one decode token: the scratch's one-element
 # vector on the CPU path, a fresh vector otherwise.

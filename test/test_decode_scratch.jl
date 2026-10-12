@@ -276,4 +276,24 @@ end
         @test I._decode_xq(sc, Val(:xq_dim)) isa I.Q8KVec
         @test all(eltype(getfield(sc, f)) === Float32 for f in rowfields)
     end
+
+    # reference_generate on a device backend hands _last_logits that backend's
+    # head scratch, a NamedTuple; V3 broke CUDA generation by having no method for it
+    @testset "device head scratch (NamedTuple) keeps its own xq_dim" begin
+        @test I._decode_xq((; logits=zeros(Float32, 1, 4), xq_dim=nothing), Val(:xq_dim)) === nothing
+        ok = try
+            @eval Main using CUDA
+            CUDA.functional()
+        catch
+            false
+        end
+        if !ok
+            @test _skip("no functional CUDA device: CUDA reference_generate needs one")
+        else
+            ts = toy2_tensors()
+            ids = reference_generate(toy2_modelir(), Gesso.to_device(Gesso.CUDABackend(), ts),
+                [1, 3, 4, 5]; backend=Gesso.CUDABackend(), max_new_tokens=4)
+            @test ids == reference_generate(toy2_modelir(), ts, [1, 3, 4, 5]; max_new_tokens=4)
+        end
+    end
 end
