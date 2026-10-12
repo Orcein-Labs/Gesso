@@ -35,6 +35,8 @@ else
         :q5_k => (176, 256, (0, 2)),
         :q6_k => (210, 256, (208,)),
         :iq4_xs => (136, 256, (0,)),
+        :iq2_xs => (74, 256, (0,)),
+        :iq3_xxs => (98, 256, (0,)),
         :q8_0 => (34, 32, (0,)),
     )
     const _LQ_TYPE = Dict(
@@ -42,6 +44,8 @@ else
         :q5_k => _lq_inf.GGML_TYPE_Q5_K,
         :q6_k => _lq_inf.GGML_TYPE_Q6_K,
         :iq4_xs => _lq_inf.GGML_TYPE_IQ4_XS,
+        :iq2_xs => _lq_inf.GGML_TYPE_IQ2_XS,
+        :iq3_xxs => _lq_inf.GGML_TYPE_IQ3_XXS,
         :q8_0 => _lq_inf.GGML_TYPE_Q8_0,
     )
 
@@ -113,5 +117,58 @@ else
         @test _lq_ext._lq_eligible(qm)
         bad = _lq_inf.QuantMatrix(qm.data, 0, _lq_inf.GGML_TYPE_Q4_K, 100, 8, qm.row_bytes, C_NULL, Int64(256))
         @test !_lq_ext._lq_eligible(bad)
+    end
+
+    # Expert bank: n_exp matrices concatenated as one device buffer, as
+    # GpuQuantSlice stores them. Each expert is checked against its own host
+    # matrix, the way the CUDA expert MMVQ testset does.
+    function _lq_expert_bank(qms)
+        data = reduce(vcat, [collect(_lq_inf._quant_bytes(q)) for q in qms])
+        q1 = qms[1]
+        return _lq_inf.GpuQuantSlice(
+            Lava.LavaArray{UInt8}(data), q1.ggml_type, length(qms), q1.ne0, q1.nrows,
+            q1.nrows * q1.row_bytes, q1.blck_size,
+        )
+    end
+
+    function _lq_expert_gemv(bank, e::Int, xv::Vector{Float32})
+        x = Lava.LavaArray{Float32}(xv)
+        y = Lava.LavaArray{Float32}(zeros(Float32, bank.ne1))
+        _lq_inf._qgemv_expert!(y, x, bank, e)
+        return Array(y)
+    end
+
+    @testset "LavaDenseQuant expert GEMV: device bank vs host dequant" begin
+        rng = MersenneTwister(20261012)
+        for kind in (:iq2_xs, :iq3_xxs, :iq4_xs)
+            @testset "$kind" begin
+                k = 512
+                nrows = 37
+                qms = [_lq_random_matrix(rng, kind, nrows, k) for _ in 1:3]
+                bank = _lq_expert_bank(qms)
+                xv = randn(rng, Float32, k)
+                for e in (1, 3)
+                    y = _lq_expert_gemv(bank, e, xv)
+                    _lq_check(qms[e], reshape(xv, 1, k), reshape(y, 1, nrows); label="$kind expert $e")
+                end
+            end
+        end
+    end
+
+    @testset "LavaDenseQuant expert GEMV: F32 bank and alpha/beta contract" begin
+        rng = MersenneTwister(20261013)
+        k = 300
+        nrows = 37
+        qms = [_lq_inf.QuantMatrix(collect(reinterpret(UInt8, randn(rng, Float32, nrows * k))),
+            0, _lq_inf.GGML_TYPE_F32, k, nrows, k * 4, C_NULL, Int64(1)) for _ in 1:2]
+        bank = _lq_expert_bank(qms)
+        xv = randn(rng, Float32, k)
+        y1 = _lq_expert_gemv(bank, 2, xv)
+        _lq_check(qms[2], reshape(xv, 1, k), reshape(y1, 1, nrows); label="f32 expert 2")
+
+        x = Lava.LavaArray{Float32}(xv)
+        y = Lava.LavaArray{Float32}(ones(Float32, nrows))
+        _lq_inf._qgemv_expert!(y, x, bank, 2; alpha=2.0f0, beta=0.5f0)
+        @test isapprox(Array(y), 2 .* y1 .+ 0.5f0; rtol=1.0f-5, atol=1.0f-5)
     end
 end
