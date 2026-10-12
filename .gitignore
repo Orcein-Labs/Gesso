@@ -19,3 +19,9 @@ snapshots/
 # ChatGPT Work-mode campaign drops (depots, scratch, nested checkout)
 work(from chatgpt)/
 outputs(from chatgpt)/
+
+# Local research scratch (repo-hygiene standard): never pushed
+/research/
+
+# Local scratch and handoff notes (repo-hygiene standard): never pushed
+/.local/

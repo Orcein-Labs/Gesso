@@ -86,11 +86,29 @@ const ROLE_V = Symbol("attention.v")
 const ROLE_O = Symbol("attention.o")
 const ROLE_Q_NORM = Symbol("attention.q_norm")
 const ROLE_K_NORM = Symbol("attention.k_norm")
+const ROLE_ATTN_GATE = Symbol("attention.gate")
 const ROLE_GATE = Symbol("ffn.gate")
 const ROLE_UP = Symbol("ffn.up")
 const ROLE_DOWN = Symbol("ffn.down")
 const ROLE_NORM_PRE_ATTN = Symbol("norm.pre_attention")
 const ROLE_NORM_POST_ATTN = Symbol("norm.post_attention")
+const ROLE_GDN_QKV = Symbol("linear.qkv")
+const ROLE_GDN_Z = Symbol("linear.z")
+const ROLE_GDN_A = Symbol("linear.a")
+const ROLE_GDN_B = Symbol("linear.b")
+const ROLE_GDN_CONV = Symbol("linear.conv")
+const ROLE_GDN_A_LOG = Symbol("linear.A_log")
+const ROLE_GDN_DT_BIAS = Symbol("linear.dt_bias")
+const ROLE_GDN_NORM = Symbol("linear.norm")
+const ROLE_GDN_O = Symbol("linear.o")
+const ROLE_ROUTER = Symbol("ffn.router")
+const ROLE_EXPERT_GATE = Symbol("ffn.experts.gate")
+const ROLE_EXPERT_UP = Symbol("ffn.experts.up")
+const ROLE_EXPERT_DOWN = Symbol("ffn.experts.down")
+const ROLE_SHARED_GATE = Symbol("ffn.shared.gate")
+const ROLE_SHARED_UP = Symbol("ffn.shared.up")
+const ROLE_SHARED_DOWN = Symbol("ffn.shared.down")
+const ROLE_SHARED_GATE_INP = Symbol("ffn.shared.gate_inp")
 
 """
     LAYER_ROLES
@@ -118,6 +136,13 @@ _role_family(::Val{Symbol("norm.post_attention")}) = :frozen
 _role_family(::Val{:final_norm}) = :frozen
 _role_family(::Val{Symbol("attention.q_norm")}) = :frozen
 _role_family(::Val{Symbol("attention.k_norm")}) = :frozen
+_role_family(::Val{Symbol("linear.norm")}) = :frozen
+_role_family(::Val{Symbol("linear.A_log")}) = :frozen
+_role_family(::Val{Symbol("linear.dt_bias")}) = :frozen
+_role_family(::Val{Symbol("ffn.shared.gate_inp")}) = :frozen
+_role_family(::Val{Symbol("ffn.experts.gate")}) = :expert
+_role_family(::Val{Symbol("ffn.experts.up")}) = :expert
+_role_family(::Val{Symbol("ffn.experts.down")}) = :expert
 _role_family(role::Symbol) = :projection
 
 param_family_for(role::Symbol) = _role_family(Val(role))
@@ -147,6 +172,24 @@ const ROLE_TO_SLOT = Dict{Symbol, Symbol}(
     # family travel all the way to the capability gate (§II lattice).
     ROLE_Q_NORM => :wq_norm,
     ROLE_K_NORM => :wk_norm,
+    ROLE_ATTN_GATE => :wattn_gate,
+    ROLE_GDN_QKV => :wgdn_qkv,
+    ROLE_GDN_Z => :wgdn_z,
+    ROLE_GDN_A => :wgdn_a,
+    ROLE_GDN_B => :wgdn_b,
+    ROLE_GDN_CONV => :wgdn_conv,
+    ROLE_GDN_A_LOG => :wgdn_A_log,
+    ROLE_GDN_DT_BIAS => :wgdn_dt_bias,
+    ROLE_GDN_NORM => :wgdn_norm,
+    ROLE_GDN_O => :wgdn_o,
+    ROLE_ROUTER => :wrouter,
+    ROLE_EXPERT_GATE => :wexp_gate,
+    ROLE_EXPERT_UP => :wexp_up,
+    ROLE_EXPERT_DOWN => :wexp_down,
+    ROLE_SHARED_GATE => :wshared_gate,
+    ROLE_SHARED_UP => :wshared_up,
+    ROLE_SHARED_DOWN => :wshared_down,
+    ROLE_SHARED_GATE_INP => :wshared_gate_inp,
 )
 
 slot_for(role::Symbol) = get(ROLE_TO_SLOT, role, nothing)
@@ -202,6 +245,30 @@ struct FamilyParamMap
     embedding_external::String                 # e.g. "model.embed_tokens.weight"
     final_norm_external::Union{Nothing, String}
     lm_head_external::Union{Nothing, String}
+    ignored_prefixes::Vector{String}
+    linear_refs::Vector{ParamRef}
+end
+
+function FamilyParamMap(
+    family::Symbol,
+    layer_prefix::AbstractString,
+    layer_refs::Vector{ParamRef},
+    embedding_external::AbstractString,
+    final_norm_external::Union{Nothing, AbstractString},
+    lm_head_external::Union{Nothing, AbstractString};
+    ignored_prefixes::Vector{String}=String[],
+    linear_refs::Vector{ParamRef}=ParamRef[],
+)
+    return FamilyParamMap(
+        family,
+        String(layer_prefix),
+        layer_refs,
+        String(embedding_external),
+        final_norm_external === nothing ? nothing : String(final_norm_external),
+        lm_head_external === nothing ? nothing : String(lm_head_external),
+        ignored_prefixes,
+        linear_refs,
+    )
 end
 
 """
@@ -237,4 +304,22 @@ export SemanticParamId,
     ROLE_UP,
     ROLE_DOWN,
     ROLE_NORM_PRE_ATTN,
-    ROLE_NORM_POST_ATTN
+    ROLE_NORM_POST_ATTN,
+    ROLE_ATTN_GATE,
+    ROLE_GDN_QKV,
+    ROLE_GDN_Z,
+    ROLE_GDN_A,
+    ROLE_GDN_B,
+    ROLE_GDN_CONV,
+    ROLE_GDN_A_LOG,
+    ROLE_GDN_DT_BIAS,
+    ROLE_GDN_NORM,
+    ROLE_GDN_O,
+    ROLE_ROUTER,
+    ROLE_EXPERT_GATE,
+    ROLE_EXPERT_UP,
+    ROLE_EXPERT_DOWN,
+    ROLE_SHARED_GATE,
+    ROLE_SHARED_UP,
+    ROLE_SHARED_DOWN,
+    ROLE_SHARED_GATE_INP

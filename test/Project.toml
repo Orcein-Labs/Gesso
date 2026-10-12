@@ -21,6 +21,9 @@ Mmap = "a63ad114-7e13-5084-954f-fe012c677804"
 # parsing; the test sandbox needs it declared too (it is not a stdlib, so
 # the sandbox rule bites even harder)
 JSON = "682c06a0-de6a-54ab-a142-c8b1cf79cde6"
+# stdlib: socket tests for the chat server (test/test_serve.jl) open a real
+# TCP connection on an ephemeral port. Declared here for the same sandbox reason.
+Sockets = "6462fe0b-24de-5631-8697-dd941f90decc"
 # Phase 4 (§LXXVII): CUDA in the TEST env so Pkg.test can load the
 # GessoCUDAExt extension. This is the test env, not core — core [deps]
 # stays CUDA-free (§VII). Device-absent machines still pass: the CUDA

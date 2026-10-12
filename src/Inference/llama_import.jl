@@ -168,8 +168,14 @@ Lift the strict Llama config NamedTuple back into the canonical
 doorway speak the SAME language downstream of validation.
 """
 function spec_from_llama_cfg(cfg)
+    # Toy / Phi-3 execution fixtures pass a geometry NamedTuple without
+    # model_type / rope_theta / tie_word_embeddings. Llama defaults keep
+    # those paths bit-identical with the pre-spec_to_model composition.
+    family = hasproperty(cfg, :model_type) ? Symbol(cfg.model_type) : :llama
+    theta = hasproperty(cfg, :rope_theta) ? cfg.rope_theta : 10000.0
+    tied = hasproperty(cfg, :tie_word_embeddings) ? cfg.tie_word_embeddings : true
     return ArchitectureSpec(;
-        family=Symbol(cfg.model_type),
+        family,
         hidden_size=cfg.hidden_size,
         num_layers=cfg.num_hidden_layers,
         n_heads=cfg.num_attention_heads,
@@ -178,8 +184,8 @@ function spec_from_llama_cfg(cfg)
         intermediate_size=cfg.intermediate_size,
         norm_kind=:rms,
         activation_kind=:swiglu,
-        rope=RoPEPolicy(; theta=cfg.rope_theta),
-        tie_word_embeddings=cfg.tie_word_embeddings,
+        rope=RoPEPolicy(; theta),
+        tie_word_embeddings=tied,
     )
 end
 
@@ -210,18 +216,26 @@ Compose a validated config into a `ModelIR.Model` (§VIII: a new architecture
 is a new composition of existing primitives — no `LlamaModel` type).
 """
 function config_to_model(cfg)
-    blocks = ntuple(cfg.num_hidden_layers) do _
+    return spec_to_model(spec_from_llama_cfg(cfg))
+end
+
+"""
+    spec_to_model(spec) -> Model
+
+Compose an ArchitectureSpec into ModelIR. Head counts come from the spec;
+published `head_dim` is NOT a ModelIR field (the interpreter reads it from
+`tensors.spec` when present).
+"""
+function spec_to_model(spec)
+    blocks = ntuple(spec.num_layers) do _
         Block(
-            Attention(;
-                n_heads=cfg.num_attention_heads,
-                n_kv_heads=cfg.num_key_value_heads,
-            ),
-            SwiGLU(hidden=cfg.intermediate_size),
+            Attention(; n_heads=spec.n_heads, n_kv_heads=spec.n_kv_heads),
+            SwiGLU(hidden=spec.intermediate_size),
         )
     end
     return Model(;
-        vocab_size=cfg.vocab_size,
-        embedding=Embedding(dim=cfg.hidden_size),
+        vocab_size=spec.vocab_size,
+        embedding=Embedding(dim=spec.hidden_size),
         blocks=blocks,
     )
 end
@@ -415,11 +429,7 @@ Sharded checkpoints via `model.safetensors.index.json` `weight_map` are
 followed; a single `model.safetensors` is the ordinary case. Tokenizer
 files are NOT this function's concern (item C).
 """
-function _load_llama_impl(dir::AbstractString)
-    isdir(dir) || error("load_llama: no such directory: $dir")
-    cfg = load_llama_config(joinpath(dir, "config.json"))
-    model = config_to_model(cfg)
-
+function _load_tensors_by_name(dir::AbstractString)
     index_path = joinpath(dir, "model.safetensors.index.json")
     tensors_by_name = Dict{String, Array{Float64}}()
     if isfile(index_path)
@@ -462,12 +472,44 @@ function _load_llama_impl(dir::AbstractString)
     else
         merge!(tensors_by_name, load_safetensors(joinpath(dir, "model.safetensors")))
     end
+    return tensors_by_name
+end
 
+function _load_llama_impl(dir::AbstractString)
+    isdir(dir) || error("load_llama: no such directory: $dir")
+    cfg = load_llama_config(joinpath(dir, "config.json"))
+    model = config_to_model(cfg)
+    tensors_by_name = _load_tensors_by_name(dir)
     tensors = materialize_llama(model, tensors_by_name, cfg)
     return (model, tensors, cfg)
 end
 
-export load_llama_config, config_to_model, load_safetensors, materialize_llama, load_llama
+"""
+    load_architecture(dir) -> (model, tensors, spec)
+
+Generic doorway: `config.json` through the family adapter, safetensors through
+the same shard walk as `load_llama`, then `materialize_architecture`. The
+returned tensor set carries `spec` so the interpreter can read published
+`head_dim` and the hybrid mixer.
+"""
+function _load_architecture_impl(dir::AbstractString)
+    isdir(dir) || error("load_architecture: no such directory: $dir")
+    spec = architecture_spec(joinpath(dir, "config.json"))
+    adapter = adapter_for(String(spec.family))
+    pmap = param_map(adapter, spec)
+    tensors_by_name = _load_tensors_by_name(dir)
+    bound = materialize_architecture(spec, pmap, tensors_by_name)
+    model = spec_to_model(spec)
+    return (model, bound, spec)
+end
+
+export load_llama_config,
+    config_to_model,
+    spec_to_model,
+    load_safetensors,
+    materialize_llama,
+    load_llama,
+    load_architecture
 
 load_llama_config(path::AbstractString) =
     _load_boundary(() -> _load_llama_config_impl(path), :load_llama_config)
@@ -477,6 +519,10 @@ load_safetensors(path::AbstractString) =
 
 load_llama(dir::AbstractString) = _load_boundary(() -> _load_llama_impl(dir), :load_llama)
 
+load_architecture(dir::AbstractString) =
+    _load_boundary(() -> _load_architecture_impl(dir), :load_architecture)
+
 @doc (@doc _load_llama_config_impl) load_llama_config
 @doc (@doc _load_safetensors_impl) load_safetensors
 @doc (@doc _load_llama_impl) load_llama
+@doc (@doc _load_architecture_impl) load_architecture

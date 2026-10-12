@@ -1,0 +1,472 @@
+# Dense GGUF quant weights kept in their native bytes on the device, and the
+# decode GEMV that reads them.
+#
+# Design follows llama.cpp's MMVQ path (MIT; ggml/src/ggml-cuda/mmvq.cu,
+# vecdotq.cuh, quantize.cu): the activation row is quantized once per matmul
+# to 32-value blocks (d = amax/127, int8 values, the block sum kept for the
+# K-quant minimums), each output row is handled by one warp, and each 32-value
+# block is one dp4a dot product with the weight values unpacked into int8
+# words. The block byte layouts are the ggml ones. The decode math here is
+# written from those layouts and is checked against this repo's CPU dequant
+# (`_quant_host_f32`) in test/test_cuda_quant_dense.jl.
+#
+# Activation layout (per token t, block gb = (t-1)*nb + b, 0-based b):
+#   qx[gb*8 + w + 1]  Int32, four int8 values packed little-endian (w = 0..7)
+#   dx[gb + 1]        Float32 block scale d = amax/127
+#   sx[gb + 1]        Int32 sum of the block's int8 values
+
+const _DQ_KINDS = (:q4_k, :q5_k, :q6_k, :iq4_xs, :q8_0)
+
+# Device-resident dense weight: the file's bytes for rows 1..nrows, row r at
+# (r-1)*row_bytes, in ggml block order. Not an AbstractArray on purpose, as on
+# the host side (`QuantMatrix`).
+struct GpuDenseQuant
+    data::_CuVec{UInt8}
+    ggml_type::Int32
+    ne0::Int
+    nrows::Int
+    row_bytes::Int
+end
+
+Base.size(q::GpuDenseQuant) = (q.nrows, q.ne0)
+Base.size(q::GpuDenseQuant, d::Integer) = size(q)[d]
+Base.ndims(::GpuDenseQuant) = 2
+Base.length(q::GpuDenseQuant) = q.nrows * q.ne0
+Base.sizeof(q::GpuDenseQuant) = sizeof(q.data)
+
+# GESSO_GPU_DENSE_QUANT=0 restores the dequant-to-F16 path for A/B runs.
+_gpu_dense_quant_on() = get(ENV, "GESSO_GPU_DENSE_QUANT", "1") != "0"
+
+function _dq_kind(t::Int32)
+    I = Gesso.Inference
+    t == I.GGML_TYPE_Q4_K && return :q4_k
+    t == I.GGML_TYPE_Q5_K && return :q5_k
+    t == I.GGML_TYPE_Q6_K && return :q6_k
+    t == I.GGML_TYPE_IQ4_XS && return :iq4_xs
+    t == I.GGML_TYPE_Q8_0 && return :q8_0
+    return nothing
+end
+
+# Whether a host QuantMatrix can be placed natively on the device. The K-quant
+# superblock is 256 values, Q8_0 blocks are 32.
+function _dq_eligible(s)
+    s isa Gesso.Inference.QuantMatrix || return false
+    _gpu_dense_quant_on() || return false
+    kind = _dq_kind(s.ggml_type)
+    kind === nothing && return false
+    s.ne0 % 32 == 0 || return false
+    kind === :q8_0 || s.ne0 % 256 == 0 || return false
+    return true
+end
+
+_dq_device_bytes(s::Gesso.Inference.QuantMatrix) = Int64(s.nrows) * Int64(s.row_bytes)
+
+function _to_gpu_dense_quant(s::Gesso.Inference.QuantMatrix)
+    bytes = CuArray{UInt8}(Gesso.Inference._quant_bytes(s))
+    return GpuDenseQuant(bytes, s.ggml_type, s.ne0, s.nrows, s.row_bytes)
+end
+
+# --- activation quantize: Q8_1-style, one thread per (token, 32-value block) --
+
+function _cuda_q8_1_quant_kernel!(qx, dx, sx, X, nb::Int, total::Int)
+    g = Int((blockIdx().x - 1) * blockDim().x + threadIdx().x)
+    g > total && return
+    t = (g - 1) ÷ nb + 1
+    b = (g - 1) % nb
+    base = b * 32
+    @inbounds begin
+        amax = 0.0f0
+        for l in 1:32
+            amax = max(amax, abs(X[t, base + l]))
+        end
+        d = amax / 127.0f0
+        inv = amax == 0.0f0 ? 0.0f0 : 127.0f0 / amax
+        ssum = Int32(0)
+        wbase = (t - 1) * nb * 8 + b * 8
+        for w in 0:7
+            u = UInt32(0)
+            for tt in 0:3
+                v = X[t, base + 4 * w + tt + 1] * inv
+                qi = unsafe_trunc(Int32, v + copysign(0.5f0, v))
+                qi = clamp(qi, Int32(-127), Int32(127))
+                ssum += qi
+                u |= UInt32(qi & 0xff) << (8 * tt)
+            end
+            qx[wbase + w + 1] = reinterpret(Int32, u)
+        end
+        dx[g] = d
+        sx[g] = ssum
+    end
+    return
+end
+
+# --- per-block contributions ------------------------------------------------
+# Each returns the float dot product of one 32-value weight block with the
+# matching activation block. `boff` is the byte offset of the superblock (or
+# of the Q8_0 block), `gb` the activation block index.
+
+# Q4_K / Q5_K: value = d*sc*q - dmin*mn, q is 4 bits (Q5_K adds one high bit
+# from qh). Sub-block s of a superblock takes nibble (s&1) of qs chunk s>>1.
+# Superblocks are 144 and 176 bytes, so every word read here is 4-aligned and
+# four values unpack at once with byte-lane masks.
+@inline function _dq_kq45(W, boff::Int, has_qh::Bool, b::Int, gb::Int, qx, dx, sx)
+    @inbounds begin
+        s = b & 7
+        dd = _cu_u32a(W, boff)
+        d = Float32(reinterpret(Float16, UInt16(dd & 0xffff)))
+        dmin = Float32(reinterpret(Float16, UInt16(dd >> 16)))
+        sbase = boff + 4
+        if s < 4
+            sc = Float32(W[sbase + s + 1] & 0x3f)
+            mn = Float32(W[sbase + s + 5] & 0x3f)
+        else
+            sc = Float32((W[sbase + s + 5] & 0x0f) | ((W[sbase + s - 3] >> 6) << 4))
+            mn = Float32((W[sbase + s + 5] >> 4) | ((W[sbase + s + 1] >> 6) << 4))
+        end
+        qs0 = boff + (has_qh ? 48 : 16) + 32 * (s >> 1)
+        qh0 = boff + 16
+        shift = 4 * (s & 1)
+        isum = Int32(0)
+        for w in 0:7
+            word = (_cu_u32a(W, qs0 + 4 * w) >> shift) & 0x0f0f0f0f
+            if has_qh
+                word |= ((_cu_u32a(W, qh0 + 4 * w) >> s) & 0x01010101) << 4
+            end
+            isum = CUDA.dp4a(reinterpret(Int32, word), qx[gb * 8 + w + 1], isum)
+        end
+        return dx[gb + 1] * (d * sc * Float32(isum) - dmin * mn * Float32(sx[gb + 1]))
+    end
+end
+
+# Q6_K: value = d*sc*(q - 32), 6-bit q split into ql (low 4) and qh (high 2).
+# Sub-block s = 4h + g covers values 32s..32s+31; its first 16 values use scale
+# 2s and the last 16 use scale 2s+1. The 210-byte superblock is only 2-aligned.
+@inline function _dq_q6k(W, boff::Int, b::Int, gb::Int, qx, dx)
+    @inbounds begin
+        s = b & 7
+        h = s >> 2
+        g = s & 3
+        ql0 = boff + 64 * h + 32 * (g & 1)
+        hi = g >> 1
+        qh0 = boff + 128 + 32 * h
+        sh = 2 * g
+        ia = Int32(0)
+        ib = Int32(0)
+        for w in 0:7
+            lw = (_cu_u32h(W, ql0 + 4 * w) >> (4 * hi)) & 0x0f0f0f0f
+            hw = (_cu_u32h(W, qh0 + 4 * w) >> sh) & 0x03030303
+            # q - 32 in each byte lane. q is 0..63, so with bit 7 set first the
+            # subtraction never borrows from the next lane.
+            word = ((lw | (hw << 4) | 0x80808080) - 0x20202020) ⊻ 0x80808080
+            xw = qx[gb * 8 + w + 1]
+            if w < 4
+                ia = CUDA.dp4a(reinterpret(Int32, word), xw, ia)
+            else
+                ib = CUDA.dp4a(reinterpret(Int32, word), xw, ib)
+            end
+        end
+        d = _cu_f16a(W, boff + 208)
+        sc_a = Float32(reinterpret(Int8, W[boff + 192 + 2 * s + 1]))
+        sc_b = Float32(reinterpret(Int8, W[boff + 192 + 2 * s + 2]))
+        return dx[gb + 1] * d * (sc_a * Float32(ia) + sc_b * Float32(ib))
+    end
+end
+
+# Four IQ4_NL table values for the four nibbles in the low bits of each byte lane.
+@inline function _kv4_word(kv, nibs::UInt32)
+    @inbounds begin
+        word = UInt32(0)
+        for tt in 0:3
+            word |= UInt32(reinterpret(UInt8, kv[Int((nibs >> (8 * tt)) & 0x0f) + 1])) << (8 * tt)
+        end
+        return reinterpret(Int32, word)
+    end
+end
+
+# IQ4_XS: 6-bit sub-block scale ls (value ls-32), values are the IQ4_NL table
+# entries for the nibbles; the low nibbles of a 16-byte run are values 0..15,
+# the high nibbles are values 16..31.
+@inline function _dq_iq4xs(W, boff::Int, b::Int, gb::Int, qx, dx, kv)
+    @inbounds begin
+        ib = b & 7
+        d = _cu_f16a(W, boff)
+        scales_h = _cu_u16a(W, boff + 2)
+        sl = W[boff + 4 + (ib >> 1) + 1]
+        ls = Int((sl >> (4 * (ib & 1))) & 0x0f) | (Int((scales_h >> (2 * ib)) & 0x03) << 4)
+        dl = d * Float32(ls - 32)
+        qs0 = boff + 8 + 16 * ib
+        isum = Int32(0)
+        for w in 0:3
+            qw = _cu_u32a(W, qs0 + 4 * w)
+            isum = CUDA.dp4a(_kv4_word(kv, qw), qx[gb * 8 + w + 1], isum)
+            isum = CUDA.dp4a(_kv4_word(kv, qw >> 4), qx[gb * 8 + w + 5], isum)
+        end
+        return dx[gb + 1] * dl * Float32(isum)
+    end
+end
+
+@inline function _cuda_dq_block(::Val{:q4_k}, W, rowoff::Int, b::Int, qx, dx, sx, tok::Int, nb::Int, kv)
+    return _dq_kq45(W, rowoff + (b >> 3) * 144, false, b, (tok - 1) * nb + b, qx, dx, sx)
+end
+@inline function _cuda_dq_block(::Val{:q5_k}, W, rowoff::Int, b::Int, qx, dx, sx, tok::Int, nb::Int, kv)
+    return _dq_kq45(W, rowoff + (b >> 3) * 176, true, b, (tok - 1) * nb + b, qx, dx, sx)
+end
+@inline function _cuda_dq_block(::Val{:q6_k}, W, rowoff::Int, b::Int, qx, dx, sx, tok::Int, nb::Int, kv)
+    return _dq_q6k(W, rowoff + (b >> 3) * 210, b, (tok - 1) * nb + b, qx, dx)
+end
+@inline function _cuda_dq_block(::Val{:iq4_xs}, W, rowoff::Int, b::Int, qx, dx, sx, tok::Int, nb::Int, kv)
+    return _dq_iq4xs(W, rowoff + (b >> 3) * 136, b, (tok - 1) * nb + b, qx, dx, kv)
+end
+@inline function _cuda_dq_block(::Val{:q8_0}, W, rowoff::Int, b::Int, qx, dx, sx, tok::Int, nb::Int, kv)
+    @inbounds begin
+        off = rowoff + b * 34
+        d = _cu_f16a(W, off)
+        gb = (tok - 1) * nb + b
+        isum = Int32(0)
+        for w in 0:7
+            isum = CUDA.dp4a(reinterpret(Int32, _cu_u32h(W, off + 2 + 4 * w)), qx[gb * 8 + w + 1], isum)
+        end
+        return d * dx[gb + 1] * Float32(isum)
+    end
+end
+
+# --- decode GEMV: one warp per output row, four rows per block --------------
+
+function _cuda_dq_gemv_kernel!(y, W, qx, dx, sx, kv, ::Val{K}, nrows::Int, nb::Int, row_bytes::Int) where {K}
+    lane = Int((threadIdx().x - 1) % 32)
+    row = Int((blockIdx().x - 1) * 4 + (threadIdx().x - 1) ÷ 32 + 1)
+    tok = Int(blockIdx().y)
+    row > nrows && return
+    rowoff = (row - 1) * row_bytes
+    acc = 0.0f0
+    b = lane
+    while b < nb
+        acc += _cuda_dq_block(Val{K}(), W, rowoff, b, qx, dx, sx, tok, nb, kv)
+        b += 32
+    end
+    off = 16
+    while off >= 1
+        acc += CUDA.shfl_down_sync(0xffffffff, acc, off)
+        off >>= 1
+    end
+    if lane == 0
+        @inbounds y[tok, row] = acc
+    end
+    return
+end
+
+# dst[t, o] = sum_i x[t, i] * W[o, i] for a native GpuDenseQuant W.
+_cuda_dq_matmul!(dst, x, w) = (_cuda_dq_matmul_group!((dst,), x, (w,)); dst)
+
+# The same for several weights reading one `x`: it is quantized once.
+# `storage` fields are untyped, so the work happens behind a function barrier:
+# one run-time dispatch per group instead of one per launch.
+function _cuda_dq_matmul_group!(dsts::Tuple, x, ws::Tuple)
+    _cuda_dq_group!(map(d -> d.storage, dsts), x.storage, map(w -> w.storage::GpuDenseQuant, ws))
+    return dsts
+end
+
+@noinline _dq_shape_error(what, a, b) =
+    throw(DimensionMismatch("dense quant matmul: $what is $a, want $b"))
+
+function _cuda_dq_group!(ds::Tuple, xs, qs::Tuple{Vararg{GpuDenseQuant}})
+    n, k = size(xs, 1), size(xs, 2)
+    for (d, q) in zip(ds, qs)
+        k == q.ne0 || _dq_shape_error("x", size(xs), ("_", q.ne0))
+        size(d) == (n, q.nrows) || _dq_shape_error("dst", size(d), (n, q.nrows))
+        _cu_aligned(q.data, 4) || error("dense quant matmul: weight bytes not 4-byte aligned")
+    end
+    n == 0 && return nothing
+    _dq_gemm_ok(ds, n) && return _cuda_dq_gemm_group!(ds, xs, qs, n, k)
+    nb = k ÷ 32
+    total = n * nb
+    qx, dx, sx = _cuda_q8_buffers!(_CUDA_Q8_DENSE, total)
+    @fastcuda threads = 256 blocks = cld(total, 256) _cuda_q8_1_quant_kernel!(qx, dx, sx, xs, nb, total)
+    kv = _cuda_q_tables().kv4
+    for (d, q) in zip(ds, qs)
+        _dq_with_kind(_cuda_dq_launch!, q.ggml_type, d, q, qx, dx, sx, kv, n, nb)
+    end
+    return nothing
+end
+
+# Calls f(Val(kind), args...) so each kernel's `Val` is a compile-time constant.
+@inline function _dq_with_kind(f::F, t::Int32, args...) where {F}
+    I = Gesso.Inference
+    t == I.GGML_TYPE_Q5_K && return f(Val(:q5_k), args...)
+    t == I.GGML_TYPE_Q6_K && return f(Val(:q6_k), args...)
+    t == I.GGML_TYPE_Q4_K && return f(Val(:q4_k), args...)
+    t == I.GGML_TYPE_IQ4_XS && return f(Val(:iq4_xs), args...)
+    t == I.GGML_TYPE_Q8_0 && return f(Val(:q8_0), args...)
+    error("dense quant matmul: unsupported ggml type $t")
+end
+
+@inline function _cuda_dq_launch!(vk::Val, d, q::GpuDenseQuant, qx, dx, sx, kv, n, nb)
+    @fastcuda threads = 128 blocks = (cld(q.nrows, 4), n) _cuda_dq_gemv_kernel!(
+        d, q.data, qx, dx, sx, kv, vk, q.nrows, nb, q.row_bytes,
+    )
+    return nothing
+end
+
+# --- prefill GEMM: dequantize W to F16 once, multiply on the tensor cores ---
+# The GEMV above decodes every weight block once per token, so a 256-token
+# prefill decodes each weight 256 times. From GESSO_DQ_GEMM_MIN tokens on, W is
+# dequantized to F16 in row chunks (scratch capped at GESSO_DQ_GEMM_SCRATCH_MIB)
+# and cuBLAS multiplies it with an F16 copy of x, accumulating in F32. F16 x
+# keeps more bits than the Q8_1 blocks the GEMV reads.
+_dq_gemm_min() = parse(Int, get(ENV, "GESSO_DQ_GEMM_MIN", "32"))
+_dq_gemm_scratch_mib() = parse(Int, get(ENV, "GESSO_DQ_GEMM_SCRATCH_MIB", "32"))
+
+mutable struct _DqGemmScratch
+    w16::Union{Nothing,_CuVec{Float16}}
+    x16::Union{Nothing,_CuVec{Float16}}
+end
+
+const _DQ_GEMM = _DqGemmScratch(nothing, nothing)
+
+# --- direct F16 dequant: value 32m+L of superblock sb, lane L ---------------
+# Each lane reads its own quant byte, so a warp's loads of one sub-block are
+# coalesced; scales are warp-uniform broadcasts. The arithmetic matches the
+# GEMV decode with a unit activation, so Wf equals what the GEMV multiplies
+# (up to the sign of zero).
+@inline function _dq_scmin(W, sbase::Int, s::Int)
+    @inbounds if s < 4
+        return Float32(W[sbase + s + 1] & 0x3f), Float32(W[sbase + s + 5] & 0x3f)
+    else
+        return Float32((W[sbase + s + 5] & 0x0f) | ((W[sbase + s - 3] >> 6) << 4)),
+               Float32((W[sbase + s + 5] >> 4) | ((W[sbase + s + 1] >> 6) << 4))
+    end
+end
+
+@inline function _dq_kq45_value(W, boff::Int, has_qh::Bool, m::Int, L::Int)
+    @inbounds begin
+        dd = _cu_u32a(W, boff)
+        d = Float32(reinterpret(Float16, UInt16(dd & 0xffff)))
+        dmin = Float32(reinterpret(Float16, UInt16(dd >> 16)))
+        sc, mn = _dq_scmin(W, boff + 4, m)
+        q = (W[boff + (has_qh ? 48 : 16) + 32 * (m >> 1) + L + 1] >> (4 * (m & 1))) & 0x0f
+        if has_qh
+            q |= ((W[boff + 16 + L + 1] >> m) & 0x01) << 4
+        end
+        return d * sc * Float32(q) - dmin * mn
+    end
+end
+
+@inline _dq_value(::Val{:q4_k}, W, rowoff::Int, sb::Int, m::Int, L::Int, kv) =
+    _dq_kq45_value(W, rowoff + sb * 144, false, m, L)
+@inline _dq_value(::Val{:q5_k}, W, rowoff::Int, sb::Int, m::Int, L::Int, kv) =
+    _dq_kq45_value(W, rowoff + sb * 176, true, m, L)
+
+# Q6_K value 128h + 32g + l: ql nibble (g>>1) of byte 64h + 32(g&1) + l, qh
+# bits 2g of byte 128 + 32h + l, scale 8h + 2g + l÷16.
+@inline function _dq_value(::Val{:q6_k}, W, rowoff::Int, sb::Int, m::Int, L::Int, kv)
+    @inbounds begin
+        boff = rowoff + sb * 210
+        h = m >> 2
+        g = m & 3
+        lo = (W[boff + 64 * h + 32 * (g & 1) + L + 1] >> (4 * (g >> 1))) & 0x0f
+        hi = (W[boff + 128 + 32 * h + L + 1] >> (2 * g)) & 0x03
+        q = Int32(lo | (hi << 4)) - Int32(32)
+        sc = Float32(reinterpret(Int8, W[boff + 192 + 8 * h + 2 * g + (L >> 4) + 1]))
+        return _cu_f16a(W, boff + 208) * (sc * Float32(q))
+    end
+end
+
+@inline function _dq_value(::Val{:iq4_xs}, W, rowoff::Int, sb::Int, m::Int, L::Int, kv)
+    @inbounds begin
+        boff = rowoff + sb * 136
+        d = _cu_f16a(W, boff)
+        scales_h = _cu_u16a(W, boff + 2)
+        sl = W[boff + 4 + (m >> 1) + 1]
+        ls = Int((sl >> (4 * (m & 1))) & 0x0f) | (Int((scales_h >> (2 * m)) & 0x03) << 4)
+        dl = d * Float32(ls - 32)
+        nib = (W[boff + 8 + 16 * m + (L & 15) + 1] >> (4 * (L >> 4))) & 0x0f
+        return dl * Float32(reinterpret(Int8, reinterpret(UInt8, kv[Int(nib) + 1])))
+    end
+end
+
+# Q8_0 has 32-value blocks; "superblock" sb is blocks 8sb .. 8sb+7.
+@inline function _dq_value(::Val{:q8_0}, W, rowoff::Int, sb::Int, m::Int, L::Int, kv)
+    @inbounds begin
+        off = rowoff + (8 * sb + m) * 34
+        return _cu_f16a(W, off) * Float32(reinterpret(Int8, W[off + 2 + L + 1]))
+    end
+end
+
+# Rows r0+1 .. r0+rc of W into Wf (k, rc) column-major. One warp per
+# (row, 256 values); each store writes 64 contiguous bytes.
+function _cuda_dq_f16_kernel!(Wf, W, kv, ::Val{K}, r0::Int, rc::Int, nb::Int, nsb::Int,
+                              row_bytes::Int, k::Int) where {K}
+    g = Int((blockIdx().x - 1) * (blockDim().x ÷ 32) + (threadIdx().x - 1) ÷ 32)
+    L = Int((threadIdx().x - 1) % 32)
+    r = g ÷ nsb
+    sb = g % nsb
+    r < rc || return
+    rowoff = (r0 + r) * row_bytes
+    base = r * k + 256 * sb + L + 1
+    for m in 0:7
+        8 * sb + m < nb || break
+        @inbounds Wf[base + 32 * m] = Float16(_dq_value(Val{K}(), W, rowoff, sb, m, L, kv))
+    end
+    return
+end
+
+@inline function _cuda_dq_f16_launch!(vk::Val, Wf, q::GpuDenseQuant, kv, r0, rc, nb, k)
+    nsb = cld(nb, 8)
+    @fastcuda threads = 256 blocks = cld(rc * nsb, 8) _cuda_dq_f16_kernel!(
+        Wf, q.data, kv, vk, r0, rc, nb, nsb, q.row_bytes, k)
+    return nothing
+end
+
+_dq_gemm_ok(ds::Tuple, n::Int) = n >= _dq_gemm_min() && all(d -> d isa DenseCuArray{Float32}, ds)
+
+function _cuda_dq_gemm_group!(ds::Tuple, xs, qs::Tuple{Vararg{GpuDenseQuant}}, n::Int, k::Int)
+    G = _DQ_GEMM
+    nb = k ÷ 32
+    rc_max = max(1, (_dq_gemm_scratch_mib() << 20) ÷ (2k))
+    rc_max = min(rc_max, maximum(q -> q.nrows, qs))
+    G.w16 = _hotp_dev(G.w16, Float16, k * rc_max)
+    G.x16 = _hotp_dev(G.x16, Float16, n * k)
+    x16 = unsafe_wrap(CuArray, pointer(G.x16), (n, k))
+    x16 .= xs
+    kv = _cuda_q_tables().kv4
+    C = CUDA.CUBLAS
+    for (d, q) in zip(ds, qs)
+        r0 = 0
+        while r0 < q.nrows
+            rc = min(rc_max, q.nrows - r0)
+            Wf = unsafe_wrap(CuArray, pointer(G.w16), (k, rc))
+            _dq_with_kind(_cuda_dq_f16_launch!, q.ggml_type, Wf, q, kv, r0, rc, nb, k)
+            Y = unsafe_wrap(CuArray, pointer(d, r0 * n + 1), (n, rc))
+            C.cublasGemmEx(_blas_handle(), 'N', 'N', n, rc, k, _cu_scalar(one(Float32)), x16, Float16, n,
+                Wf, Float16, k, _cu_scalar(zero(Float32)), Y, Float32, n, C.CUBLAS_COMPUTE_32F, C.CUBLAS_GEMM_DEFAULT)
+            r0 += rc
+        end
+    end
+    return nothing
+end
+
+_dq_weight(w) = w isa ProjectionWeight && w.storage isa GpuDenseQuant
+_f32_weight(w) = w isa ProjectionWeight && w.storage isa CuMatrix{Float32}
+
+function Gesso.Inference._matmul_shared_input!(cpu::CUDABackend, dsts::Tuple, x::Activation, ws::Tuple, wl)
+    # The one-token GDN projections: qkv and z quantized, a and b small F32.
+    # The quantized pair shares one quantization of x, the F32 pair one launch.
+    if length(ws) == 4 && _dq_weight(ws[1]) && _dq_weight(ws[2]) && _f32_weight(ws[3]) && _f32_weight(ws[4]) &&
+       size(x.storage, 1) == 1 && _xwt_ok(dsts[3].storage, x.storage, ws[3].storage) &&
+       _xwt_ok(dsts[4].storage, x.storage, ws[4].storage)
+        _cuda_device_storage!(:matmul!, x)
+        foreach(d -> _cuda_device_storage!(:matmul!, d), dsts)
+        _cuda_dq_matmul_group!((dsts[1], dsts[2]), x, (ws[1], ws[2]))
+        _cuda_xwt2!(dsts[3].storage, dsts[4].storage, x.storage, ws[3].storage, ws[4].storage)
+        return dsts
+    end
+    if length(ws) > 1 && all(w -> w isa ProjectionWeight && w.storage isa GpuDenseQuant, ws)
+        _cuda_device_storage!(:matmul!, x)
+        foreach(d -> _cuda_device_storage!(:matmul!, d), dsts)
+        return _cuda_dq_matmul_group!(dsts, x, ws)
+    end
+    for i in eachindex(dsts)
+        matmul!(cpu, dsts[i], x, ws[i], wl)
+    end
+    return dsts
+end

@@ -12,8 +12,10 @@ license = "Apache-2.0"
 # dependency-law test (test/runtests.jl) justifying it:
 #   Dates  — timestamps for structured log events (§XLII receipts vocabulary)
 #   LinearAlgebra — CPU reference matmul (§LXXV Phase 2)
+#   Libdl  — ggml to_float for GGUF dequant (qwen35moe)
 #   Mmap   — safetensors byte region (§LXXVI)
 #   JSON   — config.json + safetensors header parsing (§LXXVI)
+#   Sockets — TCP listener for the OpenAI-compatible server (src/serve)
 #
 # Backend lowering arrives as package extensions when their phases call for
 # it — never as core dependencies:
@@ -26,12 +28,18 @@ Dates = "ade2ca70-3891-5945-98fb-dc099432e06a"
 # Phase 2 (§LXXV): CPU reference matmul — matmul! lowers x * transpose(W)
 # through BLAS. Stdlib, justified in the dependency-law test.
 LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
+# qwen35moe GGUF: dlopen llama.cpp ggml for quantized to_float.
+Libdl = "8f399da3-3557-5675-b5ff-fb832c97cbdb"
 # Phase 3 (§LXXVI): safetensors byte region is mmapped, never copied
 # through a handle. Stdlib, justified in the dependency-law test.
 Mmap = "a63ad114-7e13-5084-954f-fe012c677804"
 # Phase 3 (§LXXVI): the ONE sanctioned third-party dependency — config.json
 # and the safetensors header are JSON. Justified in the dependency-law test.
 JSON = "682c06a0-de6a-54ab-a142-c8b1cf79cde6"
+# Serve (src/serve): the OpenAI-compatible chat server listens on TCP. HTTP/1.1
+# framing is hand-written, so Sockets is the only network dependency. Stdlib,
+# justified in the dependency-law test.
+Sockets = "6462fe0b-24de-5631-8697-dd941f90decc"
 
 [weakdeps]
 # Phase 4 (§LXXVII): CUDA.jl is a package EXTENSION, never a core dep (§VII).

@@ -97,6 +97,10 @@ const INVENTORY = Dict{Symbol, Tuple{Symbol, Vector{String}}}(
 
     # --- §CIX semantics vocabulary (workload dispatch types) ----------------
     :PrefillWorkload => (:live, ["test_semantics.jl", "test_operators.jl"]),
+    # --- chat server (src/serve) -------------------------------------------
+    :ChatModel => (:live, ["test_serve.jl"]),
+    :serve => (:live, ["test_serve.jl"]),
+    :gguf_chat_model => (:live, ["test_serve_engine.jl"]),
     :DecodeWorkload => (:live, ["test_semantics.jl", "test_operators.jl"]),
 
     # --- §CIX ModelIR vocabulary --------------------------------------------
@@ -113,7 +117,7 @@ const INVENTORY = Dict{Symbol, Tuple{Symbol, Vector{String}}}(
     :ProjectionWeight => (:live, ["test_parameters.jl", "test_operators.jl"]),
     :KVCache => (:live, ["test_parameters.jl", "test_kv_manager.jl"]),
     :EmbeddingTable => (:live, ["test_parameters.jl", "test_cpu_ops.jl"]),
-    :ExpertWeight => (:empty, String[]),          # §LVIII-adjacent vocabulary: contract only
+    :ExpertWeight => (:live, ["test_moe_routing.jl"]),
     :FrozenParameter => (:live, ["test_parameters.jl", "test_cpu_ops.jl"]),
     :QuantizedParameter => (:empty, String[]),    # §XV vocabulary: contract only (Phase 10)
     :Activation => (:live, ["test_parameters.jl", "test_operators.jl"]),
@@ -126,11 +130,34 @@ const INVENTORY = Dict{Symbol, Tuple{Symbol, Vector{String}}}(
     # --- Phase 2/3 oracle + import (§LXXV/§LXXVI) ---------------------------
     :reference_prefill => (:live, ["test_reference_prefill.jl"]),
     :reference_generate => (:live, ["test_reference_generate.jl"]),
+    :GenerateState => (:live, ["test_reference_generate.jl", "test_qwen35_hybrid.jl", "test_cuda_hybrid.jl", "test_generate_state_io.jl"]),
+    :save_state => (:live, ["test_generate_state_io.jl"]),
+    :load_state => (:live, ["test_generate_state_io.jl"]),
+
+    # --- context budget + compaction policy (CPU, pure Julia) ----------------
+    :kv_bytes_per_token => (:live, ["test_context_budget.jl"]),
+    :memory_ceiling_tokens => (:live, ["test_context_budget.jl"]),
+    :CostModel => (:live, ["test_context_budget.jl"]),
+    :prefill_seconds => (:live, ["test_context_budget.jl"]),
+    :decode_seconds => (:live, ["test_context_budget.jl"]),
+    :ContextBudget => (:live, ["test_context_budget.jl"]),
+    :latency_ceiling_tokens => (:live, ["test_context_budget.jl"]),
+    :CompactionPolicy => (:live, ["test_context_budget.jl"]),
+    :CompactionTracker => (:live, ["test_context_budget.jl"]),
+    :reset! => (:live, ["test_context_budget.jl"]),
+    :decide_compaction => (:live, ["test_context_budget.jl"]),
     :load_llama_config => (:live, ["test_import_llama.jl"]),
     :config_to_model => (:live, ["test_import_llama.jl"]),
     :load_safetensors => (:live, ["test_import_llama.jl"]),
     :materialize_llama => (:live, ["test_import_llama.jl"]),
     :load_llama => (:live, ["test_import_llama.jl"]),
+    :load_gguf => (:live, ["test_gguf_import.jl"]),
+    :gguf_architecture_spec => (:live, ["test_gguf_import.jl"]),
+    :gguf_header => (:live, ["test_gguf_import.jl"]),
+    :GgufQuantSlice => (:live, ["test_gguf_import.jl"]),
+    :GpuQuantSlice => (:live, ["test_gguf_import.jl", "test_cuda_moe.jl"]),
+    :HostOffload => (:live, ["test_moe_routing.jl", "test_cuda_moe.jl"]),
+    :gguf_dequant_expert => (:live, ["test_gguf_import.jl"]),
     :GPT2BPE => (:here, String[]),                # type exercised via its loader everywhere
     :load_gpt2_tokenizer => (:live, ["test_tokenizer_gpt2.jl"]),
     :encode => (:live, ["test_tokenizer_gpt2.jl"]),
@@ -147,16 +174,25 @@ const INVENTORY = Dict{Symbol, Tuple{Symbol, Vector{String}}}(
     :ArchitectureAdapter => (:live, ["test_breadth0.jl"]),
     :LlamaAdapter => (:live, ["test_breadth0.jl"]),
     :Qwen2Adapter => (:live, ["test_breadth0.jl"]),
+    :Qwen35Adapter => (:live, ["test_breadth0.jl"]),
+    :Qwen35MoeAdapter => (:live, ["test_moe_routing.jl"]),
+    :MoeSpec => (:live, ["test_moe_routing.jl"]),
+    :gguf_param_map => (:live, ["test_moe_routing.jl"]),
     :GemmaAdapter => (:live, ["test_breadth0.jl"]),
     :MistralAdapter => (:live, ["test_breadth0.jl"]),
     :Phi3Adapter => (:live, ["test_breadth0.jl"]),
     :PhiAdapter => (:here, String[]),
     :FusedQKVLayout => (:live, ["test_breadth0.jl"]),
     :fused_qkv_rows => (:live, ["test_breadth0.jl"]),
+    :fused_qg_rows => (:live, ["test_breadth0.jl"]),
     :adapter_for => (:live, ["test_breadth0.jl"]),
     :known_families => (:live, ["test_breadth0.jl"]),
     :architecture_spec => (:live, ["test_breadth0.jl"]),
+    :LinearMixerSpec => (:live, ["test_breadth0.jl"]),
+    :layer_mixer => (:live, ["test_breadth0.jl"]),
     :materialize_architecture => (:live, ["test_breadth0.jl"]),
+    :load_architecture => (:here, String[]),
+    :spec_to_model => (:here, String[]),
     :parse_config => (:live, ["test_breadth0.jl"]),
     :param_map => (:live, ["test_breadth0.jl"]),
     :family_symbol => (:live, ["test_breadth0.jl"]),
@@ -174,6 +210,22 @@ const INVENTORY = Dict{Symbol, Tuple{Symbol, Vector{String}}}(
     :compatibility_matrix => (:live, ["test_breadth0.jl"]),
     :compatibility_table => (:live, ["test_breadth0.jl"]),
     :vocab_size => (:live, ["test_tokenizer_protocol.jl"]),
+
+    # --- Phase 20 speculation seam (§XCIII; SPECULATION_SEAM.md) ------------
+    :DraftSource => (:live, ["test_speculation.jl"]),
+    :DraftContext => (:live, ["test_speculation.jl"]),
+    :Draft => (:live, ["test_speculation.jl"]),
+    :propose => (:live, ["test_speculation.jl"]),
+    :observe! => (:live, ["test_speculation.jl"]),
+    :SuffixSource => (:live, ["test_speculation.jl"]),
+    :TemplateRule => (:live, ["test_speculation.jl"]),
+    :TemplateSource => (:live, ["test_speculation.jl"]),
+    :SymbolicSource => (:live, ["test_speculation.jl"]),
+    :IntegerArithmetic => (:live, ["test_speculation.jl"]),
+    :IntegerSequence => (:live, ["test_speculation.jl"]),
+    :LastLineProcedure => (:live, ["test_speculation.jl"]),
+    :complete_text => (:live, ["test_speculation.jl"]),
+    :feedback_counts => (:live, ["test_speculation.jl"]),
 
     # --- Phase 5 engine (§LXXVIII) ------------------------------------------
     :Session => (:live, ["test_session.jl"]),

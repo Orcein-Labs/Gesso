@@ -171,6 +171,88 @@ function _probe(backend, cap::Symbol)
         return _conformance_run(
             () -> Gesso.rope!(backend, q, k, [0, 1], wl; theta=10000.0, inv_freq=inv),
         )
+    elseif cap === :qk_norm
+        x = _act(reshape(randn(rng, 16), (2, 2, 4)))
+        return _conformance_run(
+            () -> Gesso.rmsnorm!(backend, _act(zeros(2, 2, 4)), x, _froz(ones(4)), wl),
+        )
+    elseif cap === :attn_output_gate
+        src = randn(rng, 4)
+        gate = randn(rng, 4)
+        dst = zeros(4)
+        return _conformance_run(() -> Gesso._cpu_sigmoid_mul!(dst, src, gate))
+    elseif cap === :rope_partial_dim
+        q = _act(reshape(randn(rng, 16), (2, 2, 4)))
+        k = _act(reshape(randn(rng, 16), (2, 2, 4)))
+        inv = Gesso.rope_inv_freq(Gesso.RoPEPolicy(; rotary_dim=4), 4)
+        return _conformance_run(
+            () -> Gesso.rope!(
+                backend,
+                q,
+                k,
+                [0, 1],
+                wl;
+                theta=10000.0,
+                inv_freq=inv,
+                rotary_dim=4,
+            ),
+        )
+    elseif cap === :rope_interleaved
+        q = _act(reshape(randn(rng, 16), (2, 2, 4)))
+        k = _act(reshape(randn(rng, 16), (2, 2, 4)))
+        return _conformance_run(
+            () -> Gesso.rope!(
+                backend,
+                q,
+                k,
+                [0, 1],
+                wl;
+                theta=10000.0,
+                interleaved=true,
+            ),
+        )
+    elseif cap === :mrope
+        q = _act(reshape(randn(rng, 16), (2, 2, 4)))
+        k = _act(reshape(randn(rng, 16), (2, 2, 4)))
+        inv = Gesso.rope_inv_freq(
+            Gesso.RoPEPolicy(; rotary_dim=4, mrope_section=[1, 1]),
+            4,
+        )
+        return _conformance_run(
+            () -> Gesso.rope!(
+                backend,
+                q,
+                k,
+                [0, 1],
+                wl;
+                theta=10000.0,
+                inv_freq=inv,
+                rotary_dim=4,
+            ),
+        )
+    elseif cap === :moe_routing
+        seq, h, n_exp, ff, k = 2, 4, 4, 8, 2
+        x = randn(rng, seq, h)
+        router = randn(rng, n_exp, h)
+        gate3 = randn(rng, n_exp, ff, h)
+        up3 = randn(rng, n_exp, ff, h)
+        down3 = randn(rng, n_exp, h, ff)
+        y = zeros(seq, h)
+        return _conformance_run(
+            () -> Gesso._cpu_moe_topk_swiglu!(y, x, router, gate3, up3, down3, k),
+        )
+    elseif cap === :linear_attention
+        seq, nv, dk, dv = 2, 2, 4, 4
+        q = randn(rng, seq, nv, dk)
+        k = randn(rng, seq, nv, dk)
+        v = randn(rng, seq, nv, dv)
+        g = -rand(rng, seq, nv)
+        beta = rand(rng, seq, nv)
+        out = zeros(seq, nv, dv)
+        state = zeros(nv, dk, dv)
+        return _conformance_run(
+            () -> Gesso._cpu_gated_delta_rule!(out, q, k, v, g, beta, state),
+        )
     else
         return :unsupported
     end
@@ -253,6 +335,56 @@ const _CAP_PROBE_SPECS = [
             factor=8.0,
             original_max_position_embeddings=8192,
         ),
+    ),
+    Gesso.ArchitectureSpec(;
+        family=:probe,
+        hidden_size=8,
+        num_layers=1,
+        n_heads=2,
+        n_kv_heads=1,
+        vocab_size=8,
+        intermediate_size=16,
+        features=Set{Symbol}([:linear_attention]),
+    ),
+    Gesso.ArchitectureSpec(;
+        family=:probe,
+        hidden_size=8,
+        num_layers=1,
+        n_heads=2,
+        n_kv_heads=1,
+        vocab_size=8,
+        intermediate_size=16,
+        features=Set{Symbol}([:attn_output_gate]),
+    ),
+    Gesso.ArchitectureSpec(;
+        family=:probe,
+        hidden_size=8,
+        num_layers=1,
+        n_heads=2,
+        n_kv_heads=1,
+        vocab_size=8,
+        intermediate_size=16,
+        features=Set{Symbol}([:mrope]),
+    ),
+    Gesso.ArchitectureSpec(;
+        family=:probe,
+        hidden_size=8,
+        num_layers=1,
+        n_heads=2,
+        n_kv_heads=1,
+        vocab_size=8,
+        intermediate_size=16,
+        rope=Gesso.RoPEPolicy(; rotary_dim=4),
+    ),
+    Gesso.ArchitectureSpec(;
+        family=:probe,
+        hidden_size=8,
+        num_layers=1,
+        n_heads=2,
+        n_kv_heads=1,
+        vocab_size=8,
+        intermediate_size=16,
+        rope=Gesso.RoPEPolicy(; interleaved=true),
     ),
 ]
 

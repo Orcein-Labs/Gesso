@@ -114,9 +114,9 @@ Read from `src/` on 2026-10-01. No tok/s claim is made here.
 
 | # | Mechanism | Where | Why it costs |
 |---|-----------|--------|--------------|
-| 1 | Attention **gathers** paged KV into contiguous scratch every step | `kv_manager.jl` `gather_kv!`; `session.jl` | Pages are the cache; the manager is not a kernel. FlashAttention-class fusion is glue we have not written. |
+| 1 | Attention **gathers** paged KV into contiguous scratch every step | `kv_manager.jl` `gather_kv!`; `session.jl` | Pages are the cache; the manager is not a kernel. FlashAttention-class fusion is glue we have not written. **10E:** the gather is now IN PLACE into a Session-owned context-length workspace (`gather_kv!` writes `dest[1:len]`, tail untouched) — the per-step *allocation* is gone, the gather itself remains. **10F:** on CUDA the gather's row copies are one kernel each instead of a `@views .=` broadcast wrapper per row (`_copy_rows_at!`), which is what took `kv_manager.jl` from 380,160 B to 3,840 B per warmed SmolLM2 `decode!`. |
 | 2 | Prefill still D2H of the logits row; decode greedy is device-side | `session.jl` | CUDA `:argmax` — host gets one Int on **decode**. `prefill!` still returns `Array(logits)`. Lava: full-row host argmax. |
-| 3 | Unfused op soup + gather then GEMM | `cpu.jl` / `cuda_ops.jl` / `lava_ops.jl` / `session.jl` | Layer ops still separate launches. CUDA attention is now device `mul!` over **gathered** scratch (`:attn_gemm`). Gather every step remains. Phase 9 Autotune still only selects among two **matmuls**. |
+| 3 | Unfused op soup + gather then GEMM | `cpu.jl` / `cuda_ops.jl` / `lava_ops.jl` / `session.jl` | Layer ops still separate launches. CUDA attention is now device `mul!` over **gathered** scratch (`:attn_gemm`). Gather every step remains. Phase 9 Autotune still only selects among two **matmuls**. **10E:** decode no longer rebuilds per-token Activations / gathered arrays / GQA repeats — one Session-owned workspace serves every layer, and the CPU op bodies reach storage through typed helpers, so warmed `decode!` allocation is O(1) in seqlen. Ops are still separate calls. **10F:** on CUDA the per-head split/merge/GQA-repeat copies and the rmsnorm reduction+apply are now elementwise/reduction kernels, dispatched as `CuArray` specializations of the same core helpers (no new type, `Inference.jl` charges 0 B to a warmed `decode!`); what remains is the launch floor — ~9,300 `@cuda`/CUBLAS launches per token at ~528–1,088 B each — so warmed SmolLM2 CUDA `decode!` host allocation is 1,269,616 B. **10G:** of that, 320,509 B was not engine work at all — §LXXII Autotune receipt construction re-emitted on every cache HIT (633 consults per token, one decision copied 633 times). A cache hit is not a decision: `select` now returns the cached `TuneResult` and emits nothing, and the miss receipt still names the winner (no schema bump). Warmed SmolLM2 CUDA `decode!` is 942,128 B, 106,448 B UNDER item D's 1 MiB — the ceiling was not raised to get there. What is left is the launch floor plus a 37,136 B consult residual. |
 | 4 | Batch = 1, `generate` RESETS | `session.jl` | No continuous batching, no prefix-reuse across `generate` calls. `fork` is the share constructor; `generate` drops it. |
 | 5 | Host-side interpreter loop | `Inference.jl` | Julia orchestrates layers in a serial for-loop. Fine for correctness. Death for decode tok/s until the inner step is one (or few) device graphs. |
 | 6 | Lava path is GPUArrays broadcast + `mul!` | `lava_ops.jl` | Portable seam (Phase 8). Untuned. CUDA is the speed horse; Lava stays the portable proof. |
@@ -150,12 +150,136 @@ must not rediscover information the semantic core already had
 exists *inside* Gesso's meaning pipeline, not as a generic
 "make Julia faster" side quest.
 
+### 2a.0 WHERE DECODE TIME ACTUALLY GOES (measured 2026-10-03)
+
+**This is NOT ladder rung 1.** Rung 1 below (the compile/execute
+attribution table) is still OPEN and is still the precondition for
+a Julia fork. This subsection answers a different, narrower
+question — *on the steady-state clock, is decode limited by
+arithmetic, by memory traffic, or by neither?* — because the G2
+factor (1.452x, SmolLM2-135M) was measured on exactly one model
+size and nothing said whether it generalises.
+
+**What was measured.** Gesso CUDA decode over a ladder of
+Llama-shaped checkpoints from 1M to 843M parameters, plus real
+SmolLM2-135M. Checkpoints are synthetic but REAL safetensors +
+`config.json` written by the protocol `test_import_llama.jl`
+already uses, so the closed Llama importer takes them with no
+special casing. Weights are RANDOM: this subsection measures
+**time and host allocation only**. Output quality is the test
+suite's job, and no claim is made here about what these
+checkpoints generate.
+
+```
+model      h    L      V    params  ms/token  tok/s   GB/s  alloc/tok
+tiny     128    4   2048      1.0M    4.122  242.6    1.0  119,984 B
+small    256    8   4096      7.3M    5.658  176.8    5.2  222,640 B
+base     512   12   8192     41.9M    8.804  113.6   19.1  331,216 B
+mid      768   16  16384    125.8M   11.050   90.5   45.5  436,560 B
+large   1024   20  32768    285.2M   15.227   65.7   74.9  542,672 B
+xl      1536   28  32768    843.1M   23.085   43.3  146.1  758,640 B
+SmolLM2  576   30  49152    147.8M   21.303   46.9   27.7  811,312 B
+```
+
+Fitting `ms = c0 + a*L + b*L*h^2` over all seven rows:
+
+```
+ms/token = 0.797  +  0.6528 * L  +  6.03e-08 * L * h^2
+            fixed     PER-LAYER        compute
+```
+
+| term | value | at SmolLM2 (h=576, L=30) |
+|---|---|---|
+| per-session fixed | 0.797 ms | 0.8 ms |
+| **per-layer launch floor** | **0.653 ms** | **19.58 ms** |
+| compute | 6.03e-08·L·h² ms | 0.60 ms |
+
+**THE HEADLINE: at SmolLM2 scale, 97.0% of decode time is per-layer
+launch latency.** 19.6 ms of a 21.3 ms token. Actual arithmetic is
+0.6 ms. The overhead floor is *linear in layer count* and almost
+independent of width, so it dominates everything a demo would run:
+
+```
+h=576  L=30: overhead 19.58 ms | compute  0.60 ms | 97.0% overhead
+h=1024 L=30: overhead 19.58 ms | compute  1.90 ms | 91.2%
+h=1536 L=30: overhead 19.58 ms | compute  4.27 ms | 82.1%
+h=2048 L=30: overhead 19.58 ms | compute  7.58 ms | 72.1%
+h=3072 L=30: overhead 19.58 ms | compute 17.06 ms | 53.4%
+h=4096 L=30: overhead 19.58 ms | compute 30.33 ms | 39.2%
+crossover (overhead == compute) at h ~= 3291, L=30
+```
+
+**And it is not memory-bound either.** Achievable device
+bandwidth on this box, measured (triad, 6 s sustained ramp, clocks
+verified at SM 2782 / MEM 13801 MHz before the timed window):
+**371 GB/s**. Not the ~1.8 TB/s vendor spec — the achieved figure,
+which is the only one this repo is entitled to cite. Against it:
+
+```
+model      GB/s   % of 371 GB/s achieved
+base      19.1        5.1%
+mid       45.5       12.3%
+large     74.9       20.2%
+xl       146.1       39.4%
+SmolLM2   27.7        7.5%
+```
+
+SmolLM2 decode moves 27.7 GB/s of a 371 GB/s stream. **The GPU is
+idle ~92% of the decode.** (The triad is a simple streaming kernel;
+decode's access pattern is worse, so the honest reading is that the
+real ceiling is at or below 371 GB/s and the percentage is an
+optimistic bound.)
+
+**METHOD, and the bug it caught.** First attempt at this table was
+WRONG and was thrown away. 30 measured tokens per model, taken right
+after warmup, with multi-second gaps between models (safetensors
+write, H2D). On this box the GPU sits at `pstate P8` / 405 MHz
+memory clock when briefly loaded and needs seconds of CONTINUOUS
+work to promote to boost — the first bandwidth attempt read 60 GB/s
+and 186 GB/s for triad and copy, at 10.9 W of a 145 W limit. The
+numbers in this subsection use a sustained 2 s ramp before EACH
+timing, 100 measured tokens so clocks settle inside the window,
+and CLOCKS PRINTED PER ROW as evidence. Compile and the Autotune
+searches are outside every timed window (§XXXIII rule 1). This is
+recorded because the same trap will catch the next person who runs a
+G2 row on this hardware.
+
+**What this does and does not license.**
+
+* LICENSES: "Gesso at SmolLM2 scale is 97% launch-latency-bound and
+  runs at 7.5% of this GPU's achieved memory bandwidth." That is a
+  measured statement with a stated method.
+* DOES NOT LICENSE: any eager-PyTorch comparison. **torch is not
+  installed on the demo box**, so the 1.452x factor could NOT be
+  re-measured at any size here. The only Llama-shaped model present
+  is SmolLM2-135M; the other cached snapshot is `model_type:
+  "needle"` and is not loadable.
+* CONSEQUENCE FOR THE 1.452x CLAIM — corrected.* It was tempting to
+  predict the factor decays with model size. This data says the
+  opposite of the intuitive story: we stay launch-bound far longer
+  than expected (crossover at h~=3291, past any demo-sized model),
+  so the factor is an OVERHEAD factor and plausibly HOLDS or
+  IMPROVES against eager, whose per-layer dispatch is worse. That is
+  a **hypothesis, not a measurement** — PyTorch is not on this box
+  and the claim is not made. What IS measured is that 46.9 tok/s at
+  135M sits ~an order of magnitude below where a fused
+  llama.cpp-class runtime would be, and the reason is entirely
+  per-layer overhead (0.653 ms), not anything semantic.
+
+**NEXT MEASUREMENT, if the demo needs the factor curve:** install
+torch and obtain one real Llama-shaped checkpoint above 1B params
+(the harness `benchmark/compare_eager.py` runs as-is). Until then
+the factor is a single point on one model and should be quoted as
+exactly that.
+
 ### Exhaust this ladder, in order
 
 1. **Attribute.** Split every G2 run into source load, package
    load, inference, specialization, LLVM, native emit, GPUCompiler,
    (Lava: SPIR-V + pipeline), GPU execute, D2H. A performance claim
-   without this decomposition is not actionable. The ancient texts
+   without this decomposition is not actionable. **STILL OPEN** —
+   §2a.0 above measures the steady-state decode regime only and is
+   not a substitute for this table. The ancient texts
    §3 are the instrument list. No Julia **compiler fork** begins
    until this table exists for SmolLM2 decode on the demo box.
 2. **Win without modifying Julia** (ancient texts §4). Type
@@ -165,6 +289,22 @@ exists *inside* Gesso's meaning pipeline, not as a generic
    restart is recovery not the hot path. Lava already does not
    precompile on 1.12 — that is a compiler-layer finding we
    already paid for.
+   **10H LANDED the first rung: type stability on the decode
+   step.** §CIX was amended so the array type holding a tensor is
+   ONE trait-equivalent type parameter `S` on the §XI families and
+   the Session engine buffers. `@inferred reference_prefill` and
+   `@inferred decode!` are GREEN on toy2 and llama_micro (10D's
+   packeted `@test_broken` trio is gone). The measured side effect
+   is an allocation win, because type-stable dispatch stops boxing
+   dynamic-dispatch targets: warmed SmolLM2 CUDA `decode!`
+   942,128 B → **814,544 B** (`Profile.Allocs`: cuda_ops.jl
+   601,552 → 550,616 B, session.jl 214,652 → 156,188 B). §2a.0
+   (measured) now says WHY that win was available and what is
+   left: at SmolLM2 scale decode is **97.0% per-layer launch
+   latency** at 0.653 ms/layer, and 7.5% of this GPU's achieved
+   371 GB/s. The remaining rungs — bounded specialization,
+   invalidation control, persistent worker — are open, and §2a.0
+   says the launch floor is what they and fusion have to beat.
 3. **GPUCompiler / Lava emitter** as the portable-fast surface
    (ancient texts §11–13): Julia IR before GPUCompiler sees the
    kernel, then fusion, then SPIR-V quality. CUDA remains the

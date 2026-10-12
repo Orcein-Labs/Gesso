@@ -218,10 +218,11 @@ function Session(
     # (§LXX, capability lattice §II). CPU and Lava run it; CUDA comparison still declines scaled policies.
     inv_freq = tensors_rope_inv_freq(tensors, d_head; theta)
 
-    T = typeof(tensors.embedding.storage)
+    proto = _embedding_prototype(tensors)
+    T = typeof(proto)
     h = fill!(
         similar(
-            tensors.embedding.storage,
+            proto,
             T <: Array ? Float64 : eltype(T),
             (context_length, dim),
         ),
@@ -229,7 +230,7 @@ function Session(
     )
 
     mgr = PagedKVManager(
-        tensors.embedding.storage;
+        proto;
         n_layers=length(model.blocks),
         n_kv_heads=n_kv_heads,
         d_head=d_head,
@@ -277,16 +278,23 @@ end
 
 # --- shared scratch plumbing ---------------------------------------------------
 
+# Storage kind used as a `similar` prototype. A quantized embedding (GGUF
+# `QuantMatrix`) is not an array; its activations and KV pages are F32 host
+# arrays, so the prototype is an empty F32 matrix.
+_embedding_prototype(tensors) =
+    _is_quant_storage(tensors.embedding.storage) ? zeros(Float32, 0, 0) :
+    tensors.embedding.storage
+
 # zeroed scratch of the tensors' storage kind (CPU F64 buffers / device F32,
 # §LXXVII) — the same pattern the oracle uses
 _session_zeros_like(tensors, dims::Tuple{Vararg{Int}}) = fill!(
     similar(
-        tensors.embedding.storage,
-        typeof(tensors.embedding.storage) <: Array ? Float64 :
-        eltype(tensors.embedding.storage),
+        _embedding_prototype(tensors),
+        typeof(_embedding_prototype(tensors)) <: Array ? Float64 :
+        eltype(_embedding_prototype(tensors)),
         dims,
     ),
-    zero(eltype(tensors.embedding.storage)),
+    zero(eltype(_embedding_prototype(tensors))),
 )
 
 # --- Phase 10E item A: the Session-owned decode workspace -----------------------
@@ -431,16 +439,17 @@ function _assert_disjoint_scratch!(parent::Session, child::Session)
 end
 
 # greedy id from a logits row: argmax, ties = first index, 0-based (§LXXVIII;
-# no Random, no Sampler zoo)
+# no Random). Greedy is the default everywhere; the one opt-in sampler lives in
+# sampling.jl and is reachable only through reference_generate's `sampler`.
 _all_finite(a) = all(isfinite, a)
 
+_nonfinite_logits() = gesso_error(
+    ERR_NUMERICAL_INSTABILITY,
+    "inference: nonfinite logits; no token may be emitted",
+)
+
 function _require_finite_logits(logits)
-    _all_finite(logits) || throw(
-        gesso_error(
-            ERR_NUMERICAL_INSTABILITY,
-            "inference: nonfinite logits; no token may be emitted",
-        ),
-    )
+    _all_finite(logits) || throw(_nonfinite_logits())
     return logits
 end
 _greedy_id(logits_row) = Int(argmax(_require_finite_logits(logits_row))) - 1
@@ -482,7 +491,7 @@ end
 
 function _session_reset!(s::Session)
     s.mgr = PagedKVManager(
-        s.tensors.embedding.storage;
+        _embedding_prototype(s.tensors);
         n_layers=length(s.model.blocks),
         n_kv_heads=s.n_kv_heads,
         d_head=s.d_head,
@@ -754,6 +763,7 @@ function _prefill_impl!(s::Session, tokens::AbstractVector{Int}, span::_EngineSp
             theta=s.theta,
             inv_freq=s.inv_freq,
             interleaved=s.interleaved,
+            rotary_dim=_tensor_rotary_dim(tensors),
         )
         # KV APPEND through the paged manager: post-RoPE rows 1..P, one page
         # row per token, K and V as a pair (§LXXVIII)
@@ -952,6 +962,7 @@ function _session_consume!(s::Session, tok::Int)
             theta=s.theta,
             inv_freq=s.inv_freq,
             interleaved=s.interleaved,
+            rotary_dim=_tensor_rotary_dim(tensors),
         )   # 0-based position
         # KV APPEND through the paged manager (K and V as a pair), THEN gather
         # rows 1..K IN PLACE into the context_length workspace — identical bytes

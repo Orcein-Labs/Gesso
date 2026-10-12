@@ -1,0 +1,40 @@
+{
+ "input": {
+  "messages": [
+   {
+    "role": "user",
+    "content": "q"
+   },
+   {
+    "role": "assistant",
+    "content": "",
+    "tool_calls": [
+     {
+      "type": "function",
+      "function": {
+       "name": "f",
+       "arguments": {
+        "x": "1"
+       }
+      }
+     }
+    ]
+   },
+   {
+    "role": "tool",
+    "content": "r1"
+   },
+   {
+    "role": "tool",
+    "content": "r2"
+   },
+   {
+    "role": "assistant",
+    "content": "done"
+   }
+  ],
+  "add_generation_prompt": true,
+  "enable_thinking": true
+ },
+ "expected": "<|im_start|>user\nq<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n<tool_call>\n<function=f>\n<parameter=x>\n1\n</parameter>\n</function>\n</tool_call><|im_end|>\n<|im_start|>user\n<tool_response>\nr1\n</tool_response>\n<tool_response>\nr2\n</tool_response><|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\ndone"
+}
