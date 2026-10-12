@@ -1166,6 +1166,7 @@ function reference_generate(
     draft=nothing,
     max_draft::Int=8,
     sampler=nothing,
+    checkpoint_at::Integer=0,
 )
     isempty(prompt) && error("reference_generate: prompt is empty")
     (sampler === nothing || draft === nothing) || throw(ArgumentError(
@@ -1262,6 +1263,9 @@ function reference_generate(
         ckpt_slots = ckpt_on ? _ctx_checkpoint_slots() : 0
         ckpt_every = ckpt_slots > 0 ? _ctx_checkpoint_stride() : 0
         ckpt_on && _ckpt_fit!(st, max(ckpt_slots, 1))
+        # the system-prompt boundary, a pinned checkpoint: a later session that
+        # shares the system prompt resumes there even when the stride has moved on
+        ckpt_at = ckpt_on && ckpt_slots > 0 && n0 < checkpoint_at < P ? Int(checkpoint_at) : 0
 
         # BREADTH-0 Pass D — see reference_prefill. `nothing` = unscaled model.
         inv_freq = tensors_rope_inv_freq(tensors, d_head; theta)
@@ -1274,6 +1278,7 @@ function reference_generate(
             # a pass ends at the next stride boundary, so the GDN state there is
             # the state after exactly those rows
             lim = ckpt_every > 0 ? min(P, (s1 ÷ ckpt_every + 1) * ckpt_every) : P
+            ckpt_at > s1 && (lim = min(lim, ckpt_at))
             s1 += _prefill_pass_rows(cpu, lim - s1, s1, chunk, qdim, group)
             n = s1 - s0 + 1
             ptok = _prefill_pass_begin(cpu, s0, n, P)
@@ -1285,8 +1290,9 @@ function reference_generate(
                     gdn_conv, gdn_rec, cpu_scratch; vocab, n_heads, n_kv_heads, d_head, group, eps,
                     theta, inv_freq, rotary_dim, head=false)
                 _commit_window!(win, n, gdn_conv, gdn_rec, h)
-                if ckpt_every > 0 && s1 < P && s1 % ckpt_every == 0
-                    _generate_checkpoint!(st, s1, ckpt_slots)
+                at_boundary = ckpt_at > 0 && s1 == ckpt_at
+                if s1 < P && (at_boundary || (ckpt_every > 0 && s1 % ckpt_every == 0))
+                    _generate_checkpoint!(st, s1, ckpt_slots; pinned=at_boundary)
                 end
                 _prefill_pass_end(ptok)
                 continue
@@ -1413,8 +1419,9 @@ function reference_generate(
             end
             # every pass, not only the last: a stride checkpoint copies h at its boundary
             h.storage .= @view hp.storage[n:n, :]
-            if ckpt_every > 0 && s1 < P && s1 % ckpt_every == 0
-                _generate_checkpoint!(st, s1, ckpt_slots)
+            at_boundary = ckpt_at > 0 && s1 == ckpt_at
+            if s1 < P && (at_boundary || (ckpt_every > 0 && s1 % ckpt_every == 0))
+                _generate_checkpoint!(st, s1, ckpt_slots; pinned=at_boundary)
             end
             _arena_release!(pass_tmp)
             _prefill_pass_end(ptok)

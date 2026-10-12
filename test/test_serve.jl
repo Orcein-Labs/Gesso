@@ -458,3 +458,9 @@ end
         close(srv)
     end
 end
+
+@testset "engine contract: a ChatModel without prefix_len asks for no boundary" begin
+    cm = sv_fake()
+    @test cm.prefix_len([Dict{String,Any}("role" => "system", "content" => "s")], Any[], false, [1, 2, 3]) == 0
+    @test cm.prefix_len(Dict{String,Any}[], Any[], false, Int[]) == 0
+end

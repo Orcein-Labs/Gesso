@@ -79,6 +79,7 @@ function handle_chat(srv::Server, req::HTTPRequest, io::IO, keepalive::Bool)::Bo
 
     msgs = _normalize_messages(messages)
     prompt_ids = model.tokenize(model.render(msgs, collect(Any, tools), thinking))
+    boundary = model.prefix_len(msgs, collect(Any, tools), thinking, prompt_ids)
     n = length(prompt_ids)
     n >= model.n_ctx && throw(HTTPError(400,
         "This model's maximum context length is $(model.n_ctx) tokens. However, your messages resulted in $n tokens. Please reduce the length of the messages.";
@@ -100,7 +101,7 @@ function handle_chat(srv::Server, req::HTTPRequest, io::IO, keepalive::Bool)::Bo
 
     gen = try
         lock(srv.gate) do
-            _run_turn!(turn, prompt_ids, max_new, sampling)
+            _run_turn!(turn, prompt_ids, max_new, sampling, boundary)
         end
     catch e
         if turn.started[]
@@ -151,7 +152,7 @@ function handle_chat(srv::Server, req::HTTPRequest, io::IO, keepalive::Bool)::Bo
     return keepalive
 end
 
-function _run_turn!(turn::Turn, prompt_ids::Vector{Int}, max_new::Int, sampling)
+function _run_turn!(turn::Turn, prompt_ids::Vector{Int}, max_new::Int, sampling, boundary::Int)
     turn.cancelled[] && return nothing
     if turn.stream
         start_event_stream(turn.io; keepalive=turn.keepalive)
@@ -159,6 +160,9 @@ function _run_turn!(turn::Turn, prompt_ids::Vector{Int}, max_new::Int, sampling)
         _write_event!(turn, _chunk(turn, Dict("role" => "assistant", "content" => ""), nothing))
     end
     extra = sampling === nothing ? (;) : (sampling=sampling,)
+    # the boundary is asked for only when the prompt holds one, so an engine
+    # without the keyword is called as before
+    boundary > 0 && (extra = merge(extra, (checkpoint_at=boundary,)))
     return turn.model.generate(prompt_ids; max_new_tokens=max_new,
         on_token=id -> _on_token(turn, id), extra...)
 end

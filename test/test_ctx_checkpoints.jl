@@ -105,3 +105,91 @@ end
         close(whole.st)
     end
 end
+
+# The system-prompt boundary: `checkpoint_at` pins a checkpoint at that row, and
+# a session that shares the system prompt resumes there even when the stride
+# checkpoints sit past it.
+@testset "ctx checkpoints: checkpoint_at leaves a pinned checkpoint at that row" begin
+    ts = _hybrid_toy_tensors(toy2_tensors())
+    A = [_CK_SYS; _CK_CONV_A]
+    cut = length(_CK_SYS)
+    _with_env("GESSO_CTX_CHECKPOINTS" => "8", "GESSO_CTX_CHECKPOINT_EVERY" => "3") do
+        st = GenerateState(64)
+        try
+            reference_generate(ts.model, ts, A; max_new_tokens=3, state=st, checkpoint_at=cut)
+            @test _ck_positions(st) == [3, 6, 7, 9, 10]
+            @test [ck.pinned for ck in st.ckpts] == [false, false, true, false, false]
+        finally
+            close(st)
+        end
+    end
+end
+
+@testset "ctx checkpoints: a session sharing the system prompt resumes at the boundary" begin
+    ts = _hybrid_toy_tensors(toy2_tensors())
+    A = [_CK_SYS; _CK_CONV_A]
+    B = [_CK_SYS; _CK_CONV_B]
+    cut = length(_CK_SYS)
+    _with_env("GESSO_CTX_CHECKPOINTS" => "8", "GESSO_CTX_CHECKPOINT_EVERY" => "3") do
+        st = GenerateState(64)
+        fresh = GenerateState(64)
+        try
+            reference_generate(ts.model, ts, A; max_new_tokens=3, state=st, checkpoint_at=cut)
+            info = Ref{Any}(nothing)
+            gB = reference_generate(ts.model, ts, B; max_new_tokens=3, state=st, info, checkpoint_at=cut)
+            @test info[].reused == cut
+            gF = reference_generate(ts.model, ts, B; max_new_tokens=3, state=fresh)
+            @test gB == gF
+            @test _vw_state_diff(st, fresh) == String[]
+        finally
+            close(st)
+            close(fresh)
+        end
+    end
+end
+
+@testset "ctx checkpoints: the pinned checkpoint survives a fill to cap" begin
+    ts = _hybrid_toy_tensors(toy2_tensors())
+    A = [_CK_SYS; _CK_CONV_A]
+    cut = length(_CK_SYS)
+    _with_env("GESSO_CTX_CHECKPOINTS" => "3", "GESSO_CTX_CHECKPOINT_EVERY" => "3") do
+        st = GenerateState(64)
+        try
+            reference_generate(ts.model, ts, A; max_new_tokens=3, state=st, checkpoint_at=cut)
+            @test _ck_positions(st) == [3, 7, 10]
+            @test [ck.pinned for ck in st.ckpts] == [false, true, false]
+        finally
+            close(st)
+        end
+    end
+end
+
+@testset "ctx checkpoints: a conversation that diverges before the boundary drops it" begin
+    ts = _hybrid_toy_tensors(toy2_tensors())
+    A = [_CK_SYS; _CK_CONV_A]
+    D = [_CK_SYS[1:5]; _CK_CONV_B]
+    cut = length(_CK_SYS)
+    _with_env("GESSO_CTX_CHECKPOINTS" => "8", "GESSO_CTX_CHECKPOINT_EVERY" => "3") do
+        st = GenerateState(64)
+        try
+            reference_generate(ts.model, ts, A; max_new_tokens=3, state=st, checkpoint_at=cut)
+            @test cut in _ck_positions(st)
+            info = Ref{Any}(nothing)
+            reference_generate(ts.model, ts, D; max_new_tokens=3, state=st, info)
+            @test info[].reused == 3
+            @test !any(ck -> ck.pinned, st.ckpts)
+        finally
+            close(st)
+        end
+    end
+end
+
+@testset "ctx checkpoints: the victim is never a pinned interior entry" begin
+    victim = Gesso.Inference._ckpt_victim
+    ps = [3, 6, 7, 9]
+    @test victim(ps) == 3
+    @test victim(ps, [false, false, true, false]) == 2
+    # every interior entry pinned: the unpinned rule runs over all of them
+    @test victim(ps, [false, true, true, false]) == 3
+    @test victim([3, 7], [true, false]) == 1
+end

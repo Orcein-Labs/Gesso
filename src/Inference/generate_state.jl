@@ -89,9 +89,20 @@ end
 # smallest hole in the resume coverage. With two entries the oldest goes, so a
 # single slot keeps only the newest. `ps` is ascending with at least two entries
 # and the victim is never its last index.
-function _ckpt_victim(ps::AbstractVector{Int})
+#
+# A pinned entry (the system-prompt boundary, which every new session resumes
+# from) is skipped among the interior candidates. When no interior entry is
+# free to go, the rule runs over all of them, so the state still makes room.
+function _ckpt_victim(ps::AbstractVector{Int}, pinned::AbstractVector{Bool}=fill(false, length(ps)))
     n = length(ps)
     n == 2 && return 1
+    best, gap_best = 0, typemax(Int)
+    for j in 2:(n - 1)
+        pinned[j] && continue
+        gap = ps[j + 1] - ps[j - 1]
+        gap < gap_best && ((best, gap_best) = (j, gap))
+    end
+    best != 0 && return best
     best, gap_best = 2, typemax(Int)
     for j in 2:(n - 1)
         gap = ps[j + 1] - ps[j - 1]
@@ -119,7 +130,7 @@ end
 function _ckpt_fit!(st::GenerateState, cap::Int)
     cap == 0 && return _ckpt_clear!(st)
     while length(st.ckpts) > cap
-        i = _ckpt_victim([c.pos for c in st.ckpts])
+        i = _ckpt_victim([c.pos for c in st.ckpts], [c.pinned for c in st.ckpts])
         push!(st.ckpt_free, st.ckpts[i])
         deleteat!(st.ckpts, i)
     end
@@ -173,21 +184,22 @@ end
 # Copies the current GDN states and hidden row in as the checkpoint at `pos`,
 # which is always the newest: prefill only moves forward from the truncated
 # history. With `cap` slots full, the victim's buffers are the ones written, so
-# the buffer count never exceeds `cap`.
-function _generate_checkpoint!(st::GenerateState, pos::Int, cap::Int)
+# the buffer count never exceeds `cap`. `pinned` marks the system-prompt boundary,
+# which the eviction rule then keeps while another entry can go.
+function _generate_checkpoint!(st::GenerateState, pos::Int, cap::Int; pinned::Bool=false)
     cap >= 1 || return nothing
     ck = st.ckpts
     if length(ck) < cap
         bufs = _ckpt_buffers(st)
     else
-        i = _ckpt_victim(push!([c.pos for c in ck], pos))
+        i = _ckpt_victim(push!([c.pos for c in ck], pos), push!([c.pinned for c in ck], pinned))
         bufs = (conv=ck[i].conv, rec=ck[i].rec, h=ck[i].h)
         deleteat!(ck, i)
     end
     _gdn_copy!(bufs.conv, st.gdn_conv)
     _gdn_copy!(bufs.rec, st.gdn_rec)
     copyto!(bufs.h, st.h.storage)
-    push!(ck, merge((pos=pos,), bufs))
+    push!(ck, merge((pos=pos, pinned=pinned), bufs))
     return nothing
 end
 
@@ -486,7 +498,7 @@ function _restore_pending!(st::GenerateState)
         _gdn_copy!(bufs.conv, p.snap.conv)
         _gdn_copy!(bufs.rec, p.snap.rec)
         _state_copy!(bufs.h, p.snap.h)
-        push!(st.ckpts, merge((pos=p.snap_len,), bufs))
+        push!(st.ckpts, merge((pos=p.snap_len, pinned=false), bufs))
     end
     empty!(st.ids)
     append!(st.ids, p.ids)

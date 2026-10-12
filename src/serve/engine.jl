@@ -24,12 +24,12 @@ function gguf_chat_model(model, tensors, spec, tk::GGUFBPE;
     eps = spec.rms_norm_eps
     state = GenerateState(n_ctx)
 
-    function generate(prompt_ids; max_new_tokens, on_token, sampling=nothing)
+    function generate(prompt_ids; max_new_tokens, on_token, sampling=nothing, checkpoint_at::Integer=0)
         run = wrapped -> begin
             info = Ref{Any}(nothing)
             ids = reference_generate(model, tensors, prompt_ids; backend=backend,
                 max_new_tokens=max_new_tokens, info=info, eps=eps, state=state,
-                on_token=wrapped, eos_ids=eos, sampler=sampling)
+                on_token=wrapped, eos_ids=eos, sampler=sampling, checkpoint_at=checkpoint_at)
             return (ids, info[].reused)
         end
         return _run_generation(run, prompt_ids, eos; on_token=on_token)
@@ -43,7 +43,22 @@ function gguf_chat_model(model, tensors, spec, tk::GGUFBPE;
         generate=generate,
         n_ctx=n_ctx,
         model_id=model_id,
+        prefix_len=(msgs, tools, thinking, ids) ->
+            _system_prefix_len(tk, msgs, tools, thinking, ids),
     )
+end
+
+# Length of the prompt's leading system message, rendered alone, when the prompt
+# starts with exactly those ids. A new session that shares the system prompt
+# then resumes from a checkpoint at that boundary. A conversation whose system
+# messages are merged by the template does not begin with the lone rendering,
+# so it gets 0 and no boundary.
+function _system_prefix_len(tk::GGUFBPE, msgs, tools, thinking::Bool, ids::AbstractVector{Int})
+    (isempty(msgs) || get(msgs[1], "role", nothing) != "system") && return 0
+    head = encode(tk, render_chat([msgs[1]]; tools=tools,
+        add_generation_prompt=false, enable_thinking=thinking); parse_special=true)
+    L = length(head)
+    return 0 < L < length(ids) && view(ids, 1:L) == head ? L : 0
 end
 
 # The end-of-turn ids the sampler must stop on. The GGUF's eos key is not always

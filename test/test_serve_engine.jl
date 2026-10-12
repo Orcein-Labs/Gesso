@@ -138,3 +138,44 @@ end
         @test Set(_engine_eos_ids(tk)) == Set([248046, 248044])
     end
 end
+
+# Byte-level tokens with no merges, plus the two Qwen turn markers as control
+# tokens. Enough for the template's system framing, which is all prefix_len reads.
+function sv_qwen_bpe()
+    chars = [string(Gesso.Inference._BYTES_TO_UNICODE[UInt8(b)]) for b in 0:255]
+    marks = ["<|im_start|>", "<|im_end|>"]
+    tokens = vcat(chars, marks)
+    types = vcat(fill(Int32(1), 256), fill(Int32(3), 2))
+    vocab = Dict(t => i - 1 for (i, t) in enumerate(tokens))
+    specials = [Gesso.Inference._GGUFSpecial(marks[k], 255 + k, true) for k in 1:2]
+    return Gesso.Inference.GGUFBPE(tokens, types, vocab, collect(0:255), Dict{UInt64,Int}(),
+        Int[], Int[], Int[], specials, nothing, 257, nothing, "{{ template }}")
+end
+
+@testset "engine: prefix_len is the lone system rendering when the prompt starts with it" begin
+    tk = sv_qwen_bpe()
+    cm = gguf_chat_model(nothing, nothing, (; rms_norm_eps=1e-6), tk;
+        backend=nothing, n_ctx=4096, model_id="x")
+    sys = Dict{String,Any}("role" => "system", "content" => "be terse")
+    usr = Dict{String,Any}("role" => "user", "content" => "hi")
+    render(msgs) = Gesso.Inference.render_chat(msgs; tools=Any[], add_generation_prompt=true,
+        enable_thinking=true)
+    ids = Gesso.Inference.encode(tk, render([sys, usr]); parse_special=true)
+    head = Gesso.Inference.encode(tk, Gesso.Inference.render_chat([sys]; tools=Any[],
+        add_generation_prompt=false, enable_thinking=true); parse_special=true)
+
+    @test cm.prefix_len([sys, usr], Any[], true, ids) == length(head)
+    @test length(head) > 0
+    @test ids[1:length(head)] == head
+
+    # a system prompt that differs from the shared one is not a boundary
+    other = Dict{String,Any}("role" => "system", "content" => "be verbose")
+    @test cm.prefix_len([other, usr], Any[], true, ids) == 0
+
+    # no system message, or a prompt that is only the system message: no boundary
+    usr_ids = Gesso.Inference.encode(tk, render([usr]); parse_special=true)
+    @test cm.prefix_len([usr], Any[], true, usr_ids) == 0
+    sys_only = Gesso.Inference.encode(tk, Gesso.Inference.render_chat([sys]; tools=Any[],
+        add_generation_prompt=false, enable_thinking=true); parse_special=true)
+    @test cm.prefix_len([sys], Any[], true, sys_only) == 0
+end
