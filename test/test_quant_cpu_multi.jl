@@ -97,7 +97,7 @@ end
     rng = Xoshiro(7)
     nb = 4
     ne0 = 256 * nb
-    for ty in (_MQ.GGML_TYPE_IQ2_XXS, _MQ.GGML_TYPE_IQ3_S, _MQ.GGML_TYPE_Q4_K)
+    for ty in (_MQ.GGML_TYPE_IQ2_XXS, _MQ.GGML_TYPE_IQ3_S, _MQ.GGML_TYPE_Q2_K, _MQ.GGML_TYPE_Q4_K)
         rb = _MQ._qrow_bytes(ty, ne0)
         w = _mq_random_rows(rng, ty, 1, nb)
         xqs = _mq_acts(rng, ne0, 4)

@@ -17,7 +17,8 @@
 # inside the llvmcall, so each column repeats that step. Its scale decode and
 # the row pointers are still shared.
 #
-# K-quants (Q4_K, Q2_K) run the per-column single dot in every tile; see below.
+# Q2_K shares its unpack through a different integer core; Q4_K runs the
+# per-column single dot in every tile. Both are explained in their section below.
 
 const _MULTI_TILE = 4
 
@@ -450,11 +451,118 @@ end
     return out
 end
 
-# ---------------------------------------------------------------- K-quants (Q4_K, Q2_K)
+# ---------------------------------------------------------------- Q2_K
 #
-# K-quants take the per-column single AVX2 dot (_dot_q8k) in every tile. Their
-# unpacking is cheap relative to the dot, so sharing it across columns gained
-# nothing; a measured multi kernel was slower than the single path.
+# The single kernel's float step reads only two integers per block: isum (the
+# scaled sub-block dots) and summs (bsums against the mins). Integer addition
+# is exact, so any grouping of the products that yields the same two totals
+# keeps every column bit-equal. That frees the core from the lane layout of
+# _q2k_ints_avx2: here each 32-value plane is one vpmaddubsw (weight 0..3 as the
+# unsigned operand, so a pair sums to at most 2*3*128 and cannot saturate)
+# followed by one vpmaddwd against the two sub-block scales. The planes, scales
+# and mins are built once per block and shared by the K columns.
+#
+# Q4_K still takes the per-column single dot: a shared-unpack kernel for it was
+# measured slower than the single path.
+
+function _kq_ir_q2k_multi(K::Int)
+    io = IOBuffer()
+    qargs = join(("ptr %q$c" for c in 0:(K - 1)), ", ")
+    bargs = join(("ptr %b$c" for c in 0:(K - 1)), ", ")
+    print(io,
+        "declare <16 x i16> @llvm.x86.avx2.pmadd.ub.sw(<32 x i8>, <32 x i8>)\n",
+        "declare <8 x i32> @llvm.x86.avx2.pmadd.wd(<16 x i16>, <16 x i16>)\n",
+        "define <$(2K) x i32> @entry(ptr %w, $qargs, $bargs) #0 {\n",
+        "  %scb = load <16 x i8>, ptr %w, align 1\n",
+        "  %scl = and <16 x i8> %scb, splat (i8 15)\n",
+        "  %mnb = lshr <16 x i8> %scb, splat (i8 4)\n",
+        "  %mn = zext <16 x i8> %mnb to <16 x i16>\n")
+    for k in 0:1
+        _kq_ld(io, "qv$k", "w", 16 + 32 * k)
+    end
+    acc = ["zeroinitializer" for _ in 0:(K - 1)]
+    for k in 0:1, t in 0:3
+        i = 8 * k + 2 * t
+        mask = join(vcat(fill("i32 $i", 8), fill("i32 $(i + 1)", 8)), ", ")
+        print(io,
+            "  %pa$k$t = lshr <32 x i8> %qv$k, splat (i8 $(2t))\n",
+            "  %p$k$t = and <32 x i8> %pa$k$t, splat (i8 3)\n",
+            "  %s8$k$t = shufflevector <16 x i8> %scl, <16 x i8> poison, <16 x i32> <$mask>\n",
+            "  %s$k$t = zext <16 x i8> %s8$k$t to <16 x i16>\n")
+        for c in 0:(K - 1)
+            _kq_ld(io, "x$c$k$t", "q$c", 128 * k + 32 * t)
+            print(io,
+                "  %m$c$k$t = call <16 x i16> @llvm.x86.avx2.pmadd.ub.sw(<32 x i8> %p$k$t, <32 x i8> %x$c$k$t)\n",
+                "  %d$c$k$t = call <8 x i32> @llvm.x86.avx2.pmadd.wd(<16 x i16> %m$c$k$t, <16 x i16> %s$k$t)\n",
+                "  %a$c$k$t = add <8 x i32> $(acc[c + 1]), %d$c$k$t\n")
+            acc[c + 1] = "%a$c$k$t"
+        end
+    end
+    res = "poison"
+    for c in 0:(K - 1)
+        print(io,
+            "  %bs$c = load <16 x i16>, ptr %b$c, align 1\n",
+            "  %mm$c = call <8 x i32> @llvm.x86.avx2.pmadd.wd(<16 x i16> %bs$c, <16 x i16> %mn)\n")
+        for (name, v) in (("i", acc[c + 1]), ("n", "%mm$c"))
+            for e in 0:7
+                print(io, "  %h$name$c.$e = extractelement <8 x i32> $v, i32 $e\n")
+            end
+            prev = "%h$name$c.0"
+            for e in 1:7
+                print(io, "  %h$name$c.s$e = add i32 $prev, %h$name$c.$e\n")
+                prev = "%h$name$c.s$e"
+            end
+            slot = name == "i" ? 2c : 2c + 1
+            print(io, "  %r$name$c = insertelement <$(2K) x i32> $res, i32 $prev, i32 $slot\n")
+            res = "%r$name$c"
+        end
+    end
+    print(io, "  ret <$(2K) x i32> $res\n}\n", _KQ_ATTRS)
+    return String(take!(io))
+end
+
+# (isum, summs) of one block for each of the K columns, interleaved. One method
+# per tile width, because llvmcall needs its IR and argument list as constants.
+for K in 1:8
+    qs = [:(pq[$c]) for c in 1:K]
+    bs = [:(pb[$c]) for c in 1:K]
+    argt = Tuple{Ptr{UInt8},ntuple(_ -> Ptr{Int8}, K)...,ntuple(_ -> Ptr{Int16}, K)...}
+    @eval @inline _q2k_multi_ints(pw::Ptr{UInt8}, pq::NTuple{$K,Ptr{Int8}}, pb::NTuple{$K,Ptr{Int16}}) =
+        Base.llvmcall(($(_kq_ir_q2k_multi(K)), "entry"), NTuple{$(2K),VecElement{Int32}}, $argt,
+            pw, $(qs...), $(bs...))
+end
+
+# sumf[c] += dall*isum - dmin*summs, with dall and dmin formed as the single
+# kernel forms them.
+@inline _multi_q2k_fadd(sumf::NTuple{K,Float32}, xv::NTuple{K,Q8KVec}, ib::Int, fd::Float32,
+    fm::Float32, r::NTuple{N,VecElement{Int32}}) where {K,N} =
+    ntuple(c -> sumf[c] + ((xv[c].d[ib + 1] * fd) * Float32(r[2c - 1].value) -
+                           (xv[c].d[ib + 1] * fm) * Float32(r[2c].value)), Val(K))
+
+@noinline function _dot_q2k_multi!(out::AbstractVector{Float32}, w::AbstractVector{UInt8},
+    woff::Int, xqs, t0::Int, ::Val{K}) where {K}
+    nb = length(xqs[t0].d)
+    _q8k_check_row(w, woff, 84 * nb)
+    _multi_check(xqs, t0, K, nb)
+    nb == 0 && return _multi_zero!(out, t0, K)
+    GC.@preserve w xqs begin
+        xv = ntuple(c -> xqs[t0 + c - 1], Val(K))
+        sumf = ntuple(_ -> 0.0f0, Val(K))
+        @inbounds for ib in 0:(nb - 1)
+            b = woff + ib * 84
+            fd = _kq_f16(w, b + 80)
+            fm = _kq_f16(w, b + 82)
+            r = _q2k_multi_ints(pointer(w, b + 1),
+                ntuple(c -> pointer(xv[c].qs, ib * QK_K + 1), Val(K)),
+                ntuple(c -> pointer(xv[c].bsums, 16 * ib + 1), Val(K)))
+            sumf = _multi_q2k_fadd(sumf, xv, ib, fd, fm, r)
+        end
+        for c in 1:K
+            out[t0 + c - 1] = sumf[c]
+        end
+    end
+    return out
+end
 
 # ---------------------------------------------------------------- dispatch
 
@@ -463,7 +571,7 @@ end
 _q8k_multi_type(t::Int32) =
     t == GGML_TYPE_IQ2_XXS || t == GGML_TYPE_IQ3_S || t == GGML_TYPE_IQ2_S ||
     t == GGML_TYPE_IQ2_XS || t == GGML_TYPE_IQ3_XXS || t == GGML_TYPE_IQ1_S ||
-    t == GGML_TYPE_IQ1_M || t == GGML_TYPE_IQ4_XS
+    t == GGML_TYPE_IQ1_M || t == GGML_TYPE_IQ4_XS || t == GGML_TYPE_Q2_K
 
 function _dot_q8k_multi_kernel!(out::AbstractVector{Float32}, ggml_type::Int32,
     w::AbstractVector{UInt8}, woff::Int, xqs, t0::Int, v::Val)
@@ -474,6 +582,7 @@ function _dot_q8k_multi_kernel!(out::AbstractVector{Float32}, ggml_type::Int32,
     ggml_type == GGML_TYPE_IQ3_XXS && return _dot_iq3xxs_multi!(out, w, woff, xqs, t0, v)
     ggml_type == GGML_TYPE_IQ1_S && return _dot_iq1s_multi!(out, w, woff, xqs, t0, v)
     ggml_type == GGML_TYPE_IQ1_M && return _dot_iq1m_multi!(out, w, woff, xqs, t0, v)
+    ggml_type == GGML_TYPE_Q2_K && return _dot_q2k_multi!(out, w, woff, xqs, t0, v)
     return _dot_iq4_xs_multi!(out, w, woff, xqs, t0, v)
 end
 
