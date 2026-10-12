@@ -138,6 +138,22 @@ else
         return Array(y)
     end
 
+    # Two full token tiles and a partial one: the tile guard and the per-token
+    # tail both run.
+    @testset "LavaDenseQuant: token tiles cross the tile boundary" begin
+        rng = MersenneTwister(20261014)
+        for kind in (:q4_k, :q5_k, :q8_0)
+            @testset "$kind" begin
+                k = 512
+                nrows = 37
+                ntok = 19
+                qm = _lq_random_matrix(rng, kind, nrows, k)
+                X = randn(rng, Float32, ntok, k)
+                _lq_check(qm, X, _lq_device_matmul(qm, X); label="$kind ntok=$ntok")
+            end
+        end
+    end
+
     @testset "LavaDenseQuant expert GEMV: device bank vs host dequant" begin
         rng = MersenneTwister(20261012)
         for kind in (:iq2_xs, :iq3_xxs, :iq4_xs)
