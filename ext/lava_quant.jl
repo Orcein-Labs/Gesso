@@ -255,20 +255,29 @@ end
                                             alpha::Float32, beta::Float32)
     tl = @index(Local, Linear)
     r = @index(Group, Linear)
-    part = @localmem Float32 (64,)
+    # One slot per subgroup; the subgroup size is only known at run time.
+    part = @localmem Float32 (_LQ_LANES,)
+    sgs = Lava.subgroup_size()
+    sgid = (tl - 1) ÷ sgs
+    nsg = _LQ_LANES ÷ sgs
+    lane0 = Lava.subgroup_lane() == 0
     rowoff = base + (r - 1) * row_bytes
     for t in 1:ntok
         acc = 0.0f0
         e = tl - 1
         while e < ne0
             acc += _lq_elem(kind, W, kv, g2, g3, ks, rowoff, e) * X[e * ntok + t]
-            e += 64
+            e += _LQ_LANES
         end
-        part[tl] = acc
+        # subgroup_add must run with every lane active, so it sits outside the branch.
+        red = Lava.subgroup_add(acc)
+        if lane0
+            part[sgid + 1] = red
+        end
         @synchronize
         if tl == 1
             s = 0.0f0
-            for i in 1:64
+            for i in 1:nsg
                 s += part[i]
             end
             idx = (r - 1) * ntok + t
