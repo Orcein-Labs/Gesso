@@ -80,8 +80,9 @@ function handle_chat(srv::Server, req::HTTPRequest, io::IO, keepalive::Bool)::Bo
     msgs = _normalize_messages(messages)
     prompt_ids = model.tokenize(model.render(msgs, collect(Any, tools), thinking))
     n = length(prompt_ids)
-    n >= model.n_ctx &&
-        throw(HTTPError(400, "prompt is $n tokens, which leaves no room in a context of $(model.n_ctx)"))
+    n >= model.n_ctx && throw(HTTPError(400,
+        "This model's maximum context length is $(model.n_ctx) tokens. However, your messages resulted in $n tokens. Please reduce the length of the messages.";
+        code="context_length_exceeded", param="messages"))
     room = model.n_ctx - n
     max_new = requested === nothing ? room : min(requested, room)
 

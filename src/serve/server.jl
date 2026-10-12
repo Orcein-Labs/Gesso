@@ -75,7 +75,8 @@ function _serve_one(srv::Server, sock::TCPSocket)::Bool
         read_request(sock)
     catch e
         e isa HTTPError || rethrow()
-        _try_write(() -> write_error(sock, e.status, e.message; keepalive=false))
+        _try_write(() -> write_error(sock, e.status, e.message; keepalive=false,
+            code=e.code, param=e.param))
         return false
     end
     req === nothing && return false
@@ -85,7 +86,8 @@ function _serve_one(srv::Server, sock::TCPSocket)::Bool
         return route(srv, req, sock, keepalive)
     catch e
         if e isa HTTPError
-            _try_write(() -> write_error(sock, e.status, e.message; keepalive=keepalive))
+            _try_write(() -> write_error(sock, e.status, e.message; keepalive=keepalive,
+                code=e.code, param=e.param))
             return keepalive
         elseif e isa Base.IOError || e isa EOFError
             return false

@@ -394,7 +394,27 @@ end
     srv = serve(sv_fake(n_ctx=8); port=0, block=false)
     try
         body = sv_chat([Dict("role" => "user", "content" => "hello world!!")])
-        @test sv_request(srv.port, sv_post("/v1/chat/completions", body)).status == 400
+        r = sv_request(srv.port, sv_post("/v1/chat/completions", body))
+        @test r.status == 400
+        err = JSON.parse(r.body)["error"]
+        @test err["code"] == "context_length_exceeded"
+        @test err["type"] == "invalid_request_error"
+        @test err["param"] == "messages"
+        m = match(r"maximum context length is 8 tokens\. However, your messages resulted in (\d+) tokens", err["message"])
+        @test m !== nothing && parse(Int, m[1]) >= 8
+    finally
+        close(srv)
+    end
+end
+
+@testset "other 400s keep the numeric code and no param" begin
+    srv = serve(sv_fake(); port=0, block=false)
+    try
+        r = sv_request(srv.port, sv_post("/v1/chat/completions", sv_chat(Any[])))
+        @test r.status == 400
+        err = JSON.parse(r.body)["error"]
+        @test err["code"] == 400
+        @test !haskey(err, "param")
     finally
         close(srv)
     end

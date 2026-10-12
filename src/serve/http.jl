@@ -8,7 +8,13 @@ const MAX_BODY_BYTES = 32 * 1024 * 1024
 struct HTTPError <: Exception
     status::Int
     message::String
+    code::Union{Nothing,String}
+    param::Union{Nothing,String}
 end
+
+HTTPError(status::Int, message::AbstractString; code=nothing, param=nothing) =
+    HTTPError(status, String(message), code === nothing ? nothing : String(code),
+        param === nothing ? nothing : String(param))
 
 struct HTTPRequest
     method::String
@@ -154,10 +160,13 @@ function write_json(io::IO, status::Int, obj; keepalive::Bool=true)
     return nothing
 end
 
-function write_error(io::IO, status::Int, message::AbstractString; keepalive::Bool=true)
+function write_error(io::IO, status::Int, message::AbstractString; keepalive::Bool=true,
+        code::Union{Nothing,AbstractString}=nothing, param::Union{Nothing,AbstractString}=nothing)
     kind = status == 404 ? "not_found_error" : status >= 500 ? "server_error" : "invalid_request_error"
-    write_json(io, status, Dict("error" => Dict("message" => message, "type" => kind, "code" => status));
-        keepalive=keepalive)
+    err = Dict{String,Any}("message" => message, "type" => kind,
+        "code" => code === nothing ? status : code)
+    param === nothing || (err["param"] = param)
+    write_json(io, status, Dict("error" => err); keepalive=keepalive)
 end
 
 # Chunked framing for SSE: each event is one chunk, so the connection can be
