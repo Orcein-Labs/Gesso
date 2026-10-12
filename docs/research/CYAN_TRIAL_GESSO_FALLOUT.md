@@ -6,7 +6,7 @@
     Source:             first end-to-end Cyan/Palette operator trial
                         (Buffy / GLM-5.3 via Freebuff); Chat extraction
                         handed to Foreman Grok 2026-09-30
-    Primary testimony:  /mnt/d/Code Projects/Palette/docs/research/FIRST_ENGINEER_INTERVIEW.md
+    Primary testimony:  Palette repo, docs/research/FIRST_ENGINEER_INTERVIEW.md
                         (testimony + transcripts; not Gesso canon)
     Canon:              docs/Gesso_Stack.md remains canon
     This file is NOT:   a Phase 5 work item, a Magenta program,

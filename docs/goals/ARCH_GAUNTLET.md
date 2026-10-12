@@ -20,14 +20,14 @@ Locked sequence (2026-10-08):
 
 ## What is on disk today (2026-10-08)
 
-No Hugging Face fetches. Weights already live under `/mnt/d/Code Projects`
+No Hugging Face fetches. Weights already live in the local model directory
 (GGUF inventory) and `Gesso/snapshots/` (safetensors specimens). RTX 5060
-8151 MiB, 31 GiB host RAM, `/mnt/d` ~768 G free.
+8151 MiB, 31 GiB host RAM, ~768 G free on the model disk.
 
 Gesso architecture specimen: `snapshots/Qwen3.5-0.8B/` (safetensors BF16
 shard `model.safetensors-00001-of-00001.safetensors`, ~1.75 GB). SmolLM2-135M
 stays the Regime II oracle. Named non-toy files are llama.cpp GGUF quants
-at `/mnt/d/Code Projects/` (third-column until campaign 4 unparks GGUF):
+in the local model directory (third-column until campaign 4 unparks GGUF):
 
 | File | Size | Role |
 | --- | ---: | --- |
@@ -205,5 +205,5 @@ under `~/.cache/gesso`, `julia -t 8`):
 | llama.cpp CUDA tg64 ngl99 ncmoe24 fa | 32.80 ± 3.20 |
 
 The ~37 tok/s figure from Regime II is SmolLM2-135M Lava Hello, not 35B.
-drvfs `/mnt/d` mmap made expert dequant ~5× slower than the same file on
+An mmap from the drvfs model disk made expert dequant ~5× slower than the same file on
 NVMe. Expert F32 cache at cap 12 swapped the 31 GiB host and lost.
