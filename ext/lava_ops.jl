@@ -273,6 +273,29 @@ const _LAVA_RMS_LANES = 64
     end
 end
 
+# Single-token per-head normalization for (1, heads, d_head) inputs (QK-norm in
+# decode). One workgroup per head runs the same lane-split reduction as the row
+# kernel, so each head gets the row kernel's arithmetic without a host loop.
+@kernel cpu=false function _lava_rmsnorm_head_kernel!(dst, xs, scales, eps, d::Int)
+    g = @index(Group, Linear)
+    tl = @index(Local, Linear)
+    part = @localmem Float32 (_LAVA_RMS_LANES,)
+    acc = Float32(0)
+    for j in tl:_LAVA_RMS_LANES:d
+        acc += abs2(xs[1, g, j])
+    end
+    part[tl] = acc
+    @synchronize
+    total = Float32(0)
+    for i in 1:_LAVA_RMS_LANES
+        total += part[i]
+    end
+    rms = sqrt(Float64(total) / d + Float64(eps))
+    for j in tl:_LAVA_RMS_LANES:d
+        dst[1, g, j] = Float32((Float64(xs[1, g, j]) / rms) * Float64(scales[j]))
+    end
+end
+
 function _lava_rmsnorm!(dst, x, scale; eps = 1e-6, check_finite = true)
     a = _LAVA_DECODE_AUDIT
     t0 = a.enabled ? time_ns() : UInt64(0)
@@ -289,6 +312,18 @@ function _lava_rmsnorm!(dst, x, scale; eps = 1e-6, check_finite = true)
         kern = _lava_rmsnorm_row_kernel!(KA.get_backend(xs))
         kern(dst.storage, xs, scale.storage, Float64(eps), Int(d);
             ndrange=_LAVA_RMS_LANES, workgroupsize=(_LAVA_RMS_LANES,))
+        if check_finite
+            Gesso.Inference._all_finite(dst.storage) || throw(gesso_error(ERR_NUMERICAL_INSTABILITY,
+                "rmsnorm!: nonfinite normalization denominator"))
+        end
+        a.enabled && _lava_note_op!(:rmsnorm, time_ns() - t0)
+        return dst
+    end
+    if ndims(xs) == 3 && size(xs, 1) == 1
+        nheads = size(xs, 2)
+        kern = _lava_rmsnorm_head_kernel!(KA.get_backend(xs))
+        kern(dst.storage, xs, scale.storage, Float64(eps), Int(d);
+            ndrange=_LAVA_RMS_LANES * nheads, workgroupsize=(_LAVA_RMS_LANES,))
         if check_finite
             Gesso.Inference._all_finite(dst.storage) || throw(gesso_error(ERR_NUMERICAL_INSTABILITY,
                 "rmsnorm!: nonfinite normalization denominator"))
@@ -395,6 +430,17 @@ function _lava_rope!(q, k, positions; theta = 10000.0, inv_freq = nothing, inter
         a.enabled && _lava_note_op!(:rope, time_ns() - t0)
         return q
     end
+    if length(positions) == 1 && size(q.storage, 1) == 1
+        row = Int32(Int(positions[1]) + 1)
+        cs, sn = _lava_rope_table(Float32.(inv_freq), rd, Int(row))
+        for x in (q.storage, k.storage)
+            nheads = size(x, 2)
+            kern = _lava_rope_table_kernel!(KA.get_backend(x))
+            kern(x, cs, sn, row, interleaved, rd; ndrange=nheads, workgroupsize=_LAVA_WG1)
+        end
+        a.enabled && _lava_note_op!(:rope, time_ns() - t0)
+        return q
+    end
     seq = size(q.storage, 1)
     half = rd ÷ 2
     freq = Float32.(inv_freq)
@@ -414,6 +460,55 @@ function _lava_rope!(q, k, positions; theta = 10000.0, inv_freq = nothing, inter
     end
     a.enabled && _lava_note_op!(:rope, time_ns() - t0)
     return q
+end
+
+# Scaled inv_freq policies on single-token decode. The general path below
+# uploads a per-call angle table; decode instead reads one row of a device
+# cos/sin table keyed by (rotary width, inv_freq). Rows are built with the
+# same F32 phase and F64 reduction as the general path, so both agree to
+# rounding. The table grows by doubling, so steady-state decode uploads
+# nothing and allocates nothing.
+@kernel cpu=false function _lava_rope_table_kernel!(x, cos_t, sin_t, row::Int32, interleaved::Bool, rd::Int)
+    h = @index(Global)
+    _, nheads, _ = size(x)
+    h > nheads && return
+    half = rd ÷ 2
+    for i in 1:half
+        c = cos_t[row, i]
+        s = sin_t[row, i]
+        a = interleaved ? (2 * i - 1) : i
+        b = interleaved ? (2 * i) : (i + half)
+        x1 = x[1, h, a]
+        x2 = x[1, h, b]
+        x[1, h, a] = x1 * c - x2 * s
+        x[1, h, b] = x1 * s + x2 * c
+    end
+end
+
+const _LAVA_ROPE_TABLES = Dict{Tuple{Int, Vector{Float32}}, Any}()
+
+function _lava_rope_table(freq::Vector{Float32}, rd::Int, row::Int)
+    key = (rd, freq)
+    ent = get(_LAVA_ROPE_TABLES, key, nothing)
+    if ent === nothing || ent.cap < row
+        cap = max(row, ent === nothing ? 256 : 2 * ent.cap)
+        half = length(freq)
+        cosm = Matrix{Float32}(undef, cap, half)
+        sinm = Matrix{Float32}(undef, cap, half)
+        for p in 0:(cap - 1), i in 1:half
+            phase = Float32(p) * freq[i]
+            r = Float32(rem(Float64(phase), 2π))
+            cosm[p + 1, i] = cos(r)
+            sinm[p + 1, i] = sin(r)
+        end
+        if ent !== nothing
+            Lava.unsafe_free!(ent.cos)
+            Lava.unsafe_free!(ent.sin)
+        end
+        ent = (cap = cap, cos = Lava.LavaArray{Float32}(cosm), sin = Lava.LavaArray{Float32}(sinm))
+        _LAVA_ROPE_TABLES[key] = ent
+    end
+    return ent.cos, ent.sin
 end
 
 # Causal softmax over (L, K) score rows, rows aligned to the LAST K keys
@@ -1005,4 +1100,96 @@ end
 # to the already-installed function object)
 function to_device(::LavaBackend, tensors)
     return _lava_to_device(tensors)
+end
+
+# --- decode activation arena ---------------------------------------------------
+# A decode step asks for the same sequence of activation shapes every token, so
+# the n-th request is served from the n-th view the previous step laid out.
+# The views are slices of one slab, so the step's zeroing is one fill! instead
+# of one allocation and one fill per buffer. Without this, ~185 fresh device
+# buffers per 35B token leave the pool under pressure and maybe_collect runs
+# GC.gc on the decode path. Requests within a step never share a view, and a
+# step whose requests differ from the layout gets fresh buffers for the ones
+# that do not fit; the next step lays the slab out again.
+mutable struct LavaArenaSlab
+    slab::Union{Nothing, Lava.LavaArray{Float32, 1}}
+    views::Vector{Any}
+    layout::Vector{NTuple{5, Int}}
+    requested::Vector{NTuple{5, Int}}
+    loose::Vector{Any}
+end
+
+struct LavaDecodeArena
+    s::LavaArenaSlab
+    next::Base.RefValue{Int}
+end
+
+# (ndims, dims padded to four). Rank above four or an empty buffer gets key 0:
+# a request the layout cannot hold, so it is served loose.
+function _lava_arena_key(dims::NTuple{N, Int}) where {N}
+    (N <= 4 && prod(dims) > 0) || return (0, 0, 0, 0, 0)
+    return (N, ntuple(k -> k <= N ? dims[k] : 0, 4)...)
+end
+
+# 64 Float32s: views start on 256-byte boundaries, as separate allocations would.
+_lava_arena_round(n::Int) = cld(n, 64) * 64
+
+function _lava_arena_relayout!(s::LavaArenaSlab)
+    for v in s.views
+        Lava.unsafe_free!(v)
+    end
+    s.slab === nothing || Lava.unsafe_free!(s.slab)
+    empty!(s.views)
+    copy!(s.layout, s.requested)
+    total = 0
+    for key in s.layout
+        total += _lava_arena_round(prod(key[2:(key[1] + 1)]))
+    end
+    s.slab = Lava.LavaArray{Float32}(undef, max(total, 1))
+    off = 0
+    for key in s.layout
+        dims = key[2:(key[1] + 1)]
+        n = prod(dims)
+        push!(s.views, reshape(view(s.slab, (off + 1):(off + n)), dims))
+        off += _lava_arena_round(n)
+    end
+    return s
+end
+
+function (a::LavaDecodeArena)(dims::NTuple{N, Int}) where {N}
+    s = a.s
+    i = (a.next[] += 1)
+    key = _lava_arena_key(dims)
+    push!(s.requested, key)
+    if key[1] != 0 && i <= length(s.layout) && s.layout[i] == key
+        return s.views[i]::Lava.LavaArray{Float32, N}
+    end
+    buf = fill!(Lava.LavaArray{Float32}(undef, dims...), 0.0f0)
+    push!(s.loose, buf)
+    return buf
+end
+
+const _LAVA_DECODE_ARENA = LavaArenaSlab(
+    nothing, Any[], NTuple{5, Int}[], NTuple{5, Int}[], Any[])
+
+# Mirrors the CUDA arena's step protocol (ext/cuda_ops.jl). Freeing the previous
+# step's views and slab is safe only because nothing taken from this factory
+# outlives its step (the decode contract in Inference.jl).
+function Gesso.Inference._decode_zeros_like(be::LavaBackend, tensors)
+    proto = Gesso.Inference._first_array_storage(tensors)
+    proto isa Lava.LavaArray{Float32} ||
+        return Gesso.Inference._zeros_like_factory(be, tensors)
+    s = _LAVA_DECODE_ARENA
+    if !isempty(s.requested) && (s.requested != s.layout || !isempty(s.loose))
+        if all(k -> k[1] != 0, s.requested)
+            _lava_arena_relayout!(s)
+        end
+        for b in s.loose
+            Lava.unsafe_free!(b)
+        end
+        empty!(s.loose)
+    end
+    empty!(s.requested)
+    s.slab === nothing || fill!(s.slab, 0.0f0)
+    return LavaDecodeArena(s, Ref(0))
 end

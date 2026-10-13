@@ -222,4 +222,73 @@ else
         gpu2 = Gesso.to_device(lava, merge(tensors, (final_rms=fr,)))
         @test gpu2.final_rms.storage isa Lava.LavaArray{Float32}
     end
+
+    # The decode arena lays step n-1's requests out as views of one slab. Step
+    # C is the first with a matching layout and no loose buffers, so its views
+    # must come back zeroed even though step B left them dirty.
+    @testset "lava decode arena: views reused from the next step, zeroed each step" begin
+        e = (storage=lz(2, 2),)
+        tens = (embedding=e, lm_head=e, blocks=())
+        z1 = Gesso.Inference._decode_zeros_like(lava, tens)
+        a1 = z1((3, 2))
+        b1 = z1((4,))
+        @test a1 isa Lava.LavaArray{Float32, 2}
+        @test all(==(0.0f0), Array(a1))
+        @test all(==(0.0f0), Array(b1))
+        fill!(a1, 7.0f0)
+        fill!(b1, 9.0f0)
+
+        z2 = Gesso.Inference._decode_zeros_like(lava, tens)
+        a2 = z2((3, 2))
+        b2 = z2((4,))
+        fill!(a2, 5.0f0)
+        fill!(b2, 6.0f0)
+
+        z3 = Gesso.Inference._decode_zeros_like(lava, tens)
+        a3 = z3((3, 2))
+        b3 = z3((4,))
+        @test a3 isa Lava.LavaArray{Float32, 2}
+        @test size(a3) == (3, 2)
+        @test all(==(0.0f0), Array(a3))
+        @test all(==(0.0f0), Array(b3))
+        # disjoint views: writing one must not show in the other
+        fill!(a3, 1.0f0)
+        @test all(==(0.0f0), Array(b3))
+    end
+
+    # Single-token decode with a scaled inv_freq reads the cached cos/sin table.
+    # Position 5000 exercises table growth past the first 256 rows.
+    @testset "lava rope! seq=1 inv_freq: cached table matches CPU at positions 0, 1, 5000" begin
+        d = 8
+        q0 = reshape(collect(range(-1.0, 1.0; length=16)), (1, 2, d))
+        k0 = reshape(collect(range(1.0, -1.0; length=16)), (1, 2, d))
+        for pos in (0, 1, 5000), rd in (4, d), interleaved in (true, false)
+            inv = Gesso.rope_inv_freq(Gesso.RoPEPolicy(; rotary_dim=rd, theta=10000.0), d)
+            cq, ck = mat(Gesso.Activation, copy(q0)), mat(Gesso.Activation, copy(k0))
+            Gesso.rope!(Gesso.CPUBackend(), cq, ck, [pos], wl;
+                theta=10000.0, inv_freq=inv, interleaved, rotary_dim=rd)
+            q = mat(Gesso.Activation, Lava.LavaArray{Float32}(q0))
+            k = mat(Gesso.Activation, Lava.LavaArray{Float32}(k0))
+            Gesso.rope!(lava, q, k, [pos], wl;
+                theta=10000.0, inv_freq=inv, interleaved, rotary_dim=rd)
+            @test approx_eq(Array(q.storage), Float32.(cq.storage); atol=1e-3)
+            @test approx_eq(Array(k.storage), Float32.(ck.storage); atol=1e-3)
+        end
+    end
+
+    # QK-norm in decode: one workgroup per head, checked against an F64 per-head reference.
+    @testset "lava rmsnorm! (1, heads, d_head): per-head normalize matches F64 reference" begin
+        d, H = 8, 3
+        x = reshape(collect(range(-2.0, 3.0; length=H * d)), (1, H, d))
+        s = collect(range(0.5, 1.5; length=d))
+        ref = similar(x)
+        for h in 1:H
+            v = x[1, h, :]
+            ref[1, h, :] = v ./ sqrt(sum(abs2, v) / d + 1e-6) .* s
+        end
+        dst = mat(Gesso.Activation, lz(1, H, d))
+        Gesso.rmsnorm!(lava, dst, mat(Gesso.Activation, Lava.LavaArray{Float32}(x)),
+            mat(Gesso.FrozenParameter, Lava.LavaArray{Float32}(Float32.(s))), wl)
+        @test approx_eq(Array(dst.storage), Float32.(ref); atol=1e-3)
+    end
 end
