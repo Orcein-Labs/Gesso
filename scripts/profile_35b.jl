@@ -23,7 +23,8 @@
 #      token cancel). Prefill is never inside a token window anyway.
 #
 # Prints a RECEIPT line, the cold token log, and the warm per-token table.
-# Exit 1 if the greedy ids change under profiling.
+# Exit 1 if the greedy ids change under profiling, or if the one-token prompt
+# drifts from the reference sequence (teacher-forced, see ForcedIds).
 
 using Gesso
 
@@ -74,6 +75,28 @@ gen(n) = Gesso.reference_generate(
 dtype = get(ENV, "GESSO_GPU_WEIGHT_DTYPE", "f16")
 moe_host = get(ENV, "GESSO_MOE_HOST_EXPERTS", "0")
 
+# The reference sequence is checked teacher-forced, not by greedy ids: step 2
+# is a near-tie (271 over 353 by 0.016 logits on the byte-wise Q8_0 kernel),
+# and an equally exact kernel with another summation order flips it, which
+# shifts every later id. Feeding the reference token at each step and
+# requiring it to sit within IDS_TOL of the top logit passes reordering noise
+# (0.0006) and fails a Q8_0 block-scale indexing bug (gaps up to 3.7). It
+# checks the top token, not calibration: every Q8_0 scale off by 3% stays
+# under 0.006 and passes.
+const IDS_TOL = parse(Float64, get(ENV, "GESSO_IDS_TOL", "0.05"))
+mutable struct ForcedIds
+    ids::Vector{Int}
+    k::Int
+    gaps::Vector{Float32}
+end
+function INF._sample_id(s::ForcedIds, logits_row)
+    row = vec(Array(logits_row))
+    s.k += 1
+    id = s.ids[s.k]
+    push!(s.gaps, maximum(row) - row[id + 1])
+    return id
+end
+
 # Inside a function so the runs share one world. On Julia 1.12 each new
 # top-level global bumps the world counter, and Lava drops every launch plan
 # compiled in an older world, so a global assigned between two runs made the
@@ -103,9 +126,12 @@ function measure()
     ids_wall = nothing
     tw = @elapsed (ids_wall = gen(WALL + 1))
     wall_ms = 1e3 * (tw - t1) / max(1, length(ids_wall) - 1)
-    return (; ids_cold, cold, a, hits0, ids_warm, hits1, b, wall_ms, nwall=length(ids_wall) - 1)
+    forced = ForcedIds(EXPECTED[2:end], 0, Float32[])
+    CTX == 1 && Gesso.reference_generate(model, dev, prompt; max_new_tokens=length(EXPECTED) - 1,
+        eps=spec.rms_norm_eps, backend=backend, sampler=forced)
+    return (; forced, ids_cold, cold, a, hits0, ids_warm, hits1, b, wall_ms, nwall=length(ids_wall) - 1)
 end
-(; ids_cold, cold, a, hits0, ids_warm, hits1, b, wall_ms, nwall) = measure()
+(; forced, ids_cold, cold, a, hits0, ids_warm, hits1, b, wall_ms, nwall) = measure()
 
 # per-layer residency and hit counts for the warm run only
 let H = 0, M = 0
@@ -120,11 +146,10 @@ let H = 0, M = 0
 end
 
 ids_warm == ids_cold || error("profile_35b: ids differ between the cold and warm profiled runs")
-if CTX == 1 && N == length(EXPECTED) - 1
-    ok = ids_cold[1:length(EXPECTED)] == EXPECTED
-else
-    ok = true
-end
+checked = !isempty(forced.gaps)
+ok = !checked || maximum(forced.gaps) <= IDS_TOL
+ids_ok = checked ? string(ok) : "unchecked"
+greedy = length(ids_cold) >= length(EXPECTED) ? ids_cold[1:length(EXPECTED)] == EXPECTED : missing
 
 d = INF.profile_delta(b, a)
 d.tokens == N || error("profile_35b: measured $(d.tokens) decode tokens, expected $N (EOS reached?)")
@@ -132,7 +157,7 @@ d.tokens == N || error("profile_35b: measured $(d.tokens) decode tokens, expecte
 println(
     "RECEIPT profile_35b backend=$which threads=$(Threads.nthreads()) ",
     "dtype=$dtype moe_host_experts=$moe_host ctx=$CTX decode_tokens=$N ",
-    "ids_ok=$ok load_s=$(round(t_load; digits=1))",
+    "ids_ok=$ids_ok greedy_match=$greedy load_s=$(round(t_load; digits=1))",
 )
 println("RECEIPT unprofiled decode_tokens=$nwall ms_per_token=$(round(wall_ms; digits=2)) ",
     "tok_s=$(round(1e3 / wall_ms; digits=2))")
@@ -142,4 +167,6 @@ INF.print_token_log(stdout, cold)
 println()
 println("== warm per-token table (difference of profiled runs, $N decode tokens) ==")
 INF.print_decode_profile(stdout, d; label="backend=$which dtype=$dtype moe_host=$moe_host")
+checked && println("RECEIPT forced_ids tol=$IDS_TOL max_gap=$(maximum(forced.gaps)) ",
+    "gaps=$(round.(forced.gaps; digits=4))")
 ok || (println("ids got  $ids_cold\nids want $EXPECTED"); exit(1))
