@@ -810,6 +810,15 @@ function _cpu_moe_topk_swiglu_gguf!(
     fill!(y, zero(T))
     logits = Vector{T}(undef, n_exp)
     order = Vector{Int}(undef, n_exp)
+    # K-quant slabs take the batched Q8_K kernels the CUDA host route uses (x
+    # quantized once per token, every selected expert in one pool dispatch).
+    # They make the same _dot_q8k calls and sum in k order, so the result is
+    # bit-identical to the per-expert loop below. On the GSQ 35B the loop
+    # below was about half of CPU decode, and Lava's host experts run here too.
+    if T === Float32 && gate_s isa GgufQuantSlice && up_s isa GgufQuantSlice &&
+       down_s isa GgufQuantSlice && _moe_host_batchable(gate_s, up_s, down_s, h, ff)
+        return _cpu_moe_topk_swiglu_batched!(y, x, router, gate_s, up_s, down_s, n_used, logits, order)
+    end
     # One scratch set per chunk of expert slots, indexed by chunk and not by
     # threadid(): a chunk is one @threads iteration, so no two tasks share a set.
     nchunk = min(Threads.nthreads(), n_used)
@@ -899,6 +908,69 @@ function _cpu_moe_topk_swiglu_gguf!(
             end
         end
     end
+    return y
+end
+
+# Routing is the per-expert loop's, op for op, so the selected experts and
+# their weights match it exactly.
+function _cpu_moe_topk_swiglu_batched!(y, x, router, gate_s, up_s, down_s, n_used, logits, order)
+    seq, h = size(x)
+    n_exp = length(logits)
+    experts = Matrix{Int}(undef, n_used, seq)
+    wts = Matrix{Float32}(undef, n_used, seq)
+    live = fill(false, seq)
+    for t in 1:seq
+        m = typemin(Float32)
+        for e in 1:n_exp
+            acc = 0.0f0
+            @inbounds for i in 1:h
+                acc += x[t, i] * router[e, i]
+            end
+            logits[e] = acc
+            acc > m && (m = acc)
+        end
+        s = 0.0f0
+        for e in 1:n_exp
+            v = exp(logits[e] - m)
+            logits[e] = v
+            s += v
+        end
+        invs = 1.0f0 / s
+        for e in 1:n_exp
+            logits[e] *= invs
+            order[e] = e
+        end
+        sort!(order; by=e -> (-logits[e], e))
+        wsum = 0.0f0
+        for k in 1:n_used
+            wsum += logits[order[k]]
+        end
+        wsum > 0 || continue
+        invw = 1.0f0 / wsum
+        live[t] = true
+        for k in 1:n_used
+            experts[k, t] = order[k]
+            wts[k, t] = logits[order[k]] * invw
+        end
+    end
+    if seq == 1
+        live[1] || return y
+        xf = Vector{Float32}(undef, h)
+        yrow = Vector{Float32}(undef, h)
+        @inbounds for i in 1:h
+            xf[i] = x[1, i]
+        end
+        _moe_host_experts_auto!(yrow, xf, view(experts, :, 1), view(wts, :, 1), n_used,
+            gate_s, up_s, down_s)
+        @inbounds for i in 1:h
+            y[1, i] = yrow[i]
+        end
+        return y
+    end
+    X = x isa Matrix{Float32} ? x : Matrix{Float32}(x)
+    Y = y isa Matrix{Float32} ? y : Matrix{Float32}(undef, seq, h)
+    _moe_host_prefill!(Y, X, experts, wts, live, n_exp, gate_s, up_s, down_s)
+    Y === y || copyto!(y, Y)
     return y
 end
 
