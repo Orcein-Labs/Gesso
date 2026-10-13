@@ -1,24 +1,97 @@
 # Gesso.jl
 
-A Julia-native inference runtime. It loads open-weight models, keeps their
-meaning intact, and runs them on the hardware you actually have — CPU,
-CUDA, or Vulkan (Lava) — through one `Session`.
+Gesso is an inference runtime written in Julia. It loads open-weight models
+and runs them on CPU, on NVIDIA through CUDA.jl, or on any Vulkan GPU through
+Lava, all behind one `Session` API. It also ships an OpenAI-compatible chat
+server, so tools that talk to the OpenAI API can use a local model through it.
 
-Julia 1.12. Training is out of scope. Gesso loads checkpoints; it does not
-make them.
+We test everything against an oracle. The CPU path is the reference, and on
+real checkpoints we compare greedy token IDs against Hugging Face or
+llama.cpp. A speed number only counts if the IDs still match.
 
-## Head to head
+Gesso needs Julia 1.12. It does not train models. It only runs them.
 
-SmolLM2-135M, RTX 5060, Julia 1.12.6, greedy, 8 new tokens, compile
-excluded, host-visible token IDs. Same `Session` interpreter on every
-backend. 27/27 IDs match the independent Hugging Face reference. A planted
-NaN still fails with `ERR_NUMERICAL_INSTABILITY`.
+## Results
 
-### Gesso Lava vs Gesso CUDA (2026-10-08)
+Two models, measured on one desktop: an RTX 5060 (8 GB) on a PCIe gen3 x8
+link, with 31 GiB of single-channel DDR4. SmolLM2-135M is small enough to
+show what the engine itself costs. Ornith-1.5-35B-A3B is a model you can
+actually work with, and it doesn't fit on the card.
 
-Warmed decode tok/s. Receipts:
-[`s4-lava-three.json`](docs/archive/2026-10_regime-ii/s4-lava-three.json),
-[`s4-cuda-three.json`](docs/archive/2026-10_regime-ii/s4-cuda-three.json).
+### Ornith-1.5-35B-A3B on an 8 GB card (2026-10-09 to 2026-10-11)
+
+The model is a hybrid MoE (gated DeltaNet plus attention, 256 experts with 8
+active per token). We ran Unsloth's `UD-Q2_K_XL` GGUF, 11.4 GiB. Its expert
+weights are IQ2_XS, IQ3_XXS and IQ4_XS, and the dense weights are Q5_K to
+Q8_0. The weights don't fit in 8 GB, so some experts live in host memory and
+run on the CPU. llama.cpp does the same thing with `--n-cpu-moe`.
+
+The baseline is llama.cpp's CUDA build on the same machine:
+`-ngl 99 --n-cpu-moe 24 -fa on`, tg64 **32.80 ± 3.20 tok/s**, pp1024
+**386 tok/s**. Gesso's greedy IDs match llama.cpp's exactly on the gate
+prompt.
+
+**Decode.** Gesso CUDA with default settings runs at 27-29 ms per token,
+against llama.cpp's 30.5 ms. Hot experts are opt-in (`GESSO_GPU_HOT_EXPERTS=1
+GESSO_GPU_HOT_PIN=1`). They keep the most-used host experts in a VRAM pool,
+and decode speed then holds up as the context grows:
+
+| Context | ms/token | tok/s |
+| --- | ---: | ---: |
+| 1 token | 20.0 | 49.9 |
+| 8,192 | 22.0 | 45.5 |
+| 16,384 | 24.1 | 41.6 |
+| 32,768 | 29.3 | 34.2 |
+
+Each row is one 65-token generation, timed per token over tokens 2-64, with
+the default q8 KV cache and the hot-expert budget fixed at 480 MiB
+(`GESSO_GPU_HOT_EXPERTS_MIB=480`). At 32k tokens Gesso still decodes faster than
+llama.cpp does at short context. An F32 cache runs out of memory at 16k, and
+F16 runs out at 32k.
+
+**Prefill**, with hot experts on:
+
+| Prompt | Gesso tok/s | llama.cpp tok/s |
+| --- | ---: | ---: |
+| 512 | 414 | |
+| 1,024 | 437 | 386 |
+| 2,048 | 433 | |
+| 4,096 | 385 | |
+
+An 8k prompt prefills in about 26 s and a 32k prompt in 100-130 s.
+
+**Multi-turn.** The session keeps its KV cache and DeltaNet state between
+calls. On an 8k-token conversation, the second turn takes 1.26 s instead of
+the 24.6 s a fresh prefill costs. Reusing prompt rows gives the same tokens as
+a fresh run. Rows that were computed during decode round slightly differently
+from a batched prefill, so reusing those can flip a near-tied greedy pick
+later on. llama.cpp's cache reuse behaves the same way.
+
+Some caveats:
+
+- The gate is a short cold run and moves about ±2 tok/s between runs. The
+  tables come from warm generations.
+- How fast a prompt decodes with hot experts depends on how often its expert
+  picks are already resident. Hits run on the GPU and misses on the CPU,
+  and the two round differently. So with hot experts on, greedy output can
+  depend on what the session ran earlier. With them off, it doesn't.
+- This machine's memory bus limits the result more than any kernel does.
+  One DDR4 channel gives about 14 GB/s, and reading the host experts costs
+  about 12 ms of every token.
+- These numbers are CUDA. Lava support for this model is newer, and we
+  haven't published its speed yet.
+
+The whole campaign, with every commit, number and dead end, is in
+[`docs/research/grok-wip/2026-10-09_35b-cuda-decode-parity.md`](docs/research/grok-wip/2026-10-09_35b-cuda-decode-parity.md).
+KV reuse is §14 of [`KV_MEMORY_PROGRAM.md`](docs/research/KV_MEMORY_PROGRAM.md).
+
+### SmolLM2-135M (2026-10-03 and 2026-10-08)
+
+Greedy, 8 new tokens, compile time excluded. All 27 IDs match the Hugging
+Face reference on every backend. A planted NaN still fails with
+`ERR_NUMERICAL_INSTABILITY`.
+
+Lava against CUDA, warmed decode tok/s, both taken the same night:
 
 | Prompt | Lava | CUDA | Lava/CUDA |
 | --- | ---: | ---: | ---: |
@@ -26,37 +99,26 @@ Warmed decode tok/s. Receipts:
 | The quick brown fox | **36.94** | 28.44 | 1.30 |
 | Julia is a programming language. | **36.78** | 30.10 | 1.22 |
 
-Median Lava/CUDA = **1.22**. Lava decode started this campaign at **2.40 /
-2.49 / 2.49** tok/s
+Lava started this work at 2.4 tok/s
 ([arm 11](docs/archive/2026-10_regime-i/receipts/arm11-lava-after.json)).
+The receipts are
+[`s4-lava-three.json`](docs/archive/2026-10_regime-ii/s4-lava-three.json) and
+[`s4-cuda-three.json`](docs/archive/2026-10_regime-ii/s4-cuda-three.json).
 
-Warmed `decode!` host allocation: Lava 3.28 MB, CUDA 1.06 MB.
-
-These are implementation pipelines, not identical floating-point instruction
-sequences. CUDA tok/s moves a few points night to night on this box; the
-pairs above were taken the same night.
-
-### Gesso CUDA vs eager PyTorch (2026-10-03)
-
-Same checkpoint, prompt `"Hello"`, `max_new_tokens=8`, greedy, batch 1, no
-`torch.compile`, no vLLM. Gesso CUDA is F32; eager PyTorch is bfloat16.
-Both dtypes travel with the numbers; this is not a cross-dtype speed claim.
-
-| Side | Warmed generate | Factor |
-| --- | ---: | ---: |
-| Gesso CUDA | 240 ms | **1.45×** vs eager |
-| Eager PyTorch | 348 ms | 1× |
-
-Source: [`benchmark/results/2026-10-03.tsv`](benchmark/results/2026-10-03.tsv)
-row `smollm2_g2_factor_eager_over_gesso`.
+Gesso CUDA against eager PyTorch, prompt `"Hello"`, batch 1, no
+`torch.compile`: a warmed generate takes 240 ms in Gesso and 348 ms in
+PyTorch, so Gesso is 1.45× faster. Gesso ran F32 and PyTorch ran bfloat16,
+so read this as a comparison of two pipelines, not of dtypes. The source is
+[`benchmark/results/2026-10-03.tsv`](benchmark/results/2026-10-03.tsv), row
+`smollm2_g2_factor_eager_over_gesso`.
 
 ## Run it
 
 ```julia
 using Gesso
-using Lava    # Vulkan path — GessoLavaExt
+using Lava    # Vulkan, through GessoLavaExt
 # or
-using CUDA    # NVIDIA path — GessoCUDAExt
+using CUDA    # NVIDIA, through GessoCUDAExt
 
 model, tensors, cfg = Gesso.load_llama(ENV["GESSO_SMOLLM2_DIR"])
 backend = Gesso.LavaBackend()          # or Gesso.CUDABackend()
@@ -65,83 +127,70 @@ session = Gesso.Session(model, tensors; backend, context_length=128, eos_token_i
 ids = Gesso.generate(session, "Hello"; max_new_tokens=8)
 ```
 
-Lava (Vulkan) is the default backend. CUDA is opt-in for people who prefer the
-vendor stack, and the scripts select it with `GESSO_BACKEND=cuda`. Requesting
-CUDA or Lava without a device throws a typed error. There is no silent CPU
-fallback.
+Lava is the default backend. CUDA is there for people who want the vendor
+stack, and the scripts pick it with `GESSO_BACKEND=cuda`. If you ask for a GPU
+backend and there's no device, you get a typed error. Gesso never falls back
+to the CPU without telling you.
 
-Reproduce the table:
+GGUF models load with `Gesso.load_gguf`, which also needs `GESSO_GGML_DIR` to
+point at a llama.cpp build. The chat server is `scripts/gesso-serve.jl`. It
+serves `/v1/models` and `/v1/chat/completions`.
+
+### Reproduce
+
+The 35B gate, which checks the IDs and prints one receipt line:
+
+```bash
+GESSO_ORNITH35_GGUF=/path/to/Unsloth-Ornith-1.5-35B-A3B-UD-Q2_K_XL.gguf \
+GESSO_GGML_DIR=/path/to/llama.cpp/build/bin \
+GESSO_BACKEND=cuda \
+julia --project=benchmark -t 16 scripts/gate_35b.jl
+```
+
+Add `GESSO_GPU_HOT_EXPERTS=1 GESSO_GPU_HOT_PIN=1` for hot experts. Keep the
+model file on a fast local disk. Mapping it from a slow network or FUSE
+mount made expert reads about 5× slower for us.
+
+The SmolLM2 tables:
 
 ```bash
 GESSO_SMOLLM2_DIR=/path/to/SmolLM2-135M \
 GESSO_HF_REFERENCE=docs/archive/2026-10_regime-i/receipts/hf-reference.json \
-julia --project=test --startup-file=no test/regime_i_performance.jl lava /tmp/lava.json
-
-GESSO_SMOLLM2_DIR=/path/to/SmolLM2-135M \
-GESSO_HF_REFERENCE=docs/archive/2026-10_regime-i/receipts/hf-reference.json \
-julia --project=test --startup-file=no test/regime_i_performance.jl cuda /tmp/cuda.json
+julia --project=test --startup-file=no test/regime_i_performance.jl lava out-lava.json
 ```
 
-The test suite never downloads weights. Without `GESSO_SMOLLM2_DIR` the
-real-model gates are named skips.
+Swap `lava` for `cuda` to get the other column.
 
-## What is in the tree
+The test suite never downloads weights. If `GESSO_SMOLLM2_DIR` isn't set, the
+real-model gates are reported as named skips.
 
-One engine: paged KV, `Session` / `generate`, declared prefix share
-(`fork` + copy-on-write), receipts on every call. CPU is the oracle.
-CUDA is the NVIDIA lowering (device argmax, GEMM attention, autotuned
-`matmul!`). Lava is the portable Vulkan lowering. Core Gesso has no
-CUDA or Lava dependency.
+## What's in the tree
 
-Landed on SmolLM2-135M. Next work is the same engine across more
-architectures and larger models — dense, MoE, and the oddballs — with
-the same ID oracle and the same compile-excluded harness.
-
-Regime II notes live in [`docs/goals/REGIME_II.md`](docs/goals/REGIME_II.md)
-and [`docs/archive/2026-10_regime-ii/`](docs/archive/2026-10_regime-ii/).
-
-## Phases
-
-```
-MAKE IT WORK → MAKE IT COMPLETE → MAKE IT MEASURABLE → MAKE IT FAST
-```
-
-| Phase | Status |
-|------:|--------|
-| 0–2 Foundation, semantic core, CPU oracle | Complete |
-| 3 First real model (Llama import, GQA, GPT-2 BPE) | Complete; SmolLM2 gate skip-or-green in CI |
-| 4 CUDA.jl | Complete |
-| 5 Native engine (`Session`, paged KV) | Complete |
-| 6 Observability (receipts, Profiling) | Complete |
-| 7 Declared prefix share (`fork`) | Complete |
-| 8 Lava/Vulkan | Complete; now at CUDA-parity decode on SmolLM2-135M |
-| 9 Autotune (CUDA `matmul!` winner cache) | Complete |
-| 10 Speed-floor rungs (device argmax, GEMM attention, alloc, G2) | Complete through 10H |
-
-Training is **not** part of Gesso
-([§LVIII](docs/Gesso_Stack.md)). If you want to contribute to the Julia ML
-ecosystem and want a job with real scope: **build the training stack.**
-Start at [WGPU.jl](https://github.com/JuliaGPU/WGPU.jl). Gesso will load
-those checkpoints like everyone else's.
+- One engine with paged KV, `Session` / `generate`, prefix sharing (`fork`
+  with copy-on-write), and a receipt on every call.
+- Model support: Llama-family safetensors, and GGUF with K-quants and
+  IQ-quants, including the Qwen3.5-MoE hybrid architecture.
+- KV cache formats f32, f16, q8 and q4h (`GESSO_KV_FORMAT`). CUDA defaults to
+  q8.
+- Backends: CPU, the oracle. CUDA, with device argmax, GEMM attention,
+  quantized expert kernels and an autotuned `matmul!`. Lava, the portable
+  Vulkan path. The core package depends on neither GPU stack.
+- An OpenAI-compatible chat server with streaming and sampling.
 
 ## Layout
 
 ```
-src/           package core (zero third-party deps)
+src/           package core
 ext/           CUDA and Lava package extensions
+scripts/       gates, benchmarks and the chat server
 test/          test harness
 benchmark/     benchmark harness (results/ accrues)
-docs/          Gesso_Stack.md is canon; ARCHITECTURE.md is the map
-libs/          local dev sources (gitignored) — DO NOT TOUCH
+docs/          Gesso_Stack.md is the design canon; ARCHITECTURE.md is the map
+libs/          local dev sources (gitignored)
 ```
 
-## Working here
-
-- `AGENTS.md` is the binding agent charter — read it before your first edit.
-- `docs/ARCHITECTURE.md` maps every module to its canon section.
-- Work items follow `.github/ISSUE_TEMPLATE/work-item.md`.
-- Open architecture decisions live in
-  [docs/DECISION_PACKETS.md](docs/DECISION_PACKETS.md).
+`AGENTS.md` covers how we work in this repo. Read it before your first edit.
+Open design questions are in [`docs/DECISION_PACKETS.md`](docs/DECISION_PACKETS.md).
 
 ## Commands
 
@@ -153,24 +202,25 @@ make format-check  # CI's formatting gate
 make freeze        # curated context-freeze bundle
 ```
 
-```bash
-GESSO_SMOLLM2_DIR=/path/to/SmolLM2-135M make test
-```
-
-The snapshot needs `config.json`, `model.safetensors` (or the shard index),
-`vocab.json`, and `merges.txt` from
-[HuggingFaceTB/SmolLM2-135M](https://huggingface.co/HuggingFaceTB/SmolLM2-135M).
-
-Julia 1.12 workspace — activate the root, then let Pkg discover the
-members; do not `Pkg.instantiate("test")`:
+This is a Julia 1.12 workspace. Activate the root and let Pkg find the
+members. Don't run `Pkg.instantiate("test")`.
 
 ```bash
 julia --project=. -e 'using Pkg; Pkg.instantiate(); Pkg.activate("test"); Pkg.instantiate(); Pkg.activate("benchmark"); Pkg.instantiate()'
 julia --project=test --check-bounds=yes test/runtests.jl
-julia --project=benchmark benchmark/runbenchmarks.jl
 ```
+
+The SmolLM2 gates need `config.json`, `model.safetensors` (or the shard index),
+`vocab.json` and `merges.txt` from
+[HuggingFaceTB/SmolLM2-135M](https://huggingface.co/HuggingFaceTB/SmolLM2-135M).
+
+## Training
+
+Gesso won't train models ([§LVIII](docs/Gesso_Stack.md)). If you want to work
+on the Julia ML ecosystem and you're after a job with real scope, build the
+training stack. [WGPU.jl](https://github.com/JuliaGPU/WGPU.jl) is a good
+place to start. Gesso will load your checkpoints like anyone else's.
 
 ## License
 
-Gesso is open source under the [Apache License 2.0](LICENSE).
-
+Apache License 2.0. See [LICENSE](LICENSE).
