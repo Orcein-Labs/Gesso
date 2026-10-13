@@ -153,8 +153,8 @@ function profile_delta(b::DecodeProfile, a::DecodeProfile)
     return d
 end
 
-# Backend sync used to bracket GPU stages. Core has no device, so the
-# extension adds the CUDA methods; every other backend needs none.
+# Backend sync used to bracket GPU stages. Core has no device, so each GPU
+# extension (CUDA, Lava) adds its own method.
 _profile_sync(::Any) = nothing
 
 @inline function _profile_add!(p::DecodeProfile, name::Symbol, dt::Int64)

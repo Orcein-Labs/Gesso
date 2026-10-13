@@ -159,6 +159,10 @@ end
 _lava_after_op!(::Gesso.PrefillWorkload) = _lava_sync!()
 _lava_after_op!(::Gesso.DecodeWorkload) = nothing
 
+# Decode never waits per op, so without this a stage timer reads only the
+# submit cost and the queued work is charged to the next stage that blocks.
+Gesso.Inference._profile_sync(::LavaBackend) = _lava_sync!()
+
 # A completed engine action leaves all primary device work synchronized.
 function Gesso.Inference._engine_boundary!(::LavaBackend)
     _lava_sync!()
