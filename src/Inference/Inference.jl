@@ -63,6 +63,7 @@ using ..Gesso:
     _cpu_silu,
     _cpu_sigmoid,
     _cpu_softplus,
+    _cpu_router_logits!,
     _cpu_moe_topk_swiglu!
 using ..Semantics: PrefillWorkload, DecodeWorkload
 using ..Parameters: KVCache, SemanticTensor, ExpertWeight

@@ -829,15 +829,7 @@ function _cpu_moe_topk_swiglu_gguf!(
     ybufs = [zeros(Float32, h) for _ in 1:n_used]
     for t in 1:seq
         xrow = @view x[t, :]
-        m = typemin(T)
-        for e in 1:n_exp
-            acc = zero(T)
-            @inbounds for i in 1:h
-                acc += xrow[i] * router[e, i]
-            end
-            logits[e] = acc
-            acc > m && (m = acc)
-        end
+        m = _cpu_router_logits!(logits, x, t, router)
         s = zero(T)
         for e in 1:n_exp
             v = exp(logits[e] - m)
@@ -920,15 +912,7 @@ function _cpu_moe_topk_swiglu_batched!(y, x, router, gate_s, up_s, down_s, n_use
     wts = Matrix{Float32}(undef, n_used, seq)
     live = fill(false, seq)
     for t in 1:seq
-        m = typemin(Float32)
-        for e in 1:n_exp
-            acc = 0.0f0
-            @inbounds for i in 1:h
-                acc += x[t, i] * router[e, i]
-            end
-            logits[e] = acc
-            acc > m && (m = acc)
-        end
+        m = _cpu_router_logits!(logits, x, t, router)
         s = 0.0f0
         for e in 1:n_exp
             v = exp(logits[e] - m)
