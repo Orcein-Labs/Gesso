@@ -185,9 +185,9 @@ end
 function _lava_device_storage!(op::Symbol, t)
     s = t.storage
     Gesso.Inference._storage_root(s) isa Lava.LavaArray && eltype(s) === Float32 && return s
-    # Quantized dense weights keep their bytes in a device LavaArray{UInt8}
-    # (lava_quant.jl); that is device storage at the same boundary.
-    s isa LavaDenseQuant && s.data isa Lava.LavaArray && return s
+    # Quantized dense weights keep their bytes in device LavaArrays (lava_quant.jl);
+    # both layouts type their fields that way, so the type alone is the check.
+    s isa LavaDenseQuant && return s
     throw(gesso_error(ERR_INVALID_PLAN,
         "$op: LavaBackend requires its own device storage (Float32 or LavaDenseQuant); host Array, " *
         "host views, other devices and unsupported arithmetic are rejected; call to_device explicitly";

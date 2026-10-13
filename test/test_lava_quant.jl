@@ -72,6 +72,7 @@ else
         dev = Gesso.to_device(_lq_lava, (; embedding=emb, blocks=[(; w=pw)], lm_head=emb))
         w = dev.blocks[1].w
         @test w.storage isa _lq_ext.LavaDenseQuant
+        @test w.storage isa (qm.ggml_type == _lq_inf.GGML_TYPE_Q8_0 ? _lq_ext.LavaQ8Quant : _lq_ext.LavaBlockQuant)
         n, nrows = size(X, 1), size(qm, 1)
         dst = Gesso.Activation(; shape=(n, nrows), storage=fill!(Lava.LavaArray{Float32}(undef, n, nrows), 0.0f0))
         x = Gesso.Activation(; shape=size(X), storage=Lava.LavaArray{Float32}(X))
@@ -176,6 +177,35 @@ else
                 qm = _lq_random_matrix(rng, kind, nrows, k)
                 X = randn(rng, Float32, ntok, k)
                 _lq_check(qm, X, _lq_device_matmul(qm, X); label="$kind ntok=$ntok")
+            end
+        end
+    end
+
+    # Repacked Q8_0 (LavaQ8Quant): word and scale indexing at one token, at the
+    # smallest row lengths, and with an odd row count so the last workgroup is partial.
+    @testset "LavaQ8Quant: GEMV at ntok=1, small k and odd nrows" begin
+        rng = MersenneTwister(20261015)
+        for (nrows, k, ntok) in ((37, 512, 1), (37, 96, 1), (37, 96, 3), (37, 32, 1), (37, 32, 3))
+            qm = _lq_random_matrix(rng, :q8_0, nrows, k)
+            X = randn(rng, Float32, ntok, k)
+            _lq_check(qm, X, _lq_device_matmul(qm, X); label="q8_0 $(nrows)x$k ntok=$ntok")
+        end
+    end
+
+    # ntok >= 32 takes the dequant-to-F16 step, which indexes the repacked words
+    # and scales directly. The chunked case splits rows across scratch chunks.
+    @testset "LavaQ8Quant: prefill dequant path" begin
+        rng = MersenneTwister(20261016)
+        @testset "staged shape, ntok=32" begin
+            qm = _lq_random_matrix(rng, :q8_0, 37, 512)
+            X = randn(rng, Float32, 32, 512)
+            _lq_check(qm, X, _lq_device_matmul(qm, X); label="prefill q8_0 37x512 n32", rtol=2.0e-3)
+        end
+        @testset "chunked scratch with a partial last chunk" begin
+            withenv("GESSO_DQ_GEMM_SCRATCH_MIB" => "1") do
+                qm = _lq_random_matrix(rng, :q8_0, 2300, 512)
+                X = randn(rng, Float32, 40, 512)
+                _lq_check(qm, X, _lq_device_matmul(qm, X); label="prefill q8_0 2300x512 n40 chunked", rtol=2.0e-3)
             end
         end
     end
