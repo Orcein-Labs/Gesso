@@ -163,4 +163,37 @@ else
             end
         end
     end
+
+    @testset "Lava GDN gated norm merge" begin
+        # dv > 64 so each lane strides the head more than once.
+        rng = MersenneTwister(0x1a5)
+        seq, nv, dv, eps = 2, 3, 100, 1.0e-6
+        core = randn(rng, Float64, seq, nv, dv)
+        z = randn(rng, Float64, seq, nv * dv)
+        w = randn(rng, Float64, dv)
+        ref = zeros(Float64, seq, nv * dv)
+        for t in 1:seq, hh in 1:nv
+            r = sqrt(sum(abs2, core[t, hh, :]) / dv + eps)
+            for j in 1:dv
+                zj = z[t, (hh - 1) * dv + j]
+                ref[t, (hh - 1) * dv + j] = core[t, hh, j] / r * w[j] * (zj / (1 + exp(-zj)))
+            end
+        end
+        merged = _lh_dev(zeros(seq, nv * dv))
+        @test _lh_inf._gdn_gnorm_merge!(_lh_lava, merged, _lh_dev(core), _lh_dev(z), (; storage=_lh_dev(w)), eps)
+        _lh_check("gnorm merge", merged, ref)
+    end
+
+    @testset "Lava shared-expert sigmoid gate" begin
+        rng = MersenneTwister(0x1a6)
+        seq, h = 3, 150
+        y0 = randn(rng, Float64, seq, h)
+        x = randn(rng, Float64, seq, h)
+        sd = randn(rng, Float64, seq, h)
+        g = randn(rng, Float64, h) ./ sqrt(h)
+        ref = y0 .+ (1 ./ (1 .+ exp.(-(x * g)))) .* sd
+        y = _lh_dev(y0)
+        _lh_inf._shared_gate_add!(_lh_lava, y, _lh_dev(x), _lh_dev(sd), _lh_dev(g))
+        _lh_check("shared gate", y, ref)
+    end
 end

@@ -31,6 +31,26 @@ end
 _lh_host(x::Lava.LavaArray) = Array(x)
 _lh_host(x) = x
 
+# Host copies of frozen device weights the host MoE route reads every token.
+# The router alone is 2 MB per layer, ~86 ms/token on the GSQ 35B when it was
+# downloaded per call. Keyed by identity: the WeakRef check rejects a recycled
+# objectid, and dead entries are pruned on the next miss.
+const _LH_HOST_WEIGHTS = Dict{UInt, Tuple{WeakRef, Array}}()
+const _LH_HOST_WEIGHTS_LOCK = ReentrantLock()
+
+function _lh_host_weight(w::Lava.LavaArray)
+    k = objectid(w)
+    lock(_LH_HOST_WEIGHTS_LOCK) do
+        e = get(_LH_HOST_WEIGHTS, k, nothing)
+        e !== nothing && e[1].value === w && return e[2]
+        filter!(p -> p.second[1].value !== nothing, _LH_HOST_WEIGHTS)
+        h = Array(w)
+        _LH_HOST_WEIGHTS[k] = (WeakRef(w), h)
+        return h
+    end
+end
+_lh_host_weight(w) = w
+
 # Causal depthwise conv1d + SiLU, one thread per (t, channel). Reads only the
 # old conv_state and x, so the state update is a separate launch.
 @kernel cpu=false function _lava_conv_silu_kernel!(dst, x, weight, state, channels::Int, k::Int, n::Int)
@@ -135,6 +155,49 @@ end
         end
         out[t, hh, j] = acc
     end
+end
+
+const _LH_RED_LANES = 64
+
+# Gated RMS norm, SiLU gate and head merge in one launch, one workgroup per
+# (token, value head). The engine's unfused fallback issues about five ops per
+# head, roughly 160 launches per GDN layer. Same arithmetic as the CUDA kernel.
+@kernel cpu=false function _lava_gdn_gnorm_kernel!(merged, core, z, norm_w, nv::Int, dv::Int, eps::Float32)
+    tl = @index(Local, Linear)
+    gi = @index(Group, Linear)
+    part = @localmem Float32 (_LH_RED_LANES,)
+    hh = (gi - 1) % nv + 1
+    t = (gi - 1) ÷ nv + 1
+    acc = 0.0f0
+    for j in tl:_LH_RED_LANES:dv
+        c = core[t, hh, j]
+        acc += c * c
+    end
+    part[tl] = acc
+    # every lane reads all partials after this barrier
+    @synchronize
+    ss = 0.0f0
+    for i in 1:_LH_RED_LANES
+        ss += part[i]
+    end
+    inv = 1.0f0 / sqrt(ss / Float32(dv) + eps)
+    base = (hh - 1) * dv
+    for j in tl:_LH_RED_LANES:dv
+        zv = z[t, base + j]
+        merged[t, base + j] = (core[t, hh, j] * inv) * norm_w[j] * (zv / (1.0f0 + exp(-zv)))
+    end
+end
+
+function Gesso.Inference._gdn_gnorm_merge!(::LavaBackend, merged::Lava.LavaArray{Float32, 2},
+                                           core::Lava.LavaArray{Float32, 3},
+                                           z::Lava.LavaArray{Float32, 2}, scale, eps)
+    seq, nv, dv = size(core)
+    seq == 0 && return true
+    w = _lh_device(scale.storage, :gdn_gnorm_merge)
+    kern = _lava_gdn_gnorm_kernel!(KA.get_backend(core))
+    kern(merged, core, z, w, Int(nv), Int(dv), Float32(eps);
+        ndrange=seq * nv * _LH_RED_LANES, workgroupsize=(_LH_RED_LANES,))
+    return true
 end
 
 function Gesso.Inference._causal_conv1d_silu!(::LavaBackend, dst, x, weight, conv_state)
@@ -275,34 +338,44 @@ function Gesso.Inference._moe_topk_swiglu!(
     end
     overlap === nothing || overlap()
     xh = _lh_host(x)
-    rh = _lh_host(router)
+    rh = _lh_host_weight(router)
     yh = zeros(Float32, size(y))
     Gesso.Inference._moe_topk_swiglu!(Gesso.CPUBackend(), yh, xh, rh, gate, up, down, n_used)
     copyto!(y, yh)
     return y
 end
 
-# Shared-expert sigmoid gate. The generic body indexes element by element, and
-# on a device array each read is a scalar fetch (GPUArrays refuses it). The
-# gate is one dot product per token, so it runs on the host with the same
-# round trip as the MoE route. CUDA has a device kernel for this; Lava does not
-# yet.
-function Gesso.Inference._shared_gate_add!(::LavaBackend, y, x, sd, gvec)
-    xh = _lh_host(x)
-    sdh = _lh_host(sd)
-    g = _lh_host(gvec)
-    yh = _lh_host(y)
-    seq, h = size(xh)
-    for t in 1:seq
-        acc = zero(eltype(xh))
-        for i in 1:h
-            acc += xh[t, i] * g[i]
-        end
-        s = one(acc) / (one(acc) + exp(-acc))
-        for i in 1:h
-            yh[t, i] += s * sdh[t, i]
-        end
+# Shared-expert sigmoid gate, y += sigmoid(x . g) * sd, one workgroup per
+# token. The host version paid four transfers per layer.
+@kernel cpu=false function _lava_shared_gate_kernel!(y, x, sd, g, h::Int)
+    tl = @index(Local, Linear)
+    t = @index(Group, Linear)
+    part = @localmem Float32 (_LH_RED_LANES,)
+    acc = 0.0f0
+    for i in tl:_LH_RED_LANES:h
+        acc += x[t, i] * g[i]
     end
-    copyto!(y, yh)
+    part[tl] = acc
+    # every lane reads all partials after this barrier
+    @synchronize
+    s = 0.0f0
+    for i in 1:_LH_RED_LANES
+        s += part[i]
+    end
+    s = 1.0f0 / (1.0f0 + exp(-s))
+    for i in tl:_LH_RED_LANES:h
+        y[t, i] += s * sd[t, i]
+    end
+end
+
+function Gesso.Inference._shared_gate_add!(::LavaBackend, y, x, sd, gvec)
+    yd = _lh_device(y, :shared_gate_add)
+    xd = _lh_device(x, :shared_gate_add)
+    sdd = _lh_device(sd, :shared_gate_add)
+    gd = _lh_device(gvec, :shared_gate_add)
+    seq, h = size(xd)
+    seq == 0 && return y
+    kern = _lava_shared_gate_kernel!(KA.get_backend(xd))
+    kern(yd, xd, sdd, gd, Int(h); ndrange=seq * _LH_RED_LANES, workgroupsize=(_LH_RED_LANES,))
     return y
 end

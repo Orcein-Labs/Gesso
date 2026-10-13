@@ -72,22 +72,30 @@ gen(n) = Gesso.reference_generate(
 dtype = get(ENV, "GESSO_GPU_WEIGHT_DTYPE", "f16")
 moe_host = get(ENV, "GESSO_MOE_HOST_EXPERTS", "0")
 
-INF.profile_disable!()
-gen(2)
+# Inside a function so the runs share one world. On Julia 1.12 each new
+# top-level global bumps the world counter, and Lava drops every launch plan
+# compiled in an older world, so a global assigned between two runs made the
+# second one recompile all of its kernels.
+function measure()
+    INF.profile_disable!()
+    gen(2)
 
-INF.profile_enable!()
-ids_cold = gen(N + 1)
-cold = INF.profile_snapshot()
+    INF.profile_enable!()
+    ids_cold = gen(N + 1)
+    cold = INF.profile_snapshot()
 
-INF.profile_enable!()
-gen(1)
-a = INF.profile_snapshot()
-INF.profile_reset!()
-hits0 = INF.expert_hit_summary(dev.blocks)
-ids_warm = gen(N + 1)
-hits1 = INF.expert_hit_summary(dev.blocks)
-b = INF.profile_snapshot()
-INF.profile_disable!()
+    INF.profile_enable!()
+    gen(1)
+    a = INF.profile_snapshot()
+    INF.profile_reset!()
+    hits0 = INF.expert_hit_summary(dev.blocks)
+    ids_warm = gen(N + 1)
+    hits1 = INF.expert_hit_summary(dev.blocks)
+    b = INF.profile_snapshot()
+    INF.profile_disable!()
+    return (; ids_cold, cold, a, hits0, ids_warm, hits1, b)
+end
+(; ids_cold, cold, a, hits0, ids_warm, hits1, b) = measure()
 
 # per-layer residency and hit counts for the warm run only
 let H = 0, M = 0
