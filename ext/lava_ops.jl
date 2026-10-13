@@ -1111,6 +1111,11 @@ end
 # GC.gc on the decode path. Requests within a step never share a view, and a
 # step whose requests differ from the layout gets fresh buffers for the ones
 # that do not fit; the next step lays the slab out again.
+#
+# A request the slab cannot hold (rank above four, or empty) keeps its place in
+# the layout with no slab space and a `nothing` view. It is served loose, and
+# because its slot is kept, one such request does not drop the layout for the
+# other requests in the step.
 mutable struct LavaArenaSlab
     slab::Union{Nothing, Lava.LavaArray{Float32, 1}}
     views::Vector{Any}
@@ -1125,7 +1130,7 @@ struct LavaDecodeArena
 end
 
 # (ndims, dims padded to four). Rank above four or an empty buffer gets key 0:
-# a request the layout cannot hold, so it is served loose.
+# a request the slab cannot hold.
 function _lava_arena_key(dims::NTuple{N, Int}) where {N}
     (N <= 4 && prod(dims) > 0) || return (0, 0, 0, 0, 0)
     return (N, ntuple(k -> k <= N ? dims[k] : 0, 4)...)
@@ -1136,18 +1141,22 @@ _lava_arena_round(n::Int) = cld(n, 64) * 64
 
 function _lava_arena_relayout!(s::LavaArenaSlab)
     for v in s.views
-        Lava.unsafe_free!(v)
+        v === nothing || Lava.unsafe_free!(v)
     end
     s.slab === nothing || Lava.unsafe_free!(s.slab)
     empty!(s.views)
     copy!(s.layout, s.requested)
     total = 0
     for key in s.layout
-        total += _lava_arena_round(prod(key[2:(key[1] + 1)]))
+        key[1] == 0 || (total += _lava_arena_round(prod(key[2:(key[1] + 1)])))
     end
     s.slab = Lava.LavaArray{Float32}(undef, max(total, 1))
     off = 0
     for key in s.layout
+        if key[1] == 0
+            push!(s.views, nothing)
+            continue
+        end
         dims = key[2:(key[1] + 1)]
         n = prod(dims)
         push!(s.views, reshape(view(s.slab, (off + 1):(off + n)), dims))
@@ -1180,14 +1189,14 @@ function Gesso.Inference._decode_zeros_like(be::LavaBackend, tensors)
     proto isa Lava.LavaArray{Float32} ||
         return Gesso.Inference._zeros_like_factory(be, tensors)
     s = _LAVA_DECODE_ARENA
-    if !isempty(s.requested) && (s.requested != s.layout || !isempty(s.loose))
-        if all(k -> k[1] != 0, s.requested)
-            _lava_arena_relayout!(s)
-        end
-        for b in s.loose
-            Lava.unsafe_free!(b)
-        end
-        empty!(s.loose)
+    # `loose` holds only the previous step's overflow buffers, so it is always
+    # released here; the layout is rebuilt only when the requests changed.
+    for b in s.loose
+        Lava.unsafe_free!(b)
+    end
+    empty!(s.loose)
+    if !isempty(s.requested) && s.requested != s.layout
+        _lava_arena_relayout!(s)
     end
     empty!(s.requested)
     s.slab === nothing || fill!(s.slab, 0.0f0)

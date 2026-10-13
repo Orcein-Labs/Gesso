@@ -256,6 +256,46 @@ else
         @test all(==(0.0f0), Array(b3))
     end
 
+    # A request the slab cannot hold (rank 5, or empty) is served loose, and
+    # must not drop the layout for the requests around it.
+    @testset "lava decode arena: a rank-5 or empty request keeps the slab layout" begin
+        ext = Base.get_extension(Gesso, :GessoLavaExt)
+        arena = ext._LAVA_DECODE_ARENA
+        e = (storage=lz(2, 2),)
+        tens = (embedding=e, lm_head=e, blocks=())
+        for mid in ((1, 1, 1, 1, 2), (0, 3))
+            z1 = Gesso.Inference._decode_zeros_like(lava, tens)
+            a1 = z1((3, 2))
+            m1 = z1(mid)
+            b1 = z1((4,))
+            fill!(a1, 7.0f0)
+            fill!(m1, 7.0f0)
+            fill!(b1, 7.0f0)
+
+            z2 = Gesso.Inference._decode_zeros_like(lava, tens)
+            slab2 = arena.slab
+            a2 = z2((3, 2))
+            m2 = z2(mid)
+            b2 = z2((4,))
+            fill!(a2, 5.0f0)
+            fill!(m2, 5.0f0)
+            fill!(b2, 6.0f0)
+
+            z3 = Gesso.Inference._decode_zeros_like(lava, tens)
+            a3 = z3((3, 2))
+            m3 = z3(mid)
+            b3 = z3((4,))
+            @test arena.slab === slab2
+            @test arena.views[1] === a3
+            @test arena.views[2] === nothing
+            @test arena.views[3] === b3
+            @test size(m3) == mid
+            @test all(==(0.0f0), Array(a3))
+            @test all(==(0.0f0), Array(m3))
+            @test all(==(0.0f0), Array(b3))
+        end
+    end
+
     # Single-token decode with a scaled inv_freq reads the cached cos/sin table.
     # Position 5000 exercises table growth past the first 256 rows.
     @testset "lava rope! seq=1 inv_freq: cached table matches CPU at positions 0, 1, 5000" begin

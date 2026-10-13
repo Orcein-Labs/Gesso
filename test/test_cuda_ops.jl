@@ -216,4 +216,48 @@ else
         gpu2 = Gesso.to_device(cuda, merge(tensors, (final_rms=fr,)))
         @test gpu2.final_rms.storage isa CuArray{Float32}
     end
+
+    # A request the slab cannot hold (rank 5, or empty) is served loose, and
+    # must not drop the layout for the requests around it.
+    @testset "cuda decode arena: a rank-5 or empty request keeps the slab layout" begin
+        ext = Base.get_extension(Gesso, :GessoCUDAExt)
+        for mid in ((1, 1, 1, 1, 2), (0, 3))
+            z1 = Gesso.Inference._decode_zeros_like(cuda, (;))
+            arena = ext._DECODE_ARENAS[Int(CUDA.deviceid(CUDA.device()))]
+            a1 = z1((3, 2))
+            m1 = z1(mid)
+            b1 = z1((4,))
+            fill!(a1, 7.0f0)
+            fill!(m1, 7.0f0)
+            fill!(b1, 7.0f0)
+
+            z2 = Gesso.Inference._decode_zeros_like(cuda, (;))
+            slab2 = arena.slab
+            a2 = z2((3, 2))
+            m2 = z2(mid)
+            b2 = z2((4,))
+            fill!(a2, 5.0f0)
+            fill!(m2, 5.0f0)
+            fill!(b2, 6.0f0)
+
+            z3 = Gesso.Inference._decode_zeros_like(cuda, (;))
+            a3 = z3((3, 2))
+            m3 = z3(mid)
+            b3 = z3((4,))
+            @test arena.slab === slab2
+            @test arena.views[1] === a3
+            # Only rank above four is keyed as unholdable here; an empty buffer
+            # is a zero-length view of the slab, which holds it trivially.
+            if length(mid) == 5
+                @test arena.views[2] === nothing
+            else
+                @test size(arena.views[2]) == mid
+            end
+            @test arena.views[3] === b3
+            @test size(m3) == mid
+            @test all(==(0.0f0), Array(a3))
+            @test all(==(0.0f0), Array(m3))
+            @test all(==(0.0f0), Array(b3))
+        end
+    end
 end
