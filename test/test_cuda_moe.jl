@@ -386,6 +386,20 @@ else
         end
     end
 
+    @testset "cuda hot experts accept a GSQ mixed K-quant triple" begin
+        # GSQ-RCO picks a type per projection, so one layer's gate, up and down
+        # can be Q2_K, Q3_K and Q4_K at once; the hot pool must still take it.
+        ext = Base.get_extension(Gesso, :GessoCUDAExt)
+        I_ = Gesso.Inference
+        sl(t, ne0, ne1) = Gesso.GgufQuantSlice(UInt8[], 0, t, 4, ne0, ne1, 1024, C_NULL, Int64(1))
+        @test ext._hot_supported(sl(I_.GGML_TYPE_Q2_K, 256, 64), sl(I_.GGML_TYPE_Q3_K, 256, 64),
+            sl(I_.GGML_TYPE_Q4_K, 64, 256))
+        @test ext._hot_supported(sl(I_.GGML_TYPE_IQ2_XS, 256, 64), sl(I_.GGML_TYPE_Q2_K, 256, 64),
+            sl(I_.GGML_TYPE_IQ4_XS, 64, 256))
+        @test !ext._hot_supported(sl(I_.GGML_TYPE_Q8_0, 256, 64), sl(I_.GGML_TYPE_Q2_K, 256, 64),
+            sl(I_.GGML_TYPE_Q2_K, 64, 256))
+    end
+
     @testset "cuda qgemv activation-column table gathers each pair's token" begin
         # Hot-layer prefill runs (token, expert) pairs in one launch, each pair
         # reading its token's column of x. Activations quantize per column in

@@ -137,8 +137,11 @@ function _hot_copy_stream()
     return s
 end
 
+# GSQ-RCO files mix these per projection inside one layer; the activations are
+# q8_1 for every type, so gate, up and down need not share one.
 const _HOT_TYPES = (Gesso.Inference.GGML_TYPE_IQ2_XS, Gesso.Inference.GGML_TYPE_IQ3_XXS,
-    Gesso.Inference.GGML_TYPE_IQ4_XS)
+    Gesso.Inference.GGML_TYPE_IQ4_XS, Gesso.Inference.GGML_TYPE_Q2_K,
+    Gesso.Inference.GGML_TYPE_Q3_K, Gesso.Inference.GGML_TYPE_Q4_K)
 
 function _hot_supported(g, u, d)
     all(s -> s.ggml_type in _HOT_TYPES && s.bytes_per_expert % 4 == 0, (g, u, d)) || return false
