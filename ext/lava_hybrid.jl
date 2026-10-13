@@ -510,8 +510,17 @@ function Gesso.Inference._moe_topk_swiglu!(
             ),
         )
     end
-    overlap === nothing || overlap()
+    # Lava only records dispatches until something flushes, so the shared
+    # expert is submitted after x is down and runs on the GPU while the CPU runs
+    # the routed experts. It writes neither y nor anything they read.
+    # GESSO_MOE_OVERLAP=0 runs it before the download instead, as CUDA does.
+    ov = overlap !== nothing && get(ENV, "GESSO_MOE_OVERLAP", "1") == "1"
+    ov || overlap === nothing || overlap()
     xh = Gesso.Inference.@decode_stage :moe_d2h backend _lh_host(x)
+    if ov
+        overlap()
+        Lava.submit!(KALava().dispatch_bq)
+    end
     rh = _lh_host_weight(router)
     yh = zeros(Float32, size(y))
     Gesso.Inference.@decode_stage :moe_host nothing Gesso.Inference._moe_topk_swiglu!(

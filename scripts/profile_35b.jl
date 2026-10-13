@@ -8,6 +8,7 @@
 # GESSO_BACKEND defaults to lava; CUDA is loaded only when it is asked for.
 #
 # Optional env: GESSO_PROFILE_TOKENS (decode tokens to measure, default 8),
+# GESSO_WALL_TOKENS (unprofiled decode tokens timed, default 16),
 # GESSO_PROFILE_CTX (prompt length, default 1; longer prompts are real text
 # from GESSO_PROFILE_TEXT, repeated, so decode runs against a filled KV cache).
 # The engine switches are read as usual: GESSO_GPU_WEIGHT_DTYPE (f16 default),
@@ -33,6 +34,7 @@ isdir(GGML_DIR) || error("profile_35b: set GESSO_GGML_DIR to the llama.cpp build
 const EXPECTED = [9419, 11, 271, 40, 2688, 4313, 310, 958, 279]
 const N = parse(Int, get(ENV, "GESSO_PROFILE_TOKENS", "8"))
 N >= 1 || error("profile_35b: GESSO_PROFILE_TOKENS must be >= 1")
+const WALL = parse(Int, get(ENV, "GESSO_WALL_TOKENS", "16"))
 const CTX = parse(Int, get(ENV, "GESSO_PROFILE_CTX", "1"))
 CTX >= 1 || error("profile_35b: GESSO_PROFILE_CTX must be >= 1")
 const TEXT = get(ENV, "GESSO_PROFILE_TEXT", joinpath(@__DIR__, "..", "docs", "Gesso_Stack.md"))
@@ -93,9 +95,17 @@ function measure()
     hits1 = INF.expert_hit_summary(dev.blocks)
     b = INF.profile_snapshot()
     INF.profile_disable!()
-    return (; ids_cold, cold, a, hits0, ids_warm, hits1, b)
+    # The profiled table syncs the device around every stage, so it cannot
+    # show work the backend overlaps; this unprofiled pair can. The first pass
+    # reaches positions the runs above never did, so it is not timed.
+    gen(WALL + 1)
+    t1 = @elapsed gen(1)
+    ids_wall = nothing
+    tw = @elapsed (ids_wall = gen(WALL + 1))
+    wall_ms = 1e3 * (tw - t1) / max(1, length(ids_wall) - 1)
+    return (; ids_cold, cold, a, hits0, ids_warm, hits1, b, wall_ms, nwall=length(ids_wall) - 1)
 end
-(; ids_cold, cold, a, hits0, ids_warm, hits1, b) = measure()
+(; ids_cold, cold, a, hits0, ids_warm, hits1, b, wall_ms, nwall) = measure()
 
 # per-layer residency and hit counts for the warm run only
 let H = 0, M = 0
@@ -124,6 +134,8 @@ println(
     "dtype=$dtype moe_host_experts=$moe_host ctx=$CTX decode_tokens=$N ",
     "ids_ok=$ok load_s=$(round(t_load; digits=1))",
 )
+println("RECEIPT unprofiled decode_tokens=$nwall ms_per_token=$(round(wall_ms; digits=2)) ",
+    "tok_s=$(round(1e3 / wall_ms; digits=2))")
 println()
 println("== cold token log (JIT warm, then first profiled run in this process) ==")
 INF.print_token_log(stdout, cold)
