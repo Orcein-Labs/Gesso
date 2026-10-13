@@ -10,9 +10,7 @@
 # Precision. The kernels run in F32 with F32 recurrent state. The CPU oracle
 # is F64. The F32 error bound is declared in test/test_lava_hybrid.jl.
 #
-# Not here yet: the fused single-token GDN decode (`_gdn_decode_core!` stays
-# unimplemented, so `_gdn_fused_decode(::LavaBackend)` stays false and the
-# unfused path runs) and device expert routing (L3).
+# Not here yet: device expert routing (L3).
 
 const _LH_WG = (64,)
 
@@ -285,6 +283,182 @@ function Gesso.Inference._gated_delta_rule!(
     krec(o, qn, kn, vs, gs, bs, st, Int(nv), Int(dk), Int(dv), Int(seq), Int(n_rec);
         ndrange=n_rec, workgroupsize=_LH_WG)
     return out
+end
+
+# --- Qwen3.5 GDN single-token decode (seq = 1), fused ---------------------------
+#
+# Port of the CUDA fused decode (cuda_ops.jl). Three launches replace the
+# unfused block's dozen allocations and ~15 launches per layer: conv + SiLU +
+# state shift, the delta rule with gates and q/k norms folded in, and the gated
+# RMSNorm. Same layout contract: conv_out holds q, k, v head-major, and core and
+# merged are head-major with index (hh-1)*dv + j.
+
+Gesso.Inference._gdn_fused_decode(::LavaBackend) = true
+
+# Thread c owns channel c alone, so its state column is read before it is
+# overwritten and no other thread touches it.
+@kernel cpu=false function _lava_gdn_conv_decode_kernel!(conv_out, state, mixed, weight, k::Int, channels::Int)
+    c = @index(Global)
+    c <= channels || return
+    acc = 0.0f0
+    for p in 1:(k - 1)
+        acc += weight[c, 1, p] * state[c, p]
+    end
+    xv = mixed[1, c]
+    acc += weight[c, 1, k] * xv
+    conv_out[1, c] = acc / (1.0f0 + exp(-acc))
+    for p in 1:(k - 2)
+        state[c, p] = state[c, p + 1]
+    end
+    state[c, k - 1] = xv
+end
+
+# Lava workgroups are 1-D and local memory is sized at compile time, so the
+# CUDA (nv, Y) block becomes a fixed 256-lane group with lane = hh + (y-1)*nv.
+# Lanes past nv*Y idle but still reach every barrier.
+const _LH_DELTA_WG = 256
+const _LH_DELTA_RED = 3 * _LH_DELTA_WG
+
+# Group j is state column j of every head; lane (hh, y) takes the state rows
+# i ≡ y (mod Y) of head hh. Consecutive lanes are consecutive heads, which are
+# adjacent in the [nv, dk, dv] state. The q and k norms scale the sums rather
+# than every element: the same math to rounding.
+@kernel cpu=false function _lava_gdn_delta_kernel!(
+    core, conv_out, a, b, A_log, dt_bias, state,
+    nv::Int, nk::Int, group::Int, tiled::Bool, dk::Int, dv::Int, Y::Int,
+    scale::Float32, eps::Float32,
+)
+    tl = @index(Local, Linear)
+    j = @index(Group, Linear)
+    red = @localmem Float32 (_LH_DELTA_RED,)
+    active = tl <= nv * Y
+    hh = (tl - 1) % nv + 1
+    y = (tl - 1) ÷ nv + 1
+    key_dim = nk * dk
+    h = tiled ? (hh - 1) % nk + 1 : (hh - 1) ÷ group + 1
+    qoff = (h - 1) * dk
+    koff = key_dim + qoff
+    beta = 0.0f0
+    decay = 0.0f0
+    sq = 0.0f0
+    sk = 0.0f0
+    sm = 0.0f0
+    if active
+        beta = 1.0f0 / (1.0f0 + exp(-b[1, hh]))
+        av = a[1, hh] + dt_bias[hh]
+        sp = av > 20.0f0 ? av : log(1.0f0 + exp(av))
+        decay = exp(-exp(A_log[hh]) * sp)
+        for i in y:Y:dk
+            qv = conv_out[1, qoff + i]
+            kv = conv_out[1, koff + i]
+            sq += qv * qv
+            sk += kv * kv
+            sm += (state[hh, i, j] * decay) * kv
+        end
+    end
+    red[tl] = sq
+    red[_LH_DELTA_WG + tl] = sk
+    red[2 * _LH_DELTA_WG + tl] = sm
+    @synchronize
+    acc = 0.0f0
+    invq = 0.0f0
+    if active
+        sq = 0.0f0
+        sk = 0.0f0
+        sm = 0.0f0
+        for t in 0:(Y - 1)
+            r = hh + t * nv
+            sq += red[r]
+            sk += red[_LH_DELTA_WG + r]
+            sm += red[2 * _LH_DELTA_WG + r]
+        end
+        invq = scale / sqrt(sq + eps)
+        invk = 1.0f0 / sqrt(sk + eps)
+        delta = (conv_out[1, 2 * key_dim + (hh - 1) * dv + j] - sm * invk) * beta
+        kd = invk * delta
+        for i in y:Y:dk
+            sn = state[hh, i, j] * decay + conv_out[1, koff + i] * kd
+            state[hh, i, j] = sn
+            acc += sn * conv_out[1, qoff + i]
+        end
+    end
+    # every lane must be done reading the first reduction before it is reused
+    @synchronize
+    red[tl] = acc
+    @synchronize
+    if active && y == 1
+        tot = 0.0f0
+        for t in 0:(Y - 1)
+            tot += red[hh + t * nv]
+        end
+        core[1, (hh - 1) * dv + j] = tot * invq
+    end
+end
+
+# Decode form of _lava_gdn_gnorm_kernel!: one group per value head over the
+# head-major core the delta kernel writes.
+@kernel cpu=false function _lava_gdn_gnorm_decode_kernel!(merged, core, z, norm_w, dv::Int, eps::Float32)
+    tl = @index(Local, Linear)
+    hh = @index(Group, Linear)
+    part = @localmem Float32 (_LH_RED_LANES,)
+    base = (hh - 1) * dv
+    acc = 0.0f0
+    for j in tl:_LH_RED_LANES:dv
+        c = core[1, base + j]
+        acc += c * c
+    end
+    part[tl] = acc
+    @synchronize
+    ss = 0.0f0
+    for i in 1:_LH_RED_LANES
+        ss += part[i]
+    end
+    inv = 1.0f0 / sqrt(ss / Float32(dv) + eps)
+    for j in tl:_LH_RED_LANES:dv
+        zv = z[1, base + j]
+        merged[1, base + j] = (core[1, base + j] * inv) * norm_w[j] * (zv / (1.0f0 + exp(-zv)))
+    end
+end
+
+function Gesso.Inference._gdn_decode_core!(
+    backend::LavaBackend, s, bt, spec, eps, conv_state, rec_state,
+)
+    mx = spec.mixer
+    nk, nv = mx.num_key_heads, mx.num_value_heads
+    dk, dv = mx.key_head_dim, mx.value_head_dim
+    ksz = mx.conv_kernel_dim
+    key_dim = nk * dk
+    conv_dim = 2 * key_dim + nv * dv
+    nv % nk == 0 || error("gdn decode: n_v_heads $nv not divisible by n_k_heads $nk")
+    nv <= _LH_DELTA_WG || error("gdn decode: $nv value heads exceed the $_LH_DELTA_WG-lane group")
+    size(rec_state) == (nv, dk, dv) ||
+        error("gdn decode: state $(size(rec_state)) ≠ ($nv, $dk, $dv)")
+    size(conv_state) == (conv_dim, ksz - 1) ||
+        error("gdn decode: conv state $(size(conv_state)) ≠ ($conv_dim, $(ksz - 1))")
+    weight = _lh_device(bt.wgdn_conv.storage, :gdn_decode)
+    A_log = _lh_device(bt.wgdn_A_log.storage, :gdn_decode)
+    dt_bias = _lh_device(bt.wgdn_dt_bias.storage, :gdn_decode)
+    norm_w = _lh_device(bt.wgdn_norm.storage, :gdn_decode)
+    cst = _lh_device(conv_state, :gdn_decode)
+    rst = _lh_device(rec_state, :gdn_decode)
+    scale = 1.0f0 / sqrt(Float32(dk))
+    eps32 = Float32(eps)
+    Y = clamp(_LH_DELTA_WG ÷ nv, 1, dk)
+    kb = KA.get_backend(s.conv)
+    Gesso.Inference.@decode_sub :gdn_conv backend begin
+        _lava_gdn_conv_decode_kernel!(kb)(s.conv, cst, s.mixed, weight, Int(ksz), Int(conv_dim);
+            ndrange=conv_dim, workgroupsize=_LH_WG)
+    end
+    Gesso.Inference.@decode_sub :gdn_recur backend begin
+        _lava_gdn_delta_kernel!(kb)(s.core, s.conv, s.a, s.b, A_log, dt_bias, rst,
+            Int(nv), Int(nk), Int(div(nv, nk)), mx.v_head_tiled, Int(dk), Int(dv), Int(Y),
+            scale, eps32; ndrange=dv * _LH_DELTA_WG, workgroupsize=(_LH_DELTA_WG,))
+    end
+    Gesso.Inference.@decode_sub :gdn_gnorm backend begin
+        _lava_gdn_gnorm_decode_kernel!(kb)(s.merged, s.core, s.z, norm_w, Int(dv), eps32;
+            ndrange=nv * _LH_RED_LANES, workgroupsize=(_LH_RED_LANES,))
+    end
+    return s
 end
 
 function Gesso.Inference._sigmoid_mul!(::LavaBackend, dst, src, gate)

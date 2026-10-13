@@ -196,4 +196,61 @@ else
         _lh_inf._shared_gate_add!(_lh_lava, y, _lh_dev(x), _lh_dev(sd), _lh_dev(g))
         _lh_check("shared gate", y, ref)
     end
+
+    @testset "Lava fused GDN decode matches the CPU oracle over carried steps" begin
+        @test _lh_inf._gdn_fused_decode(_lh_lava)
+        # nv*Y < 256 leaves idle lanes, dk not a multiple of Y leaves a ragged
+        # stride, and dv > 64 makes the gnorm lanes wrap.
+        for (nk, nv, dk, dv) in ((2, 4, 24, 100), (2, 6, 40, 70)), tiled in (false, true)
+            rng = MersenneTwister(0x1a7 + nv + tiled)
+            ksz, eps = 4, 1.0e-6
+            key_dim = nk * dk
+            conv_dim = 2 * key_dim + nv * dv
+            spec = (; mixer=(; num_key_heads=nk, num_value_heads=nv, key_head_dim=dk,
+                value_head_dim=dv, conv_kernel_dim=ksz, v_head_tiled=tiled))
+            w = 0.5 .* randn(rng, Float64, conv_dim, 1, ksz)
+            A_log = 0.3 .* randn(rng, Float64, nv)
+            dt = randn(rng, Float64, nv)
+            nw = randn(rng, Float64, dv)
+            bt = (; wgdn_conv=(; storage=_lh_dev(w)), wgdn_A_log=(; storage=_lh_dev(A_log)),
+                wgdn_dt_bias=(; storage=_lh_dev(dt)), wgdn_norm=(; storage=_lh_dev(nw)))
+            cst_ref = randn(rng, Float64, conv_dim, ksz - 1)
+            rst_ref = 0.1 .* randn(rng, Float64, nv, dk, dv)
+            cst, rst = _lh_dev(cst_ref), _lh_dev(rst_ref)
+            for step in 1:3
+                mixed = randn(rng, Float64, 1, conv_dim)
+                z = randn(rng, Float64, 1, nv * dv)
+                a = randn(rng, Float64, 1, nv)
+                b = randn(rng, Float64, 1, nv)
+                conv_ref = zeros(Float64, 1, conv_dim)
+                Gesso._cpu_causal_conv1d_silu!(conv_ref, mixed, w, cst_ref)
+                q = reshape(permutedims(reshape(conv_ref[1, 1:key_dim], dk, nk)), 1, nk, dk)
+                kk = reshape(permutedims(reshape(conv_ref[1, (key_dim + 1):(2 * key_dim)], dk, nk)), 1, nk, dk)
+                v = reshape(permutedims(reshape(conv_ref[1, (2 * key_dim + 1):end], dv, nv)), 1, nv, dv)
+                beta = 1 ./ (1 .+ exp.(-b))
+                g = -exp.(A_log)' .* log1p.(exp.(a .+ dt'))
+                core = zeros(Float64, 1, nv, dv)
+                Gesso._cpu_gated_delta_rule!(core, q, kk, v, g, beta, rst_ref; l2norm=true, v_head_tiled=tiled)
+                core_ref = reshape(permutedims(core[1, :, :]), 1, nv * dv)
+                merged_ref = zeros(Float64, 1, nv * dv)
+                for hh in 1:nv
+                    r = sqrt(sum(abs2, core[1, hh, :]) / dv + eps)
+                    for j in 1:dv
+                        zj = z[1, (hh - 1) * dv + j]
+                        merged_ref[1, (hh - 1) * dv + j] = core[1, hh, j] / r * nw[j] * (zj / (1 + exp(-zj)))
+                    end
+                end
+                s = (; mixed=_lh_dev(mixed), conv=_lh_dev(zeros(1, conv_dim)), z=_lh_dev(z),
+                    a=_lh_dev(a), b=_lh_dev(b), core=_lh_dev(zeros(1, nv * dv)),
+                    merged=_lh_dev(zeros(1, nv * dv)))
+                _lh_inf._gdn_decode_core!(_lh_lava, s, bt, spec, eps, cst, rst)
+                tag = "fused nv=$nv tiled=$tiled step=$step"
+                _lh_check("$tag conv", s.conv, conv_ref)
+                _lh_check("$tag conv state", cst, cst_ref)
+                _lh_check("$tag core", s.core, core_ref)
+                _lh_check("$tag rec state", rst, rst_ref)
+                _lh_check("$tag merged", s.merged, merged_ref)
+            end
+        end
+    end
 end
