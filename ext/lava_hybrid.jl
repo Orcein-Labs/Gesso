@@ -484,7 +484,7 @@ end
 # GESSO_MOE_HOST_EXPERTS=0 means "upload the experts" on CUDA. There is no
 # device expert path on Lava yet, so 0 is refused rather than ignored.
 function Gesso.Inference._moe_topk_swiglu!(
-    ::LavaBackend,
+    backend::LavaBackend,
     y,
     x,
     router,
@@ -511,11 +511,12 @@ function Gesso.Inference._moe_topk_swiglu!(
         )
     end
     overlap === nothing || overlap()
-    xh = _lh_host(x)
+    xh = Gesso.Inference.@decode_stage :moe_d2h backend _lh_host(x)
     rh = _lh_host_weight(router)
     yh = zeros(Float32, size(y))
-    Gesso.Inference._moe_topk_swiglu!(Gesso.CPUBackend(), yh, xh, rh, gate, up, down, n_used)
-    copyto!(y, yh)
+    Gesso.Inference.@decode_stage :moe_host nothing Gesso.Inference._moe_topk_swiglu!(
+        Gesso.CPUBackend(), yh, xh, rh, gate, up, down, n_used)
+    Gesso.Inference.@decode_stage :moe_h2d backend copyto!(y, yh)
     return y
 end
 
