@@ -2267,9 +2267,14 @@ Gesso.Inference._profile_sync(::CUDABackend) = CUDA.synchronize()
 # `zeros_like`) is one memset per step instead of one per buffer. A step whose
 # requests differ from the layout gets fresh buffers for the requests that do
 # not fit, and the next step lays the slab out again from what it asked for.
+#
+# A request the slab cannot hold (rank above four, or empty) keeps its slot in
+# the layout with no slab space and a `nothing` view. It is served loose, and
+# keeping the slot means one such request does not drop the layout for the
+# other requests in the step.
 mutable struct ArenaSlab
     slab::Union{Nothing, CuVector{Float32}}
-    views::Vector{CuArray{Float32}}
+    views::Vector{Union{Nothing, CuArray{Float32}}}
     layout::Vector{NTuple{5, Int}}
     requested::Vector{NTuple{5, Int}}
     loose::Vector{CuArray{Float32}}
@@ -2280,7 +2285,7 @@ struct DecodeArena
     next::Base.RefValue{Int}
 end
 
-# (ndims, dims padded to four); 0 for a rank the layout cannot hold.
+# (ndims, dims padded to four); 0 for a rank the slab cannot hold.
 _arena_key(dims::NTuple{N, Int}) where {N} =
     N <= 4 ? (N, ntuple(k -> k <= N ? dims[k] : 0, 4)...) : (0, 0, 0, 0, 0)
 
@@ -2289,18 +2294,22 @@ _arena_round(n::Int) = cld(n, 64) * 64
 
 function _arena_relayout!(s::ArenaSlab)
     for v in s.views
-        CUDA.unsafe_free!(v)
+        v === nothing || CUDA.unsafe_free!(v)
     end
     s.slab === nothing || CUDA.unsafe_free!(s.slab)
     empty!(s.views)
     copy!(s.layout, s.requested)
     total = 0
     for key in s.layout
-        total += _arena_round(prod(key[2:(key[1] + 1)]))
+        key[1] == 0 || (total += _arena_round(prod(key[2:(key[1] + 1)])))
     end
     s.slab = CuVector{Float32}(undef, max(total, 1))
     off = 0
     for key in s.layout
+        if key[1] == 0
+            push!(s.views, nothing)
+            continue
+        end
         dims = key[2:(key[1] + 1)]
         n = prod(dims)
         push!(s.views, reshape(view(s.slab, (off + 1):(off + n)), dims))
@@ -2326,16 +2335,16 @@ const _DECODE_ARENAS = Dict{Int, ArenaSlab}()
 
 function Gesso.Inference._decode_zeros_like(::CUDABackend, tensors)
     s = get!(_DECODE_ARENAS, Int(CUDA.deviceid(CUDA.device()))) do
-        ArenaSlab(nothing, CuArray{Float32}[], NTuple{5, Int}[], NTuple{5, Int}[], CuArray{Float32}[])
+        ArenaSlab(nothing, Union{Nothing, CuArray{Float32}}[], NTuple{5, Int}[], NTuple{5, Int}[], CuArray{Float32}[])
     end
-    if !isempty(s.requested) && (s.requested != s.layout || !isempty(s.loose))
-        if all(k -> k[1] != 0, s.requested)
-            _arena_relayout!(s)
-        end
-        for b in s.loose
-            CUDA.unsafe_free!(b)
-        end
-        empty!(s.loose)
+    # `loose` holds only the previous step's overflow buffers, so it is always
+    # released here; the layout is rebuilt only when the requests changed.
+    for b in s.loose
+        CUDA.unsafe_free!(b)
+    end
+    empty!(s.loose)
+    if !isempty(s.requested) && s.requested != s.layout
+        _arena_relayout!(s)
     end
     empty!(s.requested)
     s.slab === nothing || fill!(s.slab, 0.0f0)
