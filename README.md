@@ -118,11 +118,6 @@ MAKE IT WORK → MAKE IT COMPLETE → MAKE IT MEASURABLE → MAKE IT FAST
 | 9 Autotune (CUDA `matmul!` winner cache) | Complete |
 | 10 Speed-floor rungs (device argmax, GEMM attention, alloc, G2) | Complete through 10H |
 
-Training is **not** part of Gesso
-([§LVIII](docs/Gesso_Stack.md)). If you want to contribute to the Julia ML
-ecosystem and want a job with real scope: **build the training stack.**
-Start at [WGPU.jl](https://github.com/JuliaGPU/WGPU.jl). Gesso will load
-those checkpoints like everyone else's.
 
 ## Layout
 
