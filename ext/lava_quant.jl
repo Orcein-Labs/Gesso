@@ -27,9 +27,12 @@ const _LQ_LANES = 64
 const _LQ_KVALUES_IQ4NL = Float32[-127, -104, -83, -65, -49, -35, -22, -10,
                                   1, 13, 25, 38, 53, 69, 89, 113]
 
-# Device-resident dense quant weight. `data` holds rows 1..nrows of the GGUF
-# file in block order, row r starting at byte (r-1)*row_bytes.
-struct LavaDenseQuant
+# Device-resident dense quant weight, in one of two layouts. LavaBlockQuant keeps
+# the GGUF bytes: `data` holds rows 1..nrows in block order, row r starting at byte
+# (r-1)*row_bytes. LavaQ8Quant is the repacked Q8_0 layout defined below.
+abstract type LavaDenseQuant end
+
+struct LavaBlockQuant <: LavaDenseQuant
     data::Lava.LavaArray{UInt8}
     ggml_type::Int32
     kind::Int
@@ -42,7 +45,7 @@ Base.size(q::LavaDenseQuant) = (q.nrows, q.ne0)
 Base.size(q::LavaDenseQuant, d::Integer) = size(q)[d]
 Base.ndims(::LavaDenseQuant) = 2
 Base.length(q::LavaDenseQuant) = q.nrows * q.ne0
-Base.sizeof(q::LavaDenseQuant) = sizeof(q.data)
+Base.sizeof(q::LavaBlockQuant) = sizeof(q.data)
 
 function _lq_kind(t::Int32)
     I = Gesso.Inference
@@ -74,11 +77,22 @@ function _lq_eligible(s)
     return true
 end
 
-_lq_device_bytes(s::Gesso.Inference.QuantMatrix) = Int64(s.nrows) * Int64(s.row_bytes)
+# Q8_0 repacked is one int8 per value plus one F32 scale per 32 values: ne0 + ne0/8 bytes a row.
+function _lq_device_bytes(s::Gesso.Inference.QuantMatrix)
+    if s.ggml_type == Gesso.Inference.GGML_TYPE_Q8_0
+        return Int64(s.nrows) * Int64(s.ne0 + s.ne0 ÷ 8)
+    end
+    return Int64(s.nrows) * Int64(s.row_bytes)
+end
 
 function _lq_upload(s::Gesso.Inference.QuantMatrix)
-    bytes = Lava.LavaArray{UInt8}(collect(Gesso.Inference._quant_bytes(s)))
-    return LavaDenseQuant(bytes, s.ggml_type, _lq_kind(s.ggml_type), s.ne0, s.nrows, s.row_bytes)
+    bytes = collect(Gesso.Inference._quant_bytes(s))
+    if s.ggml_type == Gesso.Inference.GGML_TYPE_Q8_0
+        qs, d = _lq8_repack(bytes, s.nrows, s.ne0)
+        return LavaQ8Quant(Lava.LavaArray{UInt32}(qs), Lava.LavaArray{Float32}(d), s.ne0, s.nrows)
+    end
+    return LavaBlockQuant(Lava.LavaArray{UInt8}(bytes), s.ggml_type, _lq_kind(s.ggml_type),
+                          s.ne0, s.nrows, s.row_bytes)
 end
 
 # --- element decode -----------------------------------------------------------
@@ -288,6 +302,106 @@ end
     end
 end
 
+# --- Q8_0 repacked -------------------------------------------------------------
+# A Q8_0 block is a 2-byte f16 scale and 32 int8 values, 34 bytes, so the values
+# never sit on a 4-byte boundary and the byte-wise kernel reads them one byte at
+# a time (~100 GB/s on the decode shapes). At upload the blocks split into
+# 4-byte value words and an F32 scale array, and a lane loads whole words:
+# 250-330 GB/s on the same shapes. The split costs 1/16 more device bytes.
+struct LavaQ8Quant <: LavaDenseQuant
+    qs::Lava.LavaArray{UInt32}   # row r: words (r-1)*ne0/4+1 ... r*ne0/4
+    d::Lava.LavaArray{Float32}   # row r: scales (r-1)*ne0/32+1 ... r*ne0/32
+    ne0::Int
+    nrows::Int
+end
+
+Base.sizeof(q::LavaQ8Quant) = sizeof(q.qs) + sizeof(q.d)
+
+function _lq8_repack(bytes::AbstractVector{UInt8}, nrows::Int, ne0::Int)
+    nblk = nrows * (ne0 >> 5)
+    length(bytes) == 34 * nblk || error("Q8_0 repack: $(length(bytes)) bytes for $nblk blocks")
+    qs = Vector{UInt32}(undef, 8 * nblk)
+    d = Vector{Float32}(undef, nblk)
+    @inbounds for b in 0:(nblk - 1)
+        o = 34 * b
+        d[b + 1] = Float32(reinterpret(Float16, UInt16(bytes[o + 1]) | (UInt16(bytes[o + 2]) << 8)))
+        for w in 0:7
+            p = o + 2 + 4 * w
+            qs[8 * b + w + 1] = UInt32(bytes[p + 1]) | (UInt32(bytes[p + 2]) << 8) |
+                                (UInt32(bytes[p + 3]) << 16) | (UInt32(bytes[p + 4]) << 24)
+        end
+    end
+    return qs, d
+end
+
+# Byte k (0..3) of w as a signed value: shift it to the top, then arithmetic-shift down.
+@inline _lq8_i8(w::UInt32, k::Int) = Float32(reinterpret(Int32, w << (24 - 8 * k)) >> 24)
+
+# Word w of the row against token t: elements 4w..4w+3, X linear and token fastest.
+@inline function _lq8_dot4(q::UInt32, X, w::Int, ntok::Int, t::Int)
+    e = 4 * w * ntok + t
+    return _lq8_i8(q, 0) * X[e] + _lq8_i8(q, 1) * X[e + ntok] +
+           _lq8_i8(q, 2) * X[e + 2 * ntok] + _lq8_i8(q, 3) * X[e + 3 * ntok]
+end
+
+# One subgroup per row and the subgroup sum is the row result: no local memory
+# and no barrier. Each lane keeps two words in flight a subgroup apart. The
+# subgroup width is only known inside the kernel (32 on NVIDIA, 64 by default
+# on AMD), so a workgroup always owns _LQ8_ROWS rows and each subgroup walks
+# the ones its width leaves it.
+const _LQ8_LANES = 128
+const _LQ8_ROWS = 4
+
+@kernel cpu=false function _lq8_gemv_kernel!(Y, QS, D, X, ntok::Int, ne0::Int, nrows::Int)
+    tl = @index(Local, Linear)
+    g = @index(Group, Linear)
+    sgs = Int(Lava.subgroup_size())
+    sgid = (tl - 1) ÷ sgs
+    nsg = _LQ8_LANES ÷ sgs
+    lane = Int(Lava.subgroup_lane())
+    nw = ne0 >> 2
+    rr = sgid
+    while rr < _LQ8_ROWS
+        r = (g - 1) * _LQ8_ROWS + rr + 1
+        if r <= nrows
+            qoff = (r - 1) * nw
+            doff = (r - 1) * (ne0 >> 5)
+            for t in 1:ntok
+                a0 = 0.0f0
+                a1 = 0.0f0
+                w = lane
+                while w + sgs < nw
+                    w1 = w + sgs
+                    a0 += D[doff + (w >> 3) + 1] * _lq8_dot4(QS[qoff + w + 1], X, w, ntok, t)
+                    a1 += D[doff + (w1 >> 3) + 1] * _lq8_dot4(QS[qoff + w1 + 1], X, w1, ntok, t)
+                    w += 2 * sgs
+                end
+                if w < nw
+                    a0 += D[doff + (w >> 3) + 1] * _lq8_dot4(QS[qoff + w + 1], X, w, ntok, t)
+                end
+                # subgroup_add must run with every lane active, so it sits outside the branches.
+                red = Lava.subgroup_add(a0 + a1)
+                if lane == 0
+                    Y[(r - 1) * ntok + t] = red
+                end
+            end
+        end
+        rr += nsg
+    end
+end
+
+@kernel cpu=false function _lq8_dequant_f16_kernel!(Wt, QS, D, ne0::Int, r0::Int, total::Int)
+    idx = @index(Global, Linear)
+    if idx <= total
+        q = idx - 1
+        r = q ÷ ne0
+        e = q - r * ne0
+        row = r0 + r
+        word = QS[row * (ne0 >> 2) + (e >> 2) + 1]
+        Wt[idx] = Float16(D[row * (ne0 >> 5) + (e >> 5) + 1] * _lq8_i8(word, e & 3))
+    end
+end
+
 # Device-resident lookup tables, uploaded once. g2 holds each IQ2_XS grid entry
 # as two UInt32 words (low, then high); g3 is the IQ3_XXS grid; ks the sign table.
 const _LQ_TABLES = Ref{Any}(nothing)
@@ -325,7 +439,17 @@ function _lq_matmul!(Y, X, q::LavaDenseQuant)
     size(X, 2) == q.ne0 || throw(DimensionMismatch("lava quant GEMV: x has $(size(X, 2)) columns, weight has $(q.ne0)"))
     size(Y) == (ntok, q.nrows) || throw(DimensionMismatch("lava quant GEMV: dst is $(size(Y)), want $((ntok, q.nrows))"))
     ntok >= _lq_gemm_min() && return _lq_gemm_prefill!(Y, X, q)
-    return _lq_launch!(Y, X, q.data, 0, q.kind, ntok, q.ne0, q.nrows, q.row_bytes, 1.0f0, 0.0f0)
+    return _lq_gemv!(Y, X, q)
+end
+
+_lq_gemv!(Y, X, q::LavaBlockQuant) =
+    _lq_launch!(Y, X, q.data, 0, q.kind, size(X, 1), q.ne0, q.nrows, q.row_bytes, 1.0f0, 0.0f0)
+
+function _lq_gemv!(Y, X, q::LavaQ8Quant)
+    kern = _lq8_gemv_kernel!(Lava.KernelAbstractions.get_backend(X))
+    kern(Y, q.qs, q.d, X, size(X, 1), q.ne0, q.nrows;
+        ndrange=_LQ8_LANES * cld(q.nrows, _LQ8_ROWS), workgroupsize=(_LQ8_LANES,))
+    return Y
 end
 
 # --- prefill GEMM ----------------------------------------------------------------
@@ -379,6 +503,14 @@ function _lq_scratch(::Type{T}, tag::Symbol, dims::Tuple{Vararg{Int}}) where {T}
     return a
 end
 
+_lq_dequant_chunk!(wtf, q::LavaBlockQuant, tb, r0::Int, total::Int) =
+    _lq_dequant_f16_kernel!(Lava.KernelAbstractions.get_backend(wtf))(wtf, q.data, tb.kv, tb.g2, tb.g3,
+        tb.ks, q.kind, q.ne0, q.row_bytes, r0, total; ndrange=total, workgroupsize=(256,))
+
+_lq_dequant_chunk!(wtf, q::LavaQ8Quant, tb, r0::Int, total::Int) =
+    _lq8_dequant_f16_kernel!(Lava.KernelAbstractions.get_backend(wtf))(wtf, q.qs, q.d, q.ne0, r0, total;
+        ndrange=total, workgroupsize=(256,))
+
 function _lq_gemm_prefill!(Y, X, q::LavaDenseQuant)
     ntok = size(X, 1)
     k = q.ne0
@@ -388,7 +520,6 @@ function _lq_gemm_prefill!(Y, X, q::LavaDenseQuant)
     x16 = _lq_scratch(Float16, :x16, (ntok, k))
     x16 .= Float16.(X)
     rc_max = min(nrows, max(1, (_lq_gemm_scratch_mib() << 20) ÷ (2 * k)))
-    dequant = _lq_dequant_f16_kernel!(backend)
     scatter = _lq_scatter_kernel!(backend)
     r0 = 0
     while r0 < nrows
@@ -397,8 +528,7 @@ function _lq_gemm_prefill!(Y, X, q::LavaDenseQuant)
         # The dequant writes flat indices, so it takes the flat buffer. mul! takes
         # the reshape, which Lava's gemm reads as a dense strided operand.
         wtf = _lq_scratch(Float16, :wt, (total,))
-        dequant(wtf, q.data, tb.kv, tb.g2, tb.g3, tb.ks, q.kind, k, q.row_bytes, r0, total;
-            ndrange=total, workgroupsize=(256,))
+        _lq_dequant_chunk!(wtf, q, tb, r0, total)
         wt = reshape(wtf, k, rc)
         if rc == nrows
             mul!(Y, x16, wt, one(Float32), zero(Float32))
