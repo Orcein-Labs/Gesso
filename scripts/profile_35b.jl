@@ -7,7 +7,9 @@
 #
 # GESSO_BACKEND defaults to lava; CUDA is loaded only when it is asked for.
 #
-# Optional env: GESSO_PROFILE_TOKENS (decode tokens to measure, default 8).
+# Optional env: GESSO_PROFILE_TOKENS (decode tokens to measure, default 8),
+# GESSO_PROFILE_CTX (prompt length, default 1; longer prompts are real text
+# from GESSO_PROFILE_TEXT, repeated, so decode runs against a filled KV cache).
 # The engine switches are read as usual: GESSO_GPU_WEIGHT_DTYPE (f16 default),
 # GESSO_MOE_HOST_EXPERTS (0 default).
 #
@@ -31,6 +33,9 @@ isdir(GGML_DIR) || error("profile_35b: set GESSO_GGML_DIR to the llama.cpp build
 const EXPECTED = [9419, 11, 271, 40, 2688, 4313, 310, 958, 279]
 const N = parse(Int, get(ENV, "GESSO_PROFILE_TOKENS", "8"))
 N >= 1 || error("profile_35b: GESSO_PROFILE_TOKENS must be >= 1")
+const CTX = parse(Int, get(ENV, "GESSO_PROFILE_CTX", "1"))
+CTX >= 1 || error("profile_35b: GESSO_PROFILE_CTX must be >= 1")
+const TEXT = get(ENV, "GESSO_PROFILE_TEXT", joinpath(@__DIR__, "..", "docs", "Gesso_Stack.md"))
 
 which = get(ENV, "GESSO_BACKEND", "lava")
 if which == "lava"
@@ -52,8 +57,16 @@ t_load = @elapsed begin
     dev = which == "cpu" ? tensors : Gesso.to_device(backend, tensors)
 end
 
+# EXPECTED holds for the one-token prompt only.
+prompt = if CTX == 1
+    [9419]
+else
+    corpus = INF.encode(INF.load_gguf_tokenizer(GGUF), read(TEXT, String); parse_special=false)
+    [corpus[mod1(i, length(corpus))] for i in 1:CTX]
+end
+
 gen(n) = Gesso.reference_generate(
-    model, dev, [9419]; max_new_tokens=n, eps=spec.rms_norm_eps, backend=backend,
+    model, dev, prompt; max_new_tokens=n, eps=spec.rms_norm_eps, backend=backend,
 )
 
 dtype = get(ENV, "GESSO_GPU_WEIGHT_DTYPE", "f16")
@@ -89,7 +102,7 @@ let H = 0, M = 0
 end
 
 ids_warm == ids_cold || error("profile_35b: ids differ between the cold and warm profiled runs")
-if N == length(EXPECTED) - 1
+if CTX == 1 && N == length(EXPECTED) - 1
     ok = ids_cold[1:length(EXPECTED)] == EXPECTED
 else
     ok = true
@@ -100,7 +113,7 @@ d.tokens == N || error("profile_35b: measured $(d.tokens) decode tokens, expecte
 
 println(
     "RECEIPT profile_35b backend=$which threads=$(Threads.nthreads()) ",
-    "dtype=$dtype moe_host_experts=$moe_host decode_tokens=$N ",
+    "dtype=$dtype moe_host_experts=$moe_host ctx=$CTX decode_tokens=$N ",
     "ids_ok=$ok load_s=$(round(t_load; digits=1))",
 )
 println()
