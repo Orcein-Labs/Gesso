@@ -8,6 +8,20 @@
 # entry" — the test env itself is not a testable package.
 import Pkg
 root = dirname(@__DIR__)
+# The test env loads Lava, which imports GLFW, and GLFW's __init__ throws
+# without a display ("X11: The DISPLAY environment variable is missing").
+# Pkg.test then fails on the precompile of a direct dependency. On a headless
+# Linux box, re-run under xvfb-run when it is available, else say why.
+if Sys.islinux() && !haskey(ENV, "DISPLAY") && !haskey(ENV, "WAYLAND_DISPLAY")
+    xvfb = Sys.which("xvfb-run")
+    if xvfb !== nothing && get(ENV, "GESSO_TEST_XVFB", "") != "1"
+        cmd = `$xvfb -a $(Base.julia_cmd()) $(@__FILE__)`
+        exit(success(run(addenv(ignorestatus(cmd), "GESSO_TEST_XVFB" => "1"))) ? 0 : 1)
+    elseif xvfb === nothing
+        @warn "No display and no xvfb-run: Lava (GLFW) will fail to precompile " *
+              "and Pkg.test will stop. Install xvfb, or run under a display."
+    end
+end
 Pkg.activate(root; io=devnull)
 Pkg.instantiate(; io=devnull)
 # Pkg.test prints normally: `make test` must show the test summary, not
