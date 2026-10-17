@@ -502,3 +502,80 @@ end
         close(srv)
     end
 end
+
+# Waits up to `limit` seconds for `cond()`, polling. Returns the final value.
+function sv_wait_until(cond; limit::Real=10.0)
+    t0 = time()
+    while !cond() && time() - t0 < limit
+        sleep(0.02)
+    end
+    return cond()
+end
+
+@testset "read deadline closes idle and trickling connections" begin
+    srv = serve(sv_fake(); port=0, block=false, read_timeout=0.5)
+    try
+        # A connection that never sends a byte is closed by the server.
+        idle = Sockets.connect(Sockets.localhost, srv.port)
+        @test sv_wait_until(() -> eof(idle))
+        close(idle)
+
+        # A request head sent a few bytes at a time, never finished, is cut off
+        # at the deadline instead of holding the connection open.
+        slow = Sockets.connect(Sockets.localhost, srv.port)
+        t0 = time()
+        for b in codeunits("GET /v1/models HTTP/1.1\r\nHost: t")
+            isopen(slow) || break
+            try
+                write(slow, b)
+            catch
+                break
+            end
+            sleep(0.05)
+        end
+        @test sv_wait_until(() -> eof(slow))
+        @test time() - t0 < 5
+        close(slow)
+
+        # A request delivered in time still works, and keep-alive still works
+        # for a second request sent before the deadline.
+        sock = Sockets.connect(Sockets.localhost, srv.port)
+        try
+            write(sock, sv_get("/v1/models"))
+            @test sv_read_response(sock).status == 200
+            write(sock, sv_get("/v1/models"))
+            @test sv_read_response(sock).status == 200
+            # Then the idle keep-alive connection is closed by the deadline.
+            @test sv_wait_until(() -> eof(sock))
+        finally
+            close(sock)
+        end
+        @test sv_wait_until(() -> srv.open_connections[] == 0)
+    finally
+        close(srv)
+    end
+end
+
+@testset "connections past the cap get 503" begin
+    srv = serve(sv_fake(); port=0, block=false, max_connections=1)
+    try
+        first = Sockets.connect(Sockets.localhost, srv.port)
+        @test sv_wait_until(() -> srv.open_connections[] == 1)
+        over = Sockets.connect(Sockets.localhost, srv.port)
+        resp = sv_read_response(over)
+        @test resp.status == 503
+        @test resp.headers["connection"] == "close"
+        close(over)
+        # The held connection is still served.
+        write(first, sv_get("/v1/models"))
+        @test sv_read_response(first).status == 200
+        close(first)
+        @test sv_wait_until(() -> srv.open_connections[] == 0)
+        # With the slot free, a new connection is served again.
+        @test sv_request(srv.port, sv_get("/v1/models")).status == 200
+    finally
+        close(srv)
+    end
+    @test_throws ArgumentError serve(sv_fake(); port=0, block=false, read_timeout=0)
+    @test_throws ArgumentError serve(sv_fake(); port=0, block=false, max_connections=0)
+end
