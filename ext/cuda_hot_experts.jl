@@ -189,6 +189,26 @@ const _HOT_ALLOC_MARGIN = Int64(64) << 20
 # would only repeat the failure; the next generation gets the pool back.
 const _HOT_RETRY_TOKENS = 64
 
+# Layers whose pool did not fit, so their experts run on the CPU until a retry
+# fits. Failure must be explicit (§LXX): a layer is logged through @gfallback
+# when it falls back, not on every retry, and again only after a pool fit.
+const _HOT_FALLBACK = Set{Int}()
+
+function _hot_fallback!(hot, why::AbstractString)
+    hot.retry_t = hot.t + _HOT_RETRY_TOKENS
+    hot.layer in _HOT_FALLBACK && return false
+    push!(_HOT_FALLBACK, hot.layer)
+    Gesso.@gfallback(
+        "GPU hot-expert pool for layer $(hot.layer)",
+        "CPU experts for that layer, retried every $(_HOT_RETRY_TOKENS) decode tokens ($why)",
+    )
+    return false
+end
+
+# Page-locking the host slabs is noted once per process: without it swaps go
+# through a staging copy, which is slower but still correct.
+const _HOT_PIN_NOTED = Ref(false)
+
 # Entering a hot layer's MoE, and leaving it. Between the two the layer itself
 # is next; afterwards it is the furthest away.
 _hot_enter!(hot::_HotLayer, seq::Int) = (_HOT_NEXT[] = hot.layer; _HOT_SEQ[] = seq; nothing)
@@ -225,6 +245,7 @@ function _hot_release_all!()
         _hot_release!(hot)
     end
     empty!(_HOT)
+    empty!(_HOT_FALLBACK)
     return
 end
 
@@ -269,7 +290,13 @@ function _hot_pin_slabs!(slabs)
         try
             CUDA.pin(v)
         catch err
-            @debug "hot experts: page-locking a host slab failed, swaps stage" exception = err
+            if !_HOT_PIN_NOTED[]
+                _HOT_PIN_NOTED[] = true
+                Gesso.@gfallback(
+                    "page-locked host expert slabs",
+                    "pageable slabs, swaps staged through a pinned copy ($(sprint(showerror, err)))",
+                )
+            end
             return false
         end
         copies[i] = v
@@ -295,10 +322,7 @@ function _hot_alloc!(hot::_HotLayer, g, u, n_used::Int)
     # driver wants room of its own. Only DROP, behind two GCs, then rescued it.
     bytes = Int64(hot.nslots) * hot.stride + max(_HOT_ALLOC_MARGIN, _hot_reserve_bytes())
     # a failed allocation under _HOT_BUSY costs a full GC; this check costs none
-    if _hot_device_avail() < bytes
-        hot.retry_t = hot.t + _HOT_RETRY_TOKENS
-        return false
-    end
+    _hot_device_avail() < bytes && return _hot_fallback!(hot, "device memory too small")
     if CUDA.free_memory() < bytes
         # This runs under _HOT_BUSY, so CUDA's retry cannot purge and its next
         # rescue is a full GC (~0.25 s). What blocks the pool is usually CUDA's
@@ -309,10 +333,8 @@ function _hot_alloc!(hot::_HotLayer, g, u, n_used::Int)
         CUDA.CUDACore.stream_ordered(dev) && CUDA.CUDACore.trim(CUDA.CUDACore.pool_create(dev))
         # what the trim could not hand back is fragmented; the allocation would
         # fail only after the GC, and decode retries every _HOT_RETRY_TOKENS
-        if CUDA.free_memory() < bytes
-            hot.retry_t = hot.t + _HOT_RETRY_TOKENS
-            return false
-        end
+        CUDA.free_memory() < bytes &&
+            return _hot_fallback!(hot, "free memory too small after a pool trim")
     end
     # CUDA's retry for a failed allocation purges, syncs and trims, then runs
     # two full GCs. In decode they free nothing: after a P4096 prompt, live
@@ -332,11 +354,10 @@ function _hot_alloc!(hot::_HotLayer, g, u, n_used::Int)
             unsafe_wrap(CuArray, base + o3, n - o3))
         hot.pool = pool
         hot.base = base
+        delete!(_HOT_FALLBACK, hot.layer)
     catch err
         err isa CUDA.OutOfGPUMemoryError || rethrow()
-        @debug "hot experts: pool does not fit" layer=hot.layer
-        hot.retry_t = hot.t + _HOT_RETRY_TOKENS
-        return false
+        return _hot_fallback!(hot, "allocation out of GPU memory")
     finally
         GC.enable(gc_on)
     end

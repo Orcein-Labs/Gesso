@@ -33,6 +33,42 @@ function _pack_f32_slice(A3, ne0, ne1)
     )
 end
 
+# Runs without a device: only the extension has to load.
+mutable struct _SvHotMock
+    layer::Int
+    t::Int
+    retry_t::Int
+end
+
+if CUDA_LOADED
+    @testset "cuda hot-expert pool fallback is logged once per episode" begin
+        ext = Base.get_extension(Gesso, :GessoCUDAExt)
+        hot = _SvHotMock(7, 100, 0)
+        cfg = Gesso.current_config()
+        prev_io = cfg.io
+        buf = IOBuffer()
+        cfg.io = buf
+        try
+            delete!(ext._HOT_FALLBACK, 7)
+            @test ext._hot_fallback!(hot, "test") === false
+            @test hot.retry_t == 100 + ext._HOT_RETRY_TOKENS
+            hot.t = 200
+            @test ext._hot_fallback!(hot, "test") === false
+            @test hot.retry_t == 200 + ext._HOT_RETRY_TOKENS
+            lines = filter(!isempty, split(String(take!(buf)), '\n'))
+            @test length(lines) == 1
+            @test occursin("fallback", lines[1]) && occursin("layer 7", lines[1])
+            # a pool that fits ends the episode; the next failure is logged again
+            delete!(ext._HOT_FALLBACK, 7)
+            ext._hot_fallback!(hot, "test")
+            @test count(==('\n'), String(take!(buf))) == 1
+        finally
+            delete!(ext._HOT_FALLBACK, 7)
+            cfg.io = prev_io
+        end
+    end
+end
+
 if !CUDA_LOADED || !CUDA.functional()
     _skip(
         "no NVIDIA device — CUDA MoE offload tests skipped (§LXXVII skip law)",
