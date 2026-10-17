@@ -245,3 +245,23 @@ end
     @test ids[1] == 9419
     @test ids[2] == 11
 end
+
+# The traits check needs no ggml library: it is a pure table lookup, so it
+# runs everywhere and catches a drifted ggml ABI before any byte is misread.
+@testset "ggml type traits are checked against the block table" begin
+    check = Gesso.Inference._check_ggml_traits
+    @test check(0, 1, 4) === nothing      # F32
+    @test check(17, 256, 74) === nothing  # IQ2_XS
+    @test check(31, 1, 1) === nothing     # unknown type, plausible traits
+    @test_throws Gesso.GessoError check(17, 256, 75)
+    @test_throws Gesso.GessoError check(0, 4, 1)
+    @test_throws Gesso.GessoError check(31, 0, 4)
+    @test_throws Gesso.GessoError check(31, 1, 1 << 20)
+    # The library-backed path agrees with the table on every type it knows.
+    if isdir(_GGML_BIN)
+        for (t, (blck, tsize)) in Gesso.Inference._GGML_KNOWN_BLOCKS
+            tr = Gesso.Inference._ggml_traits(t)
+            @test (tr.blck_size, tr.type_size) == (blck, tsize)
+        end
+    end
+end

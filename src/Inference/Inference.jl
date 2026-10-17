@@ -47,6 +47,7 @@ using ..Gesso:
     ERR_INVALID_PLAN,
     ERR_RESOURCE_LIMIT,
     ERR_NUMERICAL_INSTABILITY,
+    ERR_RUNTIME,
     ReceiptSink,
     default_receipt_sink,
     emit!,
