@@ -20,15 +20,20 @@ jobs:
         with:
           version: ${{ matrix.julia-version }}
       - uses: julia-actions/cache@v2
+      - name: Install a virtual display
+        # Lava imports GLFW, whose __init__ fails without an X display. The
+        # Lava tests still skip by name when no Vulkan driver is present; the
+        # display only lets Lava and GessoLavaExt load and precompile.
+        run: command -v xvfb-run || (sudo apt-get update && sudo apt-get install -y xvfb)
       - name: Instantiate workspace
         run: julia --project=. -e 'using Pkg; Pkg.instantiate(); Pkg.activate("test"); Pkg.instantiate(); Pkg.activate("benchmark"); Pkg.instantiate()'
       - name: Run tests
-        run: julia --project=test --check-bounds=yes test/runtests.jl
+        run: xvfb-run -a julia --project=test --check-bounds=yes test/runtests.jl
       - name: Run dev-loop test entry (make test)
         # Pkg.test's sandbox env exposes only DECLARED dependencies, unlike a
         # direct run — the two paths can and did drift apart independently.
         # CI runs both so neither can silently rot.
-        run: make test
+        run: xvfb-run -a make test
 
   format:
     runs-on: ubuntu-latest
@@ -56,10 +61,16 @@ jobs:
         with:
           version: '1.12'
       - uses: julia-actions/cache@v2
+      - name: Install a virtual display
+        # Lava imports GLFW, whose __init__ fails without an X display. The
+        # Lava tests still skip by name when no Vulkan driver is present; the
+        # display only lets Lava and GessoLavaExt load and precompile.
+        run: command -v xvfb-run || (sudo apt-get update && sudo apt-get install -y xvfb)
       - name: Instantiate benchmark env
         run: julia --project=. -e 'using Pkg; Pkg.instantiate(); Pkg.activate("benchmark"); Pkg.instantiate()'
       - name: Run benchmark suite (smoke)
         run: |
-          julia --project=benchmark benchmark/runbenchmarks.jl | tee bench_out.txt
+          set -o pipefail
+          xvfb-run -a julia --project=benchmark benchmark/runbenchmarks.jl | tee bench_out.txt
           test -f benchmark/results/*.tsv || (echo "FAIL: no results file persisted" && exit 1)
           grep -q "benchmarks recorded" bench_out.txt || (echo "FAIL: suite did not complete" && exit 1)
