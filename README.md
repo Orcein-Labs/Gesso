@@ -191,6 +191,7 @@ libs/          local dev sources (gitignored)
 
 `AGENTS.md` covers how we work in this repo. Read it before your first edit.
 Open design questions are in [`docs/DECISION_PACKETS.md`](docs/DECISION_PACKETS.md).
+Every `GESSO_*` environment variable is indexed in [`docs/env-vars.md`](docs/env-vars.md).
 
 ## Commands
 
@@ -199,6 +200,7 @@ make test          # test suite (workspace root; runs with -t 2)
 make bench         # benchmarks (append to benchmark/results/)
 make format        # format the repo
 make format-check  # CI's formatting gate
+make env-vars      # regenerate docs/env-vars.md
 make freeze        # curated context-freeze bundle
 ```
 
