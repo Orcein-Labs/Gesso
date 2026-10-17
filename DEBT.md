@@ -11,11 +11,12 @@ Known debt, newest first. Each entry names its cause and how it gets paid off. S
   directory, set by env, that the gate and bench scripts use, so files aren't copied ad hoc.
   Do not evict models automatically.
 - **Runtime dependency on a local llama.cpp build** (`GESSO_GGML_DIR`, ggml `to_float` via
-  `dlopen`). It also reads ggml's type-traits struct at fixed byte offsets, which is ABI-fragile.
-  Pay off: native dequantization for every format. Native dot products now cover IQ2_XS,
-  IQ3_XXS, IQ4_XS, Q2_K-Q6_K and Q8_0. Still missing: IQ2_S, IQ3_S, IQ1_M.
-- **The `to_float` fallback in `QuantMatrix` matmul** still serves IQ2_S, IQ3_S and IQ1_M. That
-  makes Qwen3.8-27B UD-IQ2_M slow. Pay off: native kernels for those three formats.
+  `dlopen`). Native matmul kernels now cover every format Gesso ships (IQ2_XS, IQ2_XXS, IQ2_S,
+  IQ3_XXS, IQ3_S, IQ4_XS, IQ1_S, IQ1_M, Q2_K-Q6_K, Q8_0), so what is left is the load path:
+  GGUF import and expert dequantization still call `to_float`, and any other format falls back
+  to it. The type-traits struct is read at fixed byte offsets. Those reads are now checked
+  against Gesso's own block table and fail loudly on a mismatch, but a new ggml layout still
+  stops the load. Pay off: native dequantization on the load path, then drop the library.
 - **Host-side MoE expert path is opt-in** (`GESSO_MOE_HOST_EXPERTS=1`). It measured slower than
   uploading experts. Pay off: CPU miss compute that overlaps GPU hits, using the native kernels,
   inside the expert cache. Then remove the switch.
@@ -24,7 +25,12 @@ Known debt, newest first. Each entry names its cause and how it gets paid off. S
 - **`QuantMatrix` allocates a Q8_K activation buffer per matmul.** Pay off: reuse buffers from
   a session workspace.
 - **Lava pirates `KernelAbstractions.adapt_structure`** (upstream `Lava/src/array/ka_backend.jl`).
-  Precompilation errors as a result. Pay off: an upstream fix, or a pinned patched revision.
-  `benchmark/Project.toml` also pulls Lava unpinned.
-- **121 docs contain machine-specific paths** (`/mnt/d`, `/home/mattc`). The repo is public.
+  KernelAbstractions 0.9.43 defines the same method, and Julia 1.12 refuses the overwrite at
+  precompile, which broke CI. Stopgap: the test and benchmark envs cap KernelAbstractions at
+  0.9.42, and the benchmark env pins Lava to the same revision as the test env. Pay off: drop
+  the method from Lava upstream, then lift the cap.
+- **Lava imports GLFW, and GLFW's `__init__` needs a display.** Every env that loads Lava fails
+  to precompile on a headless box. CI and `make test` run under `xvfb-run` to get around it.
+  Pay off: make the windowing import lazy in Lava (a weakdep or extension).
+- **119 docs contain machine-specific paths** (home directories, drive mounts). The repo is public.
   Pay off: a docs sweep. Code paths are already env-only.
