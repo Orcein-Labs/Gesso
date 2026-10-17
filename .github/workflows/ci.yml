@@ -45,8 +45,8 @@ jobs:
           version: '1.12'
       - name: Check formatting
         run: |
-          julia -e 'using Pkg; Pkg.add("JuliaFormatter")'
-          julia -e 'using JuliaFormatter; format(".", verbose=true) || exit(1)'
+          # Same script, pinned formatter version and targets as `make format`.
+          julia scripts/format.jl --check
           git diff --exit-code --color
 
   bench-smoke:
