@@ -51,7 +51,8 @@ mutable struct Turn
     cancelled::Ref{Bool}
     started::Ref{Bool}
     ids::Vector{Int}
-    shown::Int                      # bytes of the decoded text already parsed
+    prefix_at::Int                  # ids before the decode window (see _sync_text!)
+    read_at::Int                    # ids whose text the parser has already had
     id::String
     created::Int
     reasoning::Vector{String}
@@ -96,7 +97,7 @@ function handle_chat(srv::Server, req::HTTPRequest, io::IO, keepalive::Bool)::Bo
     end
 
     turn = Turn(model, QwenXMLParser(; tools=collect(Any, tools), thinking=thinking, stop=stop),
-        io, stream, include_usage, keepalive, cancelled, Ref(false), Int[], 0,
+        io, stream, include_usage, keepalive, cancelled, Ref(false), Int[], 0, 0,
         _completion_id(), round(Int, time()), String[], String[], ToolCallDelta[])
 
     gen = try
@@ -175,17 +176,32 @@ function _on_token(turn::Turn, id::Integer)
     return !turn.parser.stopped && !turn.cancelled[]
 end
 
-# Decode the whole generated sequence and feed the new bytes to the parser. A
-# trailing U+FFFD means the last token ended mid-character, so it waits for more.
+# Feed the parser the text of the ids it has not seen yet. Only a short window
+# is decoded, so each token costs the window, not the whole reply (decoding all
+# ids per token made a long reply quadratic). The window starts at `prefix_at`,
+# a step before `read_at`, so a tokenizer that treats the first id of a decode
+# specially (a stripped leading space, bytes merged across ids) treats both
+# strings the same way; the new text is the difference. A trailing U+FFFD
+# means the last id ended mid-character, so it waits for more ids.
 function _sync_text!(turn::Turn; final::Bool)
-    isempty(turn.ids) && return nothing
-    text = turn.model.detokenize(turn.ids)
-    !final && endswith(text, '�') && return nothing
+    n = length(turn.ids)
+    n <= turn.read_at && return nothing
+    detok = turn.model.detokenize
+    prefix = if turn.prefix_at < turn.read_at
+        detok(turn.ids[(turn.prefix_at + 1):turn.read_at])
+    else
+        ""
+    end
+    text = detok(turn.ids[(turn.prefix_at + 1):n])
+    !final && endswith(text, '\ufffd') && return nothing
     bytes = codeunits(text)
-    n = length(bytes)
-    n <= turn.shown && return nothing
-    new = Vector{UInt8}(view(bytes, (turn.shown + 1):n))
-    turn.shown = n
+    skip = ncodeunits(prefix)
+    # an id that adds no text yet stays in the window until one does
+    length(bytes) <= skip && !final && return nothing
+    turn.prefix_at = turn.read_at
+    turn.read_at = n
+    length(bytes) <= skip && return nothing
+    new = Vector{UInt8}(view(bytes, (skip + 1):length(bytes)))
     _deliver!(turn, feed!(turn.parser, new))
     return nothing
 end

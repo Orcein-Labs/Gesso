@@ -464,3 +464,41 @@ end
     @test cm.prefix_len([Dict{String,Any}("role" => "system", "content" => "s")], Any[], false, [1, 2, 3]) == 0
     @test cm.prefix_len(Dict{String,Any}[], Any[], false, Int[]) == 0
 end
+
+# A decoder that, like GPT-2 BPE, ends an unfinished UTF-8 character with
+# U+FFFD, and counts every id it is asked to decode.
+function sv_counting_detok(counter::Ref{Int})
+    return ids -> begin
+        counter[] += length(ids)
+        bytes = UInt8.(ids)
+        s = String(copy(bytes))
+        isvalid(s) && return s
+        j = length(bytes)
+        while j > 0 && !isvalid(String(bytes[1:j]))
+            j -= 1
+        end
+        return String(bytes[1:j]) * "�"
+    end
+end
+
+@testset "decode cost stays linear in the reply, multi-byte text intact" begin
+    reply = repeat("mot é 日本 ", 300)
+    script = "think\n</think>\n\n" * reply
+    counter = Ref(0)
+    base = sv_fake(; script=script, n_ctx=1 << 16)
+    cm = ChatModel(; tokenize=base.tokenize, detokenize=sv_counting_detok(counter),
+        render=base.render, generate=base.generate, n_ctx=base.n_ctx,
+        model_id=base.model_id)
+    srv = serve(cm; port=0, block=false)
+    try
+        body = sv_chat(SV_USER; max_tokens=1 << 15)
+        resp = sv_request(srv.port, sv_post("/v1/chat/completions", body))
+        @test resp.status == 200
+        @test JSON.parse(resp.body)["choices"][1]["message"]["content"] == reply
+        n = ncodeunits(script)
+        # re-decoding every id per token would be about n^2 / 2 ids
+        @test counter[] <= 8n
+    finally
+        close(srv)
+    end
+end
