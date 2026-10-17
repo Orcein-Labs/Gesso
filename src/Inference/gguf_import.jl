@@ -115,14 +115,61 @@ function _ensure_ggml!()
     return nothing
 end
 
+# Block size and bytes per block of the ggml types Gesso reads, from ggml's own
+# type table (the same sizes as _iq_block_bytes). Used to catch a libggml whose
+# traits struct no longer has the layout _ggml_traits reads.
+const _GGML_KNOWN_BLOCKS = Dict{Int32, Tuple{Int, Int}}(
+    0 => (1, 4),        # F32
+    1 => (1, 2),        # F16
+    30 => (1, 2),       # BF16
+    8 => (32, 34),      # Q8_0
+    10 => (256, 84),    # Q2_K
+    11 => (256, 110),   # Q3_K
+    12 => (256, 144),   # Q4_K
+    13 => (256, 176),   # Q5_K
+    14 => (256, 210),   # Q6_K
+    16 => (256, 66),    # IQ2_XXS
+    17 => (256, 74),    # IQ2_XS
+    18 => (256, 98),    # IQ3_XXS
+    19 => (256, 50),    # IQ1_S
+    21 => (256, 110),   # IQ3_S
+    22 => (256, 82),    # IQ2_S
+    23 => (256, 136),   # IQ4_XS
+    29 => (256, 56),    # IQ1_M
+)
+
+# Throws unless the traits read for `ggml_type` are plausible: equal to Gesso's
+# table where it has the type, and in range otherwise. Wrong values here would
+# size every row and dequant call wrongly, so they must not pass silently.
+function _check_ggml_traits(ggml_type::Integer, blck::Integer, tsize::Integer)
+    known = get(_GGML_KNOWN_BLOCKS, Int32(ggml_type), nothing)
+    ok = if known === nothing
+        1 <= blck <= 1024 && 1 <= tsize <= 1 << 16
+    else
+        (blck, tsize) == known
+    end
+    ok && return nothing
+    want = known === nothing ? "a block size in 1:1024 and type size in 1:65536" :
+           "block size $(known[1]) and type size $(known[2])"
+    throw(gesso_error(ERR_RUNTIME,
+        "gguf_import: libggml reports block size $blck and type size $tsize for ggml " *
+        "type $ggml_type, expected $want. The ggml_type_traits layout read here " *
+        "(blck_size@8, type_size@24, to_float@40) does not match the libggml in " *
+        "GESSO_GGML_DIR; use a llama.cpp build this layout matches (see DEBT.md).";
+        ggml_type=Int(ggml_type), blck_size=Int(blck), type_size=Int(tsize),
+        ggml_dir=get(ENV, "GESSO_GGML_DIR", "")))
+end
+
 function _ggml_traits(ggml_type::Integer)
     _ensure_ggml!()
     p = ccall(_GGML_GET_TRAITS[], Ptr{Cvoid}, (Cint,), Int32(ggml_type))
     p == C_NULL && error("gguf_import: ggml_get_type_traits($ggml_type) is null")
     # ggml_type_traits on x86-64: type_name@0, blck_size@8,
     # blck_size_interleave@16, type_size@24, is_quantized@32 + pad, to_float@40.
+    # Nothing in the library states this layout, so the values are checked.
     blck = Int64(unsafe_load(Ptr{Int64}(p + 8)))
     tsize = Int(unsafe_load(Ptr{Csize_t}(p + 24)))
+    _check_ggml_traits(ggml_type, blck, tsize)
     to_float = unsafe_load(Ptr{Ptr{Cvoid}}(p + 40))
     return (blck_size=blck, type_size=tsize, to_float=to_float)
 end
