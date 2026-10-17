@@ -32,6 +32,7 @@ const _REASONS = Dict{Int,String}(
     413 => "Payload Too Large",
     431 => "Request Header Fields Too Large",
     500 => "Internal Server Error",
+    503 => "Service Unavailable",
 )
 
 # Returns `nothing` on a clean close before any byte of a line arrived. The
