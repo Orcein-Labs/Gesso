@@ -98,8 +98,9 @@ questions about the same backend:
 # actually computes; :quantize/:dequantize stay false until Representation
 # lands their math; unknown capabilities stay false (probing is always safe).
 # BREADTH-1: CPU runs scaled RoPE (Session threads `inv_freq`; verified
-# engine == oracle for :linear and :llama3). :dense_ffn and
-# :sliding_window_attention are genuinely absent.
+# engine == oracle for :linear and :llama3). :dense_ffn is genuinely absent.
+# Sliding-window attention masks keys at distance >= window in prefill and
+# decode; :geglu_ffn and the per-head attention gate came with Spark2.5.
 # Qwen3.5 hybrid extras (qk_norm, linear_attention, attn_output_gate,
 # mrope, rope_partial_dim, rope_interleaved) plus :moe_routing are CPU-ready.
 const CPU_SUPPORTED_CAPS = Set([
@@ -119,6 +120,9 @@ const CPU_SUPPORTED_CAPS = Set([
     :rope_partial_dim,
     :rope_interleaved,
     :moe_routing,
+    :sliding_window_attention,
+    :geglu_ffn,
+    :attn_head_gate,
 ])
 supports(::CPUBackend, cap::Symbol) = cap in CPU_SUPPORTED_CAPS
 supports(::Type{CPUBackend}, cap::Symbol) = cap in CPU_SUPPORTED_CAPS

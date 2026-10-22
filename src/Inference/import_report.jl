@@ -178,7 +178,7 @@ const _MATRIX_ROPES = (
     RoPEPolicy(; rotary_dim=4),
     RoPEPolicy(; interleaved=true),
 )
-const _MATRIX_ACTIVATIONS = (:swiglu, :gelu)
+const _MATRIX_ACTIVATIONS = (:swiglu, :geglu, :gelu)
 const _MATRIX_FEATURES = (
     Symbol[],
     [:qk_norm],
@@ -186,6 +186,7 @@ const _MATRIX_FEATURES = (
     [:qk_norm, :moe],
     [:linear_attention],
     [:attn_output_gate],
+    [:attn_head_gate],
     [:mrope],
 )
 const _MATRIX_WINDOWS = (nothing, 64)

@@ -246,6 +246,10 @@ function _window_attn_block!(bt, bi::Int, kc, vc, hwin::AbstractMatrix, W, bufs,
         _win_load!(bufs.k.storage, W.k, t)
         _win_load!(bufs.v.storage, W.v, t)
         gated && _win_load!(bufs.gate_attn.storage, W.gate, t)
+        if haskey(bt, :wattn_head_gate)
+            _win_load!(bufs.normed.storage, W.normed, t)
+            matmul!(cpu, bufs.gate_head, bufs.normed, bt.wattn_head_gate, wl)
+        end
         _decode_attn_core!(bt, bi, kc, vc, bufs, cpu, wl, tensors, zeros_like, cpu_scratch, base + t - 1;
             n_heads, n_kv_heads, d_head, group, eps, theta, inv_freq, rotary_dim)
         _attn_merge_gate!(bt, bufs, cpu, n_heads, d_head)
@@ -278,10 +282,10 @@ function _window_ffn_block!(bt, hwin::AbstractMatrix, subT::AbstractMatrix, W, b
     end
     _window_matmul!(cpu, W.ffn_gate, W.normed2, bt.wgate, wl, zeros_like)
     _window_matmul!(cpu, W.ffn_up, W.normed2, bt.wup, wl, zeros_like)
-    swiglu!(cpu,
-        Activation(; shape=size(W.ffn_act), storage=W.ffn_act),
-        Activation(; shape=size(W.ffn_gate), storage=W.ffn_gate),
-        Activation(; shape=size(W.ffn_up), storage=W.ffn_up), wl)
+    act = Activation(; shape=size(W.ffn_act), storage=W.ffn_act)
+    gate = Activation(; shape=size(W.ffn_gate), storage=W.ffn_gate)
+    up = Activation(; shape=size(W.ffn_up), storage=W.ffn_up)
+    haskey(bt, :ffn_geglu) ? _geglu!(cpu, act, gate, up) : swiglu!(cpu, act, gate, up, wl)
     _window_matmul!(cpu, W.ffn_down, W.ffn_act, bt.wdown, wl, zeros_like)
     _add_storage!(hwin, W.ffn_down)
     return hwin

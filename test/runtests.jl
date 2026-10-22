@@ -139,6 +139,14 @@ using Gesso: reference_prefill, reference_generate
     # round trip and streaming equality, 200 KB speed gate; GGUF-gated (skips without it)
     include("test_gguf_tokenizer.jl")
 
+    # Spark 2.5 GGUF BPE tokenizer: id parity vs llama-server /tokenize and round
+    # trip; gated on GESSO_SPARK25_GGUF (skips without it)
+    include("test_spark25_tokenizer.jl")
+
+    # Spark 2.5: exact GELU vs MPFR, sliding-window mask, per-layer window and
+    # RoPE lookups; the GGUF spec check is gated on GESSO_SPARK25_GGUF
+    include("test_spark25.jl")
+
     # Phase 3 (§LXXVI item D): the REAL-model gate — one named skip unless
     # GESSO_SMOLLM2_DIR points at a local snapshot; it never downloads
     include("test_smollm2.jl")

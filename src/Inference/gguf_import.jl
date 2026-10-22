@@ -290,11 +290,12 @@ defaults to a particular checkpoint's shape, except `full_attention_interval`
 """
 function spec_from_gguf_kv(kv::AbstractDict; tensor_names=nothing)
     arch = String(get(kv, "general.architecture", "qwen35moe"))
-    arch in ("qwen35", "qwen35moe", "llama") || error(
+    arch in ("qwen35", "qwen35moe", "llama", "spark2_5") || error(
         "spec_from_gguf_kv: unsupported general.architecture $(repr(arch)) " *
-        "(supported: qwen35 dense, qwen35moe, llama)",
+        "(supported: qwen35 dense, qwen35moe, llama, spark2_5)",
     )
     arch == "llama" && return _spec_from_gguf_llama(kv, tensor_names)
+    arch == "spark2_5" && return _spec_from_gguf_spark(kv, tensor_names)
     p(key, default=nothing) = get(kv, "$arch.$key", default)
     req(key) = (v = p(key); v === nothing ? error("spec_from_gguf_kv: missing $arch.$key") : v)
     nextn = Int(p("nextn_predict_layers", 0))
@@ -436,6 +437,62 @@ function _spec_from_gguf_llama(kv::AbstractDict, tensor_names)
             interleaved=true,
         ),
         tie_word_embeddings=tied,
+        rms_norm_eps=Float64(p("attention.layer_norm_rms_epsilon", 1e-6)),
+    )
+end
+
+"""
+`spark2_5` GGUF spec (Spark-X2.6). Dense GQA attention with a fused Q|K|V
+tensor, one sigmoid output gate per head, and a GELU-gated FFN. Layers follow
+`attention.sliding_window_pattern` (true = windowed). Windowed layers rotate
+the whole head at `rope.freq_base_swa`; full layers rotate the first
+`rope.dimension_count` dims at `rope.freq_base`. Both use the half-split (NEOX)
+layout, and llama.cpp does not permute Q/K for it.
+"""
+function _spec_from_gguf_spark(kv::AbstractDict, tensor_names)
+    p(key, default=nothing) = get(kv, "spark2_5.$key", default)
+    req(key) =
+        (v=p(key); v === nothing ? error("spec_from_gguf_kv: missing spark2_5.$key") : v)
+    n_layers = Int(req("block_count"))
+    n_heads = Int(req("attention.head_count"))
+    head_dim = Int(req("attention.key_length"))
+    Int(p("attention.value_length", head_dim)) == head_dim ||
+        error("spec_from_gguf_kv: spark2_5 key_length != value_length is not supported")
+    toks = get(kv, "tokenizer.ggml.tokens", nothing)
+    vocab =
+        toks isa Integer ? Int(toks) :
+        toks === nothing ? Int(p("vocab_size", 0)) : length(toks)
+    vocab > 0 || error("spec_from_gguf_kv: no vocabulary size in GGUF metadata")
+    pattern = collect(Bool, req("attention.sliding_window_pattern"))
+    length(pattern) == n_layers || error(
+        "spec_from_gguf_kv: spark2_5 sliding_window_pattern has $(length(pattern)) entries for $n_layers layers",
+    )
+    rot(key) = (r=Int(p(key, head_dim)); r == head_dim ? 0 : r)
+    tied = tensor_names !== nothing && !("output.weight" in tensor_names)
+    return ArchitectureSpec(;
+        family=:spark2_5,
+        hidden_size=Int(req("embedding_length")),
+        num_layers=n_layers,
+        n_heads,
+        n_kv_heads=Int(p("attention.head_count_kv", n_heads)),
+        vocab_size=vocab,
+        intermediate_size=Int(req("feed_forward_length")),
+        head_dim,
+        activation_kind=:geglu,
+        rope=RoPEPolicy(;
+            theta=Float64(req("rope.freq_base")),
+            rotary_dim=rot("rope.dimension_count"),
+            interleaved=false,
+        ),
+        rope_swa=RoPEPolicy(;
+            theta=Float64(req("rope.freq_base_swa")),
+            rotary_dim=rot("rope.dimension_count_swa"),
+            interleaved=false,
+        ),
+        sliding_window=Int(req("attention.sliding_window")),
+        swa_layers=pattern,
+        tie_word_embeddings=tied,
+        features=Set([:fused_qkv, :attn_head_gate]),
         rms_norm_eps=Float64(p("attention.layer_norm_rms_epsilon", 1e-6)),
     )
 end
@@ -718,8 +775,47 @@ end
 
 _gguf_param_map(spec::ArchitectureSpec) =
     spec.family === :llama ? gguf_param_map(LlamaAdapter(), spec) :
+    spec.family === :spark2_5 ? _gguf_spark_param_map(spec) :
     spec.moe === nothing ? gguf_param_map(Qwen35Adapter(), spec) :
     gguf_param_map(Qwen35MoeAdapter(), spec)
+
+"""
+llama.cpp `spark2_5` tensor spellings. `attn_qkv` packs Q, K and V
+contiguously (rows Q | K | V); `attn_gate` is the per-head output gate. The
+head is tied, so there is no `output.weight`.
+"""
+function _gguf_spark_param_map(spec::ArchitectureSpec)
+    qd = spec.n_heads * spec.head_dim
+    kvd = spec.n_kv_heads * spec.head_dim
+    refs = ParamRef[
+        ParamRef(SemanticParamId(ROLE_NORM_PRE_ATTN, 0, :frozen), "attn_norm.weight"),
+        ParamRef(SemanticParamId(ROLE_Q, 0, :projection), "attn_qkv.weight", 1:qd),
+        ParamRef(
+            SemanticParamId(ROLE_K, 0, :projection),
+            "attn_qkv.weight",
+            (qd+1):(qd+kvd),
+        ),
+        ParamRef(
+            SemanticParamId(ROLE_V, 0, :projection),
+            "attn_qkv.weight",
+            (qd+kvd+1):(qd+2kvd),
+        ),
+        ParamRef(SemanticParamId(ROLE_ATTN_HEAD_GATE, 0, :projection), "attn_gate.weight"),
+        ParamRef(SemanticParamId(ROLE_O, 0, :projection), "attn_output.weight"),
+        ParamRef(SemanticParamId(ROLE_NORM_POST_ATTN, 0, :frozen), "ffn_norm.weight"),
+        ParamRef(SemanticParamId(ROLE_GATE, 0, :projection), "ffn_gate.weight"),
+        ParamRef(SemanticParamId(ROLE_UP, 0, :projection), "ffn_up.weight"),
+        ParamRef(SemanticParamId(ROLE_DOWN, 0, :projection), "ffn_down.weight"),
+    ]
+    return FamilyParamMap(
+        :spark2_5,
+        "blk.",
+        refs,
+        "token_embd.weight",
+        "output_norm.weight",
+        spec.tie_word_embeddings ? nothing : "output.weight",
+    )
+end
 
 """
 Record the MTP (nextn) blocks that `spec_from_gguf_kv` excludes from

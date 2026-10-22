@@ -209,6 +209,12 @@ struct ArchitectureSpec
     mixer::Union{Nothing, LinearMixerSpec}
     rms_norm_eps::Float64
     moe::Union{Nothing, MoeSpec}
+    # Per-layer sliding-window pattern (true = windowed). Empty means every
+    # layer is windowed when `sliding_window` is set (Mistral).
+    swa_layers::Vector{Bool}
+    # RoPE of the windowed layers when it differs from `rope` (Spark2.5:
+    # full layers theta 5e6 over 64 dims, windowed layers theta 1e4 over all).
+    rope_swa::Union{Nothing, RoPEPolicy}
 end
 
 function layer_mixer(spec::ArchitectureSpec, layer0::Integer)
@@ -239,6 +245,8 @@ function ArchitectureSpec(;
     mixer::Union{Nothing, LinearMixerSpec}=nothing,
     rms_norm_eps::Real=1e-6,
     moe::Union{Nothing, MoeSpec}=nothing,
+    swa_layers::AbstractVector{Bool}=Bool[],
+    rope_swa::Union{Nothing, RoPEPolicy}=nothing,
 )
     hidden_size > 0 || error("ArchitectureSpec: hidden_size must be positive")
     num_layers > 0 || error("ArchitectureSpec: num_layers must be positive")
@@ -250,8 +258,8 @@ function ArchitectureSpec(;
     norm_kind in (:rms, :layer) || error(
         "ArchitectureSpec: unsupported norm_kind $(repr(norm_kind)) — this build expresses :rms, :layer",
     )
-    activation_kind in (:swiglu, :gelu, :relu) || error(
-        "ArchitectureSpec: unsupported activation_kind $(repr(activation_kind)) — this build expresses :swiglu, :gelu, :relu",
+    activation_kind in (:swiglu, :geglu, :gelu, :relu) || error(
+        "ArchitectureSpec: unsupported activation_kind $(repr(activation_kind)) — this build expresses :swiglu, :geglu, :gelu, :relu",
     )
     n_heads % n_kv_heads == 0 || error(
         "ArchitectureSpec: n_heads $n_heads is not divisible by n_kv_heads $n_kv_heads",
@@ -259,6 +267,14 @@ function ArchitectureSpec(;
     sliding_window === nothing ||
         sliding_window > 0 ||
         error("ArchitectureSpec: sliding_window must be positive")
+    isempty(swa_layers) ||
+        length(swa_layers) == num_layers ||
+        error(
+            "ArchitectureSpec: swa_layers length $(length(swa_layers)) != num_layers $num_layers",
+        )
+    isempty(swa_layers) && rope_swa === nothing ||
+        sliding_window !== nothing ||
+        error("ArchitectureSpec: swa_layers and rope_swa need a sliding_window")
     if head_dim === nothing
         hidden_size % n_heads == 0 || error(
             "ArchitectureSpec: hidden_size $hidden_size is not divisible by n_heads $n_heads",
@@ -297,8 +313,31 @@ function ArchitectureSpec(;
         mixer,
         Float64(rms_norm_eps),
         moe,
+        collect(Bool, swa_layers),
+        rope_swa,
     )
 end
+
+"""
+    layer_window(spec, layer0) -> Int
+
+Sliding-window width of 0-based layer `layer0`: the key count a query attends
+to, itself included, or 0 for full causal attention.
+"""
+function layer_window(spec::ArchitectureSpec, layer0::Integer)
+    spec.sliding_window === nothing && return 0
+    isempty(spec.swa_layers) && return spec.sliding_window
+    return spec.swa_layers[layer0+1] ? spec.sliding_window : 0
+end
+
+"""
+    layer_rope(spec, layer0) -> RoPEPolicy
+
+The RoPE policy of 0-based layer `layer0`: `rope_swa` on windowed layers when
+the spec has one, `rope` everywhere else.
+"""
+layer_rope(spec::ArchitectureSpec, layer0::Integer) =
+    spec.rope_swa !== nothing && layer_window(spec, layer0) > 0 ? spec.rope_swa : spec.rope
 
 Base.getproperty(s::ArchitectureSpec, name::Symbol) =
     name === :gqa ? getfield(s, :n_kv_heads) < getfield(s, :n_heads) :
@@ -353,7 +392,7 @@ function capabilities(spec::ArchitectureSpec)
         spec.n_heads > 0,
         spec.n_kv_heads < spec.n_heads,
         :qk_norm in spec.features,
-        spec.activation_kind === :swiglu,
+        spec.activation_kind in (:swiglu, :geglu),
         :fused_qkv in spec.features,
         :moe in spec.features,
         :linear_attention in spec.features,
@@ -377,7 +416,12 @@ else fails AT THAT OPERATION (Pass F) rather than at a family whitelist.
 function required_semantics(spec::ArchitectureSpec)
     caps = capabilities(spec)
     req = Symbol[:rmsnorm, :attention, :matmul]
-    push!(req, caps.gated_ffn ? :swiglu_ffn : :dense_ffn)
+    push!(
+        req,
+        !caps.gated_ffn ? :dense_ffn :
+        spec.activation_kind === :geglu ? :geglu_ffn : :swiglu_ffn,
+    )
+    :attn_head_gate in spec.features && push!(req, :attn_head_gate)
     caps.qk_norm && push!(req, :qk_norm)
     caps.sliding_window && push!(req, :sliding_window_attention)
     caps.moe && push!(req, :moe_routing)
@@ -398,7 +442,9 @@ export RoPEPolicy,
     capabilities,
     required_semantics,
     is_scaled,
-    layer_mixer
+    layer_mixer,
+    layer_window,
+    layer_rope
 
 # --- Pass D: the CPU-oracle reference for a positional policy ------------------
 

@@ -241,6 +241,17 @@ function _probe(backend, cap::Symbol)
         return _conformance_run(
             () -> Gesso._cpu_moe_topk_swiglu!(y, x, router, gate3, up3, down3, k),
         )
+    elseif cap === :geglu_ffn
+        g = _act(randn(rng, 2, 4))
+        u = _act(randn(rng, 2, 4))
+        return _conformance_run(() -> Gesso.Inference._geglu!(backend, _act(zeros(2, 4)), g, u))
+    elseif cap === :attn_head_gate
+        merged = randn(rng, 2, 2 * 4)
+        g = randn(rng, 2, 2)
+        return _conformance_run(() -> Gesso.Inference._head_gate_mul!(backend, merged, g, 4))
+    elseif cap === :sliding_window_attention
+        sc = randn(rng, 3, 5)
+        return _conformance_run(() -> Gesso.Inference._window_mask!(sc, 3, 5, 2))
     elseif cap === :linear_attention
         seq, nv, dk, dv = 2, 2, 4, 4
         q = randn(rng, seq, nv, dk)
@@ -355,6 +366,26 @@ const _CAP_PROBE_SPECS = [
         vocab_size=8,
         intermediate_size=16,
         features=Set{Symbol}([:attn_output_gate]),
+    ),
+    Gesso.ArchitectureSpec(;
+        family=:probe,
+        hidden_size=8,
+        num_layers=1,
+        n_heads=2,
+        n_kv_heads=1,
+        vocab_size=8,
+        intermediate_size=16,
+        features=Set{Symbol}([:attn_head_gate]),
+    ),
+    Gesso.ArchitectureSpec(;
+        family=:probe,
+        hidden_size=8,
+        num_layers=1,
+        n_heads=2,
+        n_kv_heads=1,
+        vocab_size=8,
+        intermediate_size=16,
+        activation_kind=:geglu,
     ),
     Gesso.ArchitectureSpec(;
         family=:probe,

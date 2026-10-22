@@ -1,0 +1,10704 @@
+{
+ "cases": [
+  {
+   "ids": [],
+   "parse_special": true,
+   "text": ""
+  },
+  {
+   "ids": [],
+   "parse_special": false,
+   "text": ""
+  },
+  {
+   "ids": [
+    220
+   ],
+   "parse_special": true,
+   "text": " "
+  },
+  {
+   "ids": [
+    220
+   ],
+   "parse_special": false,
+   "text": " "
+  },
+  {
+   "ids": [
+    256
+   ],
+   "parse_special": true,
+   "text": "  "
+  },
+  {
+   "ids": [
+    256
+   ],
+   "parse_special": false,
+   "text": "  "
+  },
+  {
+   "ids": [
+    198
+   ],
+   "parse_special": true,
+   "text": "\n"
+  },
+  {
+   "ids": [
+    198
+   ],
+   "parse_special": false,
+   "text": "\n"
+  },
+  {
+   "ids": [
+    198,
+    198
+   ],
+   "parse_special": true,
+   "text": "\n\n"
+  },
+  {
+   "ids": [
+    198,
+    198
+   ],
+   "parse_special": false,
+   "text": "\n\n"
+  },
+  {
+   "ids": [
+    201,
+    198
+   ],
+   "parse_special": true,
+   "text": "\r\n"
+  },
+  {
+   "ids": [
+    201,
+    198
+   ],
+   "parse_special": false,
+   "text": "\r\n"
+  },
+  {
+   "ids": [
+    197
+   ],
+   "parse_special": true,
+   "text": "\t"
+  },
+  {
+   "ids": [
+    197
+   ],
+   "parse_special": false,
+   "text": "\t"
+  },
+  {
+   "ids": [
+    220,
+    197,
+    954
+   ],
+   "parse_special": true,
+   "text": " \t \n"
+  },
+  {
+   "ids": [
+    220,
+    197,
+    954
+   ],
+   "parse_special": false,
+   "text": " \t \n"
+  },
+  {
+   "ids": [
+    78
+   ],
+   "parse_special": true,
+   "text": "a"
+  },
+  {
+   "ids": [
+    78
+   ],
+   "parse_special": false,
+   "text": "a"
+  },
+  {
+   "ids": [
+    46
+   ],
+   "parse_special": true,
+   "text": "A"
+  },
+  {
+   "ids": [
+    46
+   ],
+   "parse_special": false,
+   "text": "A"
+  },
+  {
+   "ids": [
+    26240
+   ],
+   "parse_special": true,
+   "text": "Hello"
+  },
+  {
+   "ids": [
+    26240
+   ],
+   "parse_special": false,
+   "text": "Hello"
+  },
+  {
+   "ids": [
+    26240,
+    25,
+    3179,
+    14
+   ],
+   "parse_special": true,
+   "text": "Hello, world!"
+  },
+  {
+   "ids": [
+    26240,
+    25,
+    3179,
+    14
+   ],
+   "parse_special": false,
+   "text": "Hello, world!"
+  },
+  {
+   "ids": [
+    1046,
+    5841,
+    19607,
+    87045,
+    75714,
+    1310,
+    275,
+    50056,
+    7057,
+    27
+   ],
+   "parse_special": true,
+   "text": "The quick brown fox jumps over the lazy dog."
+  },
+  {
+   "ids": [
+    1046,
+    5841,
+    19607,
+    87045,
+    75714,
+    1310,
+    275,
+    50056,
+    7057,
+    27
+   ],
+   "parse_special": false,
+   "text": "The quick brown fox jumps over the lazy dog."
+  },
+  {
+   "ids": [
+    20657,
+    2083,
+    4763
+   ],
+   "parse_special": true,
+   "text": "don't stop"
+  },
+  {
+   "ids": [
+    20657,
+    2083,
+    4763
+   ],
+   "parse_special": false,
+   "text": "don't stop"
+  },
+  {
+   "ids": [
+    54,
+    5580,
+    4088,
+    679,
+    7632,
+    2261,
+    454,
+    7263,
+    1360
+   ],
+   "parse_special": true,
+   "text": "I'm sure we'll see you've been"
+  },
+  {
+   "ids": [
+    54,
+    5580,
+    4088,
+    679,
+    7632,
+    2261,
+    454,
+    7263,
+    1360
+   ],
+   "parse_special": false,
+   "text": "I'm sure we'll see you've been"
+  },
+  {
+   "ids": [
+    282,
+    1045,
+    25,
+    1136,
+    7771,
+    25,
+    679,
+    6125,
+    25,
+    1278,
+    7632,
+    25,
+    506,
+    1045,
+    25,
+    764,
+    2083,
+    25,
+    4084,
+    2083,
+    25,
+    533,
+    2199,
+    114109,
+    25,
+    373,
+    20,
+    58,
+    25,
+    34453,
+    20,
+    3374,
+    25,
+    38657,
+    20,
+    4895
+   ],
+   "parse_special": true,
+   "text": "it's, they'd, we're, she'll, he's, can't, won't, DON'T, I'M, WE'RE, YOU'LL"
+  },
+  {
+   "ids": [
+    282,
+    1045,
+    25,
+    1136,
+    7771,
+    25,
+    679,
+    6125,
+    25,
+    1278,
+    7632,
+    25,
+    506,
+    1045,
+    25,
+    764,
+    2083,
+    25,
+    4084,
+    2083,
+    25,
+    533,
+    2199,
+    114109,
+    25,
+    373,
+    20,
+    58,
+    25,
+    34453,
+    20,
+    3374,
+    25,
+    38657,
+    20,
+    4895
+   ],
+   "parse_special": false,
+   "text": "it's, they'd, we're, she'll, he's, can't, won't, DON'T, I'M, WE'RE, YOU'LL"
+  },
+  {
+   "ids": [
+    1045,
+    859,
+    96,
+    859,
+    101,
+    859,
+    1813,
+    97
+   ],
+   "parse_special": true,
+   "text": "'s 's 'x 'ttt"
+  },
+  {
+   "ids": [
+    1045,
+    859,
+    96,
+    859,
+    101,
+    859,
+    1813,
+    97
+   ],
+   "parse_special": false,
+   "text": "'s 's 'x 'ttt"
+  },
+  {
+   "ids": [
+    35041,
+    13391,
+    20,
+    3046
+   ],
+   "parse_special": true,
+   "text": "rock'n'roll"
+  },
+  {
+   "ids": [
+    35041,
+    13391,
+    20,
+    3046
+   ],
+   "parse_special": false,
+   "text": "rock'n'roll"
+  },
+  {
+   "ids": [
+    6146
+   ],
+   "parse_special": true,
+   "text": "''"
+  },
+  {
+   "ids": [
+    6146
+   ],
+   "parse_special": false,
+   "text": "''"
+  },
+  {
+   "ids": [
+    20
+   ],
+   "parse_special": true,
+   "text": "'"
+  },
+  {
+   "ids": [
+    20
+   ],
+   "parse_special": false,
+   "text": "'"
+  },
+  {
+   "ids": [
+    282,
+    6146,
+    96
+   ],
+   "parse_special": true,
+   "text": "it''s"
+  },
+  {
+   "ids": [
+    282,
+    6146,
+    96
+   ],
+   "parse_special": false,
+   "text": "it''s"
+  },
+  {
+   "ids": [
+    220,
+    9963,
+    20687
+   ],
+   "parse_special": true,
+   "text": "  leading spaces"
+  },
+  {
+   "ids": [
+    220,
+    9963,
+    20687
+   ],
+   "parse_special": false,
+   "text": "  leading spaces"
+  },
+  {
+   "ids": [
+    625,
+    33138,
+    20687,
+    293
+   ],
+   "parse_special": true,
+   "text": "trailing spaces   "
+  },
+  {
+   "ids": [
+    625,
+    33138,
+    20687,
+    293
+   ],
+   "parse_special": false,
+   "text": "trailing spaces   "
+  },
+  {
+   "ids": [
+    78,
+    220,
+    287,
+    256,
+    281,
+    293,
+    286
+   ],
+   "parse_special": true,
+   "text": "a  b   c    d"
+  },
+  {
+   "ids": [
+    78,
+    220,
+    287,
+    256,
+    281,
+    293,
+    286
+   ],
+   "parse_special": false,
+   "text": "a  b   c    d"
+  },
+  {
+   "ids": [
+    78,
+    197,
+    79,
+    197,
+    80
+   ],
+   "parse_special": true,
+   "text": "a\tb\tc"
+  },
+  {
+   "ids": [
+    78,
+    197,
+    79,
+    197,
+    80
+   ],
+   "parse_special": false,
+   "text": "a\tb\tc"
+  },
+  {
+   "ids": [
+    101,
+    198,
+    198,
+    102,
+    198,
+    198,
+    198,
+    103
+   ],
+   "parse_special": true,
+   "text": "x\n\ny\n\n\nz"
+  },
+  {
+   "ids": [
+    101,
+    198,
+    198,
+    102,
+    198,
+    198,
+    198,
+    103
+   ],
+   "parse_special": false,
+   "text": "x\n\ny\n\n\nz"
+  },
+  {
+   "ids": [
+    2157,
+    1135,
+    201,
+    198,
+    2157,
+    1841,
+    201,
+    198
+   ],
+   "parse_special": true,
+   "text": "line one\r\nline two\r\n"
+  },
+  {
+   "ids": [
+    2157,
+    1135,
+    201,
+    198,
+    2157,
+    1841,
+    201,
+    198
+   ],
+   "parse_special": false,
+   "text": "line one\r\nline two\r\n"
+  },
+  {
+   "ids": [
+    90,
+    6822,
+    220,
+    201,
+    198,
+    198,
+    201,
+    198,
+    1954,
+    1266
+   ],
+   "parse_special": true,
+   "text": "mixed \r\n\n\r\n endings"
+  },
+  {
+   "ids": [
+    90,
+    6822,
+    220,
+    201,
+    198,
+    198,
+    201,
+    198,
+    1954,
+    1266
+   ],
+   "parse_special": false,
+   "text": "mixed \r\n\n\r\n endings"
+  },
+  {
+   "ids": [
+    10236,
+    53880
+   ],
+   "parse_special": true,
+   "text": "  \n  \n  "
+  },
+  {
+   "ids": [
+    10236,
+    53880
+   ],
+   "parse_special": false,
+   "text": "  \n  \n  "
+  },
+  {
+   "ids": [
+    3533,
+    25734
+   ],
+   "parse_special": true,
+   "text": " nbsp"
+  },
+  {
+   "ids": [
+    3533,
+    25734
+   ],
+   "parse_special": false,
+   "text": " nbsp"
+  },
+  {
+   "ids": [
+    78,
+    3533,
+    79
+   ],
+   "parse_special": true,
+   "text": "a b"
+  },
+  {
+   "ids": [
+    78,
+    3533,
+    79
+   ],
+   "parse_special": false,
+   "text": "a b"
+  },
+  {
+   "ids": [
+    6458,
+    805,
+    15346,
+    5497
+   ],
+   "parse_special": true,
+   "text": "　ideographic space"
+  },
+  {
+   "ids": [
+    6458,
+    805,
+    15346,
+    5497
+   ],
+   "parse_special": false,
+   "text": "　ideographic space"
+  },
+  {
+   "ids": [
+    78,
+    301,
+    225,
+    384,
+    5497
+   ],
+   "parse_special": true,
+   "text": "a em space"
+  },
+  {
+   "ids": [
+    78,
+    301,
+    225,
+    384,
+    5497
+   ],
+   "parse_special": false,
+   "text": "a em space"
+  },
+  {
+   "ids": [
+    78,
+    301,
+    115,
+    79
+   ],
+   "parse_special": true,
+   "text": "a b"
+  },
+  {
+   "ids": [
+    78,
+    301,
+    115,
+    79
+   ],
+   "parse_special": false,
+   "text": "a b"
+  },
+  {
+   "ids": [
+    78,
+    301,
+    116,
+    79
+   ],
+   "parse_special": true,
+   "text": "a b"
+  },
+  {
+   "ids": [
+    78,
+    301,
+    116,
+    79
+   ],
+   "parse_special": false,
+   "text": "a b"
+  },
+  {
+   "ids": [
+    138,
+    227,
+    20366
+   ],
+   "parse_special": true,
+   "text": "nel"
+  },
+  {
+   "ids": [
+    138,
+    227,
+    20366
+   ],
+   "parse_special": false,
+   "text": "nel"
+  },
+  {
+   "ids": [
+    169,
+    248,
+    222,
+    549,
+    6396
+   ],
+   "parse_special": true,
+   "text": " ogham"
+  },
+  {
+   "ids": [
+    169,
+    248,
+    222,
+    549,
+    6396
+   ],
+   "parse_special": false,
+   "text": " ogham"
+  },
+  {
+   "ids": [
+    78,
+    3535,
+    91,
+    25734,
+    52812,
+    253,
+    4171,
+    1117
+   ],
+   "parse_special": true,
+   "text": "a nnbsp mmsp"
+  },
+  {
+   "ids": [
+    78,
+    3535,
+    91,
+    25734,
+    52812,
+    253,
+    4171,
+    1117
+   ],
+   "parse_special": false,
+   "text": "a nnbsp mmsp"
+  },
+  {
+   "ids": [
+    30,
+    31,
+    32
+   ],
+   "parse_special": true,
+   "text": "123"
+  },
+  {
+   "ids": [
+    30,
+    31,
+    32
+   ],
+   "parse_special": false,
+   "text": "123"
+  },
+  {
+   "ids": [
+    30,
+    31,
+    32,
+    33,
+    34,
+    35,
+    36,
+    37,
+    38,
+    29
+   ],
+   "parse_special": true,
+   "text": "1234567890"
+  },
+  {
+   "ids": [
+    30,
+    31,
+    32,
+    33,
+    34,
+    35,
+    36,
+    37,
+    38,
+    29
+   ],
+   "parse_special": false,
+   "text": "1234567890"
+  },
+  {
+   "ids": [
+    30,
+    31,
+    32,
+    33,
+    34,
+    35,
+    36,
+    37,
+    38,
+    29,
+    30,
+    31,
+    32,
+    33,
+    34,
+    35,
+    36,
+    37,
+    38,
+    29
+   ],
+   "parse_special": true,
+   "text": "12345678901234567890"
+  },
+  {
+   "ids": [
+    30,
+    31,
+    32,
+    33,
+    34,
+    35,
+    36,
+    37,
+    38,
+    29,
+    30,
+    31,
+    32,
+    33,
+    34,
+    35,
+    36,
+    37,
+    38,
+    29
+   ],
+   "parse_special": false,
+   "text": "12345678901234567890"
+  },
+  {
+   "ids": [
+    32,
+    27,
+    30,
+    33,
+    30,
+    34,
+    38
+   ],
+   "parse_special": true,
+   "text": "3.14159"
+  },
+  {
+   "ids": [
+    32,
+    27,
+    30,
+    33,
+    30,
+    34,
+    38
+   ],
+   "parse_special": false,
+   "text": "3.14159"
+  },
+  {
+   "ids": [
+    30,
+    25,
+    29,
+    29,
+    29,
+    25,
+    29,
+    29,
+    29
+   ],
+   "parse_special": true,
+   "text": "1,000,000"
+  },
+  {
+   "ids": [
+    30,
+    25,
+    29,
+    29,
+    29,
+    25,
+    29,
+    29,
+    29
+   ],
+   "parse_special": false,
+   "text": "1,000,000"
+  },
+  {
+   "ids": [
+    29,
+    101,
+    30,
+    51
+   ],
+   "parse_special": true,
+   "text": "0x1F"
+  },
+  {
+   "ids": [
+    29,
+    101,
+    30,
+    51
+   ],
+   "parse_special": false,
+   "text": "0x1F"
+  },
+  {
+   "ids": [
+    56134,
+    57846,
+    57271
+   ],
+   "parse_special": true,
+   "text": "٣٤٥"
+  },
+  {
+   "ids": [
+    56134,
+    57846,
+    57271
+   ],
+   "parse_special": false,
+   "text": "٣٤٥"
+  },
+  {
+   "ids": [
+    42720,
+    220,
+    68171,
+    220,
+    24261
+   ],
+   "parse_special": true,
+   "text": "½ ¼ ²"
+  },
+  {
+   "ids": [
+    42720,
+    220,
+    68171,
+    220,
+    24261
+   ],
+   "parse_special": false,
+   "text": "½ ¼ ²"
+  },
+  {
+   "ids": [
+    23128
+   ],
+   "parse_special": true,
+   "text": "!!!"
+  },
+  {
+   "ids": [
+    23128
+   ],
+   "parse_special": false,
+   "text": "!!!"
+  },
+  {
+   "ids": [
+    55797
+   ],
+   "parse_special": true,
+   "text": "???"
+  },
+  {
+   "ids": [
+    55797
+   ],
+   "parse_special": false,
+   "text": "???"
+  },
+  {
+   "ids": [
+    2097
+   ],
+   "parse_special": true,
+   "text": "..."
+  },
+  {
+   "ids": [
+    2097
+   ],
+   "parse_special": false,
+   "text": "..."
+  },
+  {
+   "ids": [
+    474
+   ],
+   "parse_special": true,
+   "text": "--"
+  },
+  {
+   "ids": [
+    474
+   ],
+   "parse_special": false,
+   "text": "--"
+  },
+  {
+   "ids": [
+    29283
+   ],
+   "parse_special": true,
+   "text": "-->"
+  },
+  {
+   "ids": [
+    29283
+   ],
+   "parse_special": false,
+   "text": "-->"
+  },
+  {
+   "ids": [
+    38066
+   ],
+   "parse_special": true,
+   "text": "=>"
+  },
+  {
+   "ids": [
+    38066
+   ],
+   "parse_special": false,
+   "text": "=>"
+  },
+  {
+   "ids": [
+    1034
+   ],
+   "parse_special": true,
+   "text": "=="
+  },
+  {
+   "ids": [
+    1034
+   ],
+   "parse_special": false,
+   "text": "=="
+  },
+  {
+   "ids": [
+    8888
+   ],
+   "parse_special": true,
+   "text": "{}"
+  },
+  {
+   "ids": [
+    8888
+   ],
+   "parse_special": false,
+   "text": "{}"
+  },
+  {
+   "ids": [
+    6429
+   ],
+   "parse_special": true,
+   "text": "[]"
+  },
+  {
+   "ids": [
+    6429
+   ],
+   "parse_special": false,
+   "text": "[]"
+  },
+  {
+   "ids": [
+    663
+   ],
+   "parse_special": true,
+   "text": "()"
+  },
+  {
+   "ids": [
+    663
+   ],
+   "parse_special": false,
+   "text": "()"
+  },
+  {
+   "ids": [
+    91184
+   ],
+   "parse_special": true,
+   "text": "<>"
+  },
+  {
+   "ids": [
+    91184
+   ],
+   "parse_special": false,
+   "text": "<>"
+  },
+  {
+   "ids": [
+    1784
+   ],
+   "parse_special": true,
+   "text": "$$"
+  },
+  {
+   "ids": [
+    1784
+   ],
+   "parse_special": false,
+   "text": "$$"
+  },
+  {
+   "ids": [
+    45,
+    16,
+    18,
+    19,
+    23
+   ],
+   "parse_special": true,
+   "text": "@#%&*"
+  },
+  {
+   "ids": [
+    45,
+    16,
+    18,
+    19,
+    23
+   ],
+   "parse_special": false,
+   "text": "@#%&*"
+  },
+  {
+   "ids": [
+    14,
+    33753,
+    44
+   ],
+   "parse_special": true,
+   "text": "!?!?"
+  },
+  {
+   "ids": [
+    14,
+    33753,
+    44
+   ],
+   "parse_special": false,
+   "text": "!?!?"
+  },
+  {
+   "ids": [
+    2097,
+    23128
+   ],
+   "parse_special": true,
+   "text": "...!!!"
+  },
+  {
+   "ids": [
+    2097,
+    23128
+   ],
+   "parse_special": false,
+   "text": "...!!!"
+  },
+  {
+   "ids": [
+    20,
+    8252
+   ],
+   "parse_special": true,
+   "text": "'\"`"
+  },
+  {
+   "ids": [
+    20,
+    8252
+   ],
+   "parse_special": false,
+   "text": "'\"`"
+  },
+  {
+   "ids": [
+    46766
+   ],
+   "parse_special": true,
+   "text": "~~~"
+  },
+  {
+   "ids": [
+    46766
+   ],
+   "parse_special": false,
+   "text": "~~~"
+  },
+  {
+   "ids": [
+    8236
+   ],
+   "parse_special": true,
+   "text": "||"
+  },
+  {
+   "ids": [
+    8236
+   ],
+   "parse_special": false,
+   "text": "||"
+  },
+  {
+   "ids": [
+    11612
+   ],
+   "parse_special": true,
+   "text": "\\\\"
+  },
+  {
+   "ids": [
+    11612
+   ],
+   "parse_special": false,
+   "text": "\\\\"
+  },
+  {
+   "ids": [
+    8130,
+    40212,
+    9192
+   ],
+   "parse_special": true,
+   "text": "/*comment*/"
+  },
+  {
+   "ids": [
+    8130,
+    40212,
+    9192
+   ],
+   "parse_special": false,
+   "text": "/*comment*/"
+  },
+  {
+   "ids": [
+    55489,
+    11020,
+    22512,
+    1571
+   ],
+   "parse_special": true,
+   "text": "#!/bin/bash"
+  },
+  {
+   "ids": [
+    55489,
+    11020,
+    22512,
+    1571
+   ],
+   "parse_special": false,
+   "text": "#!/bin/bash"
+  },
+  {
+   "ids": [
+    3068,
+    289,
+    5211,
+    2407,
+    198,
+    293,
+    948,
+    1812,
+    1033,
+    31,
+    198
+   ],
+   "parse_special": true,
+   "text": "def f(x):\n    return x**2\n"
+  },
+  {
+   "ids": [
+    3068,
+    289,
+    5211,
+    2407,
+    198,
+    293,
+    948,
+    1812,
+    1033,
+    31,
+    198
+   ],
+   "parse_special": false,
+   "text": "def f(x):\n    return x**2\n"
+  },
+  {
+   "ids": [
+    13012,
+    2772,
+    663,
+    514,
+    21302,
+    9614,
+    3019,
+    2661,
+    578
+   ],
+   "parse_special": true,
+   "text": "fn main() { println!(\"hi\"); }"
+  },
+  {
+   "ids": [
+    13012,
+    2772,
+    663,
+    514,
+    21302,
+    9614,
+    3019,
+    2661,
+    578
+   ],
+   "parse_special": false,
+   "text": "fn main() { println!(\"hi\"); }"
+  },
+  {
+   "ids": [
+    27913,
+    901,
+    24057,
+    257,
+    33337,
+    259,
+    422,
+    859,
+    79,
+    5843
+   ],
+   "parse_special": true,
+   "text": "SELECT * FROM t WHERE a = 'b';"
+  },
+  {
+   "ids": [
+    27913,
+    901,
+    24057,
+    257,
+    33337,
+    259,
+    422,
+    859,
+    79,
+    5843
+   ],
+   "parse_special": false,
+   "text": "SELECT * FROM t WHERE a = 'b';"
+  },
+  {
+   "ids": [
+    23421,
+    3996,
+    4068,
+    1496,
+    30,
+    25,
+    220,
+    31,
+    27,
+    34,
+    25,
+    4161,
+    25,
+    2917,
+    65764
+   ],
+   "parse_special": true,
+   "text": "{\"key\": [1, 2.5, null, true]}"
+  },
+  {
+   "ids": [
+    23421,
+    3996,
+    4068,
+    1496,
+    30,
+    25,
+    220,
+    31,
+    27,
+    34,
+    25,
+    4161,
+    25,
+    2917,
+    65764
+   ],
+   "parse_special": false,
+   "text": "{\"key\": [1, 2.5, null, true]}"
+  },
+  {
+   "ids": [
+    41,
+    7521,
+    6697,
+    7713,
+    43,
+    1311,
+    2717,
+    7713,
+    12227,
+    7521,
+    43
+   ],
+   "parse_special": true,
+   "text": "<html><body>text</body></html>"
+  },
+  {
+   "ids": [
+    41,
+    7521,
+    6697,
+    7713,
+    43,
+    1311,
+    2717,
+    7713,
+    12227,
+    7521,
+    43
+   ],
+   "parse_special": false,
+   "text": "<html><body>text</body></html>"
+  },
+  {
+   "ids": [
+    17,
+    75228,
+    706,
+    1514,
+    905,
+    117957,
+    52399
+   ],
+   "parse_special": true,
+   "text": "$ ls -la | grep foo"
+  },
+  {
+   "ids": [
+    17,
+    75228,
+    706,
+    1514,
+    905,
+    117957,
+    52399
+   ],
+   "parse_special": false,
+   "text": "$ ls -la | grep foo"
+  },
+  {
+   "ids": [
+    13778,
+    59507,
+    2581
+   ],
+   "parse_special": true,
+   "text": "email@example.com"
+  },
+  {
+   "ids": [
+    13778,
+    59507,
+    2581
+   ],
+   "parse_special": false,
+   "text": "email@example.com"
+  },
+  {
+   "ids": [
+    9885,
+    3764,
+    30801,
+    2581,
+    28,
+    8461,
+    44,
+    94,
+    42,
+    30,
+    19,
+    95,
+    42,
+    31,
+    16,
+    80999
+   ],
+   "parse_special": true,
+   "text": "https://example.com/path?q=1&r=2#frag"
+  },
+  {
+   "ids": [
+    9885,
+    3764,
+    30801,
+    2581,
+    28,
+    8461,
+    44,
+    94,
+    42,
+    30,
+    19,
+    95,
+    42,
+    31,
+    16,
+    80999
+   ],
+   "parse_special": false,
+   "text": "https://example.com/path?q=1&r=2#frag"
+  },
+  {
+   "ids": [
+    48,
+    27871,
+    26158,
+    73,
+    2215,
+    73,
+    6155,
+    18375
+   ],
+   "parse_special": true,
+   "text": "C:\\Users\\name\\file.txt"
+  },
+  {
+   "ids": [
+    48,
+    27871,
+    26158,
+    73,
+    2215,
+    73,
+    6155,
+    18375
+   ],
+   "parse_special": false,
+   "text": "C:\\Users\\name\\file.txt"
+  },
+  {
+   "ids": [
+    80,
+    2234,
+    596
+   ],
+   "parse_special": true,
+   "text": "café"
+  },
+  {
+   "ids": [
+    80,
+    2234,
+    596
+   ],
+   "parse_special": false,
+   "text": "café"
+  },
+  {
+   "ids": [
+    1325,
+    9339,
+    377,
+    85863,
+    1320
+   ],
+   "parse_special": true,
+   "text": "naïve façade"
+  },
+  {
+   "ids": [
+    1325,
+    9339,
+    377,
+    85863,
+    1320
+   ],
+   "parse_special": false,
+   "text": "naïve façade"
+  },
+  {
+   "ids": [
+    119958,
+    402,
+    596
+   ],
+   "parse_special": true,
+   "text": "résumé"
+  },
+  {
+   "ids": [
+    119958,
+    402,
+    596
+   ],
+   "parse_special": false,
+   "text": "résumé"
+  },
+  {
+   "ids": [
+    50813,
+    1130,
+    1003,
+    45238
+   ],
+   "parse_special": true,
+   "text": "Ångström"
+  },
+  {
+   "ids": [
+    50813,
+    1130,
+    1003,
+    45238
+   ],
+   "parse_special": false,
+   "text": "Ångström"
+  },
+  {
+   "ids": [
+    14409,
+    7720,
+    252
+   ],
+   "parse_special": true,
+   "text": "ß ẞ"
+  },
+  {
+   "ids": [
+    14409,
+    7720,
+    252
+   ],
+   "parse_special": false,
+   "text": "ß ẞ"
+  },
+  {
+   "ids": [
+    17539,
+    69607
+   ],
+   "parse_special": true,
+   "text": "İstanbul"
+  },
+  {
+   "ids": [
+    17539,
+    69607
+   ],
+   "parse_special": false,
+   "text": "İstanbul"
+  },
+  {
+   "ids": [
+    143,
+    227,
+    220,
+    143,
+    230
+   ],
+   "parse_special": true,
+   "text": "ǅ ǈ"
+  },
+  {
+   "ids": [
+    143,
+    227,
+    220,
+    143,
+    230
+   ],
+   "parse_special": false,
+   "text": "ǅ ǈ"
+  },
+  {
+   "ids": [
+    10467,
+    7369
+   ],
+   "parse_special": true,
+   "text": "中文测试"
+  },
+  {
+   "ids": [
+    10467,
+    7369
+   ],
+   "parse_special": false,
+   "text": "中文测试"
+  },
+  {
+   "ids": [
+    6186,
+    17899,
+    2812,
+    30363,
+    35167,
+    46020
+   ],
+   "parse_special": true,
+   "text": "日本語のテキスト"
+  },
+  {
+   "ids": [
+    6186,
+    17899,
+    2812,
+    30363,
+    35167,
+    46020
+   ],
+   "parse_special": false,
+   "text": "日本語のテキスト"
+  },
+  {
+   "ids": [
+    8253,
+    28639,
+    11957,
+    9858,
+    227,
+    235,
+    112229
+   ],
+   "parse_special": true,
+   "text": "한국어 텍스트"
+  },
+  {
+   "ids": [
+    8253,
+    28639,
+    11957,
+    9858,
+    227,
+    235,
+    112229
+   ],
+   "parse_special": false,
+   "text": "한국어 텍스트"
+  },
+  {
+   "ids": [
+    10467,
+    280,
+    123232,
+    1343
+   ],
+   "parse_special": true,
+   "text": "中文，标点！"
+  },
+  {
+   "ids": [
+    10467,
+    280,
+    123232,
+    1343
+   ],
+   "parse_special": false,
+   "text": "中文，标点！"
+  },
+  {
+   "ids": [
+    40535,
+    1955,
+    7515,
+    5354,
+    4871,
+    32570,
+    8779
+   ],
+   "parse_special": true,
+   "text": "漢字かな混じり"
+  },
+  {
+   "ids": [
+    40535,
+    1955,
+    7515,
+    5354,
+    4871,
+    32570,
+    8779
+   ],
+   "parse_special": false,
+   "text": "漢字かな混じり"
+  },
+  {
+   "ids": [
+    24629,
+    3892,
+    2285,
+    25,
+    65117,
+    14
+   ],
+   "parse_special": true,
+   "text": "Привет, мир!"
+  },
+  {
+   "ids": [
+    24629,
+    3892,
+    2285,
+    25,
+    65117,
+    14
+   ],
+   "parse_special": false,
+   "text": "Привет, мир!"
+  },
+  {
+   "ids": [
+    15984,
+    12888,
+    15283,
+    22628
+   ],
+   "parse_special": true,
+   "text": "Ελληνικά"
+  },
+  {
+   "ids": [
+    15984,
+    12888,
+    15283,
+    22628
+   ],
+   "parse_special": false,
+   "text": "Ελληνικά"
+  },
+  {
+   "ids": [
+    3381,
+    12000,
+    7593
+   ],
+   "parse_special": true,
+   "text": "עברית"
+  },
+  {
+   "ids": [
+    3381,
+    12000,
+    7593
+   ],
+   "parse_special": false,
+   "text": "עברית"
+  },
+  {
+   "ids": [
+    2152,
+    1965,
+    13733,
+    5858
+   ],
+   "parse_special": true,
+   "text": "العربية"
+  },
+  {
+   "ids": [
+    2152,
+    1965,
+    13733,
+    5858
+   ],
+   "parse_special": false,
+   "text": "العربية"
+  },
+  {
+   "ids": [
+    2324,
+    90580,
+    1381
+   ],
+   "parse_special": true,
+   "text": "हिन्दी"
+  },
+  {
+   "ids": [
+    2324,
+    90580,
+    1381
+   ],
+   "parse_special": false,
+   "text": "हिन्दी"
+  },
+  {
+   "ids": [
+    20503,
+    245,
+    6118
+   ],
+   "parse_special": true,
+   "text": "ไทย"
+  },
+  {
+   "ids": [
+    20503,
+    245,
+    6118
+   ],
+   "parse_special": false,
+   "text": "ไทย"
+  },
+  {
+   "ids": [
+    29648,
+    43811,
+    28560
+   ],
+   "parse_special": true,
+   "text": "ქართული"
+  },
+  {
+   "ids": [
+    29648,
+    43811,
+    28560
+   ],
+   "parse_special": false,
+   "text": "ქართული"
+  },
+  {
+   "ids": [
+    11013,
+    236,
+    231
+   ],
+   "parse_special": true,
+   "text": "🎉"
+  },
+  {
+   "ids": [
+    11013,
+    236,
+    231
+   ],
+   "parse_special": false,
+   "text": "🎉"
+  },
+  {
+   "ids": [
+    11013,
+    236,
+    231,
+    11013,
+    236,
+    231,
+    11013,
+    236,
+    231
+   ],
+   "parse_special": true,
+   "text": "🎉🎉🎉"
+  },
+  {
+   "ids": [
+    11013,
+    236,
+    231,
+    11013,
+    236,
+    231,
+    11013,
+    236,
+    231
+   ],
+   "parse_special": false,
+   "text": "🎉🎉🎉"
+  },
+  {
+   "ids": [
+    75792,
+    235,
+    109046,
+    135
+   ],
+   "parse_special": true,
+   "text": "👍🏽"
+  },
+  {
+   "ids": [
+    75792,
+    235,
+    109046,
+    135
+   ],
+   "parse_special": false,
+   "text": "👍🏽"
+  },
+  {
+   "ids": [
+    75792,
+    115,
+    8091,
+    75792,
+    116,
+    8091,
+    75792,
+    114,
+    8091,
+    75792,
+    113
+   ],
+   "parse_special": true,
+   "text": "👨‍👩‍👧‍👦"
+  },
+  {
+   "ids": [
+    75792,
+    115,
+    8091,
+    75792,
+    116,
+    8091,
+    75792,
+    114,
+    8091,
+    75792,
+    113
+   ],
+   "parse_special": false,
+   "text": "👨‍👩‍👧‍👦"
+  },
+  {
+   "ids": [
+    11013,
+    229,
+    132,
+    11013,
+    229,
+    130,
+    11013,
+    229,
+    121,
+    11013,
+    229,
+    127
+   ],
+   "parse_special": true,
+   "text": "🇺🇸🇯🇵"
+  },
+  {
+   "ids": [
+    11013,
+    229,
+    132,
+    11013,
+    229,
+    130,
+    11013,
+    229,
+    121,
+    11013,
+    229,
+    127
+   ],
+   "parse_special": false,
+   "text": "🇺🇸🇯🇵"
+  },
+  {
+   "ids": [
+    384,
+    15736,
+    79690,
+    222,
+    12213,
+    31224,
+    248,
+    222,
+    4217
+   ],
+   "parse_special": true,
+   "text": "emoji 😀 mix 🚀 text"
+  },
+  {
+   "ids": [
+    384,
+    15736,
+    79690,
+    222,
+    12213,
+    31224,
+    248,
+    222,
+    4217
+   ],
+   "parse_special": false,
+   "text": "emoji 😀 mix 🚀 text"
+  },
+  {
+   "ids": [
+    82,
+    6382
+   ],
+   "parse_special": true,
+   "text": "é"
+  },
+  {
+   "ids": [
+    82,
+    6382
+   ],
+   "parse_special": false,
+   "text": "é"
+  },
+  {
+   "ids": [
+    78,
+    26985,
+    72303
+   ],
+   "parse_special": true,
+   "text": "ǟ"
+  },
+  {
+   "ids": [
+    78,
+    26985,
+    72303
+   ],
+   "parse_special": false,
+   "text": "ǟ"
+  },
+  {
+   "ids": [
+    45947
+   ],
+   "parse_special": true,
+   "text": "नि"
+  },
+  {
+   "ids": [
+    45947
+   ],
+   "parse_special": false,
+   "text": "नि"
+  },
+  {
+   "ids": [
+    7709,
+    16330
+   ],
+   "parse_special": true,
+   "text": "ก็"
+  },
+  {
+   "ids": [
+    7709,
+    16330
+   ],
+   "parse_special": false,
+   "text": "ก็"
+  },
+  {
+   "ids": [
+    91237,
+    12021
+   ],
+   "parse_special": true,
+   "text": "̂̃"
+  },
+  {
+   "ids": [
+    91237,
+    12021
+   ],
+   "parse_special": false,
+   "text": "̂̃"
+  },
+  {
+   "ids": [
+    92,
+    148,
+    129,
+    148,
+    130
+   ],
+   "parse_special": true,
+   "text": "o̷̸"
+  },
+  {
+   "ids": [
+    92,
+    148,
+    129,
+    148,
+    130
+   ],
+   "parse_special": false,
+   "text": "o̷̸"
+  },
+  {
+   "ids": [
+    182,
+    222,
+    222,
+    182,
+    222,
+    223
+   ],
+   "parse_special": true,
+   "text": ""
+  },
+  {
+   "ids": [
+    182,
+    222,
+    222,
+    182,
+    222,
+    223
+   ],
+   "parse_special": false,
+   "text": ""
+  },
+  {
+   "ids": [
+    187,
+    122,
+    222,
+    222
+   ],
+   "parse_special": true,
+   "text": "󰀀"
+  },
+  {
+   "ids": [
+    187,
+    122,
+    222,
+    222
+   ],
+   "parse_special": false,
+   "text": "󰀀"
+  },
+  {
+   "ids": [
+    188,
+    237,
+    137,
+    135
+   ],
+   "parse_special": true,
+   "text": "􏿽"
+  },
+  {
+   "ids": [
+    188,
+    237,
+    137,
+    135
+   ],
+   "parse_special": false,
+   "text": "􏿽"
+  },
+  {
+   "ids": [
+    149,
+    130,
+    149,
+    131
+   ],
+   "parse_special": true,
+   "text": "͸͹"
+  },
+  {
+   "ids": [
+    149,
+    130,
+    149,
+    131
+   ],
+   "parse_special": false,
+   "text": "͸͹"
+  },
+  {
+   "ids": [
+    166,
+    133,
+    168,
+    108,
+    254
+   ],
+   "parse_special": true,
+   "text": "޻ࡠ"
+  },
+  {
+   "ids": [
+    166,
+    133,
+    168,
+    108,
+    254
+   ],
+   "parse_special": false,
+   "text": "޻ࡠ"
+  },
+  {
+   "ids": [
+    190,
+    191,
+    221
+   ],
+   "parse_special": true,
+   "text": "\u0001\u0002\u007f"
+  },
+  {
+   "ids": [
+    190,
+    191,
+    221
+   ],
+   "parse_special": false,
+   "text": "\u0001\u0002\u007f"
+  },
+  {
+   "ids": [
+    78,
+    199,
+    79,
+    200,
+    80
+   ],
+   "parse_special": true,
+   "text": "a\u000bb\fc"
+  },
+  {
+   "ids": [
+    78,
+    199,
+    79,
+    200,
+    80
+   ],
+   "parse_special": false,
+   "text": "a\u000bb\fc"
+  },
+  {
+   "ids": [
+    216,
+    217,
+    218,
+    219
+   ],
+   "parse_special": true,
+   "text": "\u001c\u001d\u001e\u001f"
+  },
+  {
+   "ids": [
+    216,
+    217,
+    218,
+    219
+   ],
+   "parse_special": false,
+   "text": "\u001c\u001d\u001e\u001f"
+  },
+  {
+   "ids": [
+    41,
+    105,
+    343,
+    22870,
+    105,
+    43,
+    4294,
+    198,
+    3019,
+    41,
+    105,
+    343,
+    24574,
+    105,
+    43
+   ],
+   "parse_special": true,
+   "text": "<|im_start|>user\nhi<|im_end|>"
+  },
+  {
+   "ids": [
+    41,
+    105,
+    343,
+    22870,
+    105,
+    43,
+    4294,
+    198,
+    3019,
+    41,
+    105,
+    343,
+    24574,
+    105,
+    43
+   ],
+   "parse_special": false,
+   "text": "<|im_start|>user\nhi<|im_end|>"
+  },
+  {
+   "ids": [
+    41,
+    105,
+    510,
+    2221,
+    1311,
+    105,
+    43
+   ],
+   "parse_special": true,
+   "text": "<|endoftext|>"
+  },
+  {
+   "ids": [
+    41,
+    105,
+    510,
+    2221,
+    1311,
+    105,
+    43
+   ],
+   "parse_special": false,
+   "text": "<|endoftext|>"
+  },
+  {
+   "ids": [
+    3,
+    198,
+    124097,
+    198,
+    4,
+    198,
+    198,
+    38726
+   ],
+   "parse_special": true,
+   "text": "<think>\nreason\n</think>\n\nanswer"
+  },
+  {
+   "ids": [
+    3,
+    198,
+    124097,
+    198,
+    4,
+    198,
+    198,
+    38726
+   ],
+   "parse_special": false,
+   "text": "<think>\nreason\n</think>\n\nanswer"
+  },
+  {
+   "ids": [
+    130977,
+    198,
+    41,
+    4847,
+    51521,
+    43,
+    198,
+    2717,
+    4847,
+    43,
+    198,
+    130984
+   ],
+   "parse_special": true,
+   "text": "<tool_call>\n<function=f>\n</function>\n</tool_call>"
+  },
+  {
+   "ids": [
+    130977,
+    198,
+    41,
+    4847,
+    51521,
+    43,
+    198,
+    2717,
+    4847,
+    43,
+    198,
+    130984
+   ],
+   "parse_special": false,
+   "text": "<tool_call>\n<function=f>\n</function>\n</tool_call>"
+  },
+  {
+   "ids": [
+    130978,
+    535,
+    130979
+   ],
+   "parse_special": true,
+   "text": "<tool_response>ok</tool_response>"
+  },
+  {
+   "ids": [
+    130978,
+    535,
+    130979
+   ],
+   "parse_special": false,
+   "text": "<tool_response>ok</tool_response>"
+  },
+  {
+   "ids": [
+    41,
+    105,
+    40661,
+    22870,
+    105,
+    6697,
+    105,
+    8360,
+    2822,
+    345,
+    105,
+    6697,
+    105,
+    40661,
+    24574,
+    105,
+    43
+   ],
+   "parse_special": true,
+   "text": "<|vision_start|><|image_pad|><|vision_end|>"
+  },
+  {
+   "ids": [
+    41,
+    105,
+    40661,
+    22870,
+    105,
+    6697,
+    105,
+    8360,
+    2822,
+    345,
+    105,
+    6697,
+    105,
+    40661,
+    24574,
+    105,
+    43
+   ],
+   "parse_special": false,
+   "text": "<|vision_start|><|image_pad|><|vision_end|>"
+  },
+  {
+   "ids": [
+    1311,
+    1036,
+    105,
+    343,
+    24574,
+    105,
+    43,
+    198,
+    41,
+    105,
+    343,
+    22870,
+    105,
+    43,
+    787,
+    18827,
+    198
+   ],
+   "parse_special": true,
+   "text": "text <|im_end|>\n<|im_start|>assistant\n"
+  },
+  {
+   "ids": [
+    1311,
+    1036,
+    105,
+    343,
+    24574,
+    105,
+    43,
+    198,
+    41,
+    105,
+    343,
+    22870,
+    105,
+    43,
+    787,
+    18827,
+    198
+   ],
+   "parse_special": false,
+   "text": "text <|im_end|>\n<|im_start|>assistant\n"
+  },
+  {
+   "ids": [
+    41,
+    105,
+    343,
+    22870,
+    105,
+    6697,
+    105,
+    343,
+    22870,
+    105,
+    6697,
+    105,
+    343,
+    24574,
+    105,
+    43
+   ],
+   "parse_special": true,
+   "text": "<|im_start|><|im_start|><|im_end|>"
+  },
+  {
+   "ids": [
+    41,
+    105,
+    343,
+    22870,
+    105,
+    6697,
+    105,
+    343,
+    22870,
+    105,
+    6697,
+    105,
+    343,
+    24574,
+    105,
+    43
+   ],
+   "parse_special": false,
+   "text": "<|im_start|><|im_start|><|im_end|>"
+  },
+  {
+   "ids": [
+    3,
+    3,
+    4
+   ],
+   "parse_special": true,
+   "text": "<think><think></think>"
+  },
+  {
+   "ids": [
+    3,
+    3,
+    4
+   ],
+   "parse_special": false,
+   "text": "<think><think></think>"
+  },
+  {
+   "ids": [
+    101,
+    41,
+    105,
+    510,
+    2221,
+    1311,
+    105,
+    43,
+    102
+   ],
+   "parse_special": true,
+   "text": "x<|endoftext|>y"
+  },
+  {
+   "ids": [
+    101,
+    41,
+    105,
+    510,
+    2221,
+    1311,
+    105,
+    43,
+    102
+   ],
+   "parse_special": false,
+   "text": "x<|endoftext|>y"
+  },
+  {
+   "ids": [
+    41,
+    105,
+    343,
+    22870,
+    105,
+    43
+   ],
+   "parse_special": true,
+   "text": "<|im_start|>"
+  },
+  {
+   "ids": [
+    41,
+    105,
+    343,
+    22870,
+    105,
+    43
+   ],
+   "parse_special": false,
+   "text": "<|im_start|>"
+  },
+  {
+   "ids": [
+    41,
+    105,
+    343,
+    24574,
+    105,
+    43
+   ],
+   "parse_special": true,
+   "text": "<|im_end|>"
+  },
+  {
+   "ids": [
+    41,
+    105,
+    343,
+    24574,
+    105,
+    43
+   ],
+   "parse_special": false,
+   "text": "<|im_end|>"
+  },
+  {
+   "ids": [
+    1046,
+    6787,
+    390,
+    220,
+    3,
+    86746,
+    4,
+    220,
+    33,
+    31,
+    27
+   ],
+   "parse_special": true,
+   "text": "The answer is <think>maybe</think> 42."
+  },
+  {
+   "ids": [
+    1046,
+    6787,
+    390,
+    220,
+    3,
+    86746,
+    4,
+    220,
+    33,
+    31,
+    27
+   ],
+   "parse_special": false,
+   "text": "The answer is <think>maybe</think> 42."
+  },
+  {
+   "ids": [
+    41,
+    4847,
+    42,
+    35031,
+    43
+   ],
+   "parse_special": true,
+   "text": "<function=foo>"
+  },
+  {
+   "ids": [
+    41,
+    4847,
+    42,
+    35031,
+    43
+   ],
+   "parse_special": false,
+   "text": "<function=foo>"
+  },
+  {
+   "ids": [
+    2717,
+    28873,
+    43
+   ],
+   "parse_special": true,
+   "text": "</parameter>"
+  },
+  {
+   "ids": [
+    2717,
+    28873,
+    43
+   ],
+   "parse_special": false,
+   "text": "</parameter>"
+  },
+  {
+   "ids": [
+    71388,
+    71388,
+    71388,
+    71388,
+    71388,
+    71388,
+    71388,
+    71388,
+    71388,
+    71388,
+    71388,
+    71388,
+    71388,
+    71388,
+    71388,
+    71388,
+    71388,
+    71388,
+    71388,
+    71388,
+    71388,
+    71388,
+    71388,
+    71388,
+    71388,
+    71388,
+    71388,
+    71388,
+    71388,
+    71388,
+    71388,
+    71388,
+    71388,
+    71388,
+    71388,
+    71388,
+    71388,
+    71388,
+    71388,
+    71388,
+    71388,
+    71388,
+    71388,
+    71388,
+    71388,
+    71388,
+    71388,
+    71388,
+    71388,
+    71388,
+    71388,
+    71388,
+    71388,
+    71388,
+    71388,
+    71388,
+    71388,
+    71388,
+    71388,
+    71388,
+    71388,
+    71388,
+    71388,
+    71388,
+    71388,
+    71388,
+    71388,
+    71388,
+    71388,
+    71388,
+    71388,
+    71388,
+    71388,
+    71388,
+    71388
+   ],
+   "parse_special": true,
+   "text": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  },
+  {
+   "ids": [
+    71388,
+    71388,
+    71388,
+    71388,
+    71388,
+    71388,
+    71388,
+    71388,
+    71388,
+    71388,
+    71388,
+    71388,
+    71388,
+    71388,
+    71388,
+    71388,
+    71388,
+    71388,
+    71388,
+    71388,
+    71388,
+    71388,
+    71388,
+    71388,
+    71388,
+    71388,
+    71388,
+    71388,
+    71388,
+    71388,
+    71388,
+    71388,
+    71388,
+    71388,
+    71388,
+    71388,
+    71388,
+    71388,
+    71388,
+    71388,
+    71388,
+    71388,
+    71388,
+    71388,
+    71388,
+    71388,
+    71388,
+    71388,
+    71388,
+    71388,
+    71388,
+    71388,
+    71388,
+    71388,
+    71388,
+    71388,
+    71388,
+    71388,
+    71388,
+    71388,
+    71388,
+    71388,
+    71388,
+    71388,
+    71388,
+    71388,
+    71388,
+    71388,
+    71388,
+    71388,
+    71388,
+    71388,
+    71388,
+    71388,
+    71388
+   ],
+   "parse_special": false,
+   "text": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  },
+  {
+   "ids": [
+    4392,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    220
+   ],
+   "parse_special": true,
+   "text": "word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word "
+  },
+  {
+   "ids": [
+    4392,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    5240,
+    220
+   ],
+   "parse_special": false,
+   "text": "word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word "
+  },
+  {
+   "ids": [
+    57,
+    21533,
+    73946,
+    402,
+    101154,
+    6789,
+    64736,
+    25,
+    1626,
+    637,
+    63118,
+    64751,
+    6298,
+    295,
+    108002,
+    27,
+    603,
+    21533,
+    73946,
+    402,
+    101154,
+    6789,
+    64736,
+    25,
+    1626,
+    637,
+    63118,
+    64751,
+    6298,
+    295,
+    108002,
+    27,
+    603,
+    21533,
+    73946,
+    402,
+    101154,
+    6789,
+    64736,
+    25,
+    1626,
+    637,
+    63118,
+    64751,
+    6298,
+    295,
+    108002,
+    27,
+    603,
+    21533,
+    73946,
+    402,
+    101154,
+    6789,
+    64736,
+    25,
+    1626,
+    637,
+    63118,
+    64751,
+    6298,
+    295,
+    108002,
+    27,
+    603,
+    21533,
+    73946,
+    402,
+    101154,
+    6789,
+    64736,
+    25,
+    1626,
+    637,
+    63118,
+    64751,
+    6298,
+    295,
+    108002,
+    27,
+    603,
+    21533,
+    73946,
+    402,
+    101154,
+    6789,
+    64736,
+    25,
+    1626,
+    637,
+    63118,
+    64751,
+    6298,
+    295,
+    108002,
+    27,
+    220
+   ],
+   "parse_special": true,
+   "text": "Lorem ipsum dolor sit amet, consectetur adipiscing elit. Lorem ipsum dolor sit amet, consectetur adipiscing elit. Lorem ipsum dolor sit amet, consectetur adipiscing elit. Lorem ipsum dolor sit amet, consectetur adipiscing elit. Lorem ipsum dolor sit amet, consectetur adipiscing elit. Lorem ipsum dolor sit amet, consectetur adipiscing elit. "
+  },
+  {
+   "ids": [
+    57,
+    21533,
+    73946,
+    402,
+    101154,
+    6789,
+    64736,
+    25,
+    1626,
+    637,
+    63118,
+    64751,
+    6298,
+    295,
+    108002,
+    27,
+    603,
+    21533,
+    73946,
+    402,
+    101154,
+    6789,
+    64736,
+    25,
+    1626,
+    637,
+    63118,
+    64751,
+    6298,
+    295,
+    108002,
+    27,
+    603,
+    21533,
+    73946,
+    402,
+    101154,
+    6789,
+    64736,
+    25,
+    1626,
+    637,
+    63118,
+    64751,
+    6298,
+    295,
+    108002,
+    27,
+    603,
+    21533,
+    73946,
+    402,
+    101154,
+    6789,
+    64736,
+    25,
+    1626,
+    637,
+    63118,
+    64751,
+    6298,
+    295,
+    108002,
+    27,
+    603,
+    21533,
+    73946,
+    402,
+    101154,
+    6789,
+    64736,
+    25,
+    1626,
+    637,
+    63118,
+    64751,
+    6298,
+    295,
+    108002,
+    27,
+    603,
+    21533,
+    73946,
+    402,
+    101154,
+    6789,
+    64736,
+    25,
+    1626,
+    637,
+    63118,
+    64751,
+    6298,
+    295,
+    108002,
+    27,
+    220
+   ],
+   "parse_special": false,
+   "text": "Lorem ipsum dolor sit amet, consectetur adipiscing elit. Lorem ipsum dolor sit amet, consectetur adipiscing elit. Lorem ipsum dolor sit amet, consectetur adipiscing elit. Lorem ipsum dolor sit amet, consectetur adipiscing elit. Lorem ipsum dolor sit amet, consectetur adipiscing elit. Lorem ipsum dolor sit amet, consectetur adipiscing elit. "
+  },
+  {
+   "ids": [
+    17,
+    956,
+    18,
+    28,
+    198,
+    1615,
+    45947
+   ],
+   "parse_special": true,
+   "text": "$α%/\n #नि"
+  },
+  {
+   "ids": [
+    17,
+    956,
+    18,
+    28,
+    198,
+    1615,
+    45947
+   ],
+   "parse_special": false,
+   "text": "$α%/\n #नि"
+  },
+  {
+   "ids": [
+    27363
+   ],
+   "parse_special": true,
+   "text": "Word"
+  },
+  {
+   "ids": [
+    27363
+   ],
+   "parse_special": false,
+   "text": "Word"
+  },
+  {
+   "ids": [
+    19624,
+    41,
+    4847,
+    51521,
+    43,
+    182,
+    222,
+    222,
+    7771,
+    26985,
+    101,
+    4392,
+    72,
+    3055,
+    44
+   ],
+   "parse_special": true,
+   "text": "$(<function=f>'d̈xword[].?"
+  },
+  {
+   "ids": [
+    19624,
+    41,
+    4847,
+    51521,
+    43,
+    182,
+    222,
+    222,
+    7771,
+    26985,
+    101,
+    4392,
+    72,
+    3055,
+    44
+   ],
+   "parse_special": false,
+   "text": "$(<function=f>'d̈xword[].?"
+  },
+  {
+   "ids": [
+    6458,
+    2717,
+    28873,
+    43,
+    105,
+    45184,
+    46970
+   ],
+   "parse_special": true,
+   "text": "　</parameter>|WORD'}"
+  },
+  {
+   "ids": [
+    6458,
+    2717,
+    28873,
+    43,
+    105,
+    45184,
+    46970
+   ],
+   "parse_special": false,
+   "text": "　</parameter>|WORD'}"
+  },
+  {
+   "ids": [
+    54329,
+    66997,
+    16,
+    14409,
+    7263
+   ],
+   "parse_special": true,
+   "text": "$-+)#ß've"
+  },
+  {
+   "ids": [
+    54329,
+    66997,
+    16,
+    14409,
+    7263
+   ],
+   "parse_special": false,
+   "text": "$-+)#ß've"
+  },
+  {
+   "ids": [
+    25,
+    3533,
+    201,
+    198,
+    26985,
+    35799,
+    45,
+    73,
+    23,
+    6382,
+    1771
+   ],
+   "parse_special": true,
+   "text": ", \r\n̈%%@\\*́))"
+  },
+  {
+   "ids": [
+    25,
+    3533,
+    201,
+    198,
+    26985,
+    35799,
+    45,
+    73,
+    23,
+    6382,
+    1771
+   ],
+   "parse_special": false,
+   "text": ", \r\n̈%%@\\*́))"
+  },
+  {
+   "ids": [
+    7632
+   ],
+   "parse_special": true,
+   "text": "'ll"
+  },
+  {
+   "ids": [
+    7632
+   ],
+   "parse_special": false,
+   "text": "'ll"
+  },
+  {
+   "ids": [
+    33462,
+    6959,
+    104,
+    457,
+    58428,
+    43084
+   ],
+   "parse_special": true,
+   "text": "[xβ{中:#+\\"
+  },
+  {
+   "ids": [
+    33462,
+    6959,
+    104,
+    457,
+    58428,
+    43084
+   ],
+   "parse_special": false,
+   "text": "[xβ{中:#+\\"
+  },
+  {
+   "ids": [
+    3,
+    19,
+    21,
+    457,
+    45
+   ],
+   "parse_special": true,
+   "text": "<think>&(中@"
+  },
+  {
+   "ids": [
+    3,
+    19,
+    21,
+    457,
+    45
+   ],
+   "parse_special": false,
+   "text": "<think>&(中@"
+  },
+  {
+   "ids": [
+    41,
+    105,
+    510,
+    2221,
+    1311,
+    105,
+    6697,
+    20,
+    268,
+    197,
+    17,
+    45947,
+    197
+   ],
+   "parse_special": true,
+   "text": "<|endoftext|><'re\t$नि\t"
+  },
+  {
+   "ids": [
+    41,
+    105,
+    510,
+    2221,
+    1311,
+    105,
+    6697,
+    20,
+    268,
+    197,
+    17,
+    45947,
+    197
+   ],
+   "parse_special": false,
+   "text": "<|endoftext|><'re\t$नि\t"
+  },
+  {
+   "ids": [
+    2717,
+    28873,
+    120576,
+    143,
+    227,
+    14409
+   ],
+   "parse_special": true,
+   "text": "</parameter>*ǅß"
+  },
+  {
+   "ids": [
+    2717,
+    28873,
+    120576,
+    143,
+    227,
+    14409
+   ],
+   "parse_special": false,
+   "text": "</parameter>*ǅß"
+  },
+  {
+   "ids": [
+    3,
+    43,
+    14,
+    41,
+    4847,
+    51521,
+    43,
+    6458,
+    6125,
+    41,
+    4847,
+    51521,
+    43,
+    845,
+    2717,
+    28873,
+    43,
+    18,
+    2717,
+    28873,
+    43
+   ],
+   "parse_special": true,
+   "text": "<think>>!<function=f>　're<function=f>文</parameter>%</parameter>"
+  },
+  {
+   "ids": [
+    3,
+    43,
+    14,
+    41,
+    4847,
+    51521,
+    43,
+    6458,
+    6125,
+    41,
+    4847,
+    51521,
+    43,
+    845,
+    2717,
+    28873,
+    43,
+    18,
+    2717,
+    28873,
+    43
+   ],
+   "parse_special": false,
+   "text": "<think>>!<function=f>　're<function=f>文</parameter>%</parameter>"
+  },
+  {
+   "ids": [
+    26,
+    149,
+    130,
+    4392,
+    596,
+    24629,
+    3892,
+    2285,
+    7632,
+    75,
+    27,
+    75,
+    3533,
+    77,
+    27363,
+    457
+   ],
+   "parse_special": true,
+   "text": "-͸wordéПривет'll^.^ `Word中"
+  },
+  {
+   "ids": [
+    26,
+    149,
+    130,
+    4392,
+    596,
+    24629,
+    3892,
+    2285,
+    7632,
+    75,
+    27,
+    75,
+    3533,
+    77,
+    27363,
+    457
+   ],
+   "parse_special": false,
+   "text": "-͸wordéПривет'll^.^ `Word中"
+  },
+  {
+   "ids": [
+    44,
+    52352,
+    222,
+    40926,
+    14409,
+    27363,
+    190,
+    41,
+    105,
+    343,
+    22870,
+    105,
+    43,
+    30,
+    31,
+    32,
+    6458,
+    26985,
+    3533
+   ],
+   "parse_special": true,
+   "text": "?😀+=ßWord\u0001<|im_start|>123　̈ "
+  },
+  {
+   "ids": [
+    44,
+    52352,
+    222,
+    40926,
+    14409,
+    27363,
+    190,
+    41,
+    105,
+    343,
+    22870,
+    105,
+    43,
+    30,
+    31,
+    32,
+    6458,
+    26985,
+    3533
+   ],
+   "parse_special": false,
+   "text": "?😀+=ßWord\u0001<|im_start|>123　̈ "
+  },
+  {
+   "ids": [
+    956,
+    6959,
+    16,
+    1868,
+    377,
+    182,
+    222,
+    222,
+    14409,
+    52352,
+    222,
+    23,
+    41,
+    105,
+    510,
+    2221,
+    1311,
+    105,
+    43
+   ],
+   "parse_special": true,
+   "text": "αβ#('veß😀*<|endoftext|>"
+  },
+  {
+   "ids": [
+    956,
+    6959,
+    16,
+    1868,
+    377,
+    182,
+    222,
+    222,
+    14409,
+    52352,
+    222,
+    23,
+    41,
+    105,
+    510,
+    2221,
+    1311,
+    105,
+    43
+   ],
+   "parse_special": false,
+   "text": "αβ#('veß😀*<|endoftext|>"
+  },
+  {
+   "ids": [
+    220,
+    1036,
+    105,
+    343,
+    22870,
+    105,
+    12227,
+    28873,
+    43,
+    76,
+    42
+   ],
+   "parse_special": true,
+   "text": "  <|im_start|></parameter>_="
+  },
+  {
+   "ids": [
+    220,
+    1036,
+    105,
+    343,
+    22870,
+    105,
+    12227,
+    28873,
+    43,
+    76,
+    42
+   ],
+   "parse_special": false,
+   "text": "  <|im_start|></parameter>_="
+  },
+  {
+   "ids": [
+    24,
+    106,
+    101,
+    15240,
+    1042,
+    956,
+    77,
+    101,
+    96483,
+    18,
+    198,
+    3
+   ],
+   "parse_special": true,
+   "text": "+}x_Wordα`x=&%\n<think>"
+  },
+  {
+   "ids": [
+    24,
+    106,
+    101,
+    15240,
+    1042,
+    956,
+    77,
+    101,
+    96483,
+    18,
+    198,
+    3
+   ],
+   "parse_special": false,
+   "text": "+}x_Wordα`x=&%\n<think>"
+  },
+  {
+   "ids": [
+    130984,
+    4,
+    45947,
+    998,
+    7771,
+    130984
+   ],
+   "parse_special": true,
+   "text": "</tool_call></think>नि日'd</tool_call>"
+  },
+  {
+   "ids": [
+    130984,
+    4,
+    45947,
+    998,
+    7771,
+    130984
+   ],
+   "parse_special": false,
+   "text": "</tool_call></think>नि日'd</tool_call>"
+  },
+  {
+   "ids": [
+    107,
+    45,
+    27,
+    3533,
+    3,
+    27,
+    130977,
+    106,
+    190,
+    197,
+    45947,
+    6959,
+    1283
+   ],
+   "parse_special": true,
+   "text": "~@. <think>.<tool_call>}\u0001\tनिβü"
+  },
+  {
+   "ids": [
+    107,
+    45,
+    27,
+    3533,
+    3,
+    27,
+    130977,
+    106,
+    190,
+    197,
+    45947,
+    6959,
+    1283
+   ],
+   "parse_special": false,
+   "text": "~@. <think>.<tool_call>}\u0001\tनिβü"
+  },
+  {
+   "ids": [
+    53258,
+    6458,
+    75,
+    50915
+   ],
+   "parse_special": true,
+   "text": "βα　^*,"
+  },
+  {
+   "ids": [
+    53258,
+    6458,
+    75,
+    50915
+   ],
+   "parse_special": false,
+   "text": "βα　^*,"
+  },
+  {
+   "ids": [
+    3533,
+    845
+   ],
+   "parse_special": true,
+   "text": " 文"
+  },
+  {
+   "ids": [
+    3533,
+    845
+   ],
+   "parse_special": false,
+   "text": " 文"
+  },
+  {
+   "ids": [
+    190,
+    4,
+    143,
+    227
+   ],
+   "parse_special": true,
+   "text": "\u0001</think>ǅ"
+  },
+  {
+   "ids": [
+    190,
+    4,
+    143,
+    227
+   ],
+   "parse_special": false,
+   "text": "\u0001</think>ǅ"
+  },
+  {
+   "ids": [
+    74,
+    182,
+    222,
+    222,
+    2717,
+    28873,
+    43,
+    45947,
+    27363,
+    40,
+    20,
+    97,
+    41,
+    105,
+    343,
+    22870,
+    105,
+    86670,
+    41
+   ],
+   "parse_special": true,
+   "text": "]</parameter>निWord;'t<|im_start|>:<"
+  },
+  {
+   "ids": [
+    74,
+    182,
+    222,
+    222,
+    2717,
+    28873,
+    43,
+    45947,
+    27363,
+    40,
+    20,
+    97,
+    41,
+    105,
+    343,
+    22870,
+    105,
+    86670,
+    41
+   ],
+   "parse_special": false,
+   "text": "]</parameter>निWord;'t<|im_start|>:<"
+  },
+  {
+   "ids": [
+    3,
+    190,
+    1045,
+    24,
+    39,
+    43,
+    14,
+    130977,
+    4,
+    45184,
+    6959,
+    41,
+    105,
+    343,
+    22870,
+    105,
+    6697,
+    105,
+    343,
+    22870,
+    105,
+    44999,
+    377
+   ],
+   "parse_special": true,
+   "text": "<think>\u0001's+:>!<tool_call></think>WORDβ<|im_start|><|im_start|>'ve"
+  },
+  {
+   "ids": [
+    3,
+    190,
+    1045,
+    24,
+    39,
+    43,
+    14,
+    130977,
+    4,
+    45184,
+    6959,
+    41,
+    105,
+    343,
+    22870,
+    105,
+    6697,
+    105,
+    343,
+    22870,
+    105,
+    44999,
+    377
+   ],
+   "parse_special": false,
+   "text": "<think>\u0001's+:>!<tool_call></think>WORDβ<|im_start|><|im_start|>'ve"
+  },
+  {
+   "ids": [
+    4,
+    190,
+    75,
+    1868,
+    96,
+    30,
+    31,
+    32,
+    30813,
+    44,
+    75,
+    45947,
+    72,
+    45184,
+    105
+   ],
+   "parse_special": true,
+   "text": "</think>\u0001^('s123/(?^नि[WORD|"
+  },
+  {
+   "ids": [
+    4,
+    190,
+    75,
+    1868,
+    96,
+    30,
+    31,
+    32,
+    30813,
+    44,
+    75,
+    45947,
+    72,
+    45184,
+    105
+   ],
+   "parse_special": false,
+   "text": "</think>\u0001^('s123/(?^नि[WORD|"
+  },
+  {
+   "ids": [
+    3533,
+    6382,
+    19,
+    41,
+    105,
+    343,
+    22870,
+    105,
+    43,
+    149,
+    130,
+    1283
+   ],
+   "parse_special": true,
+   "text": " ́&<|im_start|>͸ü"
+  },
+  {
+   "ids": [
+    3533,
+    6382,
+    19,
+    41,
+    105,
+    343,
+    22870,
+    105,
+    43,
+    149,
+    130,
+    1283
+   ],
+   "parse_special": false,
+   "text": " ́&<|im_start|>͸ü"
+  },
+  {
+   "ids": [
+    2083,
+    143,
+    227,
+    41,
+    105,
+    343,
+    22870,
+    105,
+    6697,
+    4847,
+    51521,
+    43,
+    16,
+    41,
+    105,
+    343,
+    22870,
+    105,
+    123719,
+    105546,
+    149,
+    130,
+    28,
+    11013,
+    236,
+    231,
+    6959,
+    23
+   ],
+   "parse_special": true,
+   "text": "'tǅ<|im_start|><function=f>#<|im_start|>]日日͸/🎉β*"
+  },
+  {
+   "ids": [
+    2083,
+    143,
+    227,
+    41,
+    105,
+    343,
+    22870,
+    105,
+    6697,
+    4847,
+    51521,
+    43,
+    16,
+    41,
+    105,
+    343,
+    22870,
+    105,
+    123719,
+    105546,
+    149,
+    130,
+    28,
+    11013,
+    236,
+    231,
+    6959,
+    23
+   ],
+   "parse_special": false,
+   "text": "'tǅ<|im_start|><function=f>#<|im_start|>]日日͸/🎉β*"
+  },
+  {
+   "ids": [
+    6382,
+    89406,
+    845,
+    706,
+    130977,
+    6382,
+    1283,
+    27,
+    14
+   ],
+   "parse_special": true,
+   "text": "́(<文 -<tool_call>́ü.!"
+  },
+  {
+   "ids": [
+    6382,
+    89406,
+    845,
+    706,
+    130977,
+    6382,
+    1283,
+    27,
+    14
+   ],
+   "parse_special": false,
+   "text": "́(<文 -<tool_call>́ü.!"
+  },
+  {
+   "ids": [
+    220,
+    422,
+    190,
+    41,
+    758,
+    107,
+    57858,
+    998,
+    3533
+   ],
+   "parse_special": true,
+   "text": "  =\u0001<本~|\\日 "
+  },
+  {
+   "ids": [
+    220,
+    422,
+    190,
+    41,
+    758,
+    107,
+    57858,
+    998,
+    3533
+   ],
+   "parse_special": false,
+   "text": "  =\u0001<本~|\\日 "
+  },
+  {
+   "ids": [
+    758
+   ],
+   "parse_special": true,
+   "text": "本"
+  },
+  {
+   "ids": [
+    758
+   ],
+   "parse_special": false,
+   "text": "本"
+  },
+  {
+   "ids": [
+    41,
+    105,
+    343,
+    22870,
+    105,
+    15763,
+    45184,
+    24629,
+    3892,
+    2285,
+    130984,
+    52352,
+    222
+   ],
+   "parse_special": true,
+   "text": "<|im_start|>)WORDПривет</tool_call>😀"
+  },
+  {
+   "ids": [
+    41,
+    105,
+    343,
+    22870,
+    105,
+    15763,
+    45184,
+    24629,
+    3892,
+    2285,
+    130984,
+    52352,
+    222
+   ],
+   "parse_special": false,
+   "text": "<|im_start|>)WORDПривет</tool_call>😀"
+  },
+  {
+   "ids": [
+    45184,
+    19422,
+    14409,
+    41,
+    4847,
+    51521,
+    43,
+    30,
+    31,
+    32,
+    14,
+    45947,
+    101,
+    104,
+    6458
+   ],
+   "parse_special": true,
+   "text": "WORD.*ß<function=f>123!निx{　"
+  },
+  {
+   "ids": [
+    45184,
+    19422,
+    14409,
+    41,
+    4847,
+    51521,
+    43,
+    30,
+    31,
+    32,
+    14,
+    45947,
+    101,
+    104,
+    6458
+   ],
+   "parse_special": false,
+   "text": "WORD.*ß<function=f>123!निx{　"
+  },
+  {
+   "ids": [
+    27363,
+    149,
+    130,
+    130977,
+    17,
+    20,
+    96,
+    76,
+    256,
+    3
+   ],
+   "parse_special": true,
+   "text": "Word͸<tool_call>$'s_  <think>"
+  },
+  {
+   "ids": [
+    27363,
+    149,
+    130,
+    130977,
+    17,
+    20,
+    96,
+    76,
+    256,
+    3
+   ],
+   "parse_special": false,
+   "text": "Word͸<tool_call>$'s_  <think>"
+  },
+  {
+   "ids": [
+    22,
+    220,
+    578,
+    107,
+    220,
+    2027,
+    45,
+    101,
+    8994,
+    107,
+    41,
+    4847,
+    51521,
+    43,
+    3,
+    105
+   ],
+   "parse_special": true,
+   "text": ")  }~  !@x.'~<function=f><think>|"
+  },
+  {
+   "ids": [
+    22,
+    220,
+    578,
+    107,
+    220,
+    2027,
+    45,
+    101,
+    8994,
+    107,
+    41,
+    4847,
+    51521,
+    43,
+    3,
+    105
+   ],
+   "parse_special": false,
+   "text": ")  }~  !@x.'~<function=f><think>|"
+  },
+  {
+   "ids": [
+    6523,
+    81,
+    956,
+    130977,
+    758,
+    77,
+    24629,
+    3892,
+    2285,
+    30,
+    31,
+    32,
+    4
+   ],
+   "parse_special": true,
+   "text": "='dα<tool_call>本`Привет123</think>"
+  },
+  {
+   "ids": [
+    6523,
+    81,
+    956,
+    130977,
+    758,
+    77,
+    24629,
+    3892,
+    2285,
+    30,
+    31,
+    32,
+    4
+   ],
+   "parse_special": false,
+   "text": "='dα<tool_call>本`Привет123</think>"
+  },
+  {
+   "ids": [
+    106,
+    4,
+    17,
+    190,
+    4392,
+    201,
+    198,
+    19,
+    4,
+    998,
+    1045,
+    7771,
+    23,
+    68080
+   ],
+   "parse_special": true,
+   "text": "}</think>$\u0001word\r\n&</think>日's'd*!,"
+  },
+  {
+   "ids": [
+    106,
+    4,
+    17,
+    190,
+    4392,
+    201,
+    198,
+    19,
+    4,
+    998,
+    1045,
+    7771,
+    23,
+    68080
+   ],
+   "parse_special": false,
+   "text": "}</think>$\u0001word\r\n&</think>日's'd*!,"
+  },
+  {
+   "ids": [
+    72,
+    4392,
+    7771,
+    182,
+    222,
+    222,
+    45184
+   ],
+   "parse_special": true,
+   "text": "[word'dWORD"
+  },
+  {
+   "ids": [
+    72,
+    4392,
+    7771,
+    182,
+    222,
+    222,
+    45184
+   ],
+   "parse_special": false,
+   "text": "[word'dWORD"
+  },
+  {
+   "ids": [
+    44,
+    197
+   ],
+   "parse_special": true,
+   "text": "?\t"
+  },
+  {
+   "ids": [
+    44,
+    197
+   ],
+   "parse_special": false,
+   "text": "?\t"
+  },
+  {
+   "ids": [
+    190,
+    182,
+    222,
+    222,
+    596,
+    182,
+    222,
+    222,
+    1283,
+    16,
+    6959,
+    20,
+    457
+   ],
+   "parse_special": true,
+   "text": "\u0001éü#β'中"
+  },
+  {
+   "ids": [
+    190,
+    182,
+    222,
+    222,
+    596,
+    182,
+    222,
+    222,
+    1283,
+    16,
+    6959,
+    20,
+    457
+   ],
+   "parse_special": false,
+   "text": "\u0001éü#β'中"
+  },
+  {
+   "ids": [
+    457,
+    6146,
+    96,
+    52352,
+    222,
+    20,
+    268,
+    16,
+    6959,
+    30,
+    31,
+    32,
+    2083,
+    43
+   ],
+   "parse_special": true,
+   "text": "中''s😀're#β123't>"
+  },
+  {
+   "ids": [
+    457,
+    6146,
+    96,
+    52352,
+    222,
+    20,
+    268,
+    16,
+    6959,
+    30,
+    31,
+    32,
+    2083,
+    43
+   ],
+   "parse_special": false,
+   "text": "中''s😀're#β123't>"
+  },
+  {
+   "ids": [
+    17,
+    845,
+    41,
+    105,
+    510,
+    2221,
+    1311,
+    105,
+    43,
+    3533,
+    23,
+    41,
+    4847,
+    51521,
+    43
+   ],
+   "parse_special": true,
+   "text": "$文<|endoftext|> *<function=f>"
+  },
+  {
+   "ids": [
+    17,
+    845,
+    41,
+    105,
+    510,
+    2221,
+    1311,
+    105,
+    43,
+    3533,
+    23,
+    41,
+    4847,
+    51521,
+    43
+   ],
+   "parse_special": false,
+   "text": "$文<|endoftext|> *<function=f>"
+  },
+  {
+   "ids": [
+    7632,
+    197
+   ],
+   "parse_special": true,
+   "text": "'ll\t"
+  },
+  {
+   "ids": [
+    7632,
+    197
+   ],
+   "parse_special": false,
+   "text": "'ll\t"
+  },
+  {
+   "ids": [
+    41,
+    4847,
+    51521,
+    43,
+    84683,
+    76531,
+    596
+   ],
+   "parse_special": true,
+   "text": "<function=f>!_/\\é"
+  },
+  {
+   "ids": [
+    41,
+    4847,
+    51521,
+    43,
+    84683,
+    76531,
+    596
+   ],
+   "parse_special": false,
+   "text": "<function=f>!_/\\é"
+  },
+  {
+   "ids": [
+    76
+   ],
+   "parse_special": true,
+   "text": "_"
+  },
+  {
+   "ids": [
+    76
+   ],
+   "parse_special": false,
+   "text": "_"
+  },
+  {
+   "ids": [
+    6125,
+    76,
+    3533,
+    41,
+    105,
+    343,
+    22870,
+    105,
+    31876,
+    2717,
+    28873,
+    43,
+    107,
+    43,
+    26985,
+    41,
+    105,
+    343,
+    22870,
+    105,
+    43,
+    596,
+    17583
+   ],
+   "parse_special": true,
+   "text": "'re_ <|im_start|>\"</parameter>~>̈<|im_start|>é}["
+  },
+  {
+   "ids": [
+    6125,
+    76,
+    3533,
+    41,
+    105,
+    343,
+    22870,
+    105,
+    31876,
+    2717,
+    28873,
+    43,
+    107,
+    43,
+    26985,
+    41,
+    105,
+    343,
+    22870,
+    105,
+    43,
+    596,
+    17583
+   ],
+   "parse_special": false,
+   "text": "'re_ <|im_start|>\"</parameter>~>̈<|im_start|>é}["
+  },
+  {
+   "ids": [
+    41,
+    6959,
+    143,
+    227,
+    457,
+    7632,
+    27363,
+    6382
+   ],
+   "parse_special": true,
+   "text": "<βǅ中'llWord́"
+  },
+  {
+   "ids": [
+    41,
+    6959,
+    143,
+    227,
+    457,
+    7632,
+    27363,
+    6382
+   ],
+   "parse_special": false,
+   "text": "<βǅ中'llWord́"
+  },
+  {
+   "ids": [
+    130984,
+    15,
+    457,
+    149,
+    130,
+    76,
+    197,
+    22,
+    182,
+    222,
+    222,
+    45947,
+    41,
+    4847,
+    51521,
+    43,
+    4532
+   ],
+   "parse_special": true,
+   "text": "</tool_call>\"中͸_\t)नि<function=f>){"
+  },
+  {
+   "ids": [
+    130984,
+    15,
+    457,
+    149,
+    130,
+    76,
+    197,
+    22,
+    182,
+    222,
+    222,
+    45947,
+    41,
+    4847,
+    51521,
+    43,
+    4532
+   ],
+   "parse_special": false,
+   "text": "</tool_call>\"中͸_\t)नि<function=f>){"
+  },
+  {
+   "ids": [
+    3533,
+    41,
+    105,
+    343,
+    22870,
+    105,
+    43,
+    26985,
+    182,
+    222,
+    222,
+    956,
+    106
+   ],
+   "parse_special": true,
+   "text": " <|im_start|>̈α}"
+  },
+  {
+   "ids": [
+    3533,
+    41,
+    105,
+    343,
+    22870,
+    105,
+    43,
+    26985,
+    182,
+    222,
+    222,
+    956,
+    106
+   ],
+   "parse_special": false,
+   "text": " <|im_start|>̈α}"
+  },
+  {
+   "ids": [
+    21,
+    859,
+    97,
+    43,
+    16,
+    111947
+   ],
+   "parse_special": true,
+   "text": "( 't>#%\""
+  },
+  {
+   "ids": [
+    21,
+    859,
+    97,
+    43,
+    16,
+    111947
+   ],
+   "parse_special": false,
+   "text": "( 't>#%\""
+  },
+  {
+   "ids": [
+    2083,
+    596,
+    24629,
+    3892,
+    2285,
+    45184,
+    7632,
+    149,
+    130,
+    956,
+    28,
+    6959
+   ],
+   "parse_special": true,
+   "text": "'téПриветWORD'll͸α/β"
+  },
+  {
+   "ids": [
+    2083,
+    596,
+    24629,
+    3892,
+    2285,
+    45184,
+    7632,
+    149,
+    130,
+    956,
+    28,
+    6959
+   ],
+   "parse_special": false,
+   "text": "'téПриветWORD'll͸α/β"
+  },
+  {
+   "ids": [
+    28
+   ],
+   "parse_special": true,
+   "text": "/"
+  },
+  {
+   "ids": [
+    28
+   ],
+   "parse_special": false,
+   "text": "/"
+  },
+  {
+   "ids": [
+    73,
+    2257,
+    39,
+    24629,
+    3892,
+    2285,
+    45184,
+    7263,
+    38592,
+    1496,
+    130977,
+    198
+   ],
+   "parse_special": true,
+   "text": "\\##:ПриветWORD've^\\ [<tool_call>\n"
+  },
+  {
+   "ids": [
+    73,
+    2257,
+    39,
+    24629,
+    3892,
+    2285,
+    45184,
+    7263,
+    38592,
+    1496,
+    130977,
+    198
+   ],
+   "parse_special": false,
+   "text": "\\##:ПриветWORD've^\\ [<tool_call>\n"
+  },
+  {
+   "ids": [
+    197,
+    6382,
+    182,
+    222,
+    222,
+    130984,
+    27
+   ],
+   "parse_special": true,
+   "text": "\t́</tool_call>."
+  },
+  {
+   "ids": [
+    197,
+    6382,
+    182,
+    222,
+    222,
+    130984,
+    27
+   ],
+   "parse_special": false,
+   "text": "\t́</tool_call>."
+  },
+  {
+   "ids": [
+    38592,
+    20,
+    268,
+    190
+   ],
+   "parse_special": true,
+   "text": "^\\'re\u0001"
+  },
+  {
+   "ids": [
+    38592,
+    20,
+    268,
+    190
+   ],
+   "parse_special": false,
+   "text": "^\\'re\u0001"
+  },
+  {
+   "ids": [
+    6458,
+    4392,
+    25,
+    52644,
+    28108,
+    182,
+    222,
+    222,
+    17,
+    27363,
+    24
+   ],
+   "parse_special": true,
+   "text": "　word,%(=\\$Word+"
+  },
+  {
+   "ids": [
+    6458,
+    4392,
+    25,
+    52644,
+    28108,
+    182,
+    222,
+    222,
+    17,
+    27363,
+    24
+   ],
+   "parse_special": false,
+   "text": "　word,%(=\\$Word+"
+  },
+  {
+   "ids": [
+    7632,
+    2083,
+    2083,
+    457,
+    197,
+    130984,
+    197
+   ],
+   "parse_special": true,
+   "text": "'ll't't中\t</tool_call>\t"
+  },
+  {
+   "ids": [
+    7632,
+    2083,
+    2083,
+    457,
+    197,
+    130984,
+    197
+   ],
+   "parse_special": false,
+   "text": "'ll't't中\t</tool_call>\t"
+  },
+  {
+   "ids": [
+    19,
+    220,
+    758,
+    14409,
+    67354,
+    18,
+    41,
+    105,
+    343,
+    24574,
+    105,
+    29184,
+    105,
+    4392
+   ],
+   "parse_special": true,
+   "text": "& 本ß;;%<|im_end|>&|word"
+  },
+  {
+   "ids": [
+    19,
+    220,
+    758,
+    14409,
+    67354,
+    18,
+    41,
+    105,
+    343,
+    24574,
+    105,
+    29184,
+    105,
+    4392
+   ],
+   "parse_special": false,
+   "text": "& 本ß;;%<|im_end|>&|word"
+  },
+  {
+   "ids": [
+    24,
+    41,
+    4847,
+    51521,
+    43,
+    26985,
+    30,
+    31,
+    32,
+    130984,
+    2083,
+    190,
+    220,
+    143,
+    227,
+    14409,
+    16
+   ],
+   "parse_special": true,
+   "text": "+<function=f>̈123</tool_call>'t\u0001 ǅß#"
+  },
+  {
+   "ids": [
+    24,
+    41,
+    4847,
+    51521,
+    43,
+    26985,
+    30,
+    31,
+    32,
+    130984,
+    2083,
+    190,
+    220,
+    143,
+    227,
+    14409,
+    16
+   ],
+   "parse_special": false,
+   "text": "+<function=f>̈123</tool_call>'t\u0001 ǅß#"
+  },
+  {
+   "ids": [
+    25,
+    41,
+    105,
+    343,
+    22870,
+    105,
+    43,
+    45184,
+    93492,
+    28873,
+    43,
+    3533,
+    76,
+    41,
+    4847,
+    51521,
+    31876
+   ],
+   "parse_special": true,
+   "text": ",<|im_start|>WORD)</parameter> _<function=f>\""
+  },
+  {
+   "ids": [
+    25,
+    41,
+    105,
+    343,
+    22870,
+    105,
+    43,
+    45184,
+    93492,
+    28873,
+    43,
+    3533,
+    76,
+    41,
+    4847,
+    51521,
+    31876
+   ],
+   "parse_special": false,
+   "text": ",<|im_start|>WORD)</parameter> _<function=f>\""
+  },
+  {
+   "ids": [
+    998,
+    201,
+    198,
+    35567,
+    998,
+    40,
+    758,
+    7632,
+    190,
+    6458,
+    48519,
+    812
+   ],
+   "parse_special": true,
+   "text": "日\r\n<=日;本'll\u0001　!'ll"
+  },
+  {
+   "ids": [
+    998,
+    201,
+    198,
+    35567,
+    998,
+    40,
+    758,
+    7632,
+    190,
+    6458,
+    48519,
+    812
+   ],
+   "parse_special": false,
+   "text": "日\r\n<=日;本'll\u0001　!'ll"
+  },
+  {
+   "ids": [
+    45,
+    16,
+    197
+   ],
+   "parse_special": true,
+   "text": "@#\t"
+  },
+  {
+   "ids": [
+    45,
+    16,
+    197
+   ],
+   "parse_special": false,
+   "text": "@#\t"
+  },
+  {
+   "ids": [
+    6125,
+    6959,
+    845,
+    107,
+    97047,
+    268,
+    21,
+    130977,
+    256,
+    859,
+    268
+   ],
+   "parse_special": true,
+   "text": "'reβ文~\"'re(<tool_call>   're"
+  },
+  {
+   "ids": [
+    6125,
+    6959,
+    845,
+    107,
+    97047,
+    268,
+    21,
+    130977,
+    256,
+    859,
+    268
+   ],
+   "parse_special": false,
+   "text": "'reβ文~\"'re(<tool_call>   're"
+  },
+  {
+   "ids": [
+    41,
+    4847,
+    51521,
+    44999,
+    81,
+    37806,
+    2717,
+    28873,
+    43,
+    16,
+    88343,
+    190,
+    4392,
+    6959,
+    758,
+    256,
+    758
+   ],
+   "parse_special": true,
+   "text": "<function=f>'d&&</parameter>#.<\u0001wordβ本  本"
+  },
+  {
+   "ids": [
+    41,
+    4847,
+    51521,
+    44999,
+    81,
+    37806,
+    2717,
+    28873,
+    43,
+    16,
+    88343,
+    190,
+    4392,
+    6959,
+    758,
+    256,
+    758
+   ],
+   "parse_special": false,
+   "text": "<function=f>'d&&</parameter>#.<\u0001wordβ本  本"
+  },
+  {
+   "ids": [
+    5580,
+    52352,
+    222,
+    20,
+    72,
+    45184,
+    198,
+    43,
+    27363,
+    106,
+    149,
+    130,
+    33132
+   ],
+   "parse_special": true,
+   "text": "'m😀'[WORD\n>Word}͸~\\"
+  },
+  {
+   "ids": [
+    5580,
+    52352,
+    222,
+    20,
+    72,
+    45184,
+    198,
+    43,
+    27363,
+    106,
+    149,
+    130,
+    33132
+   ],
+   "parse_special": false,
+   "text": "'m😀'[WORD\n>Word}͸~\\"
+  },
+  {
+   "ids": [
+    24629,
+    3892,
+    2285,
+    52352,
+    222,
+    998,
+    27363,
+    149,
+    130,
+    130977
+   ],
+   "parse_special": true,
+   "text": "Привет😀日Word͸<tool_call>"
+  },
+  {
+   "ids": [
+    24629,
+    3892,
+    2285,
+    52352,
+    222,
+    998,
+    27363,
+    149,
+    130,
+    130977
+   ],
+   "parse_special": false,
+   "text": "Привет😀日Word͸<tool_call>"
+  },
+  {
+   "ids": [
+    5580,
+    45947,
+    3533,
+    2717,
+    28873,
+    43,
+    149,
+    130,
+    52352,
+    222,
+    20,
+    97
+   ],
+   "parse_special": true,
+   "text": "'mनि </parameter>͸😀't"
+  },
+  {
+   "ids": [
+    5580,
+    45947,
+    3533,
+    2717,
+    28873,
+    43,
+    149,
+    130,
+    52352,
+    222,
+    20,
+    97
+   ],
+   "parse_special": false,
+   "text": "'mनि </parameter>͸😀't"
+  },
+  {
+   "ids": [
+    130801,
+    998,
+    52352,
+    222,
+    3,
+    6382
+   ],
+   "parse_special": true,
+   "text": " %,日😀<think>́"
+  },
+  {
+   "ids": [
+    130801,
+    998,
+    52352,
+    222,
+    3,
+    6382
+   ],
+   "parse_special": false,
+   "text": " %,日😀<think>́"
+  },
+  {
+   "ids": [
+    41,
+    24025,
+    6382,
+    64620,
+    41,
+    105,
+    343,
+    24574,
+    105,
+    43
+   ],
+   "parse_special": true,
+   "text": "<)|́'\\<|im_end|>"
+  },
+  {
+   "ids": [
+    41,
+    24025,
+    6382,
+    64620,
+    41,
+    105,
+    343,
+    24574,
+    105,
+    43
+   ],
+   "parse_special": false,
+   "text": "<)|́'\\<|im_end|>"
+  },
+  {
+   "ids": [
+    7263,
+    20
+   ],
+   "parse_special": true,
+   "text": "'ve'"
+  },
+  {
+   "ids": [
+    7263,
+    20
+   ],
+   "parse_special": false,
+   "text": "'ve'"
+  },
+  {
+   "ids": [
+    28,
+    190,
+    198,
+    30,
+    31,
+    32,
+    14,
+    41,
+    105,
+    510,
+    2221,
+    1311,
+    105,
+    123719,
+    19,
+    72,
+    106
+   ],
+   "parse_special": true,
+   "text": "/\u0001\n123!<|endoftext|>]&[}"
+  },
+  {
+   "ids": [
+    28,
+    190,
+    198,
+    30,
+    31,
+    32,
+    14,
+    41,
+    105,
+    510,
+    2221,
+    1311,
+    105,
+    123719,
+    19,
+    72,
+    106
+   ],
+   "parse_special": false,
+   "text": "/\u0001\n123!<|endoftext|>]&[}"
+  },
+  {
+   "ids": [
+    72,
+    220,
+    197,
+    198,
+    6523,
+    812,
+    845,
+    72,
+    41,
+    105,
+    510,
+    2221,
+    1311,
+    105,
+    43,
+    24629,
+    3892,
+    2285,
+    220,
+    130977,
+    25,
+    41,
+    105,
+    343,
+    24574,
+    105,
+    43
+   ],
+   "parse_special": true,
+   "text": "[ \t\n='ll文[<|endoftext|>Привет <tool_call>,<|im_end|>"
+  },
+  {
+   "ids": [
+    72,
+    220,
+    197,
+    198,
+    6523,
+    812,
+    845,
+    72,
+    41,
+    105,
+    510,
+    2221,
+    1311,
+    105,
+    43,
+    24629,
+    3892,
+    2285,
+    220,
+    130977,
+    25,
+    41,
+    105,
+    343,
+    24574,
+    105,
+    43
+   ],
+   "parse_special": false,
+   "text": "[ \t\n='ll文[<|endoftext|>Привет <tool_call>,<|im_end|>"
+  },
+  {
+   "ids": [
+    7263,
+    143,
+    227
+   ],
+   "parse_special": true,
+   "text": "'veǅ"
+  },
+  {
+   "ids": [
+    7263,
+    143,
+    227
+   ],
+   "parse_special": false,
+   "text": "'veǅ"
+  },
+  {
+   "ids": [
+    40,
+    956,
+    4,
+    24629,
+    3892,
+    2285
+   ],
+   "parse_special": true,
+   "text": ";α</think>Привет"
+  },
+  {
+   "ids": [
+    40,
+    956,
+    4,
+    24629,
+    3892,
+    2285
+   ],
+   "parse_special": false,
+   "text": ";α</think>Привет"
+  },
+  {
+   "ids": [
+    5580,
+    52352,
+    222,
+    41,
+    105,
+    343,
+    22870,
+    105,
+    43,
+    780,
+    197,
+    11013,
+    236,
+    231
+   ],
+   "parse_special": true,
+   "text": "'m😀<|im_start|>..\t🎉"
+  },
+  {
+   "ids": [
+    5580,
+    52352,
+    222,
+    41,
+    105,
+    343,
+    22870,
+    105,
+    43,
+    780,
+    197,
+    11013,
+    236,
+    231
+   ],
+   "parse_special": false,
+   "text": "'m😀<|im_start|>..\t🎉"
+  },
+  {
+   "ids": [
+    14,
+    149,
+    130,
+    115475,
+    90,
+    14,
+    201,
+    198,
+    45,
+    130984
+   ],
+   "parse_special": true,
+   "text": "!͸{'m!\r\n@</tool_call>"
+  },
+  {
+   "ids": [
+    14,
+    149,
+    130,
+    115475,
+    90,
+    14,
+    201,
+    198,
+    45,
+    130984
+   ],
+   "parse_special": false,
+   "text": "!͸{'m!\r\n@</tool_call>"
+  },
+  {
+   "ids": [
+    27363,
+    130977,
+    1045,
+    44,
+    201,
+    198,
+    44,
+    149,
+    130
+   ],
+   "parse_special": true,
+   "text": "Word<tool_call>'s?\r\n?͸"
+  },
+  {
+   "ids": [
+    27363,
+    130977,
+    1045,
+    44,
+    201,
+    198,
+    44,
+    149,
+    130
+   ],
+   "parse_special": false,
+   "text": "Word<tool_call>'s?\r\n?͸"
+  },
+  {
+   "ids": [
+    6959,
+    75,
+    72,
+    3,
+    4392
+   ],
+   "parse_special": true,
+   "text": "β^[<think>word"
+  },
+  {
+   "ids": [
+    6959,
+    75,
+    72,
+    3,
+    4392
+   ],
+   "parse_special": false,
+   "text": "β^[<think>word"
+  },
+  {
+   "ids": [
+    15,
+    758
+   ],
+   "parse_special": true,
+   "text": "\"本"
+  },
+  {
+   "ids": [
+    15,
+    758
+   ],
+   "parse_special": false,
+   "text": "\"本"
+  },
+  {
+   "ids": [
+    7263,
+    105,
+    130984,
+    115990,
+    190,
+    201,
+    198,
+    105,
+    28
+   ],
+   "parse_special": true,
+   "text": "'ve|</tool_call>_'\u0001\r\n|/"
+  },
+  {
+   "ids": [
+    7263,
+    105,
+    130984,
+    115990,
+    190,
+    201,
+    198,
+    105,
+    28
+   ],
+   "parse_special": false,
+   "text": "'ve|</tool_call>_'\u0001\r\n|/"
+  },
+  {
+   "ids": [
+    2083,
+    41,
+    105,
+    510,
+    2221,
+    1311,
+    105,
+    43,
+    998,
+    52352,
+    222,
+    105,
+    197,
+    143,
+    227,
+    14,
+    130977,
+    41,
+    26985,
+    41,
+    105,
+    343,
+    22870,
+    105,
+    43
+   ],
+   "parse_special": true,
+   "text": "'t<|endoftext|>日😀|\tǅ!<tool_call><̈<|im_start|>"
+  },
+  {
+   "ids": [
+    2083,
+    41,
+    105,
+    510,
+    2221,
+    1311,
+    105,
+    43,
+    998,
+    52352,
+    222,
+    105,
+    197,
+    143,
+    227,
+    14,
+    130977,
+    41,
+    26985,
+    41,
+    105,
+    343,
+    22870,
+    105,
+    43
+   ],
+   "parse_special": false,
+   "text": "'t<|endoftext|>日😀|\tǅ!<tool_call><̈<|im_start|>"
+  },
+  {
+   "ids": [
+    107,
+    14409,
+    7632,
+    41,
+    105,
+    510,
+    2221,
+    1311,
+    105,
+    43,
+    101,
+    956,
+    758,
+    220
+   ],
+   "parse_special": true,
+   "text": "~ß'll<|endoftext|>xα本 "
+  },
+  {
+   "ids": [
+    107,
+    14409,
+    7632,
+    41,
+    105,
+    510,
+    2221,
+    1311,
+    105,
+    43,
+    101,
+    956,
+    758,
+    220
+   ],
+   "parse_special": false,
+   "text": "~ß'll<|endoftext|>xα本 "
+  },
+  {
+   "ids": [
+    7771,
+    25,
+    106,
+    107,
+    6959
+   ],
+   "parse_special": true,
+   "text": "'d,}~β"
+  },
+  {
+   "ids": [
+    7771,
+    25,
+    106,
+    107,
+    6959
+   ],
+   "parse_special": false,
+   "text": "'d,}~β"
+  },
+  {
+   "ids": [
+    41,
+    105,
+    343,
+    22870,
+    105,
+    43,
+    27006
+   ],
+   "parse_special": true,
+   "text": "<|im_start|>}`"
+  },
+  {
+   "ids": [
+    41,
+    105,
+    343,
+    22870,
+    105,
+    43,
+    27006
+   ],
+   "parse_special": false,
+   "text": "<|im_start|>}`"
+  },
+  {
+   "ids": [
+    22,
+    758,
+    457,
+    16,
+    21,
+    106,
+    1283,
+    25
+   ],
+   "parse_special": true,
+   "text": ")本中#(}ü,"
+  },
+  {
+   "ids": [
+    22,
+    758,
+    457,
+    16,
+    21,
+    106,
+    1283,
+    25
+   ],
+   "parse_special": false,
+   "text": ")本中#(}ü,"
+  },
+  {
+   "ids": [
+    30,
+    31,
+    32,
+    41,
+    130977,
+    18,
+    3,
+    19,
+    41,
+    956,
+    201,
+    198
+   ],
+   "parse_special": true,
+   "text": "123<<tool_call>%<think>&<α\r\n"
+  },
+  {
+   "ids": [
+    30,
+    31,
+    32,
+    41,
+    130977,
+    18,
+    3,
+    19,
+    41,
+    956,
+    201,
+    198
+   ],
+   "parse_special": false,
+   "text": "123<<tool_call>%<think>&<α\r\n"
+  },
+  {
+   "ids": [
+    201,
+    198,
+    45,
+    26,
+    106,
+    2257,
+    107,
+    6458,
+    42
+   ],
+   "parse_special": true,
+   "text": "\r\n@-}##~　="
+  },
+  {
+   "ids": [
+    201,
+    198,
+    45,
+    26,
+    106,
+    2257,
+    107,
+    6458,
+    42
+   ],
+   "parse_special": false,
+   "text": "\r\n@-}##~　="
+  },
+  {
+   "ids": [
+    17,
+    198,
+    457,
+    41,
+    105,
+    510,
+    2221,
+    1311,
+    105,
+    6697,
+    105,
+    343,
+    22870,
+    105,
+    43,
+    3533,
+    457,
+    104,
+    149,
+    130,
+    14409,
+    73,
+    1283,
+    44
+   ],
+   "parse_special": true,
+   "text": "$\n中<|endoftext|><|im_start|> 中{͸ß\\ü?"
+  },
+  {
+   "ids": [
+    17,
+    198,
+    457,
+    41,
+    105,
+    510,
+    2221,
+    1311,
+    105,
+    6697,
+    105,
+    343,
+    22870,
+    105,
+    43,
+    3533,
+    457,
+    104,
+    149,
+    130,
+    14409,
+    73,
+    1283,
+    44
+   ],
+   "parse_special": false,
+   "text": "$\n中<|endoftext|><|im_start|> 中{͸ß\\ü?"
+  },
+  {
+   "ids": [
+    43,
+    956,
+    3533,
+    143,
+    227,
+    1045,
+    41,
+    4847,
+    51521,
+    44999,
+    90
+   ],
+   "parse_special": true,
+   "text": ">α ǅ's<function=f>'m"
+  },
+  {
+   "ids": [
+    43,
+    956,
+    3533,
+    143,
+    227,
+    1045,
+    41,
+    4847,
+    51521,
+    44999,
+    90
+   ],
+   "parse_special": false,
+   "text": ">α ǅ's<function=f>'m"
+  },
+  {
+   "ids": [
+    41,
+    105,
+    343,
+    24574,
+    105,
+    44999,
+    377,
+    197,
+    14409,
+    5580,
+    16,
+    3533
+   ],
+   "parse_special": true,
+   "text": "<|im_end|>'ve\tß'm# "
+  },
+  {
+   "ids": [
+    41,
+    105,
+    343,
+    24574,
+    105,
+    44999,
+    377,
+    197,
+    14409,
+    5580,
+    16,
+    3533
+   ],
+   "parse_special": false,
+   "text": "<|im_end|>'ve\tß'm# "
+  },
+  {
+   "ids": [
+    7263,
+    41,
+    105,
+    343,
+    24574,
+    105,
+    43,
+    457,
+    104,
+    6959,
+    105,
+    76,
+    201,
+    198,
+    130984,
+    4392,
+    130984
+   ],
+   "parse_special": true,
+   "text": "'ve<|im_end|>中{β|_\r\n</tool_call>word</tool_call>"
+  },
+  {
+   "ids": [
+    7263,
+    41,
+    105,
+    343,
+    24574,
+    105,
+    43,
+    457,
+    104,
+    6959,
+    105,
+    76,
+    201,
+    198,
+    130984,
+    4392,
+    130984
+   ],
+   "parse_special": false,
+   "text": "'ve<|im_end|>中{β|_\r\n</tool_call>word</tool_call>"
+  },
+  {
+   "ids": [
+    44,
+    27363,
+    39,
+    190
+   ],
+   "parse_special": true,
+   "text": "?Word:\u0001"
+  },
+  {
+   "ids": [
+    44,
+    27363,
+    39,
+    190
+   ],
+   "parse_special": false,
+   "text": "?Word:\u0001"
+  },
+  {
+   "ids": [
+    44,
+    220,
+    3
+   ],
+   "parse_special": true,
+   "text": "? <think>"
+  },
+  {
+   "ids": [
+    44,
+    220,
+    3
+   ],
+   "parse_special": false,
+   "text": "? <think>"
+  },
+  {
+   "ids": [
+    48519,
+    90,
+    107,
+    22,
+    457,
+    24629,
+    3892,
+    2285,
+    22,
+    457
+   ],
+   "parse_special": true,
+   "text": "!'m~)中Привет)中"
+  },
+  {
+   "ids": [
+    48519,
+    90,
+    107,
+    22,
+    457,
+    24629,
+    3892,
+    2285,
+    22,
+    457
+   ],
+   "parse_special": false,
+   "text": "!'m~)中Привет)中"
+  },
+  {
+   "ids": [
+    6125,
+    18,
+    143,
+    227,
+    7632,
+    104
+   ],
+   "parse_special": true,
+   "text": "'re%ǅ'll{"
+  },
+  {
+   "ids": [
+    6125,
+    18,
+    143,
+    227,
+    7632,
+    104
+   ],
+   "parse_special": false,
+   "text": "'re%ǅ'll{"
+  },
+  {
+   "ids": [
+    104,
+    52352,
+    222,
+    101,
+    130977,
+    42,
+    6382,
+    7632,
+    45184,
+    190,
+    190,
+    18
+   ],
+   "parse_special": true,
+   "text": "{😀x<tool_call>=́'llWORD\u0001\u0001%"
+  },
+  {
+   "ids": [
+    104,
+    52352,
+    222,
+    101,
+    130977,
+    42,
+    6382,
+    7632,
+    45184,
+    190,
+    190,
+    18
+   ],
+   "parse_special": false,
+   "text": "{😀x<tool_call>=́'llWORD\u0001\u0001%"
+  },
+  {
+   "ids": [
+    15,
+    14409,
+    1036,
+    30,
+    31,
+    32,
+    130977,
+    5580,
+    115475,
+    812,
+    1045,
+    30690,
+    20,
+    90
+   ],
+   "parse_special": true,
+   "text": "\"ß <123<tool_call>'m{'ll's[-'m"
+  },
+  {
+   "ids": [
+    15,
+    14409,
+    1036,
+    30,
+    31,
+    32,
+    130977,
+    5580,
+    115475,
+    812,
+    1045,
+    30690,
+    20,
+    90
+   ],
+   "parse_special": false,
+   "text": "\"ß <123<tool_call>'m{'ll's[-'m"
+  },
+  {
+   "ids": [
+    17,
+    596,
+    18,
+    20,
+    97,
+    41,
+    4847,
+    51521,
+    43,
+    18,
+    956,
+    5580,
+    41,
+    27363
+   ],
+   "parse_special": true,
+   "text": "$é%'t<function=f>%α'm<Word"
+  },
+  {
+   "ids": [
+    17,
+    596,
+    18,
+    20,
+    97,
+    41,
+    4847,
+    51521,
+    43,
+    18,
+    956,
+    5580,
+    41,
+    27363
+   ],
+   "parse_special": false,
+   "text": "$é%'t<function=f>%α'm<Word"
+  },
+  {
+   "ids": [
+    31224,
+    236,
+    231,
+    130977,
+    1045,
+    40,
+    20,
+    96,
+    457,
+    7263,
+    4392,
+    4392,
+    41,
+    105,
+    343,
+    22870,
+    105,
+    43,
+    24,
+    149,
+    130
+   ],
+   "parse_special": true,
+   "text": " 🎉<tool_call>'s;'s中'vewordword<|im_start|>+͸"
+  },
+  {
+   "ids": [
+    31224,
+    236,
+    231,
+    130977,
+    1045,
+    40,
+    20,
+    96,
+    457,
+    7263,
+    4392,
+    4392,
+    41,
+    105,
+    343,
+    22870,
+    105,
+    43,
+    24,
+    149,
+    130
+   ],
+   "parse_special": false,
+   "text": " 🎉<tool_call>'s;'s中'vewordword<|im_start|>+͸"
+  },
+  {
+   "ids": [
+    130984,
+    30,
+    31,
+    32,
+    12814,
+    268,
+    21485,
+    75,
+    20,
+    96,
+    45184,
+    107,
+    6959
+   ],
+   "parse_special": true,
+   "text": "</tool_call>123<'re`.^'sWORD~β"
+  },
+  {
+   "ids": [
+    130984,
+    30,
+    31,
+    32,
+    12814,
+    268,
+    21485,
+    75,
+    20,
+    96,
+    45184,
+    107,
+    6959
+   ],
+   "parse_special": false,
+   "text": "</tool_call>123<'re`.^'sWORD~β"
+  },
+  {
+   "ids": [
+    758,
+    2083,
+    14,
+    24629,
+    3892,
+    2285,
+    106,
+    107,
+    3533,
+    14,
+    6382,
+    41,
+    105,
+    343,
+    24574,
+    105,
+    15763
+   ],
+   "parse_special": true,
+   "text": "本't!Привет}~ !́<|im_end|>)"
+  },
+  {
+   "ids": [
+    758,
+    2083,
+    14,
+    24629,
+    3892,
+    2285,
+    106,
+    107,
+    3533,
+    14,
+    6382,
+    41,
+    105,
+    343,
+    24574,
+    105,
+    15763
+   ],
+   "parse_special": false,
+   "text": "本't!Привет}~ !́<|im_end|>)"
+  },
+  {
+   "ids": [
+    149,
+    130,
+    44999,
+    268
+   ],
+   "parse_special": true,
+   "text": "͸>'re"
+  },
+  {
+   "ids": [
+    149,
+    130,
+    44999,
+    268
+   ],
+   "parse_special": false,
+   "text": "͸>'re"
+  },
+  {
+   "ids": [
+    45947,
+    4,
+    1045,
+    15,
+    56641,
+    20,
+    81
+   ],
+   "parse_special": true,
+   "text": "नि</think>'s\"-\"'d"
+  },
+  {
+   "ids": [
+    45947,
+    4,
+    1045,
+    15,
+    56641,
+    20,
+    81
+   ],
+   "parse_special": false,
+   "text": "नि</think>'s\"-\"'d"
+  },
+  {
+   "ids": [
+    6959,
+    27,
+    130984,
+    14409,
+    4,
+    130984,
+    107,
+    74,
+    6382,
+    43,
+    256,
+    30,
+    31,
+    32
+   ],
+   "parse_special": true,
+   "text": "β.</tool_call>ß</think></tool_call>~]́>  123"
+  },
+  {
+   "ids": [
+    6959,
+    27,
+    130984,
+    14409,
+    4,
+    130984,
+    107,
+    74,
+    6382,
+    43,
+    256,
+    30,
+    31,
+    32
+   ],
+   "parse_special": false,
+   "text": "β.</tool_call>ß</think></tool_call>~]́>  123"
+  },
+  {
+   "ids": [
+    41,
+    4847,
+    51521,
+    15763,
+    198,
+    198,
+    77,
+    41,
+    105,
+    343,
+    22870,
+    105,
+    43,
+    75,
+    182,
+    222,
+    222,
+    73,
+    143,
+    227,
+    41
+   ],
+   "parse_special": true,
+   "text": "<function=f>)\n\n`<|im_start|>^\\ǅ<"
+  },
+  {
+   "ids": [
+    41,
+    4847,
+    51521,
+    15763,
+    198,
+    198,
+    77,
+    41,
+    105,
+    343,
+    22870,
+    105,
+    43,
+    75,
+    182,
+    222,
+    222,
+    73,
+    143,
+    227,
+    41
+   ],
+   "parse_special": false,
+   "text": "<function=f>)\n\n`<|im_start|>^\\ǅ<"
+  },
+  {
+   "ids": [
+    47401,
+    3892,
+    2285,
+    457,
+    22861,
+    96,
+    149,
+    130,
+    7771,
+    149,
+    130,
+    197,
+    596
+   ],
+   "parse_special": true,
+   "text": " Привет中:'s͸'d͸\té"
+  },
+  {
+   "ids": [
+    47401,
+    3892,
+    2285,
+    457,
+    22861,
+    96,
+    149,
+    130,
+    7771,
+    149,
+    130,
+    197,
+    596
+   ],
+   "parse_special": false,
+   "text": " Привет中:'s͸'d͸\té"
+  },
+  {
+   "ids": [
+    3,
+    41,
+    105,
+    343,
+    22870,
+    105,
+    61712,
+    25,
+    75,
+    101,
+    6382,
+    40,
+    197,
+    28,
+    24629,
+    3892,
+    2285
+   ],
+   "parse_special": true,
+   "text": "<think><|im_start|>\\,^x́;\t/Привет"
+  },
+  {
+   "ids": [
+    3,
+    41,
+    105,
+    343,
+    22870,
+    105,
+    61712,
+    25,
+    75,
+    101,
+    6382,
+    40,
+    197,
+    28,
+    24629,
+    3892,
+    2285
+   ],
+   "parse_special": false,
+   "text": "<think><|im_start|>\\,^x́;\t/Привет"
+  },
+  {
+   "ids": [
+    220,
+    859,
+    81,
+    6959,
+    73,
+    11013,
+    236,
+    231,
+    15
+   ],
+   "parse_special": true,
+   "text": "  'dβ\\🎉\""
+  },
+  {
+   "ids": [
+    220,
+    859,
+    81,
+    6959,
+    73,
+    11013,
+    236,
+    231,
+    15
+   ],
+   "parse_special": false,
+   "text": "  'dβ\\🎉\""
+  },
+  {
+   "ids": [
+    75,
+    20,
+    90,
+    39,
+    41,
+    105,
+    510,
+    2221,
+    1311,
+    105,
+    6697
+   ],
+   "parse_special": true,
+   "text": "^'m:<|endoftext|><"
+  },
+  {
+   "ids": [
+    75,
+    20,
+    90,
+    39,
+    41,
+    105,
+    510,
+    2221,
+    1311,
+    105,
+    6697
+   ],
+   "parse_special": false,
+   "text": "^'m:<|endoftext|><"
+  },
+  {
+   "ids": [
+    73,
+    6959,
+    19381,
+    41,
+    4847,
+    51521,
+    43,
+    45
+   ],
+   "parse_special": true,
+   "text": "\\β%)<function=f>@"
+  },
+  {
+   "ids": [
+    73,
+    6959,
+    19381,
+    41,
+    4847,
+    51521,
+    43,
+    45
+   ],
+   "parse_special": false,
+   "text": "\\β%)<function=f>@"
+  },
+  {
+   "ids": [
+    107,
+    45,
+    201,
+    198,
+    118493,
+    105,
+    510,
+    2221,
+    1311,
+    105,
+    43,
+    76,
+    596,
+    26,
+    130977,
+    27363
+   ],
+   "parse_special": true,
+   "text": "~@\r\n/<|endoftext|>_é-<tool_call>Word"
+  },
+  {
+   "ids": [
+    107,
+    45,
+    201,
+    198,
+    118493,
+    105,
+    510,
+    2221,
+    1311,
+    105,
+    43,
+    76,
+    596,
+    26,
+    130977,
+    27363
+   ],
+   "parse_special": false,
+   "text": "~@\r\n/<|endoftext|>_é-<tool_call>Word"
+  },
+  {
+   "ids": [
+    37195,
+    457,
+    130984,
+    4392,
+    6458,
+    198,
+    198,
+    107,
+    43,
+    21485
+   ],
+   "parse_special": true,
+   "text": "\\$中</tool_call>word　\n\n~>`."
+  },
+  {
+   "ids": [
+    37195,
+    457,
+    130984,
+    4392,
+    6458,
+    198,
+    198,
+    107,
+    43,
+    21485
+   ],
+   "parse_special": false,
+   "text": "\\$中</tool_call>word　\n\n~>`."
+  },
+  {
+   "ids": [
+    143,
+    227,
+    17,
+    457,
+    198
+   ],
+   "parse_special": true,
+   "text": "ǅ$中\n"
+  },
+  {
+   "ids": [
+    143,
+    227,
+    17,
+    457,
+    198
+   ],
+   "parse_special": false,
+   "text": "ǅ$中\n"
+  },
+  {
+   "ids": [
+    3,
+    107,
+    30,
+    31,
+    32,
+    74,
+    75,
+    20,
+    96,
+    115475,
+    97
+   ],
+   "parse_special": true,
+   "text": "<think>~123]^'s{'t"
+  },
+  {
+   "ids": [
+    3,
+    107,
+    30,
+    31,
+    32,
+    74,
+    75,
+    20,
+    96,
+    115475,
+    97
+   ],
+   "parse_special": false,
+   "text": "<think>~123]^'s{'t"
+  },
+  {
+   "ids": [
+    1045,
+    182,
+    222,
+    222,
+    30,
+    31,
+    32
+   ],
+   "parse_special": true,
+   "text": "'s123"
+  },
+  {
+   "ids": [
+    1045,
+    182,
+    222,
+    222,
+    30,
+    31,
+    32
+   ],
+   "parse_special": false,
+   "text": "'s123"
+  },
+  {
+   "ids": [
+    1283,
+    40,
+    105,
+    20
+   ],
+   "parse_special": true,
+   "text": "ü;|'"
+  },
+  {
+   "ids": [
+    1283,
+    40,
+    105,
+    20
+   ],
+   "parse_special": false,
+   "text": "ü;|'"
+  },
+  {
+   "ids": [
+    15,
+    75,
+    1283
+   ],
+   "parse_special": true,
+   "text": "\"^ü"
+  },
+  {
+   "ids": [
+    15,
+    75,
+    1283
+   ],
+   "parse_special": false,
+   "text": "\"^ü"
+  },
+  {
+   "ids": [
+    3,
+    6458
+   ],
+   "parse_special": true,
+   "text": "<think>　"
+  },
+  {
+   "ids": [
+    3,
+    6458
+   ],
+   "parse_special": false,
+   "text": "<think>　"
+  },
+  {
+   "ids": [
+    6382,
+    149,
+    130,
+    14409,
+    12814,
+    81,
+    6125,
+    3,
+    220,
+    197,
+    220,
+    149,
+    130,
+    72,
+    41,
+    4847,
+    51521,
+    43,
+    3
+   ],
+   "parse_special": true,
+   "text": "́͸ß<'d're<think> \t ͸[<function=f><think>"
+  },
+  {
+   "ids": [
+    6382,
+    149,
+    130,
+    14409,
+    12814,
+    81,
+    6125,
+    3,
+    220,
+    197,
+    220,
+    149,
+    130,
+    72,
+    41,
+    4847,
+    51521,
+    43,
+    3
+   ],
+   "parse_special": false,
+   "text": "́͸ß<'d're<think> \t ͸[<function=f><think>"
+  },
+  {
+   "ids": [
+    845,
+    26985,
+    76,
+    77,
+    20,
+    268,
+    7771,
+    130984,
+    105,
+    107,
+    101,
+    27,
+    220
+   ],
+   "parse_special": true,
+   "text": "文̈_`'re'd</tool_call>|~x. "
+  },
+  {
+   "ids": [
+    845,
+    26985,
+    76,
+    77,
+    20,
+    268,
+    7771,
+    130984,
+    105,
+    107,
+    101,
+    27,
+    220
+   ],
+   "parse_special": false,
+   "text": "文̈_`'re'd</tool_call>|~x. "
+  },
+  {
+   "ids": [
+    77
+   ],
+   "parse_special": true,
+   "text": "`"
+  },
+  {
+   "ids": [
+    77
+   ],
+   "parse_special": false,
+   "text": "`"
+  },
+  {
+   "ids": [
+    27363,
+    14,
+    457,
+    201,
+    198,
+    3,
+    24629,
+    3892,
+    2285,
+    25,
+    11013,
+    236,
+    231
+   ],
+   "parse_special": true,
+   "text": "Word!中\r\n<think>Привет,🎉"
+  },
+  {
+   "ids": [
+    27363,
+    14,
+    457,
+    201,
+    198,
+    3,
+    24629,
+    3892,
+    2285,
+    25,
+    11013,
+    236,
+    231
+   ],
+   "parse_special": false,
+   "text": "Word!中\r\n<think>Привет,🎉"
+  },
+  {
+   "ids": [
+    182,
+    222,
+    222,
+    3,
+    7263
+   ],
+   "parse_special": true,
+   "text": "<think>'ve"
+  },
+  {
+   "ids": [
+    182,
+    222,
+    222,
+    3,
+    7263
+   ],
+   "parse_special": false,
+   "text": "<think>'ve"
+  },
+  {
+   "ids": [
+    41,
+    77,
+    44999,
+    96,
+    13290,
+    81,
+    14,
+    28,
+    42,
+    66997
+   ],
+   "parse_special": true,
+   "text": "<`>'s,'d!/=+)"
+  },
+  {
+   "ids": [
+    41,
+    77,
+    44999,
+    96,
+    13290,
+    81,
+    14,
+    28,
+    42,
+    66997
+   ],
+   "parse_special": false,
+   "text": "<`>'s,'d!/=+)"
+  },
+  {
+   "ids": [
+    190,
+    41,
+    105,
+    510,
+    2221,
+    1311,
+    105,
+    43,
+    44,
+    18,
+    956,
+    1784,
+    41,
+    48519,
+    377,
+    27363
+   ],
+   "parse_special": true,
+   "text": "\u0001<|endoftext|>?%α$$<!'veWord"
+  },
+  {
+   "ids": [
+    190,
+    41,
+    105,
+    510,
+    2221,
+    1311,
+    105,
+    43,
+    44,
+    18,
+    956,
+    1784,
+    41,
+    48519,
+    377,
+    27363
+   ],
+   "parse_special": false,
+   "text": "\u0001<|endoftext|>?%α$$<!'veWord"
+  },
+  {
+   "ids": [
+    182,
+    222,
+    222,
+    1045,
+    41,
+    4847,
+    51521,
+    43,
+    18,
+    77,
+    4,
+    73,
+    12814,
+    81
+   ],
+   "parse_special": true,
+   "text": "'s<function=f>%`</think>\\<'d"
+  },
+  {
+   "ids": [
+    182,
+    222,
+    222,
+    1045,
+    41,
+    4847,
+    51521,
+    43,
+    18,
+    77,
+    4,
+    73,
+    12814,
+    81
+   ],
+   "parse_special": false,
+   "text": "'s<function=f>%`</think>\\<'d"
+  },
+  {
+   "ids": [
+    72,
+    16,
+    105,
+    3533,
+    2083,
+    220,
+    220,
+    26985,
+    45184,
+    11013,
+    236,
+    231,
+    20,
+    90,
+    24629,
+    3892,
+    2285,
+    45947,
+    43
+   ],
+   "parse_special": true,
+   "text": "[#| 't  ̈WORD🎉'mПриветनि>"
+  },
+  {
+   "ids": [
+    72,
+    16,
+    105,
+    3533,
+    2083,
+    220,
+    220,
+    26985,
+    45184,
+    11013,
+    236,
+    231,
+    20,
+    90,
+    24629,
+    3892,
+    2285,
+    45947,
+    43
+   ],
+   "parse_special": false,
+   "text": "[#| 't  ̈WORD🎉'mПриветनि>"
+  },
+  {
+   "ids": [
+    1045,
+    998
+   ],
+   "parse_special": true,
+   "text": "'s日"
+  },
+  {
+   "ids": [
+    1045,
+    998
+   ],
+   "parse_special": false,
+   "text": "'s日"
+  },
+  {
+   "ids": [
+    130984,
+    182,
+    222,
+    222,
+    256,
+    4,
+    23,
+    20,
+    97
+   ],
+   "parse_special": true,
+   "text": "</tool_call>  </think>*'t"
+  },
+  {
+   "ids": [
+    130984,
+    182,
+    222,
+    222,
+    256,
+    4,
+    23,
+    20,
+    97
+   ],
+   "parse_special": false,
+   "text": "</tool_call>  </think>*'t"
+  },
+  {
+   "ids": [
+    7771,
+    28,
+    197,
+    4392,
+    76,
+    30,
+    31,
+    32,
+    27363,
+    116429
+   ],
+   "parse_special": true,
+   "text": "'d/\tword_123Word日文"
+  },
+  {
+   "ids": [
+    7771,
+    28,
+    197,
+    4392,
+    76,
+    30,
+    31,
+    32,
+    27363,
+    116429
+   ],
+   "parse_special": false,
+   "text": "'d/\tword_123Word日文"
+  },
+  {
+   "ids": [
+    2717,
+    28873,
+    43,
+    3826,
+    19,
+    74,
+    6959,
+    105,
+    3,
+    1283,
+    105
+   ],
+   "parse_special": true,
+   "text": "</parameter>++&]β|<think>ü|"
+  },
+  {
+   "ids": [
+    2717,
+    28873,
+    43,
+    3826,
+    19,
+    74,
+    6959,
+    105,
+    3,
+    1283,
+    105
+   ],
+   "parse_special": false,
+   "text": "</parameter>++&]β|<think>ü|"
+  },
+  {
+   "ids": [
+    23,
+    27363,
+    2717,
+    28873,
+    43,
+    14409,
+    956,
+    43,
+    45947,
+    3533
+   ],
+   "parse_special": true,
+   "text": "*Word</parameter>ßα>नि "
+  },
+  {
+   "ids": [
+    23,
+    27363,
+    2717,
+    28873,
+    43,
+    14409,
+    956,
+    43,
+    45947,
+    3533
+   ],
+   "parse_special": false,
+   "text": "*Word</parameter>ßα>नि "
+  },
+  {
+   "ids": [
+    41,
+    4847,
+    51521,
+    43,
+    18,
+    2717,
+    28873,
+    43,
+    24,
+    39,
+    24245,
+    73
+   ],
+   "parse_special": true,
+   "text": "<function=f>%</parameter>+:\\&\\"
+  },
+  {
+   "ids": [
+    41,
+    4847,
+    51521,
+    43,
+    18,
+    2717,
+    28873,
+    43,
+    24,
+    39,
+    24245,
+    73
+   ],
+   "parse_special": false,
+   "text": "<function=f>%</parameter>+:\\&\\"
+  },
+  {
+   "ids": [
+    11013,
+    236,
+    231,
+    26,
+    52352,
+    222,
+    4392,
+    8994,
+    90
+   ],
+   "parse_special": true,
+   "text": "🎉-😀word.'m"
+  },
+  {
+   "ids": [
+    11013,
+    236,
+    231,
+    26,
+    52352,
+    222,
+    4392,
+    8994,
+    90
+   ],
+   "parse_special": false,
+   "text": "🎉-😀word.'m"
+  },
+  {
+   "ids": [
+    41,
+    4847,
+    51521,
+    43,
+    27363,
+    27363,
+    596,
+    20,
+    27363,
+    43,
+    6959,
+    23
+   ],
+   "parse_special": true,
+   "text": "<function=f>WordWordé'Word>β*"
+  },
+  {
+   "ids": [
+    41,
+    4847,
+    51521,
+    43,
+    27363,
+    27363,
+    596,
+    20,
+    27363,
+    43,
+    6959,
+    23
+   ],
+   "parse_special": false,
+   "text": "<function=f>WordWordé'Word>β*"
+  },
+  {
+   "ids": [
+    845,
+    6959,
+    7263,
+    1283,
+    45,
+    6458,
+    45184,
+    101,
+    6959,
+    11013,
+    236,
+    231
+   ],
+   "parse_special": true,
+   "text": "文β'veü@　WORDxβ🎉"
+  },
+  {
+   "ids": [
+    845,
+    6959,
+    7263,
+    1283,
+    45,
+    6458,
+    45184,
+    101,
+    6959,
+    11013,
+    236,
+    231
+   ],
+   "parse_special": false,
+   "text": "文β'veü@　WORDxβ🎉"
+  },
+  {
+   "ids": [
+    44,
+    19,
+    14990,
+    190,
+    25
+   ],
+   "parse_special": true,
+   "text": "?& β\u0001,"
+  },
+  {
+   "ids": [
+    44,
+    19,
+    14990,
+    190,
+    25
+   ],
+   "parse_special": false,
+   "text": "?& β\u0001,"
+  },
+  {
+   "ids": [
+    24629,
+    3892,
+    2285
+   ],
+   "parse_special": true,
+   "text": "Привет"
+  },
+  {
+   "ids": [
+    24629,
+    3892,
+    2285
+   ],
+   "parse_special": false,
+   "text": "Привет"
+  },
+  {
+   "ids": [
+    998,
+    28
+   ],
+   "parse_special": true,
+   "text": "日/"
+  },
+  {
+   "ids": [
+    998,
+    28
+   ],
+   "parse_special": false,
+   "text": "日/"
+  },
+  {
+   "ids": [
+    40518,
+    6458,
+    101,
+    52352,
+    222,
+    758,
+    41,
+    105,
+    343,
+    22870,
+    105,
+    43
+   ],
+   "parse_special": true,
+   "text": "]$　x😀本<|im_start|>"
+  },
+  {
+   "ids": [
+    40518,
+    6458,
+    101,
+    52352,
+    222,
+    758,
+    41,
+    105,
+    343,
+    22870,
+    105,
+    43
+   ],
+   "parse_special": false,
+   "text": "]$　x😀本<|im_start|>"
+  },
+  {
+   "ids": [
+    15,
+    76
+   ],
+   "parse_special": true,
+   "text": "\"_"
+  },
+  {
+   "ids": [
+    15,
+    76
+   ],
+   "parse_special": false,
+   "text": "\"_"
+  },
+  {
+   "ids": [
+    845,
+    41,
+    4847,
+    51521,
+    43,
+    107,
+    190,
+    7632,
+    22441,
+    19,
+    143,
+    227,
+    45947,
+    22,
+    596,
+    104,
+    26985
+   ],
+   "parse_special": true,
+   "text": "文<function=f>~\u0001'll(`&ǅनि)é{̈"
+  },
+  {
+   "ids": [
+    845,
+    41,
+    4847,
+    51521,
+    43,
+    107,
+    190,
+    7632,
+    22441,
+    19,
+    143,
+    227,
+    45947,
+    22,
+    596,
+    104,
+    26985
+   ],
+   "parse_special": false,
+   "text": "文<function=f>~\u0001'll(`&ǅनि)é{̈"
+  },
+  {
+   "ids": [
+    33132,
+    52352,
+    222
+   ],
+   "parse_special": true,
+   "text": "~\\😀"
+  },
+  {
+   "ids": [
+    33132,
+    52352,
+    222
+   ],
+   "parse_special": false,
+   "text": "~\\😀"
+  },
+  {
+   "ids": [
+    7263,
+    457,
+    143,
+    227,
+    457,
+    35309,
+    2717,
+    28873,
+    7543
+   ],
+   "parse_special": true,
+   "text": "'ve中ǅ中=$</parameter>,"
+  },
+  {
+   "ids": [
+    7263,
+    457,
+    143,
+    227,
+    457,
+    35309,
+    2717,
+    28873,
+    7543
+   ],
+   "parse_special": false,
+   "text": "'ve中ǅ中=$</parameter>,"
+  },
+  {
+   "ids": [
+    198,
+    11013,
+    236,
+    231,
+    3,
+    845,
+    143,
+    227,
+    89406,
+    105,
+    343,
+    24574,
+    105,
+    43
+   ],
+   "parse_special": true,
+   "text": "\n🎉<think>文ǅ(<|im_end|>"
+  },
+  {
+   "ids": [
+    198,
+    11013,
+    236,
+    231,
+    3,
+    845,
+    143,
+    227,
+    89406,
+    105,
+    343,
+    24574,
+    105,
+    43
+   ],
+   "parse_special": false,
+   "text": "\n🎉<think>文ǅ(<|im_end|>"
+  },
+  {
+   "ids": [
+    41,
+    105,
+    343,
+    24574,
+    105,
+    43,
+    130977,
+    39,
+    4392,
+    74,
+    20,
+    190,
+    256
+   ],
+   "parse_special": true,
+   "text": "<|im_end|><tool_call>:word]'\u0001  "
+  },
+  {
+   "ids": [
+    41,
+    105,
+    343,
+    24574,
+    105,
+    43,
+    130977,
+    39,
+    4392,
+    74,
+    20,
+    190,
+    256
+   ],
+   "parse_special": false,
+   "text": "<|im_end|><tool_call>:word]'\u0001  "
+  },
+  {
+   "ids": [
+    41,
+    198,
+    106,
+    16,
+    45947,
+    1283,
+    46970,
+    190,
+    23,
+    72,
+    107
+   ],
+   "parse_special": true,
+   "text": "<\n}#निü'}\u0001*[~"
+  },
+  {
+   "ids": [
+    41,
+    198,
+    106,
+    16,
+    45947,
+    1283,
+    46970,
+    190,
+    23,
+    72,
+    107
+   ],
+   "parse_special": false,
+   "text": "<\n}#निü'}\u0001*[~"
+  },
+  {
+   "ids": [
+    41,
+    4847,
+    51521,
+    43,
+    578
+   ],
+   "parse_special": true,
+   "text": "<function=f> }"
+  },
+  {
+   "ids": [
+    41,
+    4847,
+    51521,
+    43,
+    578
+   ],
+   "parse_special": false,
+   "text": "<function=f> }"
+  },
+  {
+   "ids": [
+    220,
+    197,
+    17,
+    107,
+    46880,
+    236,
+    231,
+    4,
+    6458,
+    28108,
+    14409,
+    114072,
+    4
+   ],
+   "parse_special": true,
+   "text": " \t$~(🎉</think>　=\\ß.#</think>"
+  },
+  {
+   "ids": [
+    220,
+    197,
+    17,
+    107,
+    46880,
+    236,
+    231,
+    4,
+    6458,
+    28108,
+    14409,
+    114072,
+    4
+   ],
+   "parse_special": false,
+   "text": " \t$~(🎉</think>　=\\ß.#</think>"
+  },
+  {
+   "ids": [
+    41,
+    105,
+    343,
+    22870,
+    105,
+    45734,
+    25049,
+    812,
+    104
+   ],
+   "parse_special": true,
+   "text": "<|im_start|>=?'ll{"
+  },
+  {
+   "ids": [
+    41,
+    105,
+    343,
+    22870,
+    105,
+    45734,
+    25049,
+    812,
+    104
+   ],
+   "parse_special": false,
+   "text": "<|im_start|>=?'ll{"
+  },
+  {
+   "ids": [
+    41,
+    4847,
+    51521,
+    43,
+    845,
+    24629,
+    3892,
+    2285,
+    41,
+    105,
+    510,
+    2221,
+    1311,
+    105,
+    43,
+    198
+   ],
+   "parse_special": true,
+   "text": "<function=f>文Привет<|endoftext|>\n"
+  },
+  {
+   "ids": [
+    41,
+    4847,
+    51521,
+    43,
+    845,
+    24629,
+    3892,
+    2285,
+    41,
+    105,
+    510,
+    2221,
+    1311,
+    105,
+    43,
+    198
+   ],
+   "parse_special": false,
+   "text": "<function=f>文Привет<|endoftext|>\n"
+  },
+  {
+   "ids": [
+    14409,
+    30,
+    31,
+    32
+   ],
+   "parse_special": true,
+   "text": "ß123"
+  },
+  {
+   "ids": [
+    14409,
+    30,
+    31,
+    32
+   ],
+   "parse_special": false,
+   "text": "ß123"
+  },
+  {
+   "ids": [
+    42,
+    6382,
+    845
+   ],
+   "parse_special": true,
+   "text": "=́文"
+  },
+  {
+   "ids": [
+    42,
+    6382,
+    845
+   ],
+   "parse_special": false,
+   "text": "=́文"
+  },
+  {
+   "ids": [
+    5580,
+    73,
+    3,
+    76
+   ],
+   "parse_special": true,
+   "text": "'m\\<think>_"
+  },
+  {
+   "ids": [
+    5580,
+    73,
+    3,
+    76
+   ],
+   "parse_special": false,
+   "text": "'m\\<think>_"
+  },
+  {
+   "ids": [
+    201,
+    198,
+    73
+   ],
+   "parse_special": true,
+   "text": "\r\n\\"
+  },
+  {
+   "ids": [
+    201,
+    198,
+    73
+   ],
+   "parse_special": false,
+   "text": "\r\n\\"
+  },
+  {
+   "ids": [
+    72,
+    105,
+    6054,
+    143,
+    227,
+    106
+   ],
+   "parse_special": true,
+   "text": "[|!(ǅ}"
+  },
+  {
+   "ids": [
+    72,
+    105,
+    6054,
+    143,
+    227,
+    106
+   ],
+   "parse_special": false,
+   "text": "[|!(ǅ}"
+  },
+  {
+   "ids": [
+    3,
+    7263,
+    220,
+    76909,
+    105,
+    343,
+    24574,
+    105,
+    43
+   ],
+   "parse_special": true,
+   "text": "<think>'ve  (<|im_end|>"
+  },
+  {
+   "ids": [
+    3,
+    7263,
+    220,
+    76909,
+    105,
+    343,
+    24574,
+    105,
+    43
+   ],
+   "parse_special": false,
+   "text": "<think>'ve  (<|im_end|>"
+  },
+  {
+   "ids": [
+    109993,
+    41,
+    4847,
+    51521,
+    43,
+    27363,
+    27,
+    24629,
+    3892,
+    2285,
+    74,
+    758,
+    19,
+    45184,
+    40
+   ],
+   "parse_special": true,
+   "text": "!?<function=f>Word.Привет]本&WORD;"
+  },
+  {
+   "ids": [
+    109993,
+    41,
+    4847,
+    51521,
+    43,
+    27363,
+    27,
+    24629,
+    3892,
+    2285,
+    74,
+    758,
+    19,
+    45184,
+    40
+   ],
+   "parse_special": false,
+   "text": "!?<function=f>Word.Привет]本&WORD;"
+  },
+  {
+   "ids": [
+    41,
+    105,
+    343,
+    22870,
+    105,
+    43,
+    30,
+    31,
+    32,
+    7771,
+    20,
+    6959,
+    220,
+    6458,
+    3,
+    20,
+    19,
+    23
+   ],
+   "parse_special": true,
+   "text": "<|im_start|>123'd'β 　<think>'&*"
+  },
+  {
+   "ids": [
+    41,
+    105,
+    343,
+    22870,
+    105,
+    43,
+    30,
+    31,
+    32,
+    7771,
+    20,
+    6959,
+    220,
+    6458,
+    3,
+    20,
+    19,
+    23
+   ],
+   "parse_special": false,
+   "text": "<|im_start|>123'd'β 　<think>'&*"
+  },
+  {
+   "ids": [
+    41,
+    4847,
+    51521,
+    44999,
+    96,
+    42
+   ],
+   "parse_special": true,
+   "text": "<function=f>'s="
+  },
+  {
+   "ids": [
+    41,
+    4847,
+    51521,
+    44999,
+    96,
+    42
+   ],
+   "parse_special": false,
+   "text": "<function=f>'s="
+  },
+  {
+   "ids": [
+    7771,
+    197,
+    4,
+    130977,
+    7771,
+    3,
+    26,
+    44,
+    24629,
+    3892,
+    2285
+   ],
+   "parse_special": true,
+   "text": "'d\t</think><tool_call>'d<think>-?Привет"
+  },
+  {
+   "ids": [
+    7771,
+    197,
+    4,
+    130977,
+    7771,
+    3,
+    26,
+    44,
+    24629,
+    3892,
+    2285
+   ],
+   "parse_special": false,
+   "text": "'d\t</think><tool_call>'d<think>-?Привет"
+  },
+  {
+   "ids": [
+    46970,
+    101,
+    106,
+    190,
+    105,
+    43,
+    105,
+    4596,
+    41,
+    105,
+    343,
+    24574,
+    105,
+    15763
+   ],
+   "parse_special": true,
+   "text": "'}x}\u0001|>| ü<|im_end|>)"
+  },
+  {
+   "ids": [
+    46970,
+    101,
+    106,
+    190,
+    105,
+    43,
+    105,
+    4596,
+    41,
+    105,
+    343,
+    24574,
+    105,
+    15763
+   ],
+   "parse_special": false,
+   "text": "'}x}\u0001|>| ü<|im_end|>)"
+  },
+  {
+   "ids": [
+    758,
+    41,
+    4847,
+    51521,
+    44999,
+    268,
+    23,
+    845,
+    7632,
+    104,
+    45184,
+    758,
+    220,
+    859,
+    97,
+    45
+   ],
+   "parse_special": true,
+   "text": "本<function=f>'re*文'll{WORD本  't@"
+  },
+  {
+   "ids": [
+    758,
+    41,
+    4847,
+    51521,
+    44999,
+    268,
+    23,
+    845,
+    7632,
+    104,
+    45184,
+    758,
+    220,
+    859,
+    97,
+    45
+   ],
+   "parse_special": false,
+   "text": "本<function=f>'re*文'll{WORD本  't@"
+  },
+  {
+   "ids": [
+    4392,
+    1283,
+    19,
+    197,
+    5580
+   ],
+   "parse_special": true,
+   "text": "wordü&\t'm"
+  },
+  {
+   "ids": [
+    4392,
+    1283,
+    19,
+    197,
+    5580
+   ],
+   "parse_special": false,
+   "text": "wordü&\t'm"
+  },
+  {
+   "ids": [
+    130977,
+    26985,
+    1868,
+    377,
+    7632,
+    43,
+    4,
+    41,
+    105,
+    343,
+    24574,
+    105,
+    43,
+    24510,
+    377,
+    15,
+    45184,
+    149,
+    130,
+    24
+   ],
+   "parse_special": true,
+   "text": "<tool_call>̈('ve'll></think><|im_end|>}'ve\"WORD͸+"
+  },
+  {
+   "ids": [
+    130977,
+    26985,
+    1868,
+    377,
+    7632,
+    43,
+    4,
+    41,
+    105,
+    343,
+    24574,
+    105,
+    43,
+    24510,
+    377,
+    15,
+    45184,
+    149,
+    130,
+    24
+   ],
+   "parse_special": false,
+   "text": "<tool_call>̈('ve'll></think><|im_end|>}'ve\"WORD͸+"
+  },
+  {
+   "ids": [
+    24,
+    143,
+    227,
+    15,
+    190,
+    63146,
+    45184,
+    11013,
+    236,
+    231,
+    20,
+    90,
+    45947,
+    25,
+    596,
+    149,
+    130,
+    149,
+    130
+   ],
+   "parse_special": true,
+   "text": "+ǅ\"\u0001_wordWORD🎉'mनि,é͸͸"
+  },
+  {
+   "ids": [
+    24,
+    143,
+    227,
+    15,
+    190,
+    63146,
+    45184,
+    11013,
+    236,
+    231,
+    20,
+    90,
+    45947,
+    25,
+    596,
+    149,
+    130,
+    149,
+    130
+   ],
+   "parse_special": false,
+   "text": "+ǅ\"\u0001_wordWORD🎉'mनि,é͸͸"
+  },
+  {
+   "ids": [
+    45184,
+    27363,
+    41,
+    105,
+    343,
+    22870,
+    105,
+    43,
+    14,
+    596,
+    27363
+   ],
+   "parse_special": true,
+   "text": "WORDWord<|im_start|>!éWord"
+  },
+  {
+   "ids": [
+    45184,
+    27363,
+    41,
+    105,
+    343,
+    22870,
+    105,
+    43,
+    14,
+    596,
+    27363
+   ],
+   "parse_special": false,
+   "text": "WORDWord<|im_start|>!éWord"
+  },
+  {
+   "ids": [
+    101,
+    1045,
+    75
+   ],
+   "parse_special": true,
+   "text": "x's^"
+  },
+  {
+   "ids": [
+    101,
+    1045,
+    75
+   ],
+   "parse_special": false,
+   "text": "x's^"
+  },
+  {
+   "ids": [
+    29471,
+    25,
+    3,
+    3533,
+    998,
+    19873,
+    4392,
+    26985,
+    76,
+    14409
+   ],
+   "parse_special": true,
+   "text": "]*,<think> 日{xword̈_ß"
+  },
+  {
+   "ids": [
+    29471,
+    25,
+    3,
+    3533,
+    998,
+    19873,
+    4392,
+    26985,
+    76,
+    14409
+   ],
+   "parse_special": false,
+   "text": "]*,<think> 日{xword̈_ß"
+  },
+  {
+   "ids": [
+    596,
+    73,
+    23,
+    6959,
+    3,
+    72,
+    256,
+    758,
+    22,
+    197,
+    14,
+    4
+   ],
+   "parse_special": true,
+   "text": "é\\*β<think>[  本)\t!</think>"
+  },
+  {
+   "ids": [
+    596,
+    73,
+    23,
+    6959,
+    3,
+    72,
+    256,
+    758,
+    22,
+    197,
+    14,
+    4
+   ],
+   "parse_special": false,
+   "text": "é\\*β<think>[  本)\t!</think>"
+  },
+  {
+   "ids": [
+    41,
+    4847,
+    51521,
+    6697,
+    105,
+    343,
+    24574,
+    105,
+    43,
+    6458,
+    1868,
+    377,
+    23,
+    6458
+   ],
+   "parse_special": true,
+   "text": "<function=f><|im_end|>　('ve*　"
+  },
+  {
+   "ids": [
+    41,
+    4847,
+    51521,
+    6697,
+    105,
+    343,
+    24574,
+    105,
+    43,
+    6458,
+    1868,
+    377,
+    23,
+    6458
+   ],
+   "parse_special": false,
+   "text": "<function=f><|im_end|>　('ve*　"
+  },
+  {
+   "ids": [
+    6458,
+    101
+   ],
+   "parse_special": true,
+   "text": "　x"
+  },
+  {
+   "ids": [
+    6458,
+    101
+   ],
+   "parse_special": false,
+   "text": "　x"
+  },
+  {
+   "ids": [
+    1283,
+    143,
+    227,
+    24629,
+    3892,
+    2285,
+    6125,
+    3533,
+    45,
+    101,
+    72,
+    4392,
+    143,
+    227,
+    41,
+    4847,
+    51521,
+    43,
+    31725
+   ],
+   "parse_special": true,
+   "text": "üǅПривет're @x[wordǅ<function=f>-\\"
+  },
+  {
+   "ids": [
+    1283,
+    143,
+    227,
+    24629,
+    3892,
+    2285,
+    6125,
+    3533,
+    45,
+    101,
+    72,
+    4392,
+    143,
+    227,
+    41,
+    4847,
+    51521,
+    43,
+    31725
+   ],
+   "parse_special": false,
+   "text": "üǅПривет're @x[wordǅ<function=f>-\\"
+  },
+  {
+   "ids": [
+    74
+   ],
+   "parse_special": true,
+   "text": "]"
+  },
+  {
+   "ids": [
+    74
+   ],
+   "parse_special": false,
+   "text": "]"
+  },
+  {
+   "ids": [
+    28,
+    4392,
+    6458,
+    19
+   ],
+   "parse_special": true,
+   "text": "/word　&"
+  },
+  {
+   "ids": [
+    28,
+    4392,
+    6458,
+    19
+   ],
+   "parse_special": false,
+   "text": "/word　&"
+  },
+  {
+   "ids": [
+    101,
+    198,
+    5580,
+    3533,
+    47401,
+    3892,
+    2285,
+    44
+   ],
+   "parse_special": true,
+   "text": "x\n'm  Привет?"
+  },
+  {
+   "ids": [
+    101,
+    198,
+    5580,
+    3533,
+    47401,
+    3892,
+    2285,
+    44
+   ],
+   "parse_special": false,
+   "text": "x\n'm  Привет?"
+  },
+  {
+   "ids": [
+    3,
+    45,
+    41,
+    105,
+    343,
+    22870,
+    105,
+    43,
+    6382,
+    14409,
+    3,
+    75,
+    256
+   ],
+   "parse_special": true,
+   "text": "<think>@<|im_start|>́ß<think>^  "
+  },
+  {
+   "ids": [
+    3,
+    45,
+    41,
+    105,
+    343,
+    22870,
+    105,
+    43,
+    6382,
+    14409,
+    3,
+    75,
+    256
+   ],
+   "parse_special": false,
+   "text": "<think>@<|im_start|>́ß<think>^  "
+  },
+  {
+   "ids": [
+    956,
+    7632,
+    52352,
+    222,
+    4392,
+    596
+   ],
+   "parse_special": true,
+   "text": "α'll😀wordé"
+  },
+  {
+   "ids": [
+    956,
+    7632,
+    52352,
+    222,
+    4392,
+    596
+   ],
+   "parse_special": false,
+   "text": "α'll😀wordé"
+  },
+  {
+   "ids": [
+    41,
+    105,
+    343,
+    24574,
+    105,
+    43,
+    6382,
+    41,
+    105,
+    343,
+    24574,
+    105,
+    43,
+    14,
+    45184,
+    18
+   ],
+   "parse_special": true,
+   "text": "<|im_end|>́<|im_end|>!WORD%"
+  },
+  {
+   "ids": [
+    41,
+    105,
+    343,
+    24574,
+    105,
+    43,
+    6382,
+    41,
+    105,
+    343,
+    24574,
+    105,
+    43,
+    14,
+    45184,
+    18
+   ],
+   "parse_special": false,
+   "text": "<|im_end|>́<|im_end|>!WORD%"
+  },
+  {
+   "ids": [
+    75
+   ],
+   "parse_special": true,
+   "text": "^"
+  },
+  {
+   "ids": [
+    75
+   ],
+   "parse_special": false,
+   "text": "^"
+  },
+  {
+   "ids": [
+    30
+   ],
+   "parse_special": true,
+   "text": "1"
+  },
+  {
+   "ids": [
+    30
+   ],
+   "parse_special": false,
+   "text": "1"
+  },
+  {
+   "ids": [
+    30,
+    31
+   ],
+   "parse_special": true,
+   "text": "12"
+  },
+  {
+   "ids": [
+    30,
+    31
+   ],
+   "parse_special": false,
+   "text": "12"
+  },
+  {
+   "ids": [
+    30,
+    31,
+    32,
+    33
+   ],
+   "parse_special": true,
+   "text": "1234"
+  },
+  {
+   "ids": [
+    30,
+    31,
+    32,
+    33
+   ],
+   "parse_special": false,
+   "text": "1234"
+  },
+  {
+   "ids": [
+    30,
+    31,
+    32,
+    33,
+    34
+   ],
+   "parse_special": true,
+   "text": "12345"
+  },
+  {
+   "ids": [
+    30,
+    31,
+    32,
+    33,
+    34
+   ],
+   "parse_special": false,
+   "text": "12345"
+  },
+  {
+   "ids": [
+    99,
+    30,
+    27,
+    31,
+    27,
+    32
+   ],
+   "parse_special": true,
+   "text": "v1.2.3"
+  },
+  {
+   "ids": [
+    99,
+    30,
+    27,
+    31,
+    27,
+    32
+   ],
+   "parse_special": false,
+   "text": "v1.2.3"
+  },
+  {
+   "ids": [
+    78,
+    30,
+    79
+   ],
+   "parse_special": true,
+   "text": "a1b"
+  },
+  {
+   "ids": [
+    78,
+    30,
+    79
+   ],
+   "parse_special": false,
+   "text": "a1b"
+  },
+  {
+   "ids": [
+    47260,
+    30,
+    31,
+    32,
+    3068
+   ],
+   "parse_special": true,
+   "text": "abc123def"
+  },
+  {
+   "ids": [
+    47260,
+    30,
+    31,
+    32,
+    3068
+   ],
+   "parse_special": false,
+   "text": "abc123def"
+  },
+  {
+   "ids": [
+    101,
+    31,
+    102,
+    32,
+    103,
+    33
+   ],
+   "parse_special": true,
+   "text": "x2y3z4"
+  },
+  {
+   "ids": [
+    101,
+    31,
+    102,
+    32,
+    103,
+    33
+   ],
+   "parse_special": false,
+   "text": "x2y3z4"
+  },
+  {
+   "ids": [
+    31,
+    29,
+    31,
+    35,
+    26,
+    30,
+    29,
+    26,
+    31,
+    31
+   ],
+   "parse_special": true,
+   "text": "2026-10-22"
+  },
+  {
+   "ids": [
+    31,
+    29,
+    31,
+    35,
+    26,
+    30,
+    29,
+    26,
+    31,
+    31
+   ],
+   "parse_special": false,
+   "text": "2026-10-22"
+  },
+  {
+   "ids": [
+    29,
+    101,
+    30,
+    51,
+    35,
+    29,
+    29
+   ],
+   "parse_special": true,
+   "text": "0x1F600"
+  },
+  {
+   "ids": [
+    29,
+    101,
+    30,
+    51,
+    35,
+    29,
+    29
+   ],
+   "parse_special": false,
+   "text": "0x1F600"
+  },
+  {
+   "ids": [
+    30,
+    29,
+    29,
+    18
+   ],
+   "parse_special": true,
+   "text": "100%"
+  },
+  {
+   "ids": [
+    30,
+    29,
+    29,
+    18
+   ],
+   "parse_special": false,
+   "text": "100%"
+  },
+  {
+   "ids": [
+    17,
+    33,
+    31,
+    27,
+    34,
+    29
+   ],
+   "parse_special": true,
+   "text": "$42.50"
+  },
+  {
+   "ids": [
+    17,
+    33,
+    31,
+    27,
+    34,
+    29
+   ],
+   "parse_special": false,
+   "text": "$42.50"
+  },
+  {
+   "ids": [
+    54,
+    5580
+   ],
+   "parse_special": true,
+   "text": "I'm"
+  },
+  {
+   "ids": [
+    54,
+    5580
+   ],
+   "parse_special": false,
+   "text": "I'm"
+  },
+  {
+   "ids": [
+    18178,
+    6125
+   ],
+   "parse_special": true,
+   "text": "you're"
+  },
+  {
+   "ids": [
+    18178,
+    6125
+   ],
+   "parse_special": false,
+   "text": "you're"
+  },
+  {
+   "ids": [
+    33005,
+    7632
+   ],
+   "parse_special": true,
+   "text": "they'll"
+  },
+  {
+   "ids": [
+    33005,
+    7632
+   ],
+   "parse_special": false,
+   "text": "they'll"
+  },
+  {
+   "ids": [
+    980,
+    7263
+   ],
+   "parse_special": true,
+   "text": "we've"
+  },
+  {
+   "ids": [
+    980,
+    7263
+   ],
+   "parse_special": false,
+   "text": "we've"
+  },
+  {
+   "ids": [
+    31408,
+    7771
+   ],
+   "parse_special": true,
+   "text": "she'd"
+  },
+  {
+   "ids": [
+    31408,
+    7771
+   ],
+   "parse_special": false,
+   "text": "she'd"
+  },
+  {
+   "ids": [
+    282,
+    1045
+   ],
+   "parse_special": true,
+   "text": "it's"
+  },
+  {
+   "ids": [
+    282,
+    1045
+   ],
+   "parse_special": false,
+   "text": "it's"
+  },
+  {
+   "ids": [
+    49,
+    2199,
+    114109
+   ],
+   "parse_special": true,
+   "text": "DON'T"
+  },
+  {
+   "ids": [
+    49,
+    2199,
+    114109
+   ],
+   "parse_special": false,
+   "text": "DON'T"
+  },
+  {
+   "ids": [
+    68,
+    263,
+    2083
+   ],
+   "parse_special": true,
+   "text": "Won't"
+  },
+  {
+   "ids": [
+    68,
+    263,
+    2083
+   ],
+   "parse_special": false,
+   "text": "Won't"
+  },
+  {
+   "ids": [
+    16491,
+    3078
+   ],
+   "parse_special": true,
+   "text": "你好世界"
+  },
+  {
+   "ids": [
+    16491,
+    3078
+   ],
+   "parse_special": false,
+   "text": "你好世界"
+  },
+  {
+   "ids": [
+    10467,
+    464,
+    62195,
+    11266
+   ],
+   "parse_special": true,
+   "text": "中文和English混合"
+  },
+  {
+   "ids": [
+    10467,
+    464,
+    62195,
+    11266
+   ],
+   "parse_special": false,
+   "text": "中文和English混合"
+  },
+  {
+   "ids": [
+    27979,
+    21454,
+    27979,
+    45862
+   ],
+   "parse_special": true,
+   "text": "カタカナ"
+  },
+  {
+   "ids": [
+    27979,
+    21454,
+    27979,
+    45862
+   ],
+   "parse_special": false,
+   "text": "カタカナ"
+  },
+  {
+   "ids": [
+    38267,
+    4210,
+    77097,
+    20503,
+    245,
+    6118
+   ],
+   "parse_special": true,
+   "text": "ภาษาไทย"
+  },
+  {
+   "ids": [
+    38267,
+    4210,
+    77097,
+    20503,
+    245,
+    6118
+   ],
+   "parse_special": false,
+   "text": "ภาษาไทย"
+  },
+  {
+   "ids": [
+    55258,
+    4813,
+    3158,
+    84097
+   ],
+   "parse_special": true,
+   "text": "Γειά σου"
+  },
+  {
+   "ids": [
+    55258,
+    4813,
+    3158,
+    84097
+   ],
+   "parse_special": false,
+   "text": "Γειά σου"
+  },
+  {
+   "ids": [
+    28453,
+    3209,
+    43331,
+    15585,
+    1965,
+    40158
+   ],
+   "parse_special": true,
+   "text": "مرحبا بالعالم"
+  },
+  {
+   "ids": [
+    28453,
+    3209,
+    43331,
+    15585,
+    1965,
+    40158
+   ],
+   "parse_special": false,
+   "text": "مرحبا بالعالم"
+  },
+  {
+   "ids": [
+    47439,
+    14946
+   ],
+   "parse_special": true,
+   "text": "שלום"
+  },
+  {
+   "ids": [
+    47439,
+    14946
+   ],
+   "parse_special": false,
+   "text": "שלום"
+  },
+  {
+   "ids": [
+    384,
+    15736,
+    79690,
+    222,
+    75792,
+    235,
+    109046,
+    135,
+    12213
+   ],
+   "parse_special": true,
+   "text": "emoji 😀👍🏽 mix"
+  },
+  {
+   "ids": [
+    384,
+    15736,
+    79690,
+    222,
+    75792,
+    235,
+    109046,
+    135,
+    12213
+   ],
+   "parse_special": false,
+   "text": "emoji 😀👍🏽 mix"
+  },
+  {
+   "ids": [
+    75792,
+    115,
+    8091,
+    75792,
+    116,
+    8091,
+    75792,
+    114
+   ],
+   "parse_special": true,
+   "text": "👨‍👩‍👧"
+  },
+  {
+   "ids": [
+    75792,
+    115,
+    8091,
+    75792,
+    116,
+    8091,
+    75792,
+    114
+   ],
+   "parse_special": false,
+   "text": "👨‍👩‍👧"
+  },
+  {
+   "ids": [
+    21107,
+    197,
+    12949
+   ],
+   "parse_special": true,
+   "text": "tab\there"
+  },
+  {
+   "ids": [
+    21107,
+    197,
+    12949
+   ],
+   "parse_special": false,
+   "text": "tab\there"
+  },
+  {
+   "ids": [
+    198,
+    198,
+    198
+   ],
+   "parse_special": true,
+   "text": "\n\n\n"
+  },
+  {
+   "ids": [
+    198,
+    198,
+    198
+   ],
+   "parse_special": false,
+   "text": "\n\n\n"
+  },
+  {
+   "ids": [
+    954,
+    954
+   ],
+   "parse_special": true,
+   "text": " \n \n"
+  },
+  {
+   "ids": [
+    954,
+    954
+   ],
+   "parse_special": false,
+   "text": " \n \n"
+  },
+  {
+   "ids": [
+    625,
+    33138,
+    293
+   ],
+   "parse_special": true,
+   "text": "trailing   "
+  },
+  {
+   "ids": [
+    625,
+    33138,
+    293
+   ],
+   "parse_special": false,
+   "text": "trailing   "
+  },
+  {
+   "ids": [
+    256,
+    9963
+   ],
+   "parse_special": true,
+   "text": "   leading"
+  },
+  {
+   "ids": [
+    256,
+    9963
+   ],
+   "parse_special": false,
+   "text": "   leading"
+  },
+  {
+   "ids": [
+    101,
+    201,
+    198,
+    102
+   ],
+   "parse_special": true,
+   "text": "x\r\ny"
+  },
+  {
+   "ids": [
+    101,
+    201,
+    198,
+    102
+   ],
+   "parse_special": false,
+   "text": "x\r\ny"
+  },
+  {
+   "ids": [
+    3068,
+    289,
+    5211,
+    2407,
+    198,
+    293,
+    948,
+    1812,
+    901,
+    220,
+    31,
+    198
+   ],
+   "parse_special": true,
+   "text": "def f(x):\n    return x * 2\n"
+  },
+  {
+   "ids": [
+    3068,
+    289,
+    5211,
+    2407,
+    198,
+    293,
+    948,
+    1812,
+    901,
+    220,
+    31,
+    198
+   ],
+   "parse_special": false,
+   "text": "def f(x):\n    return x * 2\n"
+  },
+  {
+   "ids": [
+    23421,
+    88,
+    4068,
+    1496,
+    30,
+    25,
+    220,
+    31,
+    25,
+    220,
+    32,
+    65764
+   ],
+   "parse_special": true,
+   "text": "{\"k\": [1, 2, 3]}"
+  },
+  {
+   "ids": [
+    23421,
+    88,
+    4068,
+    1496,
+    30,
+    25,
+    220,
+    31,
+    25,
+    220,
+    32,
+    65764
+   ],
+   "parse_special": false,
+   "text": "{\"k\": [1, 2, 3]}"
+  },
+  {
+   "ids": [
+    41,
+    79,
+    43,
+    67543,
+    2717,
+    79,
+    43
+   ],
+   "parse_special": true,
+   "text": "<b>bold</b>"
+  },
+  {
+   "ids": [
+    41,
+    79,
+    43,
+    67543,
+    2717,
+    79,
+    43
+   ],
+   "parse_special": false,
+   "text": "<b>bold</b>"
+  },
+  {
+   "ids": [
+    78,
+    5043,
+    2281
+   ],
+   "parse_special": true,
+   "text": "a.b.c"
+  },
+  {
+   "ids": [
+    78,
+    5043,
+    2281
+   ],
+   "parse_special": false,
+   "text": "a.b.c"
+  },
+  {
+   "ids": [
+    23128,
+    55797
+   ],
+   "parse_special": true,
+   "text": "!!!???"
+  },
+  {
+   "ids": [
+    23128,
+    55797
+   ],
+   "parse_special": false,
+   "text": "!!!???"
+  },
+  {
+   "ids": [
+    474,
+    24287,
+    42,
+    3943
+   ],
+   "parse_special": true,
+   "text": "--flag=value"
+  },
+  {
+   "ids": [
+    474,
+    24287,
+    42,
+    3943
+   ],
+   "parse_special": false,
+   "text": "--flag=value"
+  },
+  {
+   "ids": [
+    30121,
+    933,
+    57211,
+    5326
+   ],
+   "parse_special": true,
+   "text": "snake_case_name"
+  },
+  {
+   "ids": [
+    30121,
+    933,
+    57211,
+    5326
+   ],
+   "parse_special": false,
+   "text": "snake_case_name"
+  },
+  {
+   "ids": [
+    48,
+    30448,
+    15806,
+    2441
+   ],
+   "parse_special": true,
+   "text": "CamelCaseName"
+  },
+  {
+   "ids": [
+    48,
+    30448,
+    15806,
+    2441
+   ],
+   "parse_special": false,
+   "text": "CamelCaseName"
+  },
+  {
+   "ids": [
+    3126,
+    17047,
+    96827,
+    89256,
+    12022
+   ],
+   "parse_special": true,
+   "text": "ALLCAPS WORDS"
+  },
+  {
+   "ids": [
+    3126,
+    17047,
+    96827,
+    89256,
+    12022
+   ],
+   "parse_special": false,
+   "text": "ALLCAPS WORDS"
+  },
+  {
+   "ids": [
+    90,
+    54,
+    101,
+    7864,
+    17988,
+    9398
+   ],
+   "parse_special": true,
+   "text": "mIxEd CaSe"
+  },
+  {
+   "ids": [
+    90,
+    54,
+    101,
+    7864,
+    17988,
+    9398
+   ],
+   "parse_special": false,
+   "text": "mIxEd CaSe"
+  },
+  {
+   "ids": [
+    1325,
+    9339,
+    377,
+    85187,
+    39832,
+    402,
+    596
+   ],
+   "parse_special": true,
+   "text": "naïve café résumé"
+  },
+  {
+   "ids": [
+    1325,
+    9339,
+    377,
+    85187,
+    39832,
+    402,
+    596
+   ],
+   "parse_special": false,
+   "text": "naïve café résumé"
+  },
+  {
+   "ids": [
+    15956,
+    91,
+    9339,
+    80,
+    20583,
+    596
+   ],
+   "parse_special": true,
+   "text": "Ünïcödé"
+  },
+  {
+   "ids": [
+    15956,
+    91,
+    9339,
+    80,
+    20583,
+    596
+   ],
+   "parse_special": false,
+   "text": "Ünïcödé"
+  },
+  {
+   "ids": [
+    43610,
+    13043,
+    2331
+   ],
+   "parse_special": true,
+   "text": "ﬁ ligature"
+  },
+  {
+   "ids": [
+    43610,
+    13043,
+    2331
+   ],
+   "parse_special": false,
+   "text": "ﬁ ligature"
+  },
+  {
+   "ids": [
+    42720,
+    220,
+    123686,
+    220,
+    24261
+   ],
+   "parse_special": true,
+   "text": "½ ¾ ²"
+  },
+  {
+   "ids": [
+    42720,
+    220,
+    123686,
+    220,
+    24261
+   ],
+   "parse_special": false,
+   "text": "½ ¾ ²"
+  },
+  {
+   "ids": [
+    26026,
+    38985,
+    56134,
+    60465,
+    318,
+    56197
+   ],
+   "parse_special": true,
+   "text": "١٢٣ arabic digits"
+  },
+  {
+   "ids": [
+    26026,
+    38985,
+    56134,
+    60465,
+    318,
+    56197
+   ],
+   "parse_special": false,
+   "text": "١٢٣ arabic digits"
+  },
+  {
+   "ids": [
+    16744,
+    20581,
+    31457,
+    3949,
+    267,
+    386,
+    1035,
+    56197
+   ],
+   "parse_special": true,
+   "text": "१२३ devanagari digits"
+  },
+  {
+   "ids": [
+    16744,
+    20581,
+    31457,
+    3949,
+    267,
+    386,
+    1035,
+    56197
+   ],
+   "parse_special": false,
+   "text": "१२३ devanagari digits"
+  },
+  {
+   "ids": [
+    851,
+    2667,
+    24914,
+    30787,
+    41598
+   ],
+   "parse_special": true,
+   "text": "全角１２３"
+  },
+  {
+   "ids": [
+    851,
+    2667,
+    24914,
+    30787,
+    41598
+   ],
+   "parse_special": false,
+   "text": "全角１２３"
+  },
+  {
+   "ids": [
+    101,
+    24261,
+    72125,
+    24261,
+    42,
+    103,
+    24261
+   ],
+   "parse_special": true,
+   "text": "x²+y²=z²"
+  },
+  {
+   "ids": [
+    101,
+    24261,
+    72125,
+    24261,
+    42,
+    103,
+    24261
+   ],
+   "parse_special": false,
+   "text": "x²+y²=z²"
+  },
+  {
+   "ids": [
+    14024,
+    239,
+    14024,
+    118,
+    75677,
+    14024,
+    252
+   ],
+   "parse_special": true,
+   "text": "∑∫√∞"
+  },
+  {
+   "ids": [
+    14024,
+    239,
+    14024,
+    118,
+    75677,
+    14024,
+    252
+   ],
+   "parse_special": false,
+   "text": "∑∫√∞"
+  }
+ ],
+ "n_texts": 366,
+ "oracle": "llama-server /tokenize, add_special=false, CPU, Spark-X2.6-4B BF16"
+}

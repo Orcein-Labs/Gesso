@@ -87,6 +87,7 @@ const ROLE_O = Symbol("attention.o")
 const ROLE_Q_NORM = Symbol("attention.q_norm")
 const ROLE_K_NORM = Symbol("attention.k_norm")
 const ROLE_ATTN_GATE = Symbol("attention.gate")
+const ROLE_ATTN_HEAD_GATE = Symbol("attention.head_gate")
 const ROLE_GATE = Symbol("ffn.gate")
 const ROLE_UP = Symbol("ffn.up")
 const ROLE_DOWN = Symbol("ffn.down")
@@ -173,6 +174,8 @@ const ROLE_TO_SLOT = Dict{Symbol, Symbol}(
     ROLE_Q_NORM => :wq_norm,
     ROLE_K_NORM => :wk_norm,
     ROLE_ATTN_GATE => :wattn_gate,
+    # one sigmoid gate per head (Spark2.5 g_proj), broadcast over head_dim
+    ROLE_ATTN_HEAD_GATE => :wattn_head_gate,
     ROLE_GDN_QKV => :wgdn_qkv,
     ROLE_GDN_Z => :wgdn_z,
     ROLE_GDN_A => :wgdn_a,
@@ -306,6 +309,7 @@ export SemanticParamId,
     ROLE_NORM_PRE_ATTN,
     ROLE_NORM_POST_ATTN,
     ROLE_ATTN_GATE,
+    ROLE_ATTN_HEAD_GATE,
     ROLE_GDN_QKV,
     ROLE_GDN_Z,
     ROLE_GDN_A,

@@ -125,6 +125,12 @@ function _validate_session_plan!(model, tensors, eos)
                 error("nonuniform heads at block $i")
             b.ffn.hidden==hidden || error("nonuniform FFN scratch dimension at block $i")
             bt=tensors.blocks[i]
+            # The paged Session implements plain GQA + SwiGLU only; plans that need
+            # gates, windows, per-layer RoPE or GEGLU run through `reference_generate`.
+            for k in (:wattn_gate, :wattn_head_gate, :attn_window, :rope_layer, :ffn_geglu)
+                haskey(bt, k) &&
+                    error("block $i needs $k, which Session does not implement")
+            end
             kdim=kvheads*d
             for (name, shape) in (
                 (:wq, (dim, dim)),
