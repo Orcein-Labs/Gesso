@@ -195,6 +195,12 @@ end
 
     # in-process determinism at the toy tolerance
     @test approx_eq(Gesso.reference_prefill(model, tensors, tokens), got; atol=0.0)
+
+    # hidden=true returns the states the head reads: hidden times Eᵀ is the logits
+    tf = merge(tensors, (final_rms=final_rms,))
+    hid = Gesso.reference_prefill(model, tf, tokens; hidden=true)
+    @test size(hid) == (16, 3)
+    @test approx_eq(tensors.embedding.storage * hid, got_f; atol=1e-12)
 end
 
 @testset "gqa: repeat-for-contraction equals materialized MHA repeat (atol=0)" begin

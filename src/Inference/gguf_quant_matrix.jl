@@ -12,6 +12,9 @@
 #   * K-quants Q2_K..Q6_K, Q8_0, and IQ2_XXS / IQ2_S / IQ3_S / IQ1_S / IQ1_M:
 #     native integer kernels against Q8_K/Q8_0 activations (`_qgemv_q8k_f32!`,
 #     quant_cpu_kquants.jl and quant_cpu_iq_s.jl);
+#   * F16 and BF16: threaded row dots that widen each weight row once and
+#     dot it with every token, up to 256 tokens; longer prefills widen row
+#     chunks into F32 and run one BLAS GEMM (`_half_matmul!`);
 #   * every other format: FALLBACK. Rows are dequantized per call through the
 #     existing ggml `to_float` path (`_dequant_f32`), in bounded row chunks,
 #     then multiplied in F32. This is a temporary correctness bridge. It is
@@ -53,6 +56,11 @@ _quant_q8k_native(t::Int32) = _q8k_supported_type(t)
 _quant_native(t::Int32) =
     t == GGML_TYPE_F32 || t == GGML_TYPE_IQ2_XS || t == GGML_TYPE_IQ3_XXS || t == GGML_TYPE_IQ4_XS ||
     _quant_q8k_native(t)
+
+const GGML_TYPE_F16 = Int32(1)
+const GGML_TYPE_BF16 = Int32(30)
+
+_quant_half(t::Int32) = t == GGML_TYPE_F16 || t == GGML_TYPE_BF16
 
 _contiguous_rows(rows) = all(i -> rows[i + 1] == rows[i] + 1, 1:(length(rows) - 1))
 
@@ -170,6 +178,7 @@ function _quant_matmul!(dst::AbstractMatrix, x::AbstractMatrix, q::QuantMatrix)
         end
         return dst
     end
+    _quant_half(q.ggml_type) && return _half_matmul!(dst, x, q)
     _note_quant_fallback(q.ggml_type)
     xf = Matrix{Float32}(x)
     nc = max(1, _QUANT_FALLBACK_CHUNK_ELEMS ÷ q.ne0)
@@ -187,6 +196,195 @@ function _quant_matmul!(dst::AbstractMatrix, x::AbstractMatrix, q::QuantMatrix)
         r0 = r1 + 1
     end
     return dst
+end
+
+# ---------------------------------------------------------------- F16 / BF16
+
+# Both widen exactly to Float32: BF16 is the top half of an F32, F16 converts
+# through Float16. Rows are 2-byte elements starting at an even byte offset
+# in the GGUF data section, so a UInt16 pointer reads them in place.
+@inline _half_f32(::Val{GGML_TYPE_BF16}, u::UInt16) = reinterpret(Float32, UInt32(u) << 16)
+@inline _half_f32(::Val{GGML_TYPE_F16}, u::UInt16) = Float32(reinterpret(Float16, u))
+
+# Up to this many tokens run as row dots that read each weight row once for
+# every token (decode, verify windows, short prefills). Longer prefills widen
+# row chunks into F32 and run one BLAS GEMM per chunk.
+const _HALF_ROWDOT_MAX_SEQ = 256
+
+function _half_matmul!(dst::AbstractMatrix, x::AbstractMatrix, q::QuantMatrix)
+    q.row_bytes == 2 * q.ne0 || error("half matmul: row_bytes $(q.row_bytes) ≠ 2·$(q.ne0)")
+    v = Val(q.ggml_type)
+    seq = size(x, 1)
+    if seq <= _HALF_ROWDOT_MAX_SEQ
+        # tokens padded with zero columns to whole tiles of _HALF_TILE
+        xt = zeros(Float32, q.ne0, cld(seq, _HALF_TILE) * _HALF_TILE)
+        @inbounds for t in 1:seq, i in 1:q.ne0
+            xt[i, t] = Float32(x[t, i])
+        end
+        if dst isa Matrix{Float32}
+            _half_rowdot!(dst, xt, q, v)
+        else
+            out = Matrix{Float32}(undef, seq, q.nrows)
+            _half_rowdot!(out, xt, q, v)
+            copyto!(dst, out)
+        end
+        return dst
+    end
+    xf = Matrix{Float32}(x)
+    nc = max(1, _QUANT_FALLBACK_CHUNK_ELEMS ÷ q.ne0)
+    W = Matrix{Float32}(undef, q.ne0, min(nc, q.nrows))
+    out = Matrix{Float32}(undef, seq, min(nc, q.nrows))
+    r0 = 1
+    while r0 <= q.nrows
+        r1 = min(q.nrows, r0 + nc - 1)
+        nr = r1 - r0 + 1
+        _half_widen_rows!(W, q, r0, nr, v)
+        oc = view(out, :, 1:nr)
+        mul!(oc, xf, view(W, :, 1:nr))
+        @inbounds for c in 1:nr, t in 1:seq
+            dst[t, r0 + c - 1] = oc[t, c]
+        end
+        r0 = r1 + 1
+    end
+    return dst
+end
+
+# Tokens per pass over a widened row: four independent FMA chains share each
+# load of the row.
+const _HALF_TILE = 4
+
+# dst[t, j] = Σ_i w[j, i] · xt[i, t] for every row j and token t ≤ size(dst, 1).
+# `xt` has a whole number of _HALF_TILE columns (zero padded). Each row is
+# widened once into a per-task buffer, then dotted with the tokens a tile at a
+# time. Every token runs the same tile code in one fixed order, so a row's
+# result is the same for any chunk count and any number of tokens in the call.
+function _half_rowdot!(dst::Matrix{Float32}, xt::Matrix{Float32}, q::QuantMatrix, v::Val)
+    nc = _qgemv_nchunks(q.nrows)
+    seq = size(dst, 1)
+    size(xt, 2) % _HALF_TILE == 0 && size(xt, 2) >= seq ||
+        error("half rowdot: xt has $(size(xt, 2)) columns for $seq tokens")
+    GC.@preserve q xt dst begin
+        _run_row_chunks!(nc, q.nrows * q.ne0 * seq) do c
+            j0 = div((c - 1) * q.nrows, nc) + 1
+            j1 = div(c * q.nrows, nc)
+            _half_rows!(dst, xt, q, v, j0, j1)
+        end
+    end
+    return dst
+end
+
+# Explicit 8-wide vectors for the row dot. `llvm.fma` is a correctly rounded
+# fused multiply-add on every target (a libm call where the CPU lacks FMA),
+# so the bits do not depend on what the vectorizer would have chosen.
+const _V8 = NTuple{8,VecElement{Float32}}
+
+@inline _v8load(p::Ptr{Float32}) = Base.llvmcall("""
+    %v = load <8 x float>, ptr %0, align 4
+    ret <8 x float> %v""", _V8, Tuple{Ptr{Float32}}, p)
+
+@inline _v8fma(a::_V8, b::_V8, c::_V8) = Base.llvmcall(("""
+    declare <8 x float> @llvm.fma.v8f32(<8 x float>, <8 x float>, <8 x float>)
+    define <8 x float> @entry(<8 x float> %a, <8 x float> %b, <8 x float> %c) #0 {
+        %r = call <8 x float> @llvm.fma.v8f32(<8 x float> %a, <8 x float> %b, <8 x float> %c)
+        ret <8 x float> %r
+    }
+    attributes #0 = { alwaysinline }""", "entry"), _V8, Tuple{_V8,_V8,_V8}, a, b, c)
+
+@inline _v8add(a::_V8, b::_V8) = Base.llvmcall("""
+    %r = fadd <8 x float> %0, %1
+    ret <8 x float> %r""", _V8, Tuple{_V8,_V8}, a, b)
+
+# 16 lanes (two vectors) summed in a fixed tree.
+@inline function _v8sum(a::_V8, b::_V8)
+    c = _v8add(a, b)
+    return ((c[1].value + c[5].value) + (c[3].value + c[7].value)) +
+           ((c[2].value + c[6].value) + (c[4].value + c[8].value))
+end
+
+# Dot one widened row with four token columns. Lane k of 16 accumulates the
+# elements i ≡ k (mod 16) in index order; the n % 16 tail is a scalar fma
+# chain added last. The order is fixed in the source, so a token gets the
+# same bits in any tile slot and in any call.
+@inline function _half_dot4(pb::Ptr{Float32}, p1::Ptr{Float32}, p2::Ptr{Float32},
+                            p3::Ptr{Float32}, p4::Ptr{Float32}, n::Int)
+    z = ntuple(_ -> VecElement(0.0f0), Val(8))
+    a1 = b1 = a2 = b2 = a3 = b3 = a4 = b4 = z
+    i = 0
+    while i + 16 <= n
+        wa = _v8load(pb + 4i)
+        wb = _v8load(pb + 4i + 32)
+        a1 = _v8fma(wa, _v8load(p1 + 4i), a1); b1 = _v8fma(wb, _v8load(p1 + 4i + 32), b1)
+        a2 = _v8fma(wa, _v8load(p2 + 4i), a2); b2 = _v8fma(wb, _v8load(p2 + 4i + 32), b2)
+        a3 = _v8fma(wa, _v8load(p3 + 4i), a3); b3 = _v8fma(wb, _v8load(p3 + 4i + 32), b3)
+        a4 = _v8fma(wa, _v8load(p4 + 4i), a4); b4 = _v8fma(wb, _v8load(p4 + 4i + 32), b4)
+        i += 16
+    end
+    t1 = t2 = t3 = t4 = 0.0f0
+    for k in i+1:n
+        w = unsafe_load(pb, k)
+        t1 = fma(w, unsafe_load(p1, k), t1)
+        t2 = fma(w, unsafe_load(p2, k), t2)
+        t3 = fma(w, unsafe_load(p3, k), t3)
+        t4 = fma(w, unsafe_load(p4, k), t4)
+    end
+    return _v8sum(a1, b1) + t1, _v8sum(a2, b2) + t2, _v8sum(a3, b3) + t3, _v8sum(a4, b4) + t4
+end
+
+# Rows widened per pass over the token tiles once a call has more than 16 tokens.
+const _HALF_ROW_BLOCK = 2
+
+function _half_rows!(dst::Matrix{Float32}, xt::Matrix{Float32}, q::QuantMatrix, v::Val, j0::Int, j1::Int)
+    n = q.ne0
+    seq = size(dst, 1)
+    # Short calls stream row by row so the widened row stays in L1.
+    rb = seq <= 16 ? 1 : _HALF_ROW_BLOCK
+    buf = Vector{Float32}(undef, n * rb)
+    GC.@preserve buf begin
+        @inbounds for b0 in j0:rb:j1
+            b1 = min(b0 + rb - 1, j1)
+            for j in b0:b1
+                pb = pointer(buf, (j - b0) * n + 1)
+                p = Ptr{UInt16}(pointer(q.data, q.offset0 + (j - 1) * q.row_bytes + 1))
+                @simd for i in 1:n
+                    unsafe_store!(pb, _half_f32(v, unsafe_load(p, i)), i)
+                end
+            end
+            for t0 in 1:_HALF_TILE:seq
+                p1 = pointer(xt, (t0 - 1) * n + 1)
+                p2 = p1 + 4n
+                p3 = p2 + 4n
+                p4 = p3 + 4n
+                for j in b0:b1
+                    a1, a2, a3, a4 = _half_dot4(pointer(buf, (j - b0) * n + 1), p1, p2, p3, p4, n)
+                    dst[t0, j] = a1
+                    t0 + 1 <= seq && (dst[t0 + 1, j] = a2)
+                    t0 + 2 <= seq && (dst[t0 + 2, j] = a3)
+                    t0 + 3 <= seq && (dst[t0 + 3, j] = a4)
+                end
+            end
+        end
+    end
+    return nothing
+end
+
+# Columns 1:nr of `W` (ne0, ≥ nr) ← rows r0 .. r0+nr-1 of `q`, widened to F32.
+function _half_widen_rows!(W::Matrix{Float32}, q::QuantMatrix, r0::Int, nr::Int, v::Val)
+    nc = _qgemv_nchunks(nr)
+    n = q.ne0
+    GC.@preserve q W begin
+        _run_row_chunks!(nc, nr * n) do c
+            c0 = div((c - 1) * nr, nc) + 1
+            c1 = div(c * nr, nc)
+            @inbounds for k in c0:c1
+                p = Ptr{UInt16}(pointer(q.data, q.offset0 + (r0 + k - 2) * q.row_bytes + 1))
+                pw = pointer(W, (k - 1) * n + 1)
+                @simd for i in 1:n
+                    unsafe_store!(pw, _half_f32(v, unsafe_load(p, i)), i)
+                end
+            end
+        end
+    end
+    return W
 end
 
 # Prefill (seq > 1) of a Q8_K-kind weight: each token row is quantized once, and

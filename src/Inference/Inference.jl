@@ -97,7 +97,7 @@ Phase 3 (§LXXVI item A): `eps` (default 1e-6) and `theta` (default
 10000.0) thread into `rmsnorm!` / `rope!` — toy2's values, unchanged. If
 `tensors` carries a non-`nothing` `final_rms::FrozenParameter`, a final
 RMSNorm is applied after the last block, before the tied head (Llama's
-`model.norm`; toy2 omits it).GQA supported (`n_kv_heads < n_heads`): K/V cached at `n_kv_heads` and
+`model.norm`; toy2 omits it). `hidden=true` returns those final-normed states, `(dim, seq_len)`, and skips the head.GQA supported (`n_kv_heads < n_heads`): K/V cached at `n_kv_heads` and
 repeated per query head only inside the attention contraction.
 
 Pass `backend=CUDABackend()` (Phase 4, §LXXVII) to run on an NVIDIA GPU —
@@ -161,6 +161,7 @@ function reference_prefill(
     backend::AbstractGessoBackend=CPUBackend(),
     eps::Real=1e-6,
     theta=nothing,
+    hidden::Bool=false,
 )
     isempty(tokens) && error("reference_prefill: token sequence is empty")
     theta=_resolved_rope_theta(tensors, theta)
@@ -333,6 +334,8 @@ function reference_prefill(
         rmsnorm!(cpu, finaln, h, final_rms, wl; eps)
         hhead = finaln
     end
+    # `hidden=true`: the final-normed states the head would read, (dim, seq).
+    hidden && return permutedims(hhead.storage)
 
     # tied embedding head: logits(t, :) = hhead(t, :) * Eᵀ → (seq, vocab).
     # The head's weight IS the embedding table (tied) — same bytes, viewed
@@ -813,18 +816,85 @@ _attention_decode_device!(backend, attn, q, kc, vc, n_heads, d_head, group, K) =
 # keeps the reference repeat + per-head path.
 _attention_prefill_device!(backend, attn, q, k, v, n_heads, d_head, group, L, K) = false
 
+# The CPU reference attention. Each score accumulates over the head dim in
+# order and each output over the keys in order; the decode path in
+# cpu_decode.jl is pinned bit-for-bit to that order. The loops below keep it
+# per element. A query row's scores run the head dim outer and the keys inner
+# (keys are contiguous in `k`). Its outputs run the keys outer over a
+# transposed copy of the head's values. Rows are independent, so they split
+# across threads.
 function _attention_scores_cpu!(sc, q, k, hh, d_head, L, K)
-    for t in 1:L, u in 1:K, j in 1:d_head
-        sc[t, u] += q[t, hh, j] * k[u, hh, j] / sqrt(d_head)
+    if !_attention_rows_threaded(L, K * d_head)
+        for t in 1:L, u in 1:K, j in 1:d_head
+            sc[t, u] += q[t, hh, j] * k[u, hh, j] / sqrt(d_head)
+        end
+        return sc
+    end
+    _attention_rows!(L) do rows
+        acc = Vector{eltype(sc)}(undef, K)
+        for t in rows
+            @inbounds for u in 1:K
+                acc[u] = sc[t, u]
+            end
+            for j in 1:d_head
+                qv = q[t, hh, j]
+                @inbounds for u in 1:K
+                    acc[u] += qv * k[u, hh, j] / sqrt(d_head)
+                end
+            end
+            @inbounds for u in 1:K
+                sc[t, u] = acc[u]
+            end
+        end
     end
     return sc
 end
 
 function _attention_values_cpu!(attn, probs, v, hh, d_head, L, K)
-    for t in 1:L, j in 1:d_head, u in 1:K
-        attn[t, hh, j] += probs[t, u] * v[u, hh, j]
+    if !_attention_rows_threaded(L, K * d_head)
+        for t in 1:L, j in 1:d_head, u in 1:K
+            attn[t, hh, j] += probs[t, u] * v[u, hh, j]
+        end
+        return attn
+    end
+    vt = Matrix{eltype(v)}(undef, d_head, K)
+    @inbounds for u in 1:K, j in 1:d_head
+        vt[j, u] = v[u, hh, j]
+    end
+    _attention_rows!(L) do rows
+        acc = Vector{eltype(attn)}(undef, d_head)
+        for t in rows
+            @inbounds for j in 1:d_head
+                acc[j] = attn[t, hh, j]
+            end
+            for u in 1:K
+                p = probs[t, u]
+                @inbounds for j in 1:d_head
+                    acc[j] += p * vt[j, u]
+                end
+            end
+            @inbounds for j in 1:d_head
+                attn[t, hh, j] = acc[j]
+            end
+        end
     end
     return attn
+end
+
+# Small calls (decode, short prompts) keep the plain loops above: they do not
+# allocate, which the warmed-decode allocation caps in test_decode_scratch.jl
+# rely on. Larger calls split contiguous row ranges across threads.
+_attention_rows_threaded(L::Int, work::Int) =
+    Threads.nthreads() > 1 && L > 1 && L * work >= 1 << 20
+
+function _attention_rows!(f, L::Int)
+    nc = min(Threads.nthreads(), L)
+    @sync for c in 1:nc
+        lo = div((c - 1) * L, nc) + 1
+        hi = div(c * L, nc)
+        Threads.@spawn f($lo:$hi)
+    end
+    return nothing
 end
 
 # head-major split/merge between (seq, dim) and (seq, n_heads, d_head).

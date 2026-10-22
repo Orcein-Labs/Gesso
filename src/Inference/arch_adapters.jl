@@ -715,7 +715,7 @@ function gguf_param_map(::Qwen35Adapter, spec::ArchitectureSpec)
         full,
         "token_embd.weight",
         "output_norm.weight",
-        "output.weight";
+        spec.tie_word_embeddings ? nothing : "output.weight";
         linear_refs=linear,
     )
 end
@@ -774,7 +774,7 @@ function gguf_param_map(::Qwen35MoeAdapter, spec::ArchitectureSpec)
         full,
         "token_embd.weight",
         "output_norm.weight",
-        "output.weight";
+        spec.tie_word_embeddings ? nothing : "output.weight";
         linear_refs=linear,
     )
 end

@@ -198,6 +198,15 @@ end
     @test spec.moe !== nothing
     @test spec.moe.n_experts == 16
     @test spec.intermediate_size == 48
+    @test !spec.tie_word_embeddings
+
+    # a file without output.weight has a tied head (Qwen3.5-0.8B ships this way)
+    names = Set(["token_embd.weight", "output_norm.weight"])
+    tied = _GI.spec_from_gguf_kv(kv; tensor_names=names)
+    @test tied.tie_word_embeddings
+    @test _GI._gguf_param_map(tied).lm_head_external === nothing
+    @test _GI.spec_from_gguf_kv(kv; tensor_names=push!(copy(names), "output.weight")).tie_word_embeddings == false
+
     @test spec.num_layers == 4
 
     kv["general.architecture"] = "kolibri1"

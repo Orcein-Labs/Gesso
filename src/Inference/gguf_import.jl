@@ -368,6 +368,7 @@ function spec_from_gguf_kv(kv::AbstractDict; tensor_names=nothing)
     rotary_dim = Int(p("rope.dimension_count", 0))
     section = Int[Int(x) for x in p("rope.dimension_sections", Int[])]
     isempty(section) || (section = filter(>(0), section))
+    tied = tensor_names !== nothing && !("output.weight" in tensor_names)
     # GGUF already bakes RMSNorm +1 except ssm_norm; do not set :rms_unit_offset.
     return ArchitectureSpec(;
         family,
@@ -379,7 +380,7 @@ function spec_from_gguf_kv(kv::AbstractDict; tensor_names=nothing)
         intermediate_size=intermediate,
         head_dim=head_dim > 0 ? head_dim : nothing,
         rope=RoPEPolicy(; theta, rotary_dim, interleaved=false, mrope_section=section),
-        tie_word_embeddings=false,
+        tie_word_embeddings=tied,
         features=feats,
         mixer,
         rms_norm_eps=Float64(p("attention.layer_norm_rms_epsilon", 1e-6)),
