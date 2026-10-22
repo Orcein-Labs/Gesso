@@ -1,4 +1,5 @@
-# GGUF byte-level BPE tokenizer for the qwen35 pre-tokenizer (Ornith-35B).
+# GGUF byte-level BPE tokenizer for the qwen35 (Ornith-35B) and spark2_5
+# (Spark-X2.6) pre-tokenizers.
 #
 # The tokenizer section of a GGUF header (tokens, token types, merges, special
 # ids, chat template) is read by its own scan. gguf_header and load_gguf are
@@ -9,6 +10,10 @@
 #     PCRE string in llama-vocab.cpp is only its documentation; the custom
 #     splitter is what runs. Its \s is the explicit unicode_set_whitespace set,
 #     because Julia's \s is ASCII-only.
+#   * spark2_5 has no custom splitter in llama.cpp. It runs the generic path
+#     in unicode_regex_split: four regexes in sequence, each over every chunk
+#     the previous one left, on the "collapsed" text where each codepoint is
+#     one byte (see _spark25_split).
 #   * specials: the CONTROL, USER_DEFINED and UNKNOWN tokens, longest text
 #     first. Each one splits every raw fragment left by the ones before it
 #     (tokenizer_st_partition). parse_special=false leaves CONTROL and UNKNOWN
@@ -63,7 +68,16 @@ struct GGUFBPE <: Tokenizer
     eos_token_id::Union{Nothing, Int}
     pad_token_id::Union{Nothing, Int}
     chat_template::Union{Nothing, String}
+    pre::Symbol                             # :qwen35 or :spark2_5
 end
+
+# The qwen35 tokenizer, for callers that predate the `pre` field.
+GGUFBPE(tokens, token_type, vocab, byte_id, merge_rank, merge_left, merge_right,
+    merge_target, specials, bos, eos, pad, chat_template) =
+    GGUFBPE(tokens, token_type, vocab, byte_id, merge_rank, merge_left, merge_right,
+        merge_target, specials, bos, eos, pad, chat_template, :qwen35)
+
+const _GGUF_PRE = Dict("qwen35" => :qwen35, "spark2_5" => :spark2_5)
 
 # --- the GGUF tokenizer section ------------------------------------------------
 
@@ -115,7 +129,9 @@ function _load_gguf_tokenizer_impl(path::AbstractString)
     model = get(kv, "tokenizer.ggml.model", nothing)
     model == "gpt2" || error("load_gguf_tokenizer: tokenizer.ggml.model is $(repr(model)), want \"gpt2\"")
     pre = get(kv, "tokenizer.ggml.pre", nothing)
-    pre == "qwen35" || error("load_gguf_tokenizer: tokenizer.ggml.pre is $(repr(pre)), want \"qwen35\"")
+    haskey(_GGUF_PRE, pre) || error(
+        "load_gguf_tokenizer: tokenizer.ggml.pre is $(repr(pre)), want one of $(join(repr.(sort!(collect(keys(_GGUF_PRE)))), ", "))",
+    )
     haskey(kv, "tokenizer.ggml.tokens") || error("load_gguf_tokenizer: no tokenizer.ggml.tokens in $path")
     haskey(kv, "tokenizer.ggml.token_type") || error("load_gguf_tokenizer: no tokenizer.ggml.token_type in $path")
     haskey(kv, "tokenizer.ggml.merges") || error("load_gguf_tokenizer: no tokenizer.ggml.merges in $path")
@@ -144,7 +160,15 @@ function _load_gguf_tokenizer_impl(path::AbstractString)
     for b in 0:255
         s = string(_BYTES_TO_UNICODE[UInt8(b)])
         id = get(vocab, s, nothing)
-        id === nothing && error("load_gguf_tokenizer: byte $b has no single-character token $(repr(s))")
+        # 0xC0, 0xC1 and 0xF5-0xFF never occur in valid UTF-8, and some
+        # vocabularies (Spark-X2.6) leave them out. Mark them -1; encode
+        # rejects them if invalid UTF-8 ever reaches it.
+        if id === nothing
+            (b == 0xc0 || b == 0xc1 || b >= 0xf5) || error(
+                "load_gguf_tokenizer: byte $b has no single-character token $(repr(s))",
+            )
+            id = -1
+        end
         byte_id[b+1] = id
     end
 
@@ -191,6 +215,7 @@ function _load_gguf_tokenizer_impl(path::AbstractString)
         _special_id("tokenizer.ggml.eos_token_id"),
         _special_id("tokenizer.ggml.padding_token_id"),
         get(kv, "tokenizer.chat_template", nothing),
+        _GGUF_PRE[pre],
     )
 end
 
@@ -318,6 +343,114 @@ function _qwen35_split(cp::Vector{UInt32})
     return out
 end
 
+# --- spark2_5 pre-tokenizer ----------------------------------------------------
+#
+# llama.cpp (llama-vocab.cpp, LLAMA_VOCAB_PRE_TYPE_SPARK2_5) runs, in order:
+#   1. \p{N}{1,3}
+#   2. [一-龥぀-ゟ゠-ヿ]+
+#   3. [!"#$%&'()*+,\-./:;<=>?@\[\\\]^_`{|}~][A-Za-z]+|[^\r\n\p{L}\p{P}\p{S}]?[\p{L}\p{M}]+| ?[\p{P}\p{S}]+|[\r\n]|\s+(?!\S)|\s+
+#   4. \p{N}
+# Each regex runs over each chunk on its own, so a lookahead stops at the chunk
+# end; both the matches and the gaps between them become chunks. Regexes that
+# use \p{..} run on the collapsed text: an ASCII codepoint stays itself, other
+# whitespace becomes 0x0B, and other codepoints become one byte per category
+# (N 0xD1, L 0xD2, P 0xD3, M 0xD4, S 0xD5, anything else 0xD0). Each \p{X} in
+# the pattern becomes [that byte + the ASCII members of X]. PCRE without the
+# UTF flag works on bytes, so byte offsets are codepoint offsets. Regex 2 has
+# no \p{..} and runs on the codepoints, which is a plain range test here.
+
+const _SP_N = "\\xd10-9"
+const _SP_L = "\\xd2A-Za-z"
+const _SP_P = "\\xd3!-#%-*,-/:-;?-@\\[-\\]_\\{\\}"
+const _SP_M = "\\xd4"
+const _SP_S = "\\xd5\\\$\\+<->\\^`\\|~"
+
+_sp_regex(p::String) = Regex(p, Base.PCRE.ALT_BSUX, UInt32(0))
+
+const _SP_RE1 = _sp_regex("[$(_SP_N)]{1,3}")
+const _SP_RE3 = _sp_regex(
+    "[!\"#\\\$%&'()*+,\\-./:;<=>?@\\[\\\\\\]^_`{|}~][A-Za-z]+" *
+    "|[^\\r\\n$(_SP_L)$(_SP_P)$(_SP_S)]?[$(_SP_L)$(_SP_M)]+" *
+    "| ?[$(_SP_P)$(_SP_S)]+|[\\r\\n]|\\s+(?!\\S)|\\s+",
+)
+const _SP_RE4 = _sp_regex("[$(_SP_N)]")
+
+function _sp_collapse(c::UInt32)::UInt8
+    c < 0x80 && return UInt8(c)
+    _q35_is_ws(c) && return 0x0b
+    cat = Base.Unicode.category_code(Char(c))
+    1 <= cat <= 5 && return 0xd2
+    6 <= cat <= 8 && return 0xd4
+    9 <= cat <= 11 && return 0xd1
+    12 <= cat <= 18 && return 0xd3
+    19 <= cat <= 22 && return 0xd5
+    return 0xd0
+end
+
+_sp_cjk(c::UInt32) =
+    (0x4e00 <= c <= 0x9fa5) || (0x3040 <= c <= 0x309f) || (0x30a0 <= c <= 0x30ff)
+
+# unicode_regex_split_stl over the collapsed bytes: chunk lengths in, chunk
+# lengths out.
+function _sp_regex_split(col::Vector{UInt8}, re::Regex, lens::Vector{Int})
+    out = Int[]
+    start = 0
+    for len in lens
+        sub = String(col[(start+1):(start+len)])
+        pos = 0
+        while pos < len
+            m = match(re, sub, pos + 1)
+            m === nothing && break
+            a = m.offset - 1
+            n = ncodeunits(m.match)
+            a > pos && push!(out, a - pos)
+            push!(out, n)
+            pos = a + n
+        end
+        pos < len && push!(out, len - pos)
+        start += len
+    end
+    return out
+end
+
+function _sp_cjk_split(cp::Vector{UInt32}, lens::Vector{Int})
+    out = Int[]
+    start = 0
+    for len in lens
+        i = start
+        stop = start + len
+        while i < stop
+            j = i
+            k = _sp_cjk(cp[i+1])
+            while j < stop && _sp_cjk(cp[j+1]) == k
+                j += 1
+            end
+            push!(out, j - i)
+            i = j
+        end
+        start = stop
+    end
+    return out
+end
+
+# Same contract as _qwen35_split: 0-based half-open codepoint ranges in order.
+function _spark25_split(cp::Vector{UInt32})
+    isempty(cp) && return Tuple{Int, Int}[]
+    col = UInt8[_sp_collapse(c) for c in cp]
+    lens = [length(cp)]
+    lens = _sp_regex_split(col, _SP_RE1, lens)
+    lens = _sp_cjk_split(cp, lens)
+    lens = _sp_regex_split(col, _SP_RE3, lens)
+    lens = _sp_regex_split(col, _SP_RE4, lens)
+    out = Vector{Tuple{Int, Int}}(undef, length(lens))
+    a = 0
+    for (i, n) in enumerate(lens)
+        out[i] = (a, a + n)
+        a += n
+    end
+    return out
+end
+
 # --- encode ---------------------------------------------------------------------
 
 _pair_key(a::Int, b::Int) = (UInt64(a) << 32) | UInt64(b)
@@ -363,10 +496,14 @@ function _encode_raw!(ids::Vector{Int}, tk::GGUFBPE, s::String)
     end
     push!(boff, ncodeunits(s) + 1)
     cu = codeunits(s)
-    for (a, b) in _qwen35_split(cps)
+    for (a, b) in (tk.pre === :spark2_5 ? _spark25_split(cps) : _qwen35_split(cps))
         syms = Int[]
         for k in boff[a+1]:(boff[b+1]-1)
-            push!(syms, tk.byte_id[Int(cu[k]) + 1])
+            id = tk.byte_id[Int(cu[k])+1]
+            id >= 0 || error(
+                "encode: byte 0x$(string(cu[k]; base=16)) is not valid UTF-8 and has no token",
+            )
+            push!(syms, id)
         end
         _merge_ids!(syms, tk)
         append!(ids, syms)
@@ -466,7 +603,7 @@ function decode(tk::GGUFBPE, ids::AbstractVector{<:Integer})
 end
 
 tokenizer_metadata(tk::GGUFBPE) = (
-    kind=:gguf_qwen35_bpe,
+    kind=tk.pre === :spark2_5 ? :gguf_spark25_bpe : :gguf_qwen35_bpe,
     vocab_size=length(tk.tokens),
     bos_token_id=tk.bos_token_id,
     eos_token_id=tk.eos_token_id,

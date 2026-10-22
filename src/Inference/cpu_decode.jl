@@ -57,6 +57,7 @@ struct CPUDecodeScratch{R<:AbstractFloat}
     down::Matrix{R}         # (1, dim) FFN output
     q::Matrix{R}            # (1, qdim)
     gate_attn::Matrix{R}    # (1, qdim) attention output gate
+    gate_head::Matrix{R}    # (1, n_heads) per-head attention output gate
     k::Matrix{R}            # (1, kdim)
     v::Matrix{R}            # (1, kdim)
     qh::Array{R,3}          # (1, n_heads, d_head)
@@ -116,6 +117,7 @@ function _cpu_decode_scratch(mx, dim::Integer; qdim::Integer=0, ff::Integer=0,
         zeros(R, 1, dim),
         zeros(R, 1, qdim),
         zeros(R, 1, qdim),
+        zeros(R, 1, n_heads),
         zeros(R, 1, kdim),
         zeros(R, 1, kdim),
         zeros(R, 1, n_heads, d_head),
@@ -439,38 +441,43 @@ end
 # is the `_cpu_softmax_storage!` sequence (max, exp, Float64 sum, divide), and
 # values accumulate per output over the keys in order. The outputs are
 # therefore bit-identical to the reference, not just within tolerance.
+#
+# A sliding `window` reads only the last `window` rows. The reference masks the
+# rows before them to -Inf, which the softmax turns into exact zeros, so the
+# skipped rows add nothing there either and the outputs stay identical.
 function _attention_decode_cpu!(attn, q, kc, vc, probs::AbstractVector,
-    n_heads::Int, d_head::Int, group::Int, K::Int)
+    n_heads::Int, d_head::Int, group::Int, K::Int; window::Int=0)
     fill!(attn, 0.0f0)
+    lo = window > 0 ? max(1, K - window + 1) : 1
     sqd = sqrt(d_head)
     @inbounds for hh in 1:n_heads
         hk = div(hh - 1, group) + 1
-        for u in 1:K
+        for u in lo:K
             probs[u] = 0.0f0
         end
         for j in 1:d_head
             qv = q[1, hh, j]
-            for u in 1:K
+            for u in lo:K
                 probs[u] += qv * kc[u, hk, j] / sqd
             end
         end
-        row_max = probs[1]
-        for u in 2:K
+        row_max = probs[lo]
+        for u in (lo+1):K
             row_max = max(row_max, probs[u])
         end
         isfinite(row_max) || throw(
             gesso_error(ERR_NUMERICAL_INSTABILITY, "softmax!: no finite unmasked maximum"),
         )
         acc = 0.0
-        for u in 1:K
+        for u in lo:K
             probs[u] = exp(probs[u] - row_max)
             acc += probs[u]
         end
-        for u in 1:K
+        for u in lo:K
             probs[u] /= acc
         end
         for j in 1:d_head
-            for u in 1:K
+            for u in lo:K
                 attn[1, hh, j] += probs[u] * vc[u, hk, j]
             end
         end

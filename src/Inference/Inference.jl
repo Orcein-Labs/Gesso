@@ -60,6 +60,7 @@ using ..Gesso:
     _cpu_gated_delta_rule!,
     _cpu_causal_conv1d_silu!,
     _cpu_sigmoid_mul!,
+    _cpu_geglu!,
     _cpu_silu,
     _cpu_sigmoid,
     _cpu_softplus,
@@ -199,6 +200,7 @@ function reference_prefill(
     normed = Activation(; shape=(seq, dim), storage=zeros_like((seq, dim)))
     q = Activation(; shape=(seq, qdim), storage=zeros_like((seq, qdim)))
     gate_attn = Activation(; shape=(seq, qdim), storage=zeros_like((seq, qdim)))
+    gate_head = Activation(; shape=(seq, n_heads), storage=zeros_like((seq, n_heads)))
     kdim = n_kv_heads * d_head
     k = Activation(; shape=(seq, kdim), storage=zeros_like((seq, kdim)))
     v = Activation(; shape=(seq, kdim), storage=zeros_like((seq, kdim)))
@@ -270,16 +272,17 @@ function reference_prefill(
             rmsnorm!(cpu, kh, kh, bt.wk_norm, wl; eps)
         end
 
+        br = _block_rope(bt, theta, inv_freq, rotary_dim)
         rope!(
             cpu,
             qh,
             kh,
             positions,
             wl;
-            theta,
-            inv_freq,
+            theta=br.theta,
+            inv_freq=br.inv_freq,
             interleaved=_tensors_rope_interleaved(tensors),
-            rotary_dim,
+            rotary_dim=br.rotary_dim,
         )
 
         # repeat KV heads for the contraction only (identity when MHA)
@@ -298,13 +301,18 @@ function reference_prefill(
             d_head,
             seq,
             seq,
-            wl,
+            wl;
+            window=_block_window(bt),
         )
 
         _merge_heads!(merged, attn, n_heads, d_head)
         if haskey(bt, :wattn_gate)
             matmul!(cpu, gate_attn, normed, bt.wattn_gate, wl)
             _sigmoid_mul!(cpu, merged.storage, merged.storage, gate_attn.storage)
+        end
+        if haskey(bt, :wattn_head_gate)
+            matmul!(cpu, gate_head, normed, bt.wattn_head_gate, wl)
+            _head_gate_mul!(cpu, merged.storage, gate_head.storage, d_head)
         end
         matmul!(cpu, sub, merged, bt.wo, wl)
         h.storage .+= sub.storage               # residual (interpreter add)
@@ -363,6 +371,31 @@ end
 
 function _sigmoid_mul!(backend, dst, src, gate)
     return _cpu_sigmoid_mul!(dst, src, gate)
+end
+
+# GEGLU FFN activation, act = gelu(gate) .* up with the exact (erf) GELU.
+function _geglu!(backend, act, gate, up)
+    _cpu_geglu!(act.storage, gate.storage, up.storage)
+    return act
+end
+
+# Per-head attention output gate: head h of row t of the merged attention
+# output is scaled by sigmoid(g[t, h]). `merged` is (L, n_heads * d_head),
+# head-major as `_merge_heads!` writes it; `g` is (L, n_heads).
+function _head_gate_mul!(backend, merged::Array, g::Array, d_head::Int)
+    for h in axes(g, 2), t in axes(g, 1)
+        s = _cpu_sigmoid(Float64(g[t, h]))
+        for j in ((h-1)*d_head+1):(h*d_head)
+            merged[t, j] *= s
+        end
+    end
+    return merged
+end
+function _head_gate_mul!(backend, merged, g, d_head::Int)
+    m3 = reshape(merged, size(merged, 1), d_head, size(g, 2))
+    m3 .*=
+        reshape(one(eltype(g)) ./ (one(eltype(g)) .+ exp.(-g)), size(g, 1), 1, size(g, 2))
+    return merged
 end
 
 function _silu_mul!(backend, dst, src, gate)
@@ -560,7 +593,11 @@ function _ffn_block!(cpu, down, gate, up, act, normed2, bt, wl, zeros_like;
         @decode_sub :ffn_gateup cpu begin
             _dec_matmul_group!(cpu, (gate, up), xq_in, normed2, (bt.wgate, bt.wup), wl)
         end
-        @decode_sub :ffn_act cpu swiglu!(cpu, act, gate, up, wl)
+        @decode_sub :ffn_act cpu if haskey(bt, :ffn_geglu)
+            _geglu!(cpu, act, gate, up)
+        else
+            swiglu!(cpu, act, gate, up, wl)
+        end
         @decode_sub :ffn_down cpu _dec_matmul_group!(cpu, (down,), xq_ff, act, (bt.wdown,), wl)
     end
     return down
@@ -686,7 +723,8 @@ function _attention_heads!(
     d_head::Int,
     L::Int,
     K::Int,
-    workload,
+    workload;
+    window::Int=0,
 )
     sc, probs = scores.storage, scores_out.storage
     on_cpu = backend_name(backend) === :cpu
@@ -700,6 +738,7 @@ function _attention_heads!(
             # transfer, no cross-head contraction, no padded keys.
             _attention_scores_device!(backend, sc, q, k, hh, d_head, K)
         end
+        window > 0 && _window_mask!(sc, L, K, window)
         softmax!(backend, scores_out, scores, workload)
         if on_cpu
             _attention_values_cpu!(attn, probs, v, hh, d_head, L, K)
@@ -709,6 +748,28 @@ function _attention_heads!(
     end
     return attn
 end
+
+# Sliding-window mask, applied to the scores before the causal softmax. Rows
+# align to the last K keys as in `_cpu_softmax_storage!`: query row i sits at
+# key index K - L + i and sees only the `window` keys ending there, so key j is
+# masked when (K - L + i) - j >= window (Hugging Face's `q - k >= window`).
+function _window_mask!(sc, L::Int, K::Int, window::Int)
+    offset = K - L
+    for i in 1:L
+        hi = min(offset + i - window, K)
+        hi >= 1 && fill!(view(sc, i, 1:hi), eltype(sc)(-Inf))
+    end
+    return sc
+end
+
+# A block's attention window: 0 (full causal attention) unless the family
+# declares a per-layer window.
+@inline _block_window(bt) = haskey(bt, :attn_window) ? Int(bt.attn_window) : 0
+
+# A block's RoPE arguments. A family with per-layer RoPE carries its own in
+# the block; every other block uses the model-wide policy.
+@inline _block_rope(bt, theta, inv_freq, rotary_dim) =
+    haskey(bt, :rope_layer) ? bt.rope_layer : (; theta, inv_freq, rotary_dim)
 
 # Backend-specific in-place realizations may replace these ordinary slice
 # contractions without altering the shared attention/softmax semantics.
@@ -1304,6 +1365,7 @@ function reference_generate(
             normed = Activation(; shape=(n, dim), storage=tmp((n, dim)))
             q = Activation(; shape=(n, qdim), storage=tmp((n, qdim)))
             gate_attn = Activation(; shape=(n, qdim), storage=tmp((n, qdim)))
+            gate_head = Activation(; shape=(n, n_heads), storage=tmp((n, n_heads)))
             k = Activation(; shape=(n, kdim), storage=tmp((n, kdim)))
             v = Activation(; shape=(n, kdim), storage=tmp((n, kdim)))
             qh = Activation(; shape=(n, n_heads, d_head), storage=tmp((n, n_heads, d_head)))
@@ -1354,16 +1416,17 @@ function reference_generate(
                             rmsnorm!(cpu, qh, qh, bt.wq_norm, wp; eps)
                             rmsnorm!(cpu, kh, kh, bt.wk_norm, wp; eps)
                         end
+                        br = _block_rope(bt, theta, inv_freq, rotary_dim)
                         rope!(
                             cpu,
                             qh,
                             kh,
                             positions,
                             wp;
-                            theta,
-                            inv_freq,
+                            theta=br.theta,
+                            inv_freq=br.inv_freq,
                             interleaved=_tensors_rope_interleaved(tensors),
-                            rotary_dim,
+                            rotary_dim=br.rotary_dim,
                         )
                         # KV APPEND: the pass's post-rope K/V become cache rows s0..s1,
                         # stored at n_kv_heads (GQA caches the small side, §LXXVI)
@@ -1377,8 +1440,22 @@ function reference_generate(
                             Activation(; shape=(K, n_kv_heads, d_head), storage=@view vc[bi].storage[1:K, :, :]))
                         kv_rot = _kv_rotated(kc[bi].storage)
                         kv_rot && _kv_rotate!(qh.storage, true)
-                        if !_attention_prefill_device!(cpu, attn.storage, qh.storage,
-                            ks.storage, vs.storage, n_heads, d_head, group, n, K)
+                        # a window that masks keys takes the reference path,
+                        # which applies it; the device kernels are full-causal
+                        window = _block_window(bt)
+                        if (window > 0 && K > window) ||
+                           !_attention_prefill_device!(
+                            cpu,
+                            attn.storage,
+                            qh.storage,
+                            ks.storage,
+                            vs.storage,
+                            n_heads,
+                            d_head,
+                            group,
+                            n,
+                            K,
+                        )
                             if scores === nothing
                                 scores = TemporaryWorkspace(; shape=(n, K), storage=tmp((n, K)))
                                 scores_out = TemporaryWorkspace(; shape=(n, K), storage=tmp((n, K)))
@@ -1398,7 +1475,8 @@ function reference_generate(
                                 d_head,
                                 n,
                                 K,
-                                wp,
+                                wp;
+                                window,
                             )
                             kx === ks || (_release_storage!(kx.storage); _release_storage!(vx.storage))
                         end
@@ -1408,6 +1486,10 @@ function reference_generate(
                         if haskey(bt, :wattn_gate)
                             matmul!(cpu, gate_attn, normed, bt.wattn_gate, wp)
                             _sigmoid_mul!(cpu, merged.storage, merged.storage, gate_attn.storage)
+                        end
+                        if haskey(bt, :wattn_head_gate)
+                            matmul!(cpu, gate_head, normed, bt.wattn_head_gate, wp)
+                            _head_gate_mul!(cpu, merged.storage, gate_head.storage, d_head)
                         end
                         matmul!(cpu, sub, merged, bt.wo, wp)
                         hp.storage .+= sub.storage
@@ -1592,6 +1674,7 @@ function _decode_row_buffers(cpu_scratch, zeros_like, dim::Int, kdim::Int, qdim:
     normed = Activation(; shape=(1, dim), storage=_decode_buf(cpu_scratch, Val(:normed), zeros_like, (1, dim)))
     q = Activation(; shape=(1, qdim), storage=_decode_buf(cpu_scratch, Val(:q), zeros_like, (1, qdim)))
     gate_attn = Activation(; shape=(1, qdim), storage=_decode_buf(cpu_scratch, Val(:gate_attn), zeros_like, (1, qdim)))
+    gate_head = Activation(; shape=(1, n_heads), storage=_decode_buf(cpu_scratch, Val(:gate_head), zeros_like, (1, n_heads)))
     k = Activation(; shape=(1, kdim), storage=_decode_buf(cpu_scratch, Val(:k), zeros_like, (1, kdim)))
     v = Activation(; shape=(1, kdim), storage=_decode_buf(cpu_scratch, Val(:v), zeros_like, (1, kdim)))
     qh = Activation(; shape=(1, n_heads, d_head), storage=_decode_buf(cpu_scratch, Val(:qh), zeros_like, (1, n_heads, d_head)))
@@ -1614,8 +1697,8 @@ function _decode_row_buffers(cpu_scratch, zeros_like, dim::Int, kdim::Int, qdim:
     xq_dim = _decode_xq(cpu_scratch, Val(:xq_dim))
     xq_qdim = _decode_xq(cpu_scratch, Val(:xq_qdim))
     xq_ff = _decode_xq(cpu_scratch, Val(:xq_ff))
-    return (; hp, normed, q, gate_attn, k, v, qh, kh, vh, attn, merged, sub, normed2,
-        gate, up, act, down, xq_dim, xq_qdim, xq_ff)
+    return (; hp, normed, q, gate_attn, gate_head, k, v, qh, kh, vh, attn, merged, sub,
+        normed2, gate, up, act, down, xq_dim, xq_qdim, xq_ff)
 end
 
 # Attention half of one decode block for layer `bi`: norm, QKV projections, the
@@ -1636,6 +1719,9 @@ function _decode_attn_block!(bt, bi::Int, kc, vc, bufs, cpu, wl, tensors, zeros_
             else
                 _dec_matmul_group!(cpu, (q, k, v), xq_dim, normed, (bt.wq, bt.wk, bt.wv), wl)
             end
+            # the per-head gate is a small F32 projection of the same row
+            haskey(bt, :wattn_head_gate) &&
+                matmul!(cpu, bufs.gate_head, normed, bt.wattn_head_gate, wl)
         end
         _decode_attn_core!(bt, bi, kc, vc, bufs, cpu, wl, tensors, zeros_like, cpu_scratch, pos0;
             n_heads, n_kv_heads, d_head, group, eps, theta, inv_freq, rotary_dim)
@@ -1662,16 +1748,17 @@ function _decode_attn_core!(bt, bi::Int, kc, vc, bufs, cpu, wl, tensors, zeros_l
             rmsnorm!(cpu, qh, qh, bt.wq_norm, wl; eps)
             rmsnorm!(cpu, kh, kh, bt.wk_norm, wl; eps)
         end
+        br = _block_rope(bt, theta, inv_freq, rotary_dim)
         rope!(
             cpu,
             qh,
             kh,
             _decode_pos(cpu_scratch, pos0 - 1),
             wl;
-            theta,
-            inv_freq,
+            theta=br.theta,
+            inv_freq=br.inv_freq,
             interleaved=_tensors_rope_interleaved(tensors),
-            rotary_dim,
+            rotary_dim=br.rotary_dim,
         )  # 0-based position
     end
     @decode_sub :attn_kv_append cpu begin
@@ -1680,16 +1767,27 @@ function _decode_attn_core!(bt, bi::Int, kc, vc, bufs, cpu, wl, tensors, zeros_l
     end
     kv_rot = _kv_rotated(kc[bi].storage)
     kv_rot && _kv_rotate!(qh.storage, true)
+    window = _block_window(bt)
     if cpu_scratch === nothing
         # the query is the LAST position: it attends to the whole cache.
         # A device backend that fuses the decode attention reads the
         # cache rows in place; otherwise the CACHE rows are repeated per
         # query head (kh above is the single new row; it was consumed by
-        # the append) and the reference per-head loop runs.
-        fused = @decode_sub :attn_core cpu _attention_decode_device!(
-            cpu, attn.storage, qh.storage, kc[bi].storage, vc[bi].storage,
-            n_heads, d_head, group, K,
-        )
+        # the append) and the reference per-head loop runs. The fused
+        # kernels are full-causal, so a window that masks rows declines them.
+        fused =
+            !(window > 0 && K > window) &&
+            @decode_sub :attn_core cpu _attention_decode_device!(
+                cpu,
+                attn.storage,
+                qh.storage,
+                kc[bi].storage,
+                vc[bi].storage,
+                n_heads,
+                d_head,
+                group,
+                K,
+            )
         if !fused
             # the reference attention needs (1, K) workspaces; the fused
             # path allocates none
@@ -1711,14 +1809,23 @@ function _decode_attn_core!(bt, bi::Int, kc, vc, bufs, cpu, wl, tensors, zeros_l
                 d_head,
                 1,
                 K,
-                wl,
+                wl;
+                window,
             )
         end
     else
         # fused: reads the cache rows 1:K in place, no repeat copy
         @decode_sub :attn_core cpu _attention_decode_cpu!(
-            attn.storage, qh.storage, kc[bi].storage, vc[bi].storage,
-            cpu_scratch.probs, n_heads, d_head, group, K,
+            attn.storage,
+            qh.storage,
+            kc[bi].storage,
+            vc[bi].storage,
+            cpu_scratch.probs,
+            n_heads,
+            d_head,
+            group,
+            K;
+            window,
         )
     end
     kv_rot && _kv_rotate!(attn.storage, false)
@@ -1730,6 +1837,9 @@ function _attn_merge_gate!(bt, bufs, cpu, n_heads::Int, d_head::Int)
     _merge_heads!(bufs.merged, bufs.attn, n_heads, d_head)
     if haskey(bt, :wattn_gate)
         _sigmoid_mul!(cpu, bufs.merged.storage, bufs.merged.storage, bufs.gate_attn.storage)
+    end
+    if haskey(bt, :wattn_head_gate)
+        _head_gate_mul!(cpu, bufs.merged.storage, bufs.gate_head.storage, d_head)
     end
     return bufs.merged
 end

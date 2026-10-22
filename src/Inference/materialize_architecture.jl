@@ -44,6 +44,8 @@ function expected_shape(spec::ArchitectureSpec, role::Symbol)
         (h,)
     elseif role === ROLE_Q || role === ROLE_ATTN_GATE
         (qd, h)
+    elseif role === ROLE_ATTN_HEAD_GATE
+        (spec.n_heads, h)
     elseif role === ROLE_O
         (h, qd)
     elseif role === ROLE_K || role === ROLE_V
@@ -107,6 +109,20 @@ function _apply_rms_unit_offset(spec::ArchitectureSpec, role::Symbol, arr)
     :rms_unit_offset in spec.features || return arr
     role in _RMS_UNIT_OFFSET_ROLES || return arr
     return arr .+ 1
+end
+
+# One layer's RoPE as the interpreter threads it to `rope!`. The inverse
+# frequencies are always explicit, so every block's slot has the same type;
+# `theta^(-2i / rd)` is the expression `rope!` evaluates when given none.
+function _layer_rope_slot(policy::RoPEPolicy, d_head::Integer)
+    rd = policy.rotary_dim == 0 ? Int(d_head) : Int(policy.rotary_dim)
+    inv = rope_inv_freq(policy, d_head)
+    inv === nothing && (inv = [policy.theta^(-2i / rd) for i in 0:(rd÷2-1)])
+    return (
+        theta=Float64(policy.theta),
+        inv_freq=Vector{Float64}(inv),
+        rotary_dim=Int(policy.rotary_dim),
+    )
 end
 
 # --- layer origin detection (fixture protocol, once, at the boundary) -----------
@@ -236,6 +252,17 @@ function materialize_architecture(
         slots[:mixer] = mixer
         if spec.moe !== nothing
             slots[:n_expert_used] = spec.moe.n_expert_used
+        end
+        # Per-layer attention geometry, added only for families that declare it,
+        # so every other family keeps the block fields it had.
+        if spec.sliding_window !== nothing
+            slots[:attn_window] = layer_window(spec, layer)
+        end
+        if spec.rope_swa !== nothing
+            slots[:rope_layer] = _layer_rope_slot(layer_rope(spec, layer), spec.head_dim)
+        end
+        if spec.activation_kind === :geglu
+            slots[:ffn_geglu] = true
         end
         refs =
             mixer === :linear_attention && !isempty(pmap.linear_refs) ? pmap.linear_refs :

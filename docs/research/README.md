@@ -81,6 +81,7 @@ Tackle each problem in this folder individually when its phase owns it.
 | [CAPABILITY-0a_FINDINGS.md](CAPABILITY-0a_FINDINGS.md) | CAPABILITY-0a landed: the capability declaration is tied to execution | five-arm biconditional over `supports`; both directions mutation-verified; a from-scratch `:attention` fixture | findings and receipt; `supports` is still a hand-written Set — deriving it from dispatch is CAPABILITY-0b |
 | [SPEED_FLOOR.md](SPEED_FLOOR.md) | board constraint: somewhat-close decode before exotic compilers | named model + eager-PyTorch factor + fork-preserving fused step; compiler attribution before a Julia fork | gate on §LXXXIII; 10C recipe landed (`PHASE10C_NAMED_MODEL_HYGIENE.md`): golden frozen, named-model fork bytes pinned |
 | [EXOTIC_CAPABILITY_MASTER_LEDGER.md](EXOTIC_CAPABILITY_MASTER_LEDGER.md) | capability mine: meta-primitives, Gesso/Palette/Cyan primitives, six meta-tools | strings to undiscovered capabilities; evidence labels; not a roadmap override | parked; deep-dives after speed floor |
+| [spark2-5-port/2026-10-22_spark2-5-port.md](spark2-5-port/2026-10-22_spark2-5-port.md) | Spark 2.5 (Spark-X2.6-4B) on the CPU oracle | sliding window, per-layer RoPE, per-head gate and exact-erf GEGLU; greedy 32/32 vs llama.cpp on three prompts incl. one past the window | receipt; paged Session support and an SWA ring-buffer KV are open |
 
 Same philosophy, two expensive objects:
 
