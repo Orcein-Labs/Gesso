@@ -110,6 +110,7 @@ using Gesso: reference_prefill, reference_generate
     # single-column kernel for every type; prefill on/off through _quant_matmul!;
     # real Saluki rows (env-gated)
     include("test_quant_cpu_multi.jl")
+    include("test_quant_half.jl")
 
     # K-quant and Q8_0 MoE expert GEMV and top-k SwiGLU vs dequant + F32;
     # real Kolibri-1 Q2_K expert rows (env-gated)
