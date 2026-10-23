@@ -82,6 +82,7 @@ Tackle each problem in this folder individually when its phase owns it.
 | [SPEED_FLOOR.md](SPEED_FLOOR.md) | board constraint: somewhat-close decode before exotic compilers | named model + eager-PyTorch factor + fork-preserving fused step; compiler attribution before a Julia fork | gate on §LXXXIII; 10C recipe landed (`PHASE10C_NAMED_MODEL_HYGIENE.md`): golden frozen, named-model fork bytes pinned |
 | [EXOTIC_CAPABILITY_MASTER_LEDGER.md](EXOTIC_CAPABILITY_MASTER_LEDGER.md) | capability mine: meta-primitives, Gesso/Palette/Cyan primitives, six meta-tools | strings to undiscovered capabilities; evidence labels; not a roadmap override | parked; deep-dives after speed floor |
 | [spark2-5-port/2026-10-22_spark2-5-port.md](spark2-5-port/2026-10-22_spark2-5-port.md) | Spark 2.5 (Spark-X2.6-4B) on the CPU oracle | sliding window, per-layer RoPE, per-head gate and exact-erf GEGLU; greedy 32/32 vs llama.cpp on three prompts incl. one past the window | receipt; paged Session support and an SWA ring-buffer KV are open |
+| [spark2-5-port/2026-10-22_spark-quant-parity.md](spark2-5-port/2026-10-22_spark-quant-parity.md) | Spark quant parity vs BF16 | KLD/top-1 on wikitext and GPQA-science text; GSQ-RCO schedule 0.97 KLD, new A8F6 (attn Q8_0, FFN Q6_K, imatrix) 0.011 KLD / 95.5% top-1 at 3.69 GB | receipt; long-budget GPQA and Gesso load of A8F6 are open |
 
 Same philosophy, two expensive objects:
 
