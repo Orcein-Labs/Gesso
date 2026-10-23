@@ -395,23 +395,40 @@ end
 function _quant_matmul_multi!(dst::AbstractMatrix, x::AbstractMatrix, q::QuantMatrix)
     seq = size(x, 1)
     simd = q8k_simd_enabled()
-    xqs = _prefill_quantize(q.ggml_type, x, seq, q.ne0)
     # Q6_K: shuffle each activation once here rather than once per weight row.
-    simd && q.ggml_type == GGML_TYPE_Q6_K && (xqs = map(_q6k_prep, xqs))
+    xqs = _prefill_quantize(q.ggml_type, x, seq, q.ne0, simd && q.ggml_type == GGML_TYPE_Q6_K)
     nc = max(1, min(Threads.nthreads(), cld(q.nrows, _QGEMV_MIN_ROWS)))
     chunk = _PrefillChunk(dst, _quant_bytes(q), xqs, q.ggml_type, q.ne0, q.nrows, nc, simd)
     _run_row_chunks!(chunk, nc, q.nrows * q.ne0 * seq)
     return dst
 end
 
-function _prefill_quantize(ggml_type::Int32, x::AbstractMatrix, seq::Int, ne0::Int)
-    xf = Vector{Float32}(undef, ne0)
-    return [begin
-        @inbounds for i in 1:ne0
-            xf[i] = Float32(x[t, i])
+# Quantizes each token row (and preps it, for Q6_K), with the tokens split
+# across threads.
+function _prefill_quantize(ggml_type::Int32, x::AbstractMatrix, seq::Int, ne0::Int, prep::Bool=false)
+    x1 = _prefill_quantize_row(ggml_type, x, 1, Vector{Float32}(undef, ne0), prep)
+    return _prefill_quantize_rest!(fill(x1, seq), ggml_type, x, prep)
+end
+
+function _prefill_quantize_row(ggml_type::Int32, x::AbstractMatrix, t::Int, xf::Vector{Float32}, prep::Bool)
+    @inbounds for i in eachindex(xf)
+        xf[i] = Float32(x[t, i])
+    end
+    xq = _q8k_quantize_act(ggml_type, xf)
+    return prep ? _q6k_prep(xq) : xq
+end
+
+function _prefill_quantize_rest!(xqs::Vector, ggml_type::Int32, x::AbstractMatrix, prep::Bool)
+    seq = length(xqs)
+    ne0 = size(x, 2)
+    nc = max(1, min(Threads.nthreads(), seq - 1))
+    _run_row_chunks!(nc, (seq - 1) * ne0 * 16) do c
+        xf = Vector{Float32}(undef, ne0)
+        for t in (div((c - 1) * (seq - 1), nc) + 2):(div(c * (seq - 1), nc) + 1)
+            xqs[t] = _prefill_quantize_row(ggml_type, x, t, xf, prep)
         end
-        _q8k_quantize_act(ggml_type, xf)
-    end for t in 1:seq]
+    end
+    return xqs
 end
 
 # Weight rows per block of a prefill chunk. On Spark-sized Q6_K FFN matrices (Xeon
