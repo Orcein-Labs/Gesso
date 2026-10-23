@@ -124,7 +124,10 @@ Timed with `reference_prefill` on 256 tokens of the long prompt, 8 threads.
 | Attention scores accumulate in Float32 when the scale is a power of two | 18.3 | 14.0 |
 | Q6_K and Q8_0 tiles read their activation scales from one per-tile table | 18.3 | 14.0 |
 
-- llama.cpp takes about 5.8 s for the same 256 tokens, so the gap is now about 3.2×.
+- llama.cpp baseline: `llama-bench` pp256, CPU only (`-ngl 0`), 8 threads, gives 48.0 ±
+  0.3 tok/s, about 5.3 s for 256 tokens. At equal threads the gap is about 3.4×. The
+  earlier "5.8 s, 3.2×" figure recorded no thread count. At 16 threads llama.cpp reaches
+  86 tok/s.
 - Each change is bit-equal to the single-column kernels, including a Q6_K extremes
   test. Greedy parity against llama.cpp is unchanged: p1 2/32, p2 32/32, long 32/32,
   with the same Δlogprob figures as in S1.
