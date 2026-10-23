@@ -45,13 +45,49 @@ widened to F32, so its step is 168 ms.
 
 Before the fix the best results were math T=4 at 1.16 and json T=4 at 1.11.
 
+## Q8_0 bean and an 8-column tile (9bae144)
+
+The BF16 bean's cost was a quarter to a third of each T=4 round. The bean is now
+quantized to Q8_0 (774 MiB, 8.52 BPW, made with llama-quantize), and its step drops to
+79–82 ms. The earlier estimate was 45 ms, so it is not purely bandwidth-bound. Its greedy
+text differs slightly from the BF16 bean, but top-1 acceptance held or rose.
+
+The multi-column quant tile is now 8 columns instead of 4, so T=8 unpacks each weight
+block once. On the T=8 microbench the ratio against one GEMV fell 8–39% on every tensor.
+Block 2's IQ1_S tensors stay near 5×. In the oracle, W(8) on code, shell, math and prose is
+3.47–4.09, against 3.44–4.79 before. That is inside the run noise, so the end-to-end gain is
+not proven.
+
+Log: `.local/2026-10-23_saluki-window-oracle-tile8.log`, which is local only. The plain
+step was 691–697 ms on shell, math and prose but 876 ms on code and 1559 ms on json, which
+has only 28 decode steps. Those two baselines are inflated by noise. So the table also
+gives each speedup normalized to a 690 ms plain step, computed as
+tokens per round × 690 / (round time + bean time per round).
+
+| Prompt | Bean top-1 | Tokens/round T=2 / 4 / 8 | Raw T=4 | Normalized T=2 | T=4 | T=8 |
+|---|---|---|---|---|---|---|
+| json | 0.964 | 1.87 / 3.50 / 5.60 | 3.56 (bad baseline) | 1.11 | **1.58** | 1.50 |
+| code | 0.916 | 1.90 / 3.52 / 5.59 | 1.59 | 1.11 | **1.25** | 1.07 |
+| shell | 0.725 | 1.73 / 2.46 / 3.14 | 0.93 | 1.05 | 0.92 | 0.64 |
+| math | 0.916 | 1.94 / 3.52 / 5.94 | 1.46 | 1.17 | **1.46** | 1.33 |
+| prose | 0.484 | 1.48 / 1.79 / 1.90 | 0.72 | 0.88 | 0.72 | 0.43 |
+
+An earlier Q8 run at tile 4 gave raw T=4 speedups of 1.53 json, 1.51 code and 1.47 math.
+So with a cheap bean, T=4 is worth about 1.25–1.6× on structured output.
+
+## Prefill
+
+- User-facing prefill goes through the window path (`_prefill_window_ok`) and runs at
+  4.27 prompt tok/s on 128 tokens. Time to first token on a 128-token prompt is about 30 s.
+- `reference_prefill`, the teacher-forced logits API this oracle uses for the bean, takes a
+  separate per-row path. It runs at 0.89 tok/s on Saluki at either tile width. It only
+  matters for scoring and oracle work, but it could be routed through the window path.
+
 ## What limits it
 
-- At T=4 the bean costs 505 ms per round against a 1.3 to 1.6 s verify round, a quarter
-  to a third of the total. A quantized bean is the next lever: Q8_0 is about a quarter of
-  the bytes, so its step should be roughly 45 ms if it stays bandwidth-bound. That is an
-  estimate until measured.
-- W(8) is still 3.4 to 4.8. The multi kernel tiles four rows at a time, so T=8 unpacks
-  each weight block twice. A wider tile is the second lever.
-- Prose acceptance (0.50 top-1) is too low for any window to pay. Window size should
-  follow the drafter's confidence or the content type, not a fixed T.
+- Prose (0.48 top-1) and shell (0.73) lose at every T. Window size should follow the
+  drafter's confidence or the content type, not a fixed T.
+- A verify round at T=4 still costs 1.9–2.3 plain steps. Block 2's IQ1_S multi kernel is
+  the worst tensor.
+- These are oracle predictions. A real bean-in-the-loop draft source is needed to measure
+  the actual speedup.
