@@ -350,9 +350,9 @@ function reference_prefill(
     return _logits_transpose(seqvocab.storage)  # (vocab, seq)
 end
 
-# `permutedims` of the (seq, vocab) logits. A 256-token prompt on a 262k-token
-# vocabulary is a 268 MB copy, so prefill-sized ones split the vocab across
-# threads. It is a copy either way.
+# `permutedims` of the (seq, vocab) logits. A 256-token prompt on Spark's
+# 131k-token vocabulary is a 268 MB Float64 copy, so prefill-sized ones split
+# the vocab across threads. It is a copy either way.
 function _logits_transpose(x)
     x isa Matrix && Threads.nthreads() > 1 && length(x) >= 1 << 20 || return permutedims(x)
     seq, n = size(x)

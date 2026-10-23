@@ -105,7 +105,7 @@ greedy, with 32 new tokens.
   vendor's BF16 number. Earlier runs were capped at 1.1k–4k tokens and truncated many
   answers, so their scores are not comparable. This run is in progress.
 
-## Gesso S3: CPU prefill (in progress)
+## Gesso S3: CPU prefill (paused at 17 tok/s)
 
 Timed with `reference_prefill` on 256 tokens of the long prompt, 8 threads.
 
@@ -186,3 +186,17 @@ Timed with `reference_prefill` on 256 tokens of the long prompt, 8 threads.
   - A numerical failure inside a threaded task is rethrown as the same `GessoError`. Tests
     cover this for rmsnorm and for the softmax.
   - Greedy parity is unchanged after each step.
+- Where the remaining time goes: a main-thread profile after the last row puts 84% of
+  samples in the quant matmuls. Timed alone at 256 tokens and 8 threads, one block's
+  seven matmuls take 257 ms and lm_head takes 1.0 s, about 10.2 s of the 15 s.
+  - Q6_K (the FFN) runs at 0.068 to 0.071 ns per weight-token per thread, about 3× its
+    in-L1 step rate of 0.023.
+  - Q8_0 (attention, lm_head) runs at 0.093 to 0.103.
+  - The step is memory bound. Each Q6_K block step reads 210 bytes of weights but
+    8 × 512 bytes of prepared activations, and the tile's activations (40 KB at
+    2560 inputs, 160 KB for ffn_down) do not fit in L1.
+- Next levers, held until Ornith, Qwen and LFM run on Gesso:
+  - A tile of 2 rows × 8 tokens, so each activation load feeds two weight rows.
+  - Applying the Q6_K −32 offset through per-block sums instead of the per-pair `mo`
+    words, which halves the activation bytes. It changes the int32 lane sums, so the
+    decode kernel has to change with it to keep prefill and decode bit-equal.
