@@ -6,6 +6,7 @@
 # (BLAS association vs naive loops is not bit-identical in general).
 
 using .GessoTestHelpers: approx_eq, deterministic_rng
+using Random: Xoshiro
 
 # helper: a materialized tensor of family F
 mat(F, arr) = F(; shape=size(arr), storage=arr)
@@ -234,4 +235,38 @@ end
     # vocabulary unchanged: still exactly the eight ops (inventory owns this,
     # repeated here so a drift is caught even if inventory parsing changes)
     @test length(methods(Gesso.rmsnorm!)) == 5   # stub + generic prefill + generic decode + cpu prefill + cpu decode
+end
+
+# Prefill-sized rmsnorm and RoPE split their rows across threads; each row
+# must equal the one-thread loop bit for bit, and a numerical failure inside a
+# task must surface as the same GessoError the serial loop throws.
+@testset "threaded CPU rmsnorm and rope equal the serial loops" begin
+    rng = Xoshiro(0x40be)
+    for xs in (randn(rng, Float32, 300, 1024), randn(rng, Float32, 300, 4, 256))
+        ss = randn(rng, Float32, size(xs, ndims(xs)))
+        nd = ndims(xs)
+        stail = reshape(ss, (ntuple(_ -> 1, nd - 1)..., size(xs, nd)))
+        ref = similar(xs)
+        Gesso._cpu_rmsnorm_rows!(ref, xs, stail, 1e-6, size(xs, nd),
+            CartesianIndices(size(xs)[1:(nd-1)]))
+        got = Gesso._cpu_rmsnorm_storage!(similar(xs), xs, ss, 1e-6)
+        @test reinterpret(UInt32, got) == reinterpret(UInt32, ref)
+    end
+    x = randn(rng, Float32, 300, 4, 256)
+    positions = collect(0:299)
+    for (inv_freq, interleaved, rd) in ((nothing, true, 0), (rand(rng, 32), false, 64))
+        ref = copy(x)
+        Gesso._cpu_rope_rows!(ref, positions, 10000.0, inv_freq, interleaved, rd, axes(ref, 1))
+        got = Gesso._cpu_rope_storage!(copy(x), positions, 10000.0, inv_freq, interleaved, rd)
+        @test reinterpret(UInt32, got) == reinterpret(UInt32, ref)
+    end
+    bad = randn(rng, Float32, 300, 1024)
+    bad[200, 7] = NaN32
+    err = try
+        Gesso._cpu_rmsnorm_storage!(similar(bad), bad, ones(Float32, 1024), 1e-6)
+        nothing
+    catch e
+        e
+    end
+    @test err isa Gesso.GessoError && err.code == Gesso.ERR_NUMERICAL_INSTABILITY
 end

@@ -123,6 +123,7 @@ Timed with `reference_prefill` on 256 tokens of the long prompt, 8 threads.
 | GELU erf and erfc from openlibm, with z's rounding corrected | 19.4 | 13.2 |
 | Attention scores accumulate in Float32 when the scale is a power of two | 18.3 | 14.0 |
 | Q6_K and Q8_0 tiles read their activation scales from one per-tile table | 18.3 | 14.0 |
+| Attention in one threaded row pass; threaded rmsnorm, RoPE and logits transpose | 15.0 | 17.1 |
 
 - llama.cpp baseline: `llama-bench` pp256, CPU only (`-ngl 0`), 8 threads, gives 48.0 ±
   0.3 tok/s, about 5.3 s for 256 tokens. At equal threads the gap is about 3.4×. The
@@ -170,3 +171,18 @@ Timed with `reference_prefill` on 256 tokens of the long prompt, 8 threads.
   2560 × 4096 Q8_0 matmul went from 32.2 to 30.8 ms. The end-to-end prefill timed
   18.3–21.1 s while load rose from 4 to 12, which is too noisy to show a gain that size.
   Greedy parity is unchanged.
+- A main-thread profile of the 256-token prefill (894 samples at 20 ms) found about 3 s
+  of serial work while the other 7 threads waited. The causal softmax ran on one thread
+  between the score and value passes of every head, which cost 40 samples. RoPE and
+  rmsnorm cost 30 each, and transposing the (seq, vocab) logits cost 21.
+  - Prefill attention now does a row's scores, softmax and outputs for every head in one
+    threaded pass over the rows. It keeps the per-head arithmetic element for element,
+    and the bit-equality tests cover windowed rows and a chunk after cached keys
+    (L < K). Prefill went from 18.3 s to 16.6 s (3 reps, load 3 to 7), and the
+    992-token parity prompt fell from 97 s to 77 s.
+  - rmsnorm, RoPE and the logits transpose now split their rows across threads at
+    prefill sizes. That brought prefill to 14.7–15.3 s (load 9 to 14), and the parity
+    prompt to 71 s.
+  - A numerical failure inside a threaded task is rethrown as the same `GessoError`. Tests
+    cover this for rmsnorm and for the softmax.
+  - Greedy parity is unchanged after each step.

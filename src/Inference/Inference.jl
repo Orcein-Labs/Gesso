@@ -61,6 +61,7 @@ using ..Gesso:
     _cpu_causal_conv1d_silu!,
     _cpu_sigmoid_mul!,
     _cpu_geglu!,
+    _cpu_rethrow_task_error,
     _cpu_silu,
     _cpu_sigmoid,
     _cpu_softplus,
@@ -346,7 +347,23 @@ function reference_prefill(
         storage=zeros_like((seq, size(lm_head.storage, 1))),
     )
     matmul!(cpu, seqvocab, hhead, lm_head, wl)
-    return permutedims(seqvocab.storage)        # (vocab, seq)
+    return _logits_transpose(seqvocab.storage)  # (vocab, seq)
+end
+
+# `permutedims` of the (seq, vocab) logits. A 256-token prompt on a 262k-token
+# vocabulary is a 268 MB copy, so prefill-sized ones split the vocab across
+# threads. It is a copy either way.
+function _logits_transpose(x)
+    x isa Matrix && Threads.nthreads() > 1 && length(x) >= 1 << 20 || return permutedims(x)
+    seq, n = size(x)
+    out = similar(x, n, seq)
+    nc = Threads.nthreads()
+    @sync for c in 1:nc
+        lo = div((c - 1) * n, nc) + 1
+        hi = div(c * n, nc)
+        Threads.@spawn permutedims!(view(out, $lo:$hi, :), view(x, :, $lo:$hi), (2, 1))
+    end
+    return out
 end
 
 # Hybrid extras as Inference-internal dispatch (Phase 10F pattern). Default
@@ -743,6 +760,10 @@ function _attention_heads!(
     window::Int=0,
 )
     sc, probs = scores.storage, scores_out.storage
+    if backend isa CPUBackend && _attention_rows_threaded(L, K * d_head)
+        return _attention_heads_rows!(attn, q, k, v, n_heads, d_head, L, K, window,
+            eltype(sc), eltype(probs))
+    end
     on_cpu = backend_name(backend) === :cpu
     on_cpu && fill!(attn, zero(eltype(attn)))
     for hh in 1:n_heads
@@ -935,6 +956,68 @@ function _attention_values_cpu!(attn, probs, v, hh, d_head, L, K; masked::Bool=f
     return attn
 end
 
+# The threaded CPU form of `_attention_heads!`. A query row's scores, causal
+# softmax and outputs depend only on that row, so one pass over the rows does
+# all three for every head, where the per-head form ran the softmax and the
+# value transpose on one thread between two parallel passes. The arithmetic is
+# the per-head form's, element for element: scores accumulate from zero in
+# eltype `S` as in `_attention_scores_rows!`, the softmax is
+# `_cpu_softmax_storage!` with its copy into eltype `P` (the keys a row skips
+# hold -Inf there, which adds nothing to its max and exact zeros to its sum),
+# and outputs accumulate from zero over the kept keys as in
+# `_attention_values_cpu!`.
+function _attention_heads_rows!(attn, q, k, v, n_heads::Int, d_head::Int, L::Int, K::Int,
+    window::Int, ::Type{S}, ::Type{P}) where {S,P}
+    scale = _attention_score_scale(d_head)
+    vt = Array{eltype(v)}(undef, d_head, K, n_heads)
+    _attention_rows!(n_heads) do heads
+        @inbounds for hh in heads, u in 1:K, j in 1:d_head
+            vt[j, u, hh] = v[u, hh, j]
+        end
+    end
+    _attention_rows!(L) do rows
+        s = Vector{S}(undef, K)
+        acc = Vector{eltype(attn)}(undef, d_head)
+        for t in rows
+            keys = _attention_keys(t, L, K, true, window)
+            for hh in 1:n_heads
+                @inbounds for u in keys
+                    s[u] = zero(S)
+                end
+                for j in 1:d_head
+                    qv = q[t, hh, j]
+                    @inbounds for u in keys
+                        s[u] = _score_add(s[u], qv * k[u, hh, j], scale)
+                    end
+                end
+                row_max = maximum(view(s, keys))
+                isfinite(row_max) || throw(
+                    gesso_error(ERR_NUMERICAL_INSTABILITY, "softmax!: no finite unmasked maximum"),
+                )
+                total = 0.0
+                @inbounds for u in keys
+                    s[u] = exp(s[u] - row_max)
+                    total += s[u]
+                end
+                @inbounds for u in keys
+                    s[u] /= total
+                end
+                fill!(acc, zero(eltype(attn)))
+                for u in keys
+                    p = P(s[u])
+                    @inbounds for j in 1:d_head
+                        acc[j] += p * vt[j, u, hh]
+                    end
+                end
+                @inbounds for j in 1:d_head
+                    attn[t, hh, j] = acc[j]
+                end
+            end
+        end
+    end
+    return attn
+end
+
 # Small calls (decode, short prompts) keep the plain loops above: they do not
 # allocate, which the warmed-decode allocation caps in test_decode_scratch.jl
 # rely on. Larger calls split their rows across threads.
@@ -943,9 +1026,14 @@ _attention_rows_threaded(L::Int, work::Int) =
 
 function _attention_rows!(f, L::Int)
     nc = min(Threads.nthreads(), L)
-    # Causal rows grow with t, so each task takes every nc-th row.
-    @sync for c in 1:nc
-        Threads.@spawn f($c:$nc:$L)
+    # Causal rows grow with t, so each task takes every nc-th row. A task's
+    # error (the softmax's no-finite-maximum check) is rethrown as itself.
+    try
+        @sync for c in 1:nc
+            Threads.@spawn f($c:$nc:$L)
+        end
+    catch e
+        _cpu_rethrow_task_error(e)
     end
     return nothing
 end
