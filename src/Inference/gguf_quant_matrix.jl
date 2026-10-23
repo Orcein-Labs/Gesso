@@ -398,7 +398,9 @@ function _quant_matmul_multi!(dst::AbstractMatrix, x::AbstractMatrix, q::QuantMa
     # Q6_K: shuffle each activation once here rather than once per weight row.
     xqs = _prefill_quantize(q.ggml_type, x, seq, q.ne0, simd && q.ggml_type == GGML_TYPE_Q6_K)
     nc = max(1, min(Threads.nthreads(), cld(q.nrows, _QGEMV_MIN_ROWS)))
-    chunk = _PrefillChunk(dst, _quant_bytes(q), xqs, q.ggml_type, q.ne0, q.nrows, nc, simd)
+    # The Q6_K and Q8_0 tiles read their columns' d values from one table.
+    dt = simd && (q.ggml_type == GGML_TYPE_Q6_K || q.ggml_type == GGML_TYPE_Q8_0) ? _multi_d_table(xqs) : nothing
+    chunk = _PrefillChunk(dst, _quant_bytes(q), xqs, dt, q.ggml_type, q.ne0, q.nrows, nc, simd)
     _run_row_chunks!(chunk, nc, q.nrows * q.ne0 * seq)
     return dst
 end
@@ -437,10 +439,11 @@ end
 const _MULTI_ROW_BLOCK = 32
 
 # One row chunk of _quant_matmul_multi!, as a callable struct (see _GroupChunk).
-struct _PrefillChunk{D<:AbstractMatrix,B<:AbstractVector{UInt8},X<:AbstractVector}
+struct _PrefillChunk{D<:AbstractMatrix,B<:AbstractVector{UInt8},X<:AbstractVector,T}
     dst::D
     bytes::B
     xqs::X
+    dt::T
     ggml_type::Int32
     ne0::Int
     nrows::Int
@@ -460,7 +463,7 @@ function (p::_PrefillChunk)(c::Int)
         while t0 <= seq
             K = min(_MULTI_TILE, seq - t0 + 1)
             for j in b0:b1
-                _dot_q8k_multi!(buf, p.ggml_type, p.bytes, (j - 1) * rb, p.xqs, t0, K, p.simd)
+                _dot_q8k_multi!(buf, p.ggml_type, p.bytes, (j - 1) * rb, p.xqs, t0, K, p.simd, p.dt)
                 for t in t0:(t0 + K - 1)
                     # Same expression as the per-token path, so -0.0 becomes +0.0 identically.
                     p.dst[t, j] = 1.0f0 * buf[t] + 0.0f0

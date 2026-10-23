@@ -71,13 +71,21 @@ _mq_acts(rng, ne0::Int, n::Int, ggml_type::Int32=_MQ.GGML_TYPE_Q4_K) =
     [_MQ._q8k_quantize_act(ggml_type, randn(rng, Float32, ne0)) for _ in 1:n]
 
 # Checks every column of a tile of `ntile` activations starting at t0 against
-# the single-column kernel, for both simd modes, on the rows of w.
+# the single-column kernel, for both simd modes, on the rows of w. Q6_K and
+# Q8_0 tiles that start a d-table tile are also checked through the table.
+_mq_uses_table(ggml_type::Int32, t0::Int, ntile::Int) =
+    (ggml_type == _MQ.GGML_TYPE_Q6_K || ggml_type == _MQ.GGML_TYPE_Q8_0) &&
+    (t0 - 1) % _MQ._MULTI_TILE == 0 && ntile <= _MQ._MULTI_TILE
+
 function _mq_check_tiles(ggml_type::Int32, w, nrows::Int, rb::Int, xqs, t0::Int, ntile::Int)
     nmis = 0
     out = zeros(Float32, length(xqs))
-    for simd in (true, false), j in 1:nrows
+    dt = _mq_uses_table(ggml_type, t0, ntile) ? _MQ._multi_d_table(xqs) : nothing
+    modes = dt === nothing ? ((true, nothing), (false, nothing)) : ((true, nothing), (false, nothing), (true, dt))
+    for (simd, d) in modes, j in 1:nrows
         woff = (j - 1) * rb
-        _MQ._dot_q8k_multi!(out, ggml_type, w, woff, xqs, t0, ntile, simd)
+        fill!(out, NaN32)
+        _MQ._dot_q8k_multi!(out, ggml_type, w, woff, xqs, t0, ntile, simd, d)
         for c in 1:ntile
             ref = _MQ._dot_q8k(ggml_type, w, woff, xqs[t0 + c - 1], simd)
             nmis += !(out[t0 + c - 1] === ref)
@@ -163,6 +171,35 @@ end
     out = zeros(Float32, 4)
     _MQ._dot_q8k_multi!(out, ty, w, 0, xps, 1, 4, true)
     @test (@allocated _MQ._dot_q8k_multi!(out, ty, w, 0, xps, 1, 4, true)) == 0
+    dt = _MQ._multi_d_table(xps)
+    _MQ._dot_q8k_multi!(out, ty, w, 0, xps, 1, 4, true, dt)
+    @test (@allocated _MQ._dot_q8k_multi!(out, ty, w, 0, xps, 1, 4, true, dt)) == 0
+end
+
+@testset "multi-column dot: the d table" begin
+    rng = Xoshiro(0xd7ab)
+    nb = 3
+    for ty in (_MQ.GGML_TYPE_Q6_K, _MQ.GGML_TYPE_Q8_0)
+        rb = _MQ._qrow_bytes(ty, 256 * nb)
+        w = _mq_random_rows(rng, ty, 2, nb)
+        xqs = _mq_acts(rng, 256 * nb, 9, ty)
+        dt = _MQ._multi_d_table(xqs)
+        T = _MQ._MULTI_TILE
+        @test length(dt) == T * length(xqs[1].d) * cld(9, T)
+        for t in 1:9, ib in 0:(length(xqs[1].d) - 1)
+            i, c = divrem(t - 1, T)
+            @test dt[T * (length(xqs[1].d) * i + ib) + c + 1] === xqs[t].d[ib + 1]
+        end
+        # every aligned tile of 9 columns, the last one short
+        for t0 in 1:T:9
+            K = min(T, 10 - t0)
+            @test _mq_check_tiles(ty, w, 2, rb, xqs, t0, K) == 0
+        end
+        out = zeros(Float32, 9)
+        @test_throws ErrorException _MQ._dot_q8k_multi!(out, ty, w, 0, xqs, 2, 4, true, dt)
+        @test_throws ErrorException _MQ._dot_q8k_multi!(out, ty, w, 0, xqs, 1, 5, true, dt)
+        @test_throws ErrorException _MQ._dot_q8k_multi!(out, ty, w, 0, xqs, 1, 4, true, dt[1:4])
+    end
 end
 @testset "multi-column dot: the tile kernels do not allocate" begin
     rng = Xoshiro(7)
@@ -177,6 +214,11 @@ end
         _MQ._dot_q8k_multi!(out, ty, w, 0, xqs, 1, 4, true)
         a = @allocated _MQ._dot_q8k_multi!(out, ty, w, 0, xqs, 1, 4, true)
         @test a == 0
+        if _mq_uses_table(ty, 1, 4)
+            dt = _MQ._multi_d_table(xqs)
+            _MQ._dot_q8k_multi!(out, ty, w, 0, xqs, 1, 4, true, dt)
+            @test (@allocated _MQ._dot_q8k_multi!(out, ty, w, 0, xqs, 1, 4, true, dt)) == 0
+        end
     end
 end
 
