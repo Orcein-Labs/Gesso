@@ -6,6 +6,7 @@
 #     bit, with the GESSO_PREFILL_MULTI switch on and off
 #   * Q6_K at the integer extremes (u = 0 and 63, scales and activations at
 #     -128 and 127), bit-equal to the single-column kernel
+#   * prepped Q6_K activations (_q6k_prep) give the same bits, extremes included
 #   * the tile kernels do not allocate after warm-up
 #   * the single-column path through _quant_matmul! reuses its scratch buffers
 #     across shapes (large, small, large) and stays bit-equal to fresh buffers
@@ -142,9 +143,26 @@ end
         x.d .= 1.0f0
         x
     end
+    xps = map(_MQ._q6k_prep, xqs)
     for ntile in 1:8, t0 in (1, 2)
         @test _mq_check_tiles(ty, w, nrows, rb, xqs, t0, ntile) == 0
+        @test _mq_check_tiles(ty, w, nrows, rb, xps, t0, ntile) == 0
     end
+end
+
+@testset "multi-column dot: prepped Q6_K activations, every tile size, bit-equal to _dot_q8k" begin
+    rng = Xoshiro(0x9b6c)
+    nb = 3
+    ty = _MQ.GGML_TYPE_Q6_K
+    rb = _MQ._qrow_bytes(ty, 256 * nb)
+    w = _mq_random_rows(rng, ty, 4, nb)
+    xps = map(_MQ._q6k_prep, _mq_acts(rng, 256 * nb, 9, ty))
+    for ntile in 1:8, t0 in (1, 2)
+        @test _mq_check_tiles(ty, w, 4, rb, xps, t0, ntile) == 0
+    end
+    out = zeros(Float32, 4)
+    _MQ._dot_q8k_multi!(out, ty, w, 0, xps, 1, 4, true)
+    @test (@allocated _MQ._dot_q8k_multi!(out, ty, w, 0, xps, 1, 4, true)) == 0
 end
 @testset "multi-column dot: the tile kernels do not allocate" begin
     rng = Xoshiro(7)
