@@ -10,7 +10,7 @@
 # (saturating vpmaddubsw is operand-sensitive, which is why the activation stays
 # the signed operand in every column).
 #
-# Tiles hold at most _MULTI_TILE columns; a remainder of 1..3 columns runs as a
+# Tiles hold at most _MULTI_TILE columns; a remainder of 1..7 columns runs as a
 # smaller tile, so any token count works.
 #
 # IQ4_XS is the exception to shared unpacking: its nibble-to-table lookup lives
@@ -21,7 +21,7 @@
 # the rebuilt weights; Q4_K runs the per-column single dot in every tile. Each
 # is explained in its section below.
 
-const _MULTI_TILE = 4
+const _MULTI_TILE = 8
 
 # GESSO_PREFILL_MULTI=0 selects the per-token path. Read once per process,
 # lazily: a module-level const would freeze the value into the precompile cache.
