@@ -197,7 +197,7 @@ end
         end
         out = zeros(Float32, 9)
         @test_throws ErrorException _MQ._dot_q8k_multi!(out, ty, w, 0, xqs, 2, 4, true, dt)
-        @test_throws ErrorException _MQ._dot_q8k_multi!(out, ty, w, 0, xqs, 1, 5, true, dt)
+        @test_throws ErrorException _MQ._dot_q8k_multi!(out, ty, w, 0, xqs, 1, T + 1, true, dt)
         @test_throws ErrorException _MQ._dot_q8k_multi!(out, ty, w, 0, xqs, 1, 4, true, dt[1:4])
     end
 end
