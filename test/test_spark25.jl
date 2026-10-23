@@ -49,6 +49,14 @@ end
     dst = similar(gate)
     Gesso._cpu_geglu!(dst, gate, up)
     @test dst ≈ Float32.(Gesso._cpu_gelu_erf.(Float64.(gate)) .* up)
+
+    # Prefill-sized GEGLU splits across threads; it must equal the plain loop.
+    bg = randn(Float32, 1024, 300)
+    bu = randn(Float32, 1024, 300)
+    plain = Gesso._cpu_geglu!(similar(bg), bg, bu)
+    act(a) = Gesso.Activation(; shape=size(a), storage=a)
+    split = Gesso.Inference._geglu!(Gesso.CPUBackend(), act(similar(bg)), act(bg), act(bu))
+    @test split.storage == plain
 end
 
 @testset "spark2_5: sliding window mask" begin
