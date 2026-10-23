@@ -83,6 +83,7 @@ Tackle each problem in this folder individually when its phase owns it.
 | [EXOTIC_CAPABILITY_MASTER_LEDGER.md](EXOTIC_CAPABILITY_MASTER_LEDGER.md) | capability mine: meta-primitives, Gesso/Palette/Cyan primitives, six meta-tools | strings to undiscovered capabilities; evidence labels; not a roadmap override | parked; deep-dives after speed floor |
 | [spark2-5-port/2026-10-22_spark2-5-port.md](spark2-5-port/2026-10-22_spark2-5-port.md) | Spark 2.5 (Spark-X2.6-4B) on the CPU oracle | sliding window, per-layer RoPE, per-head gate and exact-erf GEGLU; greedy 32/32 vs llama.cpp on three prompts incl. one past the window | receipt; paged Session support and an SWA ring-buffer KV are open |
 | [spark2-5-port/2026-10-22_spark-quant-parity.md](spark2-5-port/2026-10-22_spark-quant-parity.md) | Spark quant parity vs BF16 | KLD/top-1 on wikitext and GPQA-science text; GSQ-RCO schedule 0.97 KLD, new A8F6 (attn Q8_0, FFN Q6_K, imatrix) 0.011 KLD / 95.5% top-1 at 3.69 GB | receipt; long-budget GPQA and Gesso load of A8F6 are open |
+| [ornith-port/2026-10-23_ornith-quant-parity.md](ornith-port/2026-10-23_ornith-quant-parity.md) | Ornith 1.5 35B-A3B quant parity vs BF16 | vendor GSQ-RCO-3 fails at 91.8% of BF16 MMLU-Pro; harness reproduced and backend noise traced to 0.08% answer-letter mass; our backend reads −1.1 ± 0.7 pp vs vendor; d4 (gate/up Q2_K, down Q4_K, 3.60 BPW) scores 45.75 and clears the gate; no candidate reaches 95% top-1 | receipt; parked for Saluki 27B; i3xxs/i3s/e3 unscored |
 
 Same philosophy, two expensive objects:
 
