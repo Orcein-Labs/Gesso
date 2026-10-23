@@ -101,9 +101,16 @@ greedy, with 32 new tokens.
 
 ## Open
 
-- Run GPQA Diamond on A8F6 with a long thinking budget and compare against the
-  vendor's BF16 number. Earlier runs were capped at 1.1k–4k tokens and truncated many
-  answers, so their scores are not comparable. This run is in progress.
+- GPQA Diamond on A8F6 with a long thinking budget: `llama-server`, full GPU offload,
+  thinking effort high, temperature 1.0, top-p 0.95, `max_tokens` 24000.
+  - 113 of 198 correct, 57.1%. This is a lower bound: 60 items reached the 24k cap
+    without an answer. On the 138 items that finished, 113 were correct (81.9%).
+  - The vendor's per-item file (`orcein_spark_gpqa_diamond_calibrated_outputs.jsonl`)
+    is not the BF16 77.1% or 69.9% run. It scores 40.4% with completions capped at
+    about 3.6k tokens. So it is not a parity anchor, and the vendor's BF16 figure is
+    still unverified.
+  - BF16 parity for Spark rests on the KLD and top-1 gates above. A GPQA comparison needs
+    a BF16 run under the same budget, or a budget large enough that nothing truncates.
 
 ## Gesso S3: CPU prefill (paused at 17 tok/s)
 
