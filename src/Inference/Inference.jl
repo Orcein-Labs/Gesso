@@ -857,6 +857,14 @@ end
 @inline (o::_ScoreDiv)(p) = p / o.s
 @inline (o::_ScoreMul)(p) = p * o.r
 
+# acc + scale(p), rounded to acc's type. For Float32 and a power-of-two scale
+# the scaled product is exact in either type, and a Float32 sum rounded through
+# Float64 equals the Float32 sum (53 ≥ 2·24 + 2 makes the double rounding
+# harmless), so that pair stays in Float32 and vectorizes. (They part only if
+# the scaled product is a Float32 subnormal, |q·k| < 2^-122 for d_head = 256.)
+@inline _score_add(acc, p, o) = acc + o(p)
+@inline _score_add(acc::Float32, p::Float32, o::_ScoreMul) = acc + p * Float32(o.r)
+
 function _attention_score_scale(d_head::Int)
     s = sqrt(d_head)
     return significand(s) == 1.0 ? _ScoreMul(inv(s)) : _ScoreDiv(s)
@@ -871,7 +879,7 @@ end
 function _attention_scores_rows!(sc, q, k, hh, d_head, L, K, masked, window, scale::F) where {F}
     if !_attention_rows_threaded(L, K * d_head)
         for t in 1:L, u in _attention_keys(t, L, K, masked, window), j in 1:d_head
-            sc[t, u] += scale(q[t, hh, j] * k[u, hh, j])
+            sc[t, u] = _score_add(sc[t, u], q[t, hh, j] * k[u, hh, j], scale)
         end
         return sc
     end
@@ -885,7 +893,7 @@ function _attention_scores_rows!(sc, q, k, hh, d_head, L, K, masked, window, sca
             for j in 1:d_head
                 qv = q[t, hh, j]
                 @inbounds for u in keys
-                    acc[u] += scale(qv * k[u, hh, j])
+                    acc[u] = _score_add(acc[u], qv * k[u, hh, j], scale)
                 end
             end
             @inbounds for u in keys
