@@ -703,21 +703,24 @@ end
 #
 # The single kernel reads one integer per 32-value block, so only the total has
 # to match. The sign-extended weights are shared; each column runs two vpmaddwd
-# against its own activations.
+# against its own activations. A phadd tree then transposes the K lane vectors
+# into one vector of K block totals (integer adds, so exact in any order), and
+# the float step Float32(sumi) * (dw * x.d) + sumf runs on all K columns at once,
+# unfused, as the single kernel does it per column.
 
 function _kq_ir_q80_multi(K::Int)
     io = IOBuffer()
     qargs = join(("ptr %q$c" for c in 0:(K - 1)), ", ")
     print(io,
         "declare <8 x i32> @llvm.x86.avx2.pmadd.wd(<16 x i16>, <16 x i16>)\n",
-        "define <$K x i32> @entry(ptr %w, $qargs) #0 {\n")
+        "declare <8 x i32> @llvm.x86.avx2.phadd.d(<8 x i32>, <8 x i32>)\n",
+        "define <$K x float> @entry(ptr %w, $qargs, <$K x float> %s, <$K x float> %d) #0 {\n")
     _kq_ld(io, "wv", "w", 2)
     _kq_half(io, "wl", "wv", 0)
     _kq_half(io, "wh", "wv", 1)
     print(io,
         "  %wl16 = sext <16 x i8> %wl to <16 x i16>\n",
         "  %wh16 = sext <16 x i8> %wh to <16 x i16>\n")
-    res = "poison"
     for c in 0:(K - 1)
         _kq_ld(io, "x$c", "q$c", 0)
         _kq_half(io, "xl$c", "x$c", 0)
@@ -728,33 +731,49 @@ function _kq_ir_q80_multi(K::Int)
             "  %pl$c = call <8 x i32> @llvm.x86.avx2.pmadd.wd(<16 x i16> %wl16, <16 x i16> %xl16.$c)\n",
             "  %ph$c = call <8 x i32> @llvm.x86.avx2.pmadd.wd(<16 x i16> %wh16, <16 x i16> %xh16.$c)\n",
             "  %p$c = add <8 x i32> %pl$c, %ph$c\n")
-        prev = ""
-        for e in 0:7
-            print(io, "  %e$c.$e = extractelement <8 x i32> %p$c, i32 $e\n")
-            if e > 0
-                a = e == 1 ? "%e$c.0" : prev
-                print(io, "  %s$c.$e = add i32 $a, %e$c.$e\n")
-                prev = "%s$c.$e"
-            end
-        end
-        print(io, "  %r$c = insertelement <$K x i32> $res, i32 $prev, i32 $c\n")
-        res = "%r$c"
     end
-    print(io, "  ret <$K x i32> $res\n}\n", _KQ_ATTRS)
+    p(c) = c < K ? "%p$c" : "zeroinitializer"
+    hadd(dst, a, b) = print(io, "  %$dst = call <8 x i32> @llvm.x86.avx2.phadd.d(<8 x i32> $a, <8 x i32> $b)\n")
+    # h_j lanes: [p2j 01, p2j 23, p2j+1 01, p2j+1 23 | the same for 45, 67].
+    nh = cld(K, 2)
+    for j in 0:(nh - 1)
+        hadd("h$j", p(2j), p(2j + 1))
+    end
+    h(j) = j < nh ? "%h$j" : "zeroinitializer"
+    # g lanes: [p0..p3 low-half totals | p0..p3 high-half totals], g1 for p4..p7.
+    hadd("g0", h(0), h(1))
+    K > 4 && hadd("g1", h(2), h(3))
+    if K > 4
+        print(io,
+            "  %lo = shufflevector <8 x i32> %g0, <8 x i32> %g1, <8 x i32> <i32 0, i32 1, i32 2, i32 3, i32 8, i32 9, i32 10, i32 11>\n",
+            "  %hi = shufflevector <8 x i32> %g0, <8 x i32> %g1, <8 x i32> <i32 4, i32 5, i32 6, i32 7, i32 12, i32 13, i32 14, i32 15>\n",
+            "  %t = add <8 x i32> %lo, %hi\n")
+        n = 8
+    else
+        print(io,
+            "  %lo = shufflevector <8 x i32> %g0, <8 x i32> poison, <4 x i32> <i32 0, i32 1, i32 2, i32 3>\n",
+            "  %hi = shufflevector <8 x i32> %g0, <8 x i32> poison, <4 x i32> <i32 4, i32 5, i32 6, i32 7>\n",
+            "  %t = add <4 x i32> %lo, %hi\n")
+        n = 4
+    end
+    print(io,
+        "  %tk = shufflevector <$n x i32> %t, <$n x i32> poison, <$K x i32> <",
+        join(("i32 $c" for c in 0:(K - 1)), ", "), ">\n",
+        "  %fa = sitofp <$K x i32> %tk to <$K x float>\n",
+        "  %fm = fmul <$K x float> %fa, %d\n",
+        "  %fs = fadd <$K x float> %s, %fm\n",
+        "  ret <$K x float> %fs\n}\n", _KQ_ATTRS)
     return String(take!(io))
 end
 
+# One block for all K columns: s + Float32(sumi_c) * d_c per column.
 for K in 1:8
     qs = [:(pq[$c]) for c in 1:K]
-    argt = Tuple{Ptr{UInt8},ntuple(_ -> Ptr{Int8}, K)...}
-    @eval @inline _q80_multi_ints(pw::Ptr{UInt8}, pq::NTuple{$K,Ptr{Int8}}) =
-        Base.llvmcall(($(_kq_ir_q80_multi(K)), "entry"), NTuple{$K,VecElement{Int32}}, $argt,
-            pw, $(qs...))
+    V = NTuple{K,VecElement{Float32}}
+    argt = Tuple{Ptr{UInt8},ntuple(_ -> Ptr{Int8}, K)...,V,V}
+    @eval @inline _q80_multi_step(pw::Ptr{UInt8}, pq::NTuple{$K,Ptr{Int8}}, s::$V, d::$V) =
+        Base.llvmcall(($(_kq_ir_q80_multi(K)), "entry"), $V, $argt, pw, $(qs...), s, d)
 end
-
-@inline _multi_q80_fadd(sumf::NTuple{K,Float32}, xv::NTuple{K,Q80Vec}, ib::Int, dw::Float32,
-    r::NTuple{K,VecElement{Int32}}) where {K} =
-    ntuple(c -> sumf[c] + Float32(r[c].value) * (dw * xv[c].d[ib + 1]), Val(K))
 
 @noinline function _dot_q80_multi!(out::AbstractVector{Float32}, w::AbstractVector{UInt8},
     woff::Int, xqs, t0::Int, ::Val{K}) where {K}
@@ -764,15 +783,15 @@ end
     nb == 0 && return _multi_zero!(out, t0, K)
     GC.@preserve w xqs begin
         xv = ntuple(c -> xqs[t0 + c - 1], Val(K))
-        sumf = ntuple(_ -> 0.0f0, Val(K))
+        sumf = ntuple(_ -> VecElement(0.0f0), Val(K))
         @inbounds for ib in 0:(nb - 1)
             b = woff + ib * 34
             dw = _kq_f16(w, b)
-            r = _q80_multi_ints(pointer(w, b + 1), ntuple(c -> pointer(xv[c].qs, 32 * ib + 1), Val(K)))
-            sumf = _multi_q80_fadd(sumf, xv, ib, dw, r)
+            d = ntuple(c -> VecElement(dw * xv[c].d[ib + 1]), Val(K))
+            sumf = _q80_multi_step(pointer(w, b + 1), ntuple(c -> pointer(xv[c].qs, 32 * ib + 1), Val(K)), sumf, d)
         end
         for c in 1:K
-            out[t0 + c - 1] = sumf[c]
+            out[t0 + c - 1] = sumf[c].value
         end
     end
     return out

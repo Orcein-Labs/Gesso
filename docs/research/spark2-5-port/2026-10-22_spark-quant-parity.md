@@ -116,10 +116,11 @@ Timed with `reference_prefill` on 256 tokens of the long prompt, 8 threads.
 | Fused float step per tile | 44.2 | 5.8 |
 | Threaded GEGLU for prefill-sized arrays | 37.0 | 6.9 |
 | Q6_K pair-order kernel (pmaddubsw + pmaddwd, exact i32 lanes) | 34.9 | 7.3 |
+| Q8_0 tile: phadd transpose and one vector float step | 28.0 | 9.2 |
 
-- llama.cpp takes about 5.8 s for the same 256 tokens, so the gap is now about 6×.
+- llama.cpp takes about 5.8 s for the same 256 tokens, so the gap is now about 4.8×.
 - Each change is bit-equal to the single-column kernels, including a Q6_K extremes
   test. Greedy parity against llama.cpp is unchanged: p1 2/32, p2 32/32, long 32/32,
   with the same Δlogprob figures as in S1.
-- Next target: the Q8_0 tile (attention projections and the tied lm_head). Its worker
-  time is now level with the Q6_K FFN tiles, mostly in a scalar float step.
+- Next targets: the Q6_K FFN tiles and the attention score and value workers, which
+  now take most of the worker time.
