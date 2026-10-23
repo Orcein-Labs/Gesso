@@ -121,8 +121,9 @@ Timed with `reference_prefill` on 256 tokens of the long prompt, 8 threads.
 | Q6_K activations shuffled once per token; 32-row blocks | 23.2 | 11.0 |
 | Activation quantize and shuffle split across threads | 20.8 | 12.3 |
 | GELU erf and erfc from openlibm, with z's rounding corrected | 19.4 | 13.2 |
+| Attention scores accumulate in Float32 when the scale is a power of two | 18.3 | 14.0 |
 
-- llama.cpp takes about 5.8 s for the same 256 tokens, so the gap is now about 3.3×.
+- llama.cpp takes about 5.8 s for the same 256 tokens, so the gap is now about 3.2×.
 - Each change is bit-equal to the single-column kernels, including a Q6_K extremes
   test. Greedy parity against llama.cpp is unchanged: p1 2/32, p2 32/32, long 32/32,
   with the same Δlogprob figures as in S1.
@@ -150,3 +151,10 @@ Timed with `reference_prefill` on 256 tokens of the long prompt, 8 threads.
   prefill went from 112 s to 90 s.
 - Next target: the Q6_K tile still runs at about a third of its port-0 bound, and
   ffn_down's 32 rows no longer fit in L2.
+- The attention scores at d_head = 256 scale by an exact 1/16. The old path widened each
+  term to Float64 and rounded back. A Float32 sum rounded through Float64 equals the
+  Float32 sum, because 53 ≥ 2·24 + 2, so the loop now stays in Float32 and vectorizes.
+  The bit-equality tests and greedy parity are unchanged. The 256-token prefill went
+  from 18.9–20.0 s to 18.2–18.4 s, though the second set ran at lower load (3 against
+  5). The 992-token parity prompt fell from 142 s to 97 s end to end, with the erf change
+  included.
