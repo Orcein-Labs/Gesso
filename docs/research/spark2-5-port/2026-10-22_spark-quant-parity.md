@@ -74,10 +74,33 @@ llama-quantize --imatrix imatrix-wikitext2-train-300.gguf \
 `q8_0` for N = 0..35. The quant, imatrix and types file sit beside the model, in the
 Spark model directory and its `experiments/` folder.
 
+## Gesso S1: A8F6 in the Gesso oracle
+
+Gesso's `load_gguf` loads A8F6, which uses Q8_0 and Q6_K blocks. `reference_prefill` and
+`reference_generate` ran on CPU with 8 threads. The reference was llama.cpp on CPU,
+greedy, with 32 new tokens.
+
+| Prompt | Tokens | Greedy match | Max Δlogprob, llama top-10 |
+|---|---|---|---|
+| p1 (short) | 5 | 2/32 | 0.143 |
+| p2 (instruction) | 18 | 32/32 | 0.950 |
+| long (prose) | 992 | 32/32 | 0.185 |
+
+- p1 diverges at token 3. That step is a near-tie in llama.cpp: token 198 scores −1.431
+  and token 614 scores −1.454, a gap of 0.023.
+- p2's 0.95 gap is on its 4th-ranked token, 5248. Against a BF16 llama.cpp reference,
+  Gesso is closer: BF16 gives it −2.785, Gesso −3.315 and llama.cpp A8F6 −4.265. Over the
+  BF16 top-10 for p1 and p2, Gesso's error and llama.cpp A8F6's error are about the same
+  size. Both engines carry the same quant noise, and Gesso adds no error of its own.
+- Speed on CPU:
+  - Decode is about 0.24 s per token at 1k context. llama.cpp is 0.27 s.
+  - Prefill is 3.8 tok/s at P = 992. llama.cpp is 44 tok/s, so Gesso prefill is about
+    12× slower. That gap is the S3 throughput target.
+- The paged `Session` refuses Spark's ops: the attention gates, sliding windows,
+  per-layer RoPE and GEGLU. Spark runs only through the oracle's cached decode.
+
 ## Open
 
 - Run GPQA Diamond on A8F6 with a long thinking budget and compare against the
   vendor's BF16 number. Earlier runs were capped at 1.1k–4k tokens and truncated many
-  answers, so their scores are not comparable.
-- Gesso S1: load A8F6 (Q8_0 + Q6_K blocks) in Gesso and check greedy parity against
-  llama.cpp.
+  answers, so their scores are not comparable. This run is in progress.
