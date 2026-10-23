@@ -90,6 +90,33 @@ function _cpu_embedding_lookup_storage!(dsts::AbstractArray, tabs::AbstractArray
     return dsts
 end
 
+# Rows (the leading axis) are independent, so prefill-sized arrays split
+# contiguous row ranges across threads; decode-sized ones keep the plain,
+# allocation-free loop. A task's exception is rethrown as itself, so callers
+# see the same error either way.
+_cpu_rows_threaded(xs, rows::Int) =
+    xs isa Array && Threads.nthreads() > 1 && rows > 1 && length(xs) >= 1 << 18
+
+function _cpu_split_rows!(f, rows::Int)
+    nc = min(Threads.nthreads(), rows)
+    try
+        @sync for c in 1:nc
+            lo = div((c - 1) * rows, nc) + 1
+            hi = div(c * rows, nc)
+            Threads.@spawn f($lo:$hi)
+        end
+    catch e
+        _cpu_rethrow_task_error(e)
+    end
+    return nothing
+end
+
+function _cpu_rethrow_task_error(e)
+    e isa CompositeException && !isempty(e.exceptions) && (e = first(e.exceptions))
+    e isa TaskFailedException && throw(e.task.exception)
+    rethrow()
+end
+
 # RMS norm over storage, feature axis LAST (as before). The per-row sum of
 # squares is a sequential left fold, which is exactly what
 # `sum(abs2, xs; dims=ndims(xs))` performs for a reduction over the leading
@@ -106,7 +133,19 @@ function _cpu_rmsnorm_storage!(
     d = size(xs, nd)                     # last dim is the feature dim
     length(ss) == d || error("rmsnorm!: scale length $(length(ss)) ≠ feature dim $d")
     stail = reshape(ss, (ntuple(_ -> 1, nd - 1)..., d))
-    lead = CartesianIndices(size(xs)[1:(nd-1)])
+    if nd >= 2 && _cpu_rows_threaded(xs, size(xs, 1))
+        _cpu_split_rows!(size(xs, 1)) do rows
+            _cpu_rmsnorm_rows!(dsts, xs, stail, eps, d,
+                CartesianIndices((rows, size(xs)[2:(nd-1)]...)))
+        end
+    else
+        _cpu_rmsnorm_rows!(dsts, xs, stail, eps, d, CartesianIndices(size(xs)[1:(nd-1)]))
+    end
+    return dsts
+end
+
+function _cpu_rmsnorm_rows!(dsts, xs, stail, eps, d, lead)
+    nd = ndims(xs)
     for I in lead
         acc = 0.0
         for f in axes(xs, nd)
@@ -123,7 +162,7 @@ function _cpu_rmsnorm_storage!(
             dsts[I, f] = (xs[I, f] / r) * stail[f]
         end
     end
-    return dsts
+    return nothing
 end
 
 # RoPE over storage. Called once for Q and once for K, in that order, so the
@@ -141,7 +180,19 @@ function _cpu_rope_storage!(
     interleaved::Bool=true,
     rotary_dim::Int=0,
 )
-    for t in axes(storage, 1), h in axes(storage, 2)
+    if _cpu_rows_threaded(storage, size(storage, 1))
+        _cpu_split_rows!(size(storage, 1)) do rows
+            _cpu_rope_rows!(storage, positions, tθ, inv_freq, interleaved, rotary_dim, rows)
+        end
+    else
+        _cpu_rope_rows!(storage, positions, tθ, inv_freq, interleaved, rotary_dim,
+            axes(storage, 1))
+    end
+    return storage
+end
+
+function _cpu_rope_rows!(storage, positions, tθ, inv_freq, interleaved, rotary_dim, rows)
+    for t in rows, h in axes(storage, 2)
         m = Float64(positions[t])           # 0-based position
         d = size(storage, 3)                # d_head, even by contract
         rd = rotary_dim == 0 ? d : rotary_dim
@@ -154,7 +205,7 @@ function _cpu_rope_storage!(
             storage[t, h, b] = x1 * s + x2 * c
         end
     end
-    return storage
+    return nothing
 end
 
 # swiglu over storage: dst = (g / (1 + exp(-g))) .* up, elementwise, so the

@@ -826,7 +826,7 @@ function _prefill_impl!(s::Session, tokens::AbstractVector{Int}, span::_EngineSp
     span.prefill_ns = UInt64(time_ns() - t_prefill)
     append!(span.ids, tokens)
     span.prompt_tokens = P
-    logits = permutedims(seqvocab.storage)       # (vocab, P)
+    logits = _logits_transpose(seqvocab.storage) # (vocab, P)
     return on_cpu ? logits : Array(logits)       # host-visible (§LXXVII)
 end
 

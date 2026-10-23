@@ -71,26 +71,50 @@ end
     end
 end
 
-# _attention_heads! reads only the keys the causal and window masks keep; the
-# result must equal scoring every key, masking, and summing every key.
+# _attention_heads! reads only the keys the causal and window masks keep, and
+# on threaded CPU runs scores, softmax and outputs in one pass over the rows;
+# the result must equal scoring every key, masking, and summing every key, head
+# by head. L < K covers a prompt chunk after cached keys; d = 48 a true divide.
 @testset "CPU prefill attention skips masked keys bit for bit" begin
     rng = Xoshiro(0x5a1e)
+    H = 2
+    for (L, K, d) in ((300, 300, 64), (200, 450, 48))
+        q = randn(rng, Float32, L, H, d)
+        k = randn(rng, Float32, K, H, d)
+        v = randn(rng, Float32, K, H, d)
+        for window in (0, 100)
+            ref = zeros(Float32, L, H, d)
+            for hh in 1:H
+                sc = Gesso.Inference._attention_scores_cpu!(zeros(Float32, L, K), q, k, hh, d, L, K)
+                window > 0 && Gesso.Inference._window_mask!(sc, L, K, window)
+                probs = Gesso._cpu_softmax_storage!(similar(sc), sc)
+                Gesso.Inference._attention_values_cpu!(ref, probs, v, hh, d, L, K)
+            end
+            ws() = Gesso.TemporaryWorkspace(; shape=(L, K), storage=zeros(Float32, L, K))
+            attn = zeros(Float32, L, H, d)
+            Gesso.Inference._attention_heads!(Gesso.CPUBackend(), attn, ws(), ws(), q, k, v, H, d,
+                L, K, Gesso.PrefillWorkload(); window)
+            @test reinterpret(UInt32, attn) == reinterpret(UInt32, ref)
+        end
+    end
+end
+
+# A row with no finite score fails the softmax inside a threaded task; it must
+# surface as the same GessoError the per-head path throws.
+@testset "threaded CPU prefill attention rethrows the softmax error" begin
+    rng = Xoshiro(0x0bad)
     L, H, d = 300, 2, 64
     q = randn(rng, Float32, L, H, d)
     k = randn(rng, Float32, L, H, d)
     v = randn(rng, Float32, L, H, d)
-    for window in (0, 100)
-        ref = zeros(Float32, L, H, d)
-        for hh in 1:H
-            sc = Gesso.Inference._attention_scores_cpu!(zeros(Float32, L, L), q, k, hh, d, L, L)
-            window > 0 && Gesso.Inference._window_mask!(sc, L, L, window)
-            probs = Gesso._cpu_softmax_storage!(similar(sc), sc)
-            Gesso.Inference._attention_values_cpu!(ref, probs, v, hh, d, L, L)
-        end
-        ws() = Gesso.TemporaryWorkspace(; shape=(L, L), storage=zeros(Float32, L, L))
-        attn = zeros(Float32, L, H, d)
-        Gesso.Inference._attention_heads!(Gesso.CPUBackend(), attn, ws(), ws(), q, k, v, H, d, L, L,
-            Gesso.PrefillWorkload(); window)
-        @test reinterpret(UInt32, attn) == reinterpret(UInt32, ref)
+    q[150, 2, 3] = NaN32
+    ws() = Gesso.TemporaryWorkspace(; shape=(L, L), storage=zeros(Float32, L, L))
+    err = try
+        Gesso.Inference._attention_heads!(Gesso.CPUBackend(), zeros(Float32, L, H, d), ws(), ws(),
+            q, k, v, H, d, L, L, Gesso.PrefillWorkload())
+        nothing
+    catch e
+        e
     end
+    @test err isa Gesso.GessoError && err.code == Gesso.ERR_NUMERICAL_INSTABILITY
 end
