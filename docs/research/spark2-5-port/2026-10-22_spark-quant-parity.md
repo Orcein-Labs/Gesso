@@ -119,8 +119,9 @@ Timed with `reference_prefill` on 256 tokens of the long prompt, 8 threads.
 | Q8_0 tile: phadd transpose and one vector float step | 28.0 | 9.2 |
 | Attention reads only unmasked keys; exact inverse scale | 24.2 | 10.6 |
 | Q6_K activations shuffled once per token; 32-row blocks | 23.2 | 11.0 |
+| Activation quantize and shuffle split across threads | 20.8 | 12.3 |
 
-- llama.cpp takes about 5.8 s for the same 256 tokens, so the gap is now about 4.0×.
+- llama.cpp takes about 5.8 s for the same 256 tokens, so the gap is now about 3.6×.
 - Each change is bit-equal to the single-column kernels, including a Q6_K extremes
   test. Greedy parity against llama.cpp is unchanged: p1 2/32, p2 32/32, long 32/32,
   with the same Δlogprob figures as in S1.
@@ -138,5 +139,8 @@ Timed with `reference_prefill` on 256 tokens of the long prompt, 8 threads.
     in the kernel, and 63 to 65 ms pre-shuffled.
   - The 10240-wide ffn_down shape gains less: 84 ms down to 76 ms.
   - An 8-token tile is no faster than 4.
+- The activation quantize ran on one thread: about 45 ms per layer, 1.7 s per prefill.
+  Split over 8 threads it takes 1.7 to 6.5 ms per matmul instead of 4 to 25 ms. Timed
+  back to back at the same load, the commit before took 22.2 to 23.2 s.
 - Next target: the Q6_K tile still runs at about a third of its port-0 bound, and
   ffn_down's 32 rows no longer fit in L2.
