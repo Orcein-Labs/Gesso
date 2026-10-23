@@ -11,53 +11,25 @@ function _cpu_sigmoid(x::T) where {T<:AbstractFloat}
     return one(T) / (one(T) + exp(-x))
 end
 
-# erf in Float64 without a special-functions dependency (Gesso takes only
-# stdlibs): the Maclaurin series below |x| = 2, the erfc continued fraction
-# from there to 6, and ±1 beyond, where erf is 1 to double precision.
-function _cpu_erf(x::Float64)
-    z = abs(x)
-    z >= 6.0 && return copysign(1.0, x)
-    if z < 2.0
-        z2 = z * z
-        term = z
-        acc = z
-        n = 0
-        while abs(term) > 1e-17 * acc
-            n += 1
-            term *= -z2 / n
-            acc += term / (2n + 1)
-        end
-        return copysign(acc * (2 / sqrt(pi)), x)
-    end
-    return copysign(1.0 - _cpu_erfc_cf(z), x)
-end
-
-# exp(-c·x²) with x² split as xh² + (x - xh)(x + xh), xh = x rounded to
-# Float32: xh² is exact in Float64, so the rounding of x² (relative error
-# ~x²·eps in the result) never reaches the exponent.
-function _cpu_exp_neg_sq(x::Float64, c::Float64)
-    xh = Float64(Float32(x))
-    return exp(-c * (xh * xh)) * exp(-c * ((x - xh) * (x + xh)))
-end
-
-# erfc(z) for z ≥ 1.25 by the continued fraction
-# exp(-z²) / (√π (z + (1/2)/(z + 1/(z + (3/2)/(z + …))))), from a fixed tail.
-# `ez` is exp(-z²); callers that know it more exactly than z pass it in.
-function _cpu_erfc_cf(z::Float64, ez::Float64=_cpu_exp_neg_sq(z, 1.0))
-    t = z
-    for n in 120:-1:1
-        t = z + (n / 2) / t
-    end
-    return ez / (sqrt(pi) * t)
-end
+# erf and erfc in Float64 without a special-functions dependency (Gesso takes
+# only stdlibs): openlibm's fdlibm versions, under 1 ulp, from the libm Julia's
+# Base already links. They replaced a Maclaurin series and a 120-step continued
+# fraction, the costliest part of a Spark prefill GEGLU.
+_cpu_erf(x::Float64) = ccall((:erf, Base.Math.libm), Float64, (Float64,), x)
+_cpu_erfc(x::Float64) = ccall((:erfc, Base.Math.libm), Float64, (Float64,), x)
 
 # Exact (erf) GELU, the form Hugging Face's `gelu` activation computes. Far
-# left, 1 + erf cancels, so that tail uses erfc(-x/√2) directly, with
-# exp(-x²/2) taken from x itself so the rounding of x/√2 stays out of it.
+# left, 1 + erf cancels, so that tail uses erfc(z), z = -x/√2. z is rounded,
+# and erfc's relative slope there is about 2z, so the rounding alone would cost
+# ~2z²·eps. The tail adds the first-order term for it: z_true² - z² = x²/2 - z²
+# is exact from two fma products (the halves are within 2× of each other).
 function _cpu_gelu_erf(x::Float64)
     z = -x / sqrt(2.0)
-    z >= 1.25 && return 0.5 * x * _cpu_erfc_cf(z, _cpu_exp_neg_sq(x, 0.5))
-    return 0.5 * x * (1.0 + _cpu_erf(-z))
+    z >= 1.25 || return 0.5 * x * (1.0 + _cpu_erf(-z))
+    xx = x * x
+    zz = z * z
+    dz = ((0.5 * xx - zz) + (0.5 * fma(x, x, -xx) - fma(z, z, -zz))) / (2 * z)
+    return 0.5 * x * (_cpu_erfc(z) - dz * (2 / sqrt(pi)) * exp(-zz))
 end
 
 # GEGLU over storage: dst = gelu(gate) .* up, in Float64 like the SwiGLU kernel.
