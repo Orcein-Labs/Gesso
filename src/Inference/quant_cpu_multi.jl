@@ -87,6 +87,42 @@ end
 
 # Column count of a tile after checking that every column has the row's block
 # count; a mismatch would read past the end of a shorter activation.
+# A prefill's d table: per tile of _MULTI_TILE columns and per block, the
+# columns' d values side by side, so the Q8_0 and Q6_K tile kernels read them as
+# one vector instead of gathering one per column. Tile i (0-based, columns
+# T*i + 1 ...) keeps block ib's column c at index T*(nb*i + ib) + c.
+function _multi_d_table(xqs::AbstractVector)
+    T = _MULTI_TILE
+    nb = length(xqs[1].d)
+    dt = zeros(Float32, T * nb * cld(length(xqs), T))
+    @inbounds for t in eachindex(xqs)
+        i, c = divrem(t - 1, T)
+        d = xqs[t].d
+        length(d) == nb || error("q8k multi: column $t has $(length(d)) blocks, not $nb")
+        for ib in 0:(nb - 1)
+            dt[T * (nb * i + ib) + c + 1] = d[ib + 1]
+        end
+    end
+    return dt
+end
+
+# Offset of the tile at t0 in a d table, after checking that the tile is one of
+# the table's.
+function _multi_d_base(dt::Vector{Float32}, t0::Int, K::Int, nb::Int)
+    T = _MULTI_TILE
+    i, r = divrem(t0 - 1, T)
+    r == 0 && K <= T && length(dt) >= T * nb * (i + 1) ||
+        error("q8k multi: tile $t0:$(t0 + K - 1) is not in the d table")
+    return T * nb * i
+end
+_multi_d_base(::Nothing, t0::Int, K::Int, nb::Int) = 0
+
+# dw * d for each tile column at block ib: the same products either way.
+Base.@propagate_inbounds _multi_tile_d(::Nothing, xv::NTuple{K,Any}, i0::Int, ib::Int, dw::Float32) where {K} =
+    ntuple(c -> dw * xv[c].d[ib + 1], Val(K))
+Base.@propagate_inbounds _multi_tile_d(dt::Vector{Float32}, xv::NTuple{K,Any}, i0::Int, ib::Int, dw::Float32) where {K} =
+    ntuple(c -> dw * dt[i0 + _MULTI_TILE * ib + c], Val(K))
+
 function _multi_check(xqs, t0::Int, K::Int, nb::Int)
     for c in 1:K
         length(xqs[t0 + c - 1].d) == nb ||
@@ -669,23 +705,24 @@ for K in 1:8
         Base.llvmcall(($(_kq_ir_q6k_multi(K)), "entry"), $V, $argt, pw, $(qs...), s, d)
 end
 
-# Column c's scale dw * x.d, repeated over its 8 lanes.
-@inline _multi_q6k_scales(xv::NTuple{K,Q8KVec}, ib::Int, dw::Float32, ::Val{N}) where {K,N} =
-    ntuple(i -> VecElement(dw * xv[(i - 1) >> 3 + 1].d[ib + 1]), Val(N))
+# Each column's dw * d, repeated across its 8 lanes.
+@inline _multi_q6k_scales(dd::NTuple{K,Float32}) where {K} =
+    ntuple(i -> VecElement(dd[(i - 1) >> 3 + 1]), Val(8K))
 
 @noinline function _dot_q6k_multi!(out::AbstractVector{Float32}, w::AbstractVector{UInt8},
-    woff::Int, xqs, t0::Int, ::Val{K}) where {K}
+    woff::Int, xqs, t0::Int, ::Val{K}, dt=nothing) where {K}
     nb = length(xqs[t0].d)
     _q8k_check_row(w, woff, 210 * nb)
     _multi_check(xqs, t0, K, nb)
     nb == 0 && return _multi_zero!(out, t0, K)
+    i0 = _multi_d_base(dt, t0, K, nb)
     GC.@preserve w xqs begin
         xv = ntuple(c -> xqs[t0 + c - 1], Val(K))
         sums = ntuple(_ -> VecElement(0.0f0), Val(8K))
         @inbounds for ib in 0:(nb - 1)
             b = woff + ib * 210
             dw = _kq_f16(w, b + 208)
-            d = _multi_q6k_scales(xv, ib, dw, Val(8K))
+            d = _multi_q6k_scales(_multi_tile_d(dt, xv, i0, ib, dw))
             sums = _q6k_multi_step(pointer(w, b + 1), ntuple(c -> pointer(xv[c].qs, ib * QK_K + 1), Val(K)), sums, d)
         end
         for c in 1:K
@@ -811,22 +848,20 @@ for K in 1:8
         Base.llvmcall(($(_kq_ir_q6k_prep_multi(K)), "entry"), $V, $argt, pw, $(args...), s, d)
 end
 
-@inline _multi_q6k_scales(xv::NTuple{K,Q6KPrepVec}, ib::Int, dw::Float32, ::Val{N}) where {K,N} =
-    ntuple(i -> VecElement(dw * xv[(i - 1) >> 3 + 1].d[ib + 1]), Val(N))
-
 @noinline function _dot_q6k_multi!(out::AbstractVector{Float32}, w::AbstractVector{UInt8},
-    woff::Int, xqs::AbstractVector{Q6KPrepVec}, t0::Int, ::Val{K}) where {K}
+    woff::Int, xqs::AbstractVector{Q6KPrepVec}, t0::Int, ::Val{K}, dt=nothing) where {K}
     nb = length(xqs[t0].d)
     _q8k_check_row(w, woff, 210 * nb)
     _multi_check(xqs, t0, K, nb)
     nb == 0 && return _multi_zero!(out, t0, K)
+    i0 = _multi_d_base(dt, t0, K, nb)
     GC.@preserve w xqs begin
         xv = ntuple(c -> xqs[t0 + c - 1], Val(K))
         sums = ntuple(_ -> VecElement(0.0f0), Val(8K))
         @inbounds for ib in 0:(nb - 1)
             b = woff + ib * 210
             dw = _kq_f16(w, b + 208)
-            d = _multi_q6k_scales(xv, ib, dw, Val(8K))
+            d = _multi_q6k_scales(_multi_tile_d(dt, xv, i0, ib, dw))
             pq = ntuple(c -> pointer(xv[c].xp, ib * QK_K + 1), Val(K))
             pm = ntuple(c -> Ptr{Int8}(pointer(xv[c].mo, ib * (QK_K >> 1) + 1)), Val(K))
             sums = _q6k_prep_multi_step(pointer(w, b + 1), pq, pm, sums, d)
@@ -919,18 +954,19 @@ for K in 1:8
 end
 
 @noinline function _dot_q80_multi!(out::AbstractVector{Float32}, w::AbstractVector{UInt8},
-    woff::Int, xqs, t0::Int, ::Val{K}) where {K}
+    woff::Int, xqs, t0::Int, ::Val{K}, dt=nothing) where {K}
     nb = length(xqs[t0].d)
     _q8k_check_row(w, woff, 34 * nb)
     _multi_check(xqs, t0, K, nb)
     nb == 0 && return _multi_zero!(out, t0, K)
+    i0 = _multi_d_base(dt, t0, K, nb)
     GC.@preserve w xqs begin
         xv = ntuple(c -> xqs[t0 + c - 1], Val(K))
         sumf = ntuple(_ -> VecElement(0.0f0), Val(K))
         @inbounds for ib in 0:(nb - 1)
             b = woff + ib * 34
             dw = _kq_f16(w, b)
-            d = ntuple(c -> VecElement(dw * xv[c].d[ib + 1]), Val(K))
+            d = map(VecElement, _multi_tile_d(dt, xv, i0, ib, dw))
             sumf = _q80_multi_step(pointer(w, b + 1), ntuple(c -> pointer(xv[c].qs, 32 * ib + 1), Val(K)), sumf, d)
         end
         for c in 1:K
@@ -951,7 +987,7 @@ _q8k_multi_type(t::Int32) =
     t == GGML_TYPE_Q6_K || t == GGML_TYPE_Q8_0
 
 function _dot_q8k_multi_kernel!(out::AbstractVector{Float32}, ggml_type::Int32,
-    w::AbstractVector{UInt8}, woff::Int, xqs, t0::Int, v::Val)
+    w::AbstractVector{UInt8}, woff::Int, xqs, t0::Int, v::Val, dt=nothing)
     ggml_type == GGML_TYPE_IQ2_XXS && return _dot_iq2xxs_multi!(out, w, woff, xqs, t0, v)
     ggml_type == GGML_TYPE_IQ3_S && return _dot_iq3s_multi!(out, w, woff, xqs, t0, v)
     ggml_type == GGML_TYPE_IQ2_S && return _dot_iq2s_multi!(out, w, woff, xqs, t0, v)
@@ -960,8 +996,8 @@ function _dot_q8k_multi_kernel!(out::AbstractVector{Float32}, ggml_type::Int32,
     ggml_type == GGML_TYPE_IQ1_S && return _dot_iq1s_multi!(out, w, woff, xqs, t0, v)
     ggml_type == GGML_TYPE_IQ1_M && return _dot_iq1m_multi!(out, w, woff, xqs, t0, v)
     ggml_type == GGML_TYPE_Q2_K && return _dot_q2k_multi!(out, w, woff, xqs, t0, v)
-    ggml_type == GGML_TYPE_Q6_K && return _dot_q6k_multi!(out, w, woff, xqs, t0, v)
-    ggml_type == GGML_TYPE_Q8_0 && return _dot_q80_multi!(out, w, woff, xqs, t0, v)
+    ggml_type == GGML_TYPE_Q6_K && return _dot_q6k_multi!(out, w, woff, xqs, t0, v, dt)
+    ggml_type == GGML_TYPE_Q8_0 && return _dot_q80_multi!(out, w, woff, xqs, t0, v, dt)
     return _dot_iq4_xs_multi!(out, w, woff, xqs, t0, v)
 end
 
@@ -969,9 +1005,9 @@ end
 # for the K columns of the tile starting at t0. The AVX2 multi kernels are used
 # only when simd is true, and the per-column loop otherwise.
 function _dot_q8k_multi_tile!(out::AbstractVector{Float32}, ggml_type::Int32, w::AbstractVector{UInt8},
-    woff::Int, xqs, t0::Int, v::Val{K}, simd::Bool) where {K}
+    woff::Int, xqs, t0::Int, v::Val{K}, simd::Bool, dt=nothing) where {K}
     if simd && _q8k_multi_type(ggml_type)
-        return _dot_q8k_multi_kernel!(out, ggml_type, w, woff, xqs, t0, v)
+        return _dot_q8k_multi_kernel!(out, ggml_type, w, woff, xqs, t0, v, dt)
     end
     for c in 1:K
         out[t0 + c - 1] = _dot_q8k(ggml_type, w, woff, xqs[t0 + c - 1], simd)
@@ -980,23 +1016,25 @@ function _dot_q8k_multi_tile!(out::AbstractVector{Float32}, ggml_type::Int32, w:
 end
 
 """
-    _dot_q8k_multi!(out, ggml_type, w, woff, xqs, t0, ntile, simd) -> out
+    _dot_q8k_multi!(out, ggml_type, w, woff, xqs, t0, ntile, simd, dt=nothing) -> out
 
 Raw dots of the weight row at 0-based byte `woff` of `w` with the `ntile`
 Q8_K activations `xqs[t0:t0+ntile-1]`, written to `out[t0:...]`. Column c is
 bit-equal to `_dot_q8k(ggml_type, w, woff, xqs[t0+c-1], simd)`. `ntile` is
-1..8 so that any remainder is a tile.
+1..8 so that any remainder is a tile. `dt`, from `_multi_d_table(xqs)`, gives
+the Q6_K and Q8_0 kernels each tile's d values as one load; with it, `t0` must
+start one of the table's tiles and `ntile` be at most `_MULTI_TILE`.
 """
 function _dot_q8k_multi!(out::AbstractVector{Float32}, ggml_type::Int32, w::AbstractVector{UInt8},
-    woff::Int, xqs, t0::Int, ntile::Int, simd::Bool)
+    woff::Int, xqs, t0::Int, ntile::Int, simd::Bool, dt=nothing)
     1 <= ntile <= 8 || error("q8k multi: tile of $ntile columns (1..8)")
     t0 + ntile - 1 <= length(xqs) || error("q8k multi: columns $t0:$(t0 + ntile - 1) exceed $(length(xqs))")
-    ntile == 1 && return _dot_q8k_multi_tile!(out, ggml_type, w, woff, xqs, t0, Val(1), simd)
-    ntile == 2 && return _dot_q8k_multi_tile!(out, ggml_type, w, woff, xqs, t0, Val(2), simd)
-    ntile == 3 && return _dot_q8k_multi_tile!(out, ggml_type, w, woff, xqs, t0, Val(3), simd)
-    ntile == 4 && return _dot_q8k_multi_tile!(out, ggml_type, w, woff, xqs, t0, Val(4), simd)
-    ntile == 5 && return _dot_q8k_multi_tile!(out, ggml_type, w, woff, xqs, t0, Val(5), simd)
-    ntile == 6 && return _dot_q8k_multi_tile!(out, ggml_type, w, woff, xqs, t0, Val(6), simd)
-    ntile == 7 && return _dot_q8k_multi_tile!(out, ggml_type, w, woff, xqs, t0, Val(7), simd)
-    return _dot_q8k_multi_tile!(out, ggml_type, w, woff, xqs, t0, Val(8), simd)
+    ntile == 1 && return _dot_q8k_multi_tile!(out, ggml_type, w, woff, xqs, t0, Val(1), simd, dt)
+    ntile == 2 && return _dot_q8k_multi_tile!(out, ggml_type, w, woff, xqs, t0, Val(2), simd, dt)
+    ntile == 3 && return _dot_q8k_multi_tile!(out, ggml_type, w, woff, xqs, t0, Val(3), simd, dt)
+    ntile == 4 && return _dot_q8k_multi_tile!(out, ggml_type, w, woff, xqs, t0, Val(4), simd, dt)
+    ntile == 5 && return _dot_q8k_multi_tile!(out, ggml_type, w, woff, xqs, t0, Val(5), simd, dt)
+    ntile == 6 && return _dot_q8k_multi_tile!(out, ggml_type, w, woff, xqs, t0, Val(6), simd, dt)
+    ntile == 7 && return _dot_q8k_multi_tile!(out, ggml_type, w, woff, xqs, t0, Val(7), simd, dt)
+    return _dot_q8k_multi_tile!(out, ggml_type, w, woff, xqs, t0, Val(8), simd, dt)
 end

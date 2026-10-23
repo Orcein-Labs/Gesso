@@ -122,6 +122,7 @@ Timed with `reference_prefill` on 256 tokens of the long prompt, 8 threads.
 | Activation quantize and shuffle split across threads | 20.8 | 12.3 |
 | GELU erf and erfc from openlibm, with z's rounding corrected | 19.4 | 13.2 |
 | Attention scores accumulate in Float32 when the scale is a power of two | 18.3 | 14.0 |
+| Q6_K and Q8_0 tiles read their activation scales from one per-tile table | 18.3 | 14.0 |
 
 - llama.cpp takes about 5.8 s for the same 256 tokens, so the gap is now about 3.2×.
 - Each change is bit-equal to the single-column kernels, including a Q6_K extremes
@@ -158,3 +159,11 @@ Timed with `reference_prefill` on 256 tokens of the long prompt, 8 threads.
   from 18.9–20.0 s to 18.2–18.4 s, though the second set ran at lower load (3 against
   5). The 992-token parity prompt fell from 142 s to 97 s end to end, with the erf change
   included.
+- The tile kernels gathered each column's activation scale `d` separately, once per
+  block: 4 loads for Q8_0, and 32 lane products for Q6_K. A per-prefill table now stores
+  each tile's 4 `d` values side by side, so each block needs one load. The products are
+  the same, so the bit-equality tests still pass. In one process, interleaved at load 10,
+  a 2560 × 10240 Q6_K matmul over 256 tokens went from 59.8 to 58.1 ms median, and a
+  2560 × 4096 Q8_0 matmul went from 32.2 to 30.8 ms. The end-to-end prefill timed
+  18.3–21.1 s while load rose from 4 to 12, which is too noisy to show a gain that size.
+  Greedy parity is unchanged.
