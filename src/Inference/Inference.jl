@@ -377,8 +377,21 @@ function _sigmoid_mul!(backend, dst, src, gate)
 end
 
 # GEGLU FFN activation, act = gelu(gate) .* up with the exact (erf) GELU.
+# The erf series is costly, so prefill-sized arrays split contiguous ranges
+# across threads; decode-sized ones keep the plain, allocation-free loop.
 function _geglu!(backend, act, gate, up)
-    _cpu_geglu!(act.storage, gate.storage, up.storage)
+    d, g, u = act.storage, gate.storage, up.storage
+    n = length(d)
+    if d isa Array && Threads.nthreads() > 1 && n >= 1 << 18
+        nc = Threads.nthreads()
+        @sync for c in 1:nc
+            lo = div((c - 1) * n, nc) + 1
+            hi = div(c * n, nc)
+            Threads.@spawn _cpu_geglu!(view(d, $lo:$hi), view(g, $lo:$hi), view(u, $lo:$hi))
+        end
+    else
+        _cpu_geglu!(d, g, u)
+    end
     return act
 end
 

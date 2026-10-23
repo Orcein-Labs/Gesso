@@ -4,6 +4,8 @@
 #   * the same on real rows when GESSO_SALUKI_GGUF is set (skipped otherwise)
 #   * the prefill path through _quant_matmul! equals the per-token path bit for
 #     bit, with the GESSO_PREFILL_MULTI switch on and off
+#   * Q6_K at the integer extremes (u = 0 and 63, scales and activations at
+#     -128 and 127), bit-equal to the single-column kernel
 #   * the tile kernels do not allocate after warm-up
 #   * the single-column path through _quant_matmul! reuses its scratch buffers
 #     across shapes (large, small, large) and stays bit-equal to fresh buffers
@@ -32,6 +34,8 @@ const _MQ_TYPES = (
     ("IQ4_XS", _MQ.GGML_TYPE_IQ4_XS),
     ("Q2_K", _MQ.GGML_TYPE_Q2_K),
     ("Q4_K", _MQ.GGML_TYPE_Q4_K),
+    ("Q6_K", _MQ.GGML_TYPE_Q6_K),
+    ("Q8_0", _MQ.GGML_TYPE_Q8_0),
 )
 
 # Random valid rows: arbitrary bytes everywhere, with finite small f16 scales at
@@ -39,10 +43,13 @@ const _MQ_TYPES = (
 function _mq_scale_offsets(ggml_type::Int32)
     ggml_type == _MQ.GGML_TYPE_Q2_K && return (80, 82)
     ggml_type == _MQ.GGML_TYPE_Q4_K && return (0, 2)
+    ggml_type == _MQ.GGML_TYPE_Q6_K && return (208,)
     return (0,)
 end
 
 function _mq_random_rows(rng, ggml_type::Int32, nrows::Int, nb::Int)
+    # nb counts 256-value super-blocks; Q8_0 blocks hold 32 values.
+    ggml_type == _MQ.GGML_TYPE_Q8_0 && (nb *= 8)
     bsz = _MQ._iq_block_bytes(ggml_type)
     w = rand(rng, UInt8, nrows * nb * bsz)
     for blk in 0:(nrows * nb - 1)
@@ -59,7 +66,8 @@ function _mq_random_rows(rng, ggml_type::Int32, nrows::Int, nb::Int)
     return w
 end
 
-_mq_acts(rng, ne0::Int, n::Int) = [_MQ.quantize_q8_K!(_MQ.Q8KVec(div(ne0, 256)), randn(rng, Float32, ne0)) for _ in 1:n]
+_mq_acts(rng, ne0::Int, n::Int, ggml_type::Int32=_MQ.GGML_TYPE_Q4_K) =
+    [_MQ._q8k_quantize_act(ggml_type, randn(rng, Float32, ne0)) for _ in 1:n]
 
 # Checks every column of a tile of `ntile` activations starting at t0 against
 # the single-column kernel, for both simd modes, on the rows of w.
@@ -85,7 +93,7 @@ end
     for (name, ty) in _MQ_TYPES
         rb = _MQ._qrow_bytes(ty, ne0)
         w = _mq_random_rows(rng, ty, nrows, nb)
-        xqs = _mq_acts(rng, ne0, 9)
+        xqs = _mq_acts(rng, ne0, 9, ty)
         @testset "$name" begin
             for ntile in 1:8, t0 in (1, 2)
                 nmis = _mq_check_tiles(ty, w, nrows, rb, xqs, t0, ntile)
@@ -95,14 +103,58 @@ end
     end
 end
 
+@testset "multi-column dot: Q6_K at the integer extremes" begin
+    # Weights at u = 0 and 63, scales at -128 and 127, activations at -128 and
+    # 127 (the quantizer clamps to ±127, so the vectors are built by hand). This
+    # drives the 16-bit pair sums and the 32-bit lane totals to their limits.
+    rng = Xoshiro(0x6e6e)
+    nb = 2
+    ty = _MQ.GGML_TYPE_Q6_K
+    bsz = _MQ._iq_block_bytes(ty)
+    rb = _MQ._qrow_bytes(ty, 256 * nb)
+    rows = (
+        fill(0xff, rb),                  # u = 63 everywhere
+        zeros(UInt8, rb),                # u = 0 everywhere
+        rand(rng, (0x00, 0xff), rb),     # a mix of 0 and 63 per byte
+    )
+    w = UInt8[]
+    for (r, row) in enumerate(rows)
+        for blk in 0:(nb - 1)
+            o = blk * bsz
+            for k in 1:16
+                row[o + 192 + k] = isodd(k + r) ? 0x80 : 0x7f
+            end
+            row[o + 209] = 0x00
+            row[o + 210] = 0x3c            # d = 1.0 in f16
+        end
+        append!(w, row)
+    end
+    nrows = length(rows)
+    pick = (Int8(-128), Int8(127), Int8(-127), Int8(0), Int8(1))
+    xqs = map(1:9) do c
+        x = _MQ.Q8KVec(nb)
+        for i in eachindex(x.qs)
+            x.qs[i] = c <= 2 ? (c == 1 ? Int8(-128) : Int8(127)) : rand(rng, pick)
+        end
+        for i in eachindex(x.bsums)
+            x.bsums[i] = sum(Int16, @view x.qs[(16(i - 1) + 1):(16i)])
+        end
+        x.d .= 1.0f0
+        x
+    end
+    for ntile in 1:8, t0 in (1, 2)
+        @test _mq_check_tiles(ty, w, nrows, rb, xqs, t0, ntile) == 0
+    end
+end
 @testset "multi-column dot: the tile kernels do not allocate" begin
     rng = Xoshiro(7)
     nb = 4
     ne0 = 256 * nb
-    for ty in (_MQ.GGML_TYPE_IQ2_XXS, _MQ.GGML_TYPE_IQ3_S, _MQ.GGML_TYPE_Q2_K, _MQ.GGML_TYPE_Q4_K)
+    for ty in (_MQ.GGML_TYPE_IQ2_XXS, _MQ.GGML_TYPE_IQ3_S, _MQ.GGML_TYPE_Q2_K, _MQ.GGML_TYPE_Q4_K,
+        _MQ.GGML_TYPE_Q6_K, _MQ.GGML_TYPE_Q8_0)
         rb = _MQ._qrow_bytes(ty, ne0)
         w = _mq_random_rows(rng, ty, 1, nb)
-        xqs = _mq_acts(rng, ne0, 4)
+        xqs = _mq_acts(rng, ne0, 4, ty)
         out = zeros(Float32, 4)
         _MQ._dot_q8k_multi!(out, ty, w, 0, xqs, 1, 4, true)
         a = @allocated _MQ._dot_q8k_multi!(out, ty, w, 0, xqs, 1, 4, true)
@@ -159,7 +211,7 @@ end
             ne0, ne1 = info.dims[1], info.dims[2]
             rb = _MQ._qrow_bytes(ty, ne0)
             base = Int(hdr.data_start) + Int(info.offset)
-            xqs = _mq_acts(rng, ne0, 8)
+            xqs = _mq_acts(rng, ne0, 8, ty)
             rows = unique(round.(Int, range(1, ne1; length=min(8, ne1))))
             nmis = 0
             out = zeros(Float32, 8)

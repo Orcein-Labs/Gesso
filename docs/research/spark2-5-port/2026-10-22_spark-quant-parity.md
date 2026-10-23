@@ -104,3 +104,22 @@ greedy, with 32 new tokens.
 - Run GPQA Diamond on A8F6 with a long thinking budget and compare against the
   vendor's BF16 number. Earlier runs were capped at 1.1k–4k tokens and truncated many
   answers, so their scores are not comparable. This run is in progress.
+
+## Gesso S3: CPU prefill (in progress)
+
+Timed with `reference_prefill` on 256 tokens of the long prompt, 8 threads.
+
+| Change | Prefill s | tok/s |
+|---|---|---|
+| Baseline (one column per dot) | 59.8 | 4.3 |
+| Multi-column Q6_K and Q8_0 tiles | 54.3 | 4.7 |
+| Fused float step per tile | 44.2 | 5.8 |
+| Threaded GEGLU for prefill-sized arrays | 37.0 | 6.9 |
+| Q6_K pair-order kernel (pmaddubsw + pmaddwd, exact i32 lanes) | 34.9 | 7.3 |
+
+- llama.cpp takes about 5.8 s for the same 256 tokens, so the gap is now about 6×.
+- Each change is bit-equal to the single-column kernels, including a Q6_K extremes
+  test. Greedy parity against llama.cpp is unchanged: p1 2/32, p2 32/32, long 32/32,
+  with the same Δlogprob figures as in S1.
+- Next target: the Q8_0 tile (attention projections and the tied lm_head). Its worker
+  time is now level with the Q6_K FFN tiles, mostly in a scalar float step.
