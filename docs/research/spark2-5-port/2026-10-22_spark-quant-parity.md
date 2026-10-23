@@ -118,12 +118,25 @@ Timed with `reference_prefill` on 256 tokens of the long prompt, 8 threads.
 | Q6_K pair-order kernel (pmaddubsw + pmaddwd, exact i32 lanes) | 34.9 | 7.3 |
 | Q8_0 tile: phadd transpose and one vector float step | 28.0 | 9.2 |
 | Attention reads only unmasked keys; exact inverse scale | 24.2 | 10.6 |
+| Q6_K activations shuffled once per token; 32-row blocks | 23.2 | 11.0 |
 
-- llama.cpp takes about 5.8 s for the same 256 tokens, so the gap is now about 4.2×.
+- llama.cpp takes about 5.8 s for the same 256 tokens, so the gap is now about 4.0×.
 - Each change is bit-equal to the single-column kernels, including a Q6_K extremes
   test. Greedy parity against llama.cpp is unchanged: p1 2/32, p2 32/32, long 32/32,
   with the same Δlogprob figures as in S1.
 - `Profile` runs of this script with stdout redirected to a file segfault (3 of 3, a
   garbage program counter); through a pipe they finish, and the same prefill without
   the profiler has not crashed in 12 timed runs or the parity runs.
-- Next target: the Q6_K FFN tile, about half of all worker samples.
+- The machine was shared during the last row (load 4 to 10), so its timing is the
+  slower end of 22.0 to 23.4 s over 9 runs. 8cfaaa6 timed 23.9 to 24.3 s in the same
+  session. The 992-token parity prompt went from 142 s to 127 s end to end.
+- Q6_K step, measured alone on one 2560 × 10240 matrix with 256 tokens:
+  - Row by row, the pre-shuffled activations are slower: 99 ms against 85 ms. They are
+    twice the bytes (the shuffled values plus their offset words), and every weight row
+    re-reads all 256 tokens.
+  - In 32-row blocks the tile's tokens stay in cache. That gives 70 ms with the shuffle
+    in the kernel, and 63 to 65 ms pre-shuffled.
+  - The 10240-wide ffn_down shape gains less: 84 ms down to 76 ms.
+  - An 8-token tile is no faster than 4.
+- Next target: the Q6_K tile still runs at about a third of its port-0 bound, and
+  ffn_down's 32 rows no longer fit in L2.

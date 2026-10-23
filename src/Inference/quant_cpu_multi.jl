@@ -699,6 +699,149 @@ end
     return out
 end
 
+# The activation side of the Q6_K step depends only on the activation, so a
+# prefill does it once per token instead of once per weight row: `xp` is qs with
+# every 32-value chunk in pair order, and `mo` holds the chunk's 16 offset words
+# 32 * (xp[2m-1] + xp[2m]), at the same byte offset as the chunk in `xp`. `d` is
+# `q.d` and `q` the source, which the per-column fallback reads.
+struct Q6KPrepVec
+    d::Vector{Float32}
+    q::Q8KVec
+    xp::Vector{Int8}
+    mo::Vector{Int16}
+end
+
+Base.length(x::Q6KPrepVec) = length(x.q)
+
+# Byte k (0-based) of a pair-ordered chunk is source byte _Q6K_SRC[k + 1]: the
+# vpermd of _Q6K_PERMD, then the vpshufb of the lane pattern within each half.
+const _Q6K_SRC = let permd = (0, 2, 4, 6, 1, 3, 5, 7), pat = (0, 4, 8, 12, 1, 5, 9, 13, 2, 6, 10, 14, 3, 7, 11, 15)
+    ntuple(k -> (b = 16 * ((k - 1) >> 4) + pat[(k - 1) & 15 + 1]; 4 * permd[b >> 2 + 1] + (b & 3)), 32)
+end
+
+function _q6k_prep(x::Q8KVec)
+    n = length(x.qs)
+    xp = Vector{Int8}(undef, n)
+    mo = Vector{Int16}(undef, n >> 1)
+    @inbounds for o in 0:32:(n - 1)
+        for k in 1:32
+            xp[o + k] = x.qs[o + _Q6K_SRC[k] + 1]
+        end
+        for m in 1:16
+            mo[o >> 1 + m] = Int16(32) * (Int16(xp[o + 2m - 1]) + Int16(xp[o + 2m]))
+        end
+    end
+    return Q6KPrepVec(x.d, x, xp, mo)
+end
+
+# The fallback for a prepped column is the plain Q8_K dot.
+@inline _dot_q8k(ggml_type::Int32, w::AbstractVector{UInt8}, woff::Int, x::Q6KPrepVec, simd::Bool) =
+    _dot_q8k(ggml_type, w, woff, x.q, simd)
+
+# _kq_ir_q6k_multi with prepped columns: per column pointers q (to xp) and m (to
+# mo), so the chunk needs one vpmaddubsw, the subtract and the vpmaddwd.
+function _kq_ir_q6k_prep_multi(K::Int)
+    io = IOBuffer()
+    qargs = join(("ptr %q$c, ptr %m$c" for c in 0:(K - 1)), ", ")
+    print(io,
+        "declare <8 x i32> @llvm.x86.avx2.permd(<8 x i32>, <8 x i32>)\n",
+        "declare <32 x i8> @llvm.x86.avx2.pshuf.b(<32 x i8>, <32 x i8>)\n",
+        "declare <16 x i16> @llvm.x86.avx2.pmadd.ub.sw(<32 x i8>, <32 x i8>)\n",
+        "declare <8 x i32> @llvm.x86.avx2.pmadd.wd(<16 x i16>, <16 x i16>)\n",
+        "define <$(8K) x float> @entry(ptr %w, $qargs, <$(8K) x float> %s, <$(8K) x float> %d) #0 {\n",
+        "  %scbp = getelementptr i8, ptr %w, i64 192\n",
+        "  %scb = load <16 x i8>, ptr %scbp, align 1\n",
+        "  %scw = sext <16 x i8> %scb to <16 x i16>\n")
+    acc = ["zeroinitializer" for _ in 0:(K - 1)]
+    for h in 0:1
+        _kq_ld(io, "qh$h", "w", 128 + 32 * h)
+        for t in 0:3
+            ht = "$(h)$t"
+            i = 8 * h + 2 * t
+            _kq_ld(io, "ql$ht", "w", 64 * h + 32 * (t & 1))
+            if t < 2
+                print(io, "  %nb$ht = and <32 x i8> %ql$ht, splat (i8 15)\n")
+            else
+                print(io,
+                    "  %nh$ht = lshr <32 x i8> %ql$ht, splat (i8 4)\n",
+                    "  %nb$ht = and <32 x i8> %nh$ht, splat (i8 15)\n")
+            end
+            print(io,
+                "  %hs$ht = lshr <32 x i8> %qh$h, splat (i8 $(2t))\n",
+                "  %hm$ht = and <32 x i8> %hs$ht, splat (i8 3)\n",
+                "  %hb$ht = shl <32 x i8> %hm$ht, splat (i8 4)\n",
+                "  %uv$ht = or <32 x i8> %nb$ht, %hb$ht\n")
+            _q6k_pair_order(io, "up$ht", "uv$ht")
+            print(io, "  %sw$ht = shufflevector <16 x i16> %scw, <16 x i16> poison, <16 x i32> <",
+                join(("i32 $(isodd(k) ? i + 1 : i)" for k in 0:15), ", "), ">\n")
+            off = 128 * h + 32 * t
+            for c in 0:(K - 1)
+                _kq_ld(io, "xp$c.$ht", "q$c", off)
+                print(io,
+                    "  %mp$c.$ht = getelementptr i8, ptr %m$c, i64 $off\n",
+                    "  %mo$c.$ht = load <16 x i16>, ptr %mp$c.$ht, align 1\n",
+                    "  %mu$c.$ht = call <16 x i16> @llvm.x86.avx2.pmadd.ub.sw(<32 x i8> %up$ht, <32 x i8> %xp$c.$ht)\n",
+                    "  %mf$c.$ht = sub <16 x i16> %mu$c.$ht, %mo$c.$ht\n",
+                    "  %ms$c.$ht = call <8 x i32> @llvm.x86.avx2.pmadd.wd(<16 x i16> %mf$c.$ht, <16 x i16> %sw$ht)\n",
+                    "  %A$c.$ht = add <8 x i32> $(acc[c + 1]), %ms$c.$ht\n")
+                acc[c + 1] = "%A$c.$ht"
+            end
+        end
+    end
+    res = "poison"
+    for c in 0:(K - 1), e in 0:7
+        print(io,
+            "  %o$c.$e = extractelement <8 x i32> $(acc[c + 1]), i32 $e\n",
+            "  %r$c.$e = insertelement <$(8K) x i32> $res, i32 %o$c.$e, i32 $(8c + e)\n")
+        res = "%r$c.$e"
+    end
+    print(io,
+        "  %fa = sitofp <$(8K) x i32> $res to <$(8K) x float>\n",
+        "  %fm = fmul <$(8K) x float> %d, %fa\n",
+        "  %fs = fadd <$(8K) x float> %s, %fm\n",
+        "  ret <$(8K) x float> %fs\n}\n", _KQ_ATTRS)
+    return String(take!(io))
+end
+
+for K in 1:8
+    args = [a for c in 1:K for a in (:(pq[$c]), :(pm[$c]))]
+    V = NTuple{8K,VecElement{Float32}}
+    argt = Tuple{Ptr{UInt8},ntuple(_ -> Ptr{Int8}, 2K)...,V,V}
+    @eval @inline _q6k_prep_multi_step(pw::Ptr{UInt8}, pq::NTuple{$K,Ptr{Int8}}, pm::NTuple{$K,Ptr{Int8}}, s::$V, d::$V) =
+        Base.llvmcall(($(_kq_ir_q6k_prep_multi(K)), "entry"), $V, $argt, pw, $(args...), s, d)
+end
+
+@inline _multi_q6k_scales(xv::NTuple{K,Q6KPrepVec}, ib::Int, dw::Float32, ::Val{N}) where {K,N} =
+    ntuple(i -> VecElement(dw * xv[(i - 1) >> 3 + 1].d[ib + 1]), Val(N))
+
+@noinline function _dot_q6k_multi!(out::AbstractVector{Float32}, w::AbstractVector{UInt8},
+    woff::Int, xqs::AbstractVector{Q6KPrepVec}, t0::Int, ::Val{K}) where {K}
+    nb = length(xqs[t0].d)
+    _q8k_check_row(w, woff, 210 * nb)
+    _multi_check(xqs, t0, K, nb)
+    nb == 0 && return _multi_zero!(out, t0, K)
+    GC.@preserve w xqs begin
+        xv = ntuple(c -> xqs[t0 + c - 1], Val(K))
+        sums = ntuple(_ -> VecElement(0.0f0), Val(8K))
+        @inbounds for ib in 0:(nb - 1)
+            b = woff + ib * 210
+            dw = _kq_f16(w, b + 208)
+            d = _multi_q6k_scales(xv, ib, dw, Val(8K))
+            pq = ntuple(c -> pointer(xv[c].xp, ib * QK_K + 1), Val(K))
+            pm = ntuple(c -> Ptr{Int8}(pointer(xv[c].mo, ib * (QK_K >> 1) + 1)), Val(K))
+            sums = _q6k_prep_multi_step(pointer(w, b + 1), pq, pm, sums, d)
+        end
+        for c in 1:K
+            sumf = 0.0f0
+            for l in 1:8
+                sumf += sums[8 * (c - 1) + l].value
+            end
+            out[t0 + c - 1] = sumf
+        end
+    end
+    return out
+end
+
 # ---------------------------------------------------------------- Q8_0
 #
 # The single kernel reads one integer per 32-value block, so only the total has

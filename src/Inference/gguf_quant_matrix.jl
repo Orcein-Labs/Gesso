@@ -388,14 +388,18 @@ function _half_widen_rows!(W::Matrix{Float32}, q::QuantMatrix, r0::Int, nr::Int,
 end
 
 # Prefill (seq > 1) of a Q8_K-kind weight: each token row is quantized once, and
-# the weight rows are split across threads. A chunk walks its rows and, for each
-# row, runs all tokens in tiles of _MULTI_TILE columns, so the row's sub-block
-# unpacking is shared across the tile.
+# the weight rows are split across threads. A chunk walks its rows in blocks of
+# _MULTI_ROW_BLOCK; for each tile of _MULTI_TILE tokens it runs every row of the
+# block, so a row's sub-block unpacking is shared across the tile and the tile's
+# activations stay in cache across the block.
 function _quant_matmul_multi!(dst::AbstractMatrix, x::AbstractMatrix, q::QuantMatrix)
     seq = size(x, 1)
+    simd = q8k_simd_enabled()
     xqs = _prefill_quantize(q.ggml_type, x, seq, q.ne0)
+    # Q6_K: shuffle each activation once here rather than once per weight row.
+    simd && q.ggml_type == GGML_TYPE_Q6_K && (xqs = map(_q6k_prep, xqs))
     nc = max(1, min(Threads.nthreads(), cld(q.nrows, _QGEMV_MIN_ROWS)))
-    chunk = _PrefillChunk(dst, _quant_bytes(q), xqs, q.ggml_type, q.ne0, q.nrows, nc, q8k_simd_enabled())
+    chunk = _PrefillChunk(dst, _quant_bytes(q), xqs, q.ggml_type, q.ne0, q.nrows, nc, simd)
     _run_row_chunks!(chunk, nc, q.nrows * q.ne0 * seq)
     return dst
 end
@@ -409,6 +413,11 @@ function _prefill_quantize(ggml_type::Int32, x::AbstractMatrix, seq::Int, ne0::I
         _q8k_quantize_act(ggml_type, xf)
     end for t in 1:seq]
 end
+
+# Weight rows per block of a prefill chunk. On Spark-sized Q6_K FFN matrices (Xeon
+# E5-2699 v3, 8 threads) 32 and 64 tie; row by row is 1.2x slower, 1.6x with the
+# Q6_K prep, whose activations are twice the bytes.
+const _MULTI_ROW_BLOCK = 32
 
 # One row chunk of _quant_matmul_multi!, as a callable struct (see _GroupChunk).
 struct _PrefillChunk{D<:AbstractMatrix,B<:AbstractVector{UInt8},X<:AbstractVector}
@@ -428,15 +437,17 @@ function (p::_PrefillChunk)(c::Int)
     rb = _qrow_bytes(p.ggml_type, p.ne0)
     seq = length(p.xqs)
     buf = Vector{Float32}(undef, seq)
-    @inbounds for j in j0:j1
-        woff = (j - 1) * rb
+    @inbounds for b0 in j0:_MULTI_ROW_BLOCK:j1
+        b1 = min(b0 + _MULTI_ROW_BLOCK - 1, j1)
         t0 = 1
         while t0 <= seq
             K = min(_MULTI_TILE, seq - t0 + 1)
-            _dot_q8k_multi!(buf, p.ggml_type, p.bytes, woff, p.xqs, t0, K, p.simd)
-            for t in t0:(t0 + K - 1)
-                # Same expression as the per-token path, so -0.0 becomes +0.0 identically.
-                p.dst[t, j] = 1.0f0 * buf[t] + 0.0f0
+            for j in b0:b1
+                _dot_q8k_multi!(buf, p.ggml_type, p.bytes, (j - 1) * rb, p.xqs, t0, K, p.simd)
+                for t in t0:(t0 + K - 1)
+                    # Same expression as the per-token path, so -0.0 becomes +0.0 identically.
+                    p.dst[t, j] = 1.0f0 * buf[t] + 0.0f0
+                end
             end
             t0 += K
         end
