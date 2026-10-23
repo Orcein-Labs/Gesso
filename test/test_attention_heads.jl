@@ -43,7 +43,9 @@ end
 # the decode path is pinned to bit-for-bit.
 @testset "CPU attention loops keep the reference per-element order" begin
     rng = Xoshiro(20261022)
-    L, K, H, d = 64, 600, 3, 64
+    L, K, H = 64, 600, 3
+    # d = 64 scales by an exact power of two (sqrt 8), d = 48 by a true divide.
+    for d in (64, 48)
     q = randn(rng, Float32, L, H, d)
     k = randn(rng, Float32, K, H, d)
     v = randn(rng, Float32, K, H, d)
@@ -66,4 +68,29 @@ end
         Gesso.Inference._attention_values_cpu!(attn, probs, v, hh, d, L, K)
     end
     @test reinterpret(UInt32, attn) == reinterpret(UInt32, ref)
+    end
+end
+
+# _attention_heads! reads only the keys the causal and window masks keep; the
+# result must equal scoring every key, masking, and summing every key.
+@testset "CPU prefill attention skips masked keys bit for bit" begin
+    rng = Xoshiro(0x5a1e)
+    L, H, d = 300, 2, 64
+    q = randn(rng, Float32, L, H, d)
+    k = randn(rng, Float32, L, H, d)
+    v = randn(rng, Float32, L, H, d)
+    for window in (0, 100)
+        ref = zeros(Float32, L, H, d)
+        for hh in 1:H
+            sc = Gesso.Inference._attention_scores_cpu!(zeros(Float32, L, L), q, k, hh, d, L, L)
+            window > 0 && Gesso.Inference._window_mask!(sc, L, L, window)
+            probs = Gesso._cpu_softmax_storage!(similar(sc), sc)
+            Gesso.Inference._attention_values_cpu!(ref, probs, v, hh, d, L, L)
+        end
+        ws() = Gesso.TemporaryWorkspace(; shape=(L, L), storage=zeros(Float32, L, L))
+        attn = zeros(Float32, L, H, d)
+        Gesso.Inference._attention_heads!(Gesso.CPUBackend(), attn, ws(), ws(), q, k, v, H, d, L, L,
+            Gesso.PrefillWorkload(); window)
+        @test reinterpret(UInt32, attn) == reinterpret(UInt32, ref)
+    end
 end

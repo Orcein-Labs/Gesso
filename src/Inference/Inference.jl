@@ -748,7 +748,7 @@ function _attention_heads!(
     for hh in 1:n_heads
         if on_cpu
             fill!(sc, zero(eltype(sc)))
-            _attention_scores_cpu!(sc, q, k, hh, d_head, L, K)
+            _attention_scores_cpu!(sc, q, k, hh, d_head, L, K; masked=true, window)
         else
             # Ordinary per-head GEMM over explicit device slices. No host
             # transfer, no cross-head contraction, no padded keys.
@@ -757,7 +757,7 @@ function _attention_heads!(
         window > 0 && _window_mask!(sc, L, K, window)
         softmax!(backend, scores_out, scores, workload)
         if on_cpu
-            _attention_values_cpu!(attn, probs, v, hh, d_head, L, K)
+            _attention_values_cpu!(attn, probs, v, hh, d_head, L, K; masked=true, window)
         else
             _attention_values_device!(backend, attn, probs, v, hh, K)
         end
@@ -836,26 +836,59 @@ _attention_prefill_device!(backend, attn, q, k, v, n_heads, d_head, group, L, K)
 # (keys are contiguous in `k`). Its outputs run the keys outer over a
 # transposed copy of the head's values. Rows are independent, so they split
 # across threads.
-function _attention_scores_cpu!(sc, q, k, hh, d_head, L, K)
+#
+# With `masked`, a row reads only the keys the causal (and sliding window) mask
+# keeps, as the decode path does. The softmax sets the others to -Inf before
+# its max, so their scores are never read, and their probabilities are exact
+# zeros, so they add nothing to the outputs.
+#
+# Each term is (q * k) / sqrt(d_head) with the divide in Float64, since
+# sqrt(d_head) is a Float64. When sqrt(d_head) is a power of two, multiplying
+# by its inverse is the same exact scaling, without the slow divide.
+@inline _attention_keys(t::Int, L::Int, K::Int, masked::Bool, window::Int) =
+    masked ? ((window > 0 ? max(1, K - L + t - window + 1) : 1):(K - L + t)) : (1:K)
+
+struct _ScoreDiv
+    s::Float64
+end
+struct _ScoreMul
+    r::Float64
+end
+@inline (o::_ScoreDiv)(p) = p / o.s
+@inline (o::_ScoreMul)(p) = p * o.r
+
+function _attention_score_scale(d_head::Int)
+    s = sqrt(d_head)
+    return significand(s) == 1.0 ? _ScoreMul(inv(s)) : _ScoreDiv(s)
+end
+
+function _attention_scores_cpu!(sc, q, k, hh, d_head, L, K; masked::Bool=false, window::Int=0)
+    _attention_scores_rows!(sc, q, k, hh, d_head, L, K, masked, window,
+        _attention_score_scale(d_head))
+    return sc
+end
+
+function _attention_scores_rows!(sc, q, k, hh, d_head, L, K, masked, window, scale::F) where {F}
     if !_attention_rows_threaded(L, K * d_head)
-        for t in 1:L, u in 1:K, j in 1:d_head
-            sc[t, u] += q[t, hh, j] * k[u, hh, j] / sqrt(d_head)
+        for t in 1:L, u in _attention_keys(t, L, K, masked, window), j in 1:d_head
+            sc[t, u] += scale(q[t, hh, j] * k[u, hh, j])
         end
         return sc
     end
     _attention_rows!(L) do rows
         acc = Vector{eltype(sc)}(undef, K)
         for t in rows
-            @inbounds for u in 1:K
+            keys = _attention_keys(t, L, K, masked, window)
+            @inbounds for u in keys
                 acc[u] = sc[t, u]
             end
             for j in 1:d_head
                 qv = q[t, hh, j]
-                @inbounds for u in 1:K
-                    acc[u] += qv * k[u, hh, j] / sqrt(d_head)
+                @inbounds for u in keys
+                    acc[u] += scale(qv * k[u, hh, j])
                 end
             end
-            @inbounds for u in 1:K
+            @inbounds for u in keys
                 sc[t, u] = acc[u]
             end
         end
@@ -863,9 +896,9 @@ function _attention_scores_cpu!(sc, q, k, hh, d_head, L, K)
     return sc
 end
 
-function _attention_values_cpu!(attn, probs, v, hh, d_head, L, K)
+function _attention_values_cpu!(attn, probs, v, hh, d_head, L, K; masked::Bool=false, window::Int=0)
     if !_attention_rows_threaded(L, K * d_head)
-        for t in 1:L, j in 1:d_head, u in 1:K
+        for t in 1:L, j in 1:d_head, u in _attention_keys(t, L, K, masked, window)
             attn[t, hh, j] += probs[t, u] * v[u, hh, j]
         end
         return attn
@@ -880,7 +913,7 @@ function _attention_values_cpu!(attn, probs, v, hh, d_head, L, K)
             @inbounds for j in 1:d_head
                 acc[j] = attn[t, hh, j]
             end
-            for u in 1:K
+            for u in _attention_keys(t, L, K, masked, window)
                 p = probs[t, u]
                 @inbounds for j in 1:d_head
                     acc[j] += p * vt[j, u]
@@ -896,16 +929,15 @@ end
 
 # Small calls (decode, short prompts) keep the plain loops above: they do not
 # allocate, which the warmed-decode allocation caps in test_decode_scratch.jl
-# rely on. Larger calls split contiguous row ranges across threads.
+# rely on. Larger calls split their rows across threads.
 _attention_rows_threaded(L::Int, work::Int) =
     Threads.nthreads() > 1 && L > 1 && L * work >= 1 << 20
 
 function _attention_rows!(f, L::Int)
     nc = min(Threads.nthreads(), L)
+    # Causal rows grow with t, so each task takes every nc-th row.
     @sync for c in 1:nc
-        lo = div((c - 1) * L, nc) + 1
-        hi = div(c * L, nc)
-        Threads.@spawn f($lo:$hi)
+        Threads.@spawn f($c:$nc:$L)
     end
     return nothing
 end
