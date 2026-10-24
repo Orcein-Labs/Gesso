@@ -8,15 +8,17 @@ const _GIB = Gesso.Inference
 
 _bits_vw(a::AbstractArray{Float32}) = reinterpret(UInt32, vec(a))
 
-# Random rows for a block-scaled type whose first two bytes are an f16 super-scale.
+# Random rows for a block-scaled type, with finite f16 super-scales (d, and dmin
+# where the format has one) so no row is NaN: NaN payloads are not bit-stable.
 function _vwb_random_qm(rng, ty::Int32, nrows::Int, ne0::Int)
     rb = _GIB._qrow_bytes(ty, ne0)
     data = rand(rng, UInt8, nrows * rb)
     bsz = _GIB._iq_block_bytes(ty)
-    for blk in 0:(nrows * div(rb, bsz) - 1)
+    offs = filter(>=(0), [_GIB._q8k_d_offset(ty), _GIB._q8k_dmin_offset(ty)])
+    for blk in 0:(nrows * div(rb, bsz) - 1), off in offs
         bits = reinterpret(UInt16, Float16(0.005f0 + 0.05f0 * rand(rng, Float32)))
-        data[blk * bsz + 1] = UInt8(bits & 0xff)
-        data[blk * bsz + 2] = UInt8(bits >> 8)
+        data[blk * bsz + off + 1] = UInt8(bits & 0xff)
+        data[blk * bsz + off + 2] = UInt8(bits >> 8)
     end
     return _GIB.QuantMatrix(data, 0, ty, ne0, nrows, rb, C_NULL, Int64(_GIB.QK_K))
 end
