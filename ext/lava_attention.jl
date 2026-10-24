@@ -20,8 +20,17 @@ const _LAVA_ATTN_DMAX = 512
 
 import Gesso.Inference: _attention_decode_device!
 
-@kernel cpu=false function _lava_attn_split_kernel!(part, q, kc, vc, group::Int, K::Int,
-                                                    scale::Float32, d::Int, nsplit::Int)
+@kernel cpu=false function _lava_attn_split_kernel!(
+    part,
+    q,
+    kc,
+    vc,
+    group::Int,
+    K::Int,
+    scale::Float32,
+    d::Int,
+    nsplit::Int,
+)
     tl = @index(Local, Linear)
     g = @index(Group, Linear)
     s = (g - 1) % nsplit + 1
@@ -43,7 +52,7 @@ import Gesso.Inference: _attention_decode_device!
     @synchronize
     m = Float32(-Inf)
     l = Float32(0)
-    for t0 in 0:_LAVA_ATTN_TILE:(kn - 1)
+    for t0 in 0:_LAVA_ATTN_TILE:(kn-1)
         n = min(_LAVA_ATTN_TILE, kn - t0)
         lmax = Float32(-Inf)
         for i in tl:_LAVA_ATTN_LANES:n
@@ -83,14 +92,14 @@ import Gesso.Inference: _attention_decode_device!
         for j in tl:_LAVA_ATTN_LANES:d
             piece = Float32(0)
             for i in 1:n
-                piece += sp[i] * vc[k0 + t0 + i, hk, j]
+                piece += sp[i] * vc[k0+t0+i, hk, j]
             end
             acc[j] = acc[j] * alpha + piece
         end
         @synchronize
     end
     for j in tl:_LAVA_ATTN_LANES:d
-        part[s, h, 2 + j] = acc[j]
+        part[s, h, 2+j] = acc[j]
     end
     if tl == 1
         part[s, h, 1] = m
@@ -113,7 +122,7 @@ end
     for j in tl:_LAVA_ATTN_LANES:d
         num = Float32(0)
         for s in 1:nsplit
-            num += exp(part[s, h, 1] - M) * part[s, h, 2 + j]
+            num += exp(part[s, h, 1] - M) * part[s, h, 2+j]
         end
         attn[1, h, j] = num * inv
     end
@@ -130,17 +139,35 @@ function _attention_decode_device!(
     group::Int,
     K::Int,
 )
-    K >= 1 || throw(ArgumentError("decode attention needs at least one cache row, got K=$K"))
+    K >= 1 ||
+        throw(ArgumentError("decode attention needs at least one cache row, got K=$K"))
     d_head <= _LAVA_ATTN_DMAX || return false
     nsplit = cld(K, _LAVA_ATTN_TILE)
     part = Lava.LavaArray{Float32}(undef, nsplit, n_heads, d_head + 2)
     backend = KA.get_backend(attn)
     scale = Float32(1 / sqrt(d_head))
     kern_s = _lava_attn_split_kernel!(backend)
-    kern_s(part, q, kc, vc, Int(group), Int(K), scale, Int(d_head), Int(nsplit);
-        ndrange=n_heads * nsplit * _LAVA_ATTN_LANES, workgroupsize=(_LAVA_ATTN_LANES,))
+    kern_s(
+        part,
+        q,
+        kc,
+        vc,
+        Int(group),
+        Int(K),
+        scale,
+        Int(d_head),
+        Int(nsplit);
+        ndrange=n_heads * nsplit * _LAVA_ATTN_LANES,
+        workgroupsize=(_LAVA_ATTN_LANES,),
+    )
     kern_c = _lava_attn_combine_kernel!(backend)
-    kern_c(attn, part, Int(nsplit), Int(d_head);
-        ndrange=n_heads * _LAVA_ATTN_LANES, workgroupsize=(_LAVA_ATTN_LANES,))
+    kern_c(
+        attn,
+        part,
+        Int(nsplit),
+        Int(d_head);
+        ndrange=n_heads * _LAVA_ATTN_LANES,
+        workgroupsize=(_LAVA_ATTN_LANES,),
+    )
     return true
 end

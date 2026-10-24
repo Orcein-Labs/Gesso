@@ -14,68 +14,104 @@
 # stage and are reported beside the table, never added to it.
 
 const DECODE_STAGES = (
-    :embed, :gdn_mixer, :attn_mixer, :norm, :dense_ffn,
-    :moe_router, :moe_alloc, :moe_qupload, :moe_qgemv,
-    :moe_d2h, :moe_host, :moe_h2d, :shared_expert,
-    :lm_head, :sample,
+    :embed,
+    :gdn_mixer,
+    :attn_mixer,
+    :norm,
+    :dense_ffn,
+    :moe_router,
+    :moe_alloc,
+    :moe_qupload,
+    :moe_qgemv,
+    :moe_d2h,
+    :moe_host,
+    :moe_h2d,
+    :shared_expert,
+    :lm_head,
+    :sample,
 )
 
 # GDN mixer sub-stages (inside :gdn_mixer, nested like the host sub-stages).
 const DECODE_GDN_SUBSTAGES = (
-    :gdn_norm, :gdn_proj, :gdn_conv, :gdn_split, :gdn_gates,
-    :gdn_qk, :gdn_recur, :gdn_gnorm, :gdn_outproj,
+    :gdn_norm,
+    :gdn_proj,
+    :gdn_conv,
+    :gdn_split,
+    :gdn_gates,
+    :gdn_qk,
+    :gdn_recur,
+    :gdn_gnorm,
+    :gdn_outproj,
 )
 
 # Full-attention decode sub-stages (inside :attn_mixer).
-const DECODE_ATTN_SUBSTAGES = (
-    :attn_proj, :attn_headnorm_rope, :attn_kv_append, :attn_core, :attn_outproj,
-)
+const DECODE_ATTN_SUBSTAGES =
+    (:attn_proj, :attn_headnorm_rope, :attn_kv_append, :attn_core, :attn_outproj)
 
 # Dense FFN decode sub-stages (inside :dense_ffn).
 const DECODE_FFN_SUBSTAGES = (:ffn_gateup, :ffn_act, :ffn_down)
 
 const DECODE_SUBSTAGES = (
-    :host_fork_join, :host_critical_path, :host_cpu_work, :upload_gather,
+    :host_fork_join,
+    :host_critical_path,
+    :host_cpu_work,
+    :upload_gather,
     DECODE_GDN_SUBSTAGES...,
     DECODE_ATTN_SUBSTAGES...,
     DECODE_FFN_SUBSTAGES...,
 )
 
 const DECODE_COUNTERS = (
-    :expert_h2d_bytes, :expert_hits, :expert_misses,
-    :cuda_alloc_calls, :cuda_alloc_bytes,
-    :host_threaded_calls, :minflt, :majflt,
+    :expert_h2d_bytes,
+    :expert_hits,
+    :expert_misses,
+    :cuda_alloc_calls,
+    :cuda_alloc_bytes,
+    :host_threaded_calls,
+    :minflt,
+    :majflt,
 )
 
-const TokenLogEntry = NamedTuple{(:ns, :minflt, :majflt, :decoded),Tuple{Int64,Int,Int,Bool}}
+const TokenLogEntry =
+    NamedTuple{(:ns, :minflt, :majflt, :decoded), Tuple{Int64, Int, Int, Bool}}
 
 mutable struct DecodeProfile
-    ns::Dict{Symbol,Int64}
-    calls::Dict{Symbol,Int}
-    sub_ns::Dict{Symbol,Int64}
-    counters::Dict{Symbol,Int64}
+    ns::Dict{Symbol, Int64}
+    calls::Dict{Symbol, Int}
+    sub_ns::Dict{Symbol, Int64}
+    counters::Dict{Symbol, Int64}
     d2h::Int
     h2d::Int
     token_ns::Int64
     tokens::Int
     window::Bool
-    fault0::Tuple{Int,Int}
+    fault0::Tuple{Int, Int}
     tok_log::Vector{TokenLogEntry}
     chunk_ns::Vector{Int64}
 end
 
 function DecodeProfile()
-    ns = Dict{Symbol,Int64}(s => 0 for s in DECODE_STAGES)
-    calls = Dict{Symbol,Int}(s => 0 for s in DECODE_STAGES)
-    sub_ns = Dict{Symbol,Int64}(s => 0 for s in DECODE_SUBSTAGES)
-    counters = Dict{Symbol,Int64}(s => 0 for s in DECODE_COUNTERS)
+    ns = Dict{Symbol, Int64}(s => 0 for s in DECODE_STAGES)
+    calls = Dict{Symbol, Int}(s => 0 for s in DECODE_STAGES)
+    sub_ns = Dict{Symbol, Int64}(s => 0 for s in DECODE_SUBSTAGES)
+    counters = Dict{Symbol, Int64}(s => 0 for s in DECODE_COUNTERS)
     return DecodeProfile(
-        ns, calls, sub_ns, counters, 0, 0, 0, 0, false, (0, 0),
-        TokenLogEntry[], Int64[],
+        ns,
+        calls,
+        sub_ns,
+        counters,
+        0,
+        0,
+        0,
+        0,
+        false,
+        (0, 0),
+        TokenLogEntry[],
+        Int64[],
     )
 end
 
-const _PROFILE = Ref{Union{Nothing,DecodeProfile}}(nothing)
+const _PROFILE = Ref{Union{Nothing, DecodeProfile}}(nothing)
 
 function __init__()
     get(ENV, "GESSO_PROFILE", "") == "1" && profile_enable!()
@@ -89,13 +125,14 @@ end
 Start a fresh decode profile. Stages and copies are recorded from the next
 token window on.
 """
-profile_enable!() = (_PROFILE[] = DecodeProfile(); nothing)
+profile_enable!() = (_PROFILE[]=DecodeProfile(); nothing)
 
-profile_disable!() = (_PROFILE[] = nothing; nothing)
+profile_disable!() = (_PROFILE[]=nothing; nothing)
 
 function _profile_current()
     p = _PROFILE[]
-    p === nothing && error("decode profile is not enabled (set GESSO_PROFILE=1 or call profile_enable!)")
+    p === nothing &&
+        error("decode profile is not enabled (set GESSO_PROFILE=1 or call profile_enable!)")
     return p
 end
 
@@ -122,9 +159,18 @@ end
 function profile_snapshot()
     p = _profile_current()
     return DecodeProfile(
-        copy(p.ns), copy(p.calls), copy(p.sub_ns), copy(p.counters),
-        p.d2h, p.h2d, p.token_ns, p.tokens, false, (0, 0),
-        copy(p.tok_log), Int64[],
+        copy(p.ns),
+        copy(p.calls),
+        copy(p.sub_ns),
+        copy(p.counters),
+        p.d2h,
+        p.h2d,
+        p.token_ns,
+        p.tokens,
+        false,
+        (0, 0),
+        copy(p.tok_log),
+        Int64[],
     )
 end
 
@@ -197,7 +243,8 @@ Like `@decode_stage`, but the time is added to the nested sub-stage `:name`
 """
 macro decode_sub(name, backend, ex)
     nm = name isa QuoteNode ? name.value : name
-    nm isa Symbol || error("@decode_sub: sub-stage name must be a literal symbol, got $name")
+    nm isa Symbol ||
+        error("@decode_sub: sub-stage name must be a literal symbol, got $name")
     return quote
         local p = _PROFILE[]
         if p === nothing || !p.window
@@ -222,7 +269,7 @@ function _proc_faults()
     catch
         return (0, 0)
     end
-    fields = split(s[(findlast(')', s) + 2):end])
+    fields = split(s[(findlast(')', s)+2):end])
     length(fields) >= 10 || return (0, 0)
     return (parse(Int, fields[8]), parse(Int, fields[10]))
 end
@@ -268,7 +315,7 @@ end
     return nothing
 end
 
-@inline _profile_window_open() = (p = _PROFILE[]; p !== nothing && p.window)
+@inline _profile_window_open() = (p=_PROFILE[]; p !== nothing && p.window)
 
 @inline function _profile_sub!(name::Symbol, dt::Integer)
     p = _PROFILE[]
@@ -290,26 +337,51 @@ function print_decode_profile(io::IO, p::DecodeProfile; label::AbstractString=""
     tot_ms = p.token_ns / n / 1e6
     fmt(x; d=3) = string(round(x; digits=d))
     println(io, "decode profile $label  decode_tokens=$n  token_total_ms=$(fmt(tot_ms))")
-    println(io, rpad("stage", 16), lpad("ms/token", 10), lpad("%", 8), lpad("calls/token", 13))
+    println(
+        io,
+        rpad("stage", 16),
+        lpad("ms/token", 10),
+        lpad("%", 8),
+        lpad("calls/token", 13),
+    )
     staged_ms = 0.0
     for s in DECODE_STAGES
         ms = p.ns[s] / n / 1e6
         staged_ms += ms
-        println(io, rpad(string(s), 16), lpad(fmt(ms), 10), lpad(fmt(100 * ms / tot_ms; d=1), 8), lpad(fmt(p.calls[s] / n; d=2), 13))
+        println(
+            io,
+            rpad(string(s), 16),
+            lpad(fmt(ms), 10),
+            lpad(fmt(100 * ms / tot_ms; d=1), 8),
+            lpad(fmt(p.calls[s] / n; d=2), 13),
+        )
     end
     other_ms = tot_ms - staged_ms
-    println(io, rpad("other", 16), lpad(fmt(other_ms), 10), lpad(fmt(100 * other_ms / tot_ms; d=1), 8))
+    println(
+        io,
+        rpad("other", 16),
+        lpad(fmt(other_ms), 10),
+        lpad(fmt(100 * other_ms / tot_ms; d=1), 8),
+    )
     println(io, rpad("TOTAL", 16), lpad(fmt(tot_ms), 10), lpad("100.0", 8))
     println(io, "nested (inside a stage above, not summed):")
     for s in DECODE_SUBSTAGES
         ms = p.sub_ns[s] / n / 1e6
-        println(io, rpad("  " * string(s), 22), lpad(fmt(ms), 10), lpad(fmt(100 * ms / tot_ms; d=1), 8))
+        println(
+            io,
+            rpad("  " * string(s), 22),
+            lpad(fmt(ms), 10),
+            lpad(fmt(100 * ms / tot_ms; d=1), 8),
+        )
     end
     println(io, "counters/token:")
     for s in DECODE_COUNTERS
         println(io, rpad("  " * string(s), 22), lpad(fmt(p.counters[s] / n; d=1), 14))
     end
-    println(io, "copies/token  d2h=$(fmt(p.d2h / n; d=2))  h2d=$(fmt(p.h2d / n; d=2))  total=$(fmt((p.d2h + p.h2d) / n; d=2))")
+    println(
+        io,
+        "copies/token  d2h=$(fmt(p.d2h / n; d=2))  h2d=$(fmt(p.h2d / n; d=2))  total=$(fmt((p.d2h + p.h2d) / n; d=2))",
+    )
     return nothing
 end
 
@@ -322,8 +394,14 @@ page faults during the window, and whether the token ran a decode step.
 function print_token_log(io::IO, p::DecodeProfile)
     println(io, "token  ms        minflt   majflt  decoded")
     for (i, e) in enumerate(p.tok_log)
-        println(io, lpad(string(i), 5), lpad(string(round(e.ns / 1e6; digits=2)), 10),
-            lpad(string(e.minflt), 9), lpad(string(e.majflt), 9), lpad(string(e.decoded), 9))
+        println(
+            io,
+            lpad(string(i), 5),
+            lpad(string(round(e.ns / 1e6; digits=2)), 10),
+            lpad(string(e.minflt), 9),
+            lpad(string(e.majflt), 9),
+            lpad(string(e.decoded), 9),
+        )
     end
     return nothing
 end
@@ -342,11 +420,20 @@ end
 # backend stage did not wait for.
 
 const PREFILL_STAGES = (
-    :attn_mixer, :gdn_mixer, :moe_router, :moe_alloc, :moe_qupload, :moe_qgemv,
-    :moe_host, :moe_h2d, :moe_d2h, :shared_expert, :dense_ffn,
+    :attn_mixer,
+    :gdn_mixer,
+    :moe_router,
+    :moe_alloc,
+    :moe_qupload,
+    :moe_qgemv,
+    :moe_host,
+    :moe_h2d,
+    :moe_d2h,
+    :shared_expert,
+    :dense_ffn,
 )
 
-const PREFILL_STAGE_NS = NamedTuple{PREFILL_STAGES,NTuple{length(PREFILL_STAGES),Int64}}
+const PREFILL_STAGE_NS = NamedTuple{PREFILL_STAGES, NTuple{length(PREFILL_STAGES), Int64}}
 
 struct PrefillPassRecord
     pass::Int
@@ -368,14 +455,14 @@ end
 struct PrefillPassToken
     pp::PrefillProfile
     backend::Any
-    prev::Union{Nothing,DecodeProfile}
+    prev::Union{Nothing, DecodeProfile}
     t0::UInt64
     s0::Int
     n::Int
     P::Int
 end
 
-const _PREFILL_PROFILE = Ref{Union{Nothing,PrefillProfile}}(nothing)
+const _PREFILL_PROFILE = Ref{Union{Nothing, PrefillProfile}}(nothing)
 
 """
     prefill_profile_enable!()
@@ -383,16 +470,20 @@ const _PREFILL_PROFILE = Ref{Union{Nothing,PrefillProfile}}(nothing)
 Start a fresh prefill profile. Each prefill pass run after this call records
 one `PrefillPassRecord` and prints one PFPASS line; the last pass prints PFSUM.
 """
-prefill_profile_enable!() = (_PREFILL_PROFILE[] = PrefillProfile(DecodeProfile(), PrefillPassRecord[], false); nothing)
+prefill_profile_enable!() = (
+    _PREFILL_PROFILE[]=PrefillProfile(DecodeProfile(), PrefillPassRecord[], false);
+    nothing
+)
 
-prefill_profile_disable!() = (_PREFILL_PROFILE[] = nothing; nothing)
+prefill_profile_disable!() = (_PREFILL_PROFILE[]=nothing; nothing)
 
 """
     prefill_profile_records() -> Vector{PrefillPassRecord}
 
 Copy of the records from the most recent prefill, empty when profiling is off.
 """
-prefill_profile_records() = (pp = _PREFILL_PROFILE[]; pp === nothing ? PrefillPassRecord[] : copy(pp.passes))
+prefill_profile_records() =
+    (pp=_PREFILL_PROFILE[]; pp === nothing ? PrefillPassRecord[] : copy(pp.passes))
 
 # Called once per pass by `reference_generate`. Off: one Ref read and a branch,
 # and `nothing` is returned so nothing is allocated.
@@ -451,11 +542,20 @@ function _prefill_pass_close(tok::PrefillPassToken)
     wall = Int64(time_ns() - tok.t0)
     dp.window = false
     _PROFILE[] = tok.prev
-    stage_ns = PREFILL_STAGE_NS(ntuple(i -> dp.ns[PREFILL_STAGES[i]], length(PREFILL_STAGES)))
+    stage_ns =
+        PREFILL_STAGE_NS(ntuple(i -> dp.ns[PREFILL_STAGES[i]], length(PREFILL_STAGES)))
     other = wall - sum(values(stage_ns))
     K = tok.s0 + tok.n - 1
-    rec = PrefillPassRecord(length(pp.passes) + 1, tok.s0, tok.n, K, wall, stage_ns, other,
-        dp.counters[:expert_h2d_bytes])
+    rec = PrefillPassRecord(
+        length(pp.passes) + 1,
+        tok.s0,
+        tok.n,
+        K,
+        wall,
+        stage_ns,
+        other,
+        dp.counters[:expert_h2d_bytes],
+    )
     push!(pp.passes, rec)
     _print_prefill_pass(stdout, rec)
     if K == tok.P
@@ -468,13 +568,28 @@ end
 _prefill_ms(ns::Integer) = round(ns / 1e6; digits=3)
 
 function _print_prefill_pass(io::IO, r::PrefillPassRecord)
-    print(io, "PFPASS i=", r.pass, " n=", r.n, " K=", r.K, " wall_ms=", _prefill_ms(r.wall_ns))
+    print(
+        io,
+        "PFPASS i=",
+        r.pass,
+        " n=",
+        r.n,
+        " K=",
+        r.K,
+        " wall_ms=",
+        _prefill_ms(r.wall_ns),
+    )
     for s in PREFILL_STAGES
         print(io, " ", s, "=", _prefill_ms(getfield(r.stage_ns, s)))
     end
     print(io, " other=", _prefill_ms(r.other_ns))
-    println(io, " h2d_mb=", round(r.h2d_bytes / 2^20; digits=2),
-        " h2d_ms=", _prefill_ms(getfield(r.stage_ns, :moe_h2d)))
+    println(
+        io,
+        " h2d_mb=",
+        round(r.h2d_bytes / 2^20; digits=2),
+        " h2d_ms=",
+        _prefill_ms(getfield(r.stage_ns, :moe_h2d)),
+    )
     flush(io)
     return nothing
 end
@@ -482,9 +597,23 @@ end
 function _print_prefill_summary(io::IO, pp::PrefillProfile)
     rows = sum(r.n for r in pp.passes; init=0)
     wall = sum(r.wall_ns for r in pp.passes; init=0)
-    print(io, "PFSUM passes=", length(pp.passes), " rows=", rows, " wall_ms=", _prefill_ms(wall))
+    print(
+        io,
+        "PFSUM passes=",
+        length(pp.passes),
+        " rows=",
+        rows,
+        " wall_ms=",
+        _prefill_ms(wall),
+    )
     for s in PREFILL_STAGES
-        print(io, " ", s, "=", _prefill_ms(sum(getfield(r.stage_ns, s) for r in pp.passes; init=0)))
+        print(
+            io,
+            " ",
+            s,
+            "=",
+            _prefill_ms(sum(getfield(r.stage_ns, s) for r in pp.passes; init=0)),
+        )
     end
     other = sum(r.other_ns for r in pp.passes; init=0)
     h2d = sum(r.h2d_bytes for r in pp.passes; init=0)

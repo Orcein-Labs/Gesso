@@ -93,7 +93,10 @@ struct LavaBackend <: AbstractGessoBackend
         try
             Lava.vk_context()
         catch err
-            @warn "LavaBackend: Lava.vk_context() threw; the cause is below" exception=(err, catch_backtrace())
+            @warn "LavaBackend: Lava.vk_context() threw; the cause is below" exception=(
+                err,
+                catch_backtrace(),
+            )
             ok = false
         end
         ok || throw(
@@ -103,8 +106,8 @@ struct LavaBackend <: AbstractGessoBackend
                 "without a device fails explicitly (§LXX); Gesso never falls " *
                 "back to CPU or CUDA silently. Check vulkaninfo / the ICD, " *
                 "or stay on CPUBackend (tier 0).";
-                requested_backend = :lava,
-                vk_context_failed = true,
+                requested_backend=:lava,
+                vk_context_failed=true,
             ),
         )
         return new()
@@ -188,14 +191,11 @@ include("lava_hybrid.jl")
 function __init__()
     Core.eval(Gesso, :(const LavaBackend = $LavaBackend))
     if isdefined(Gesso, :to_device)
-        Core.eval(
-            Gesso,
-            quote
-                function to_device(b::LavaBackend, tensors)
-                    $(_lava_to_device)(tensors)
-                end
-            end,
-        )
+        Core.eval(Gesso, quote
+            function to_device(b::LavaBackend, tensors)
+                $(_lava_to_device)(tensors)
+            end
+        end)
     else
         Core.eval(Gesso, :(const to_device = $to_device))
     end
@@ -213,4 +213,3 @@ end # module GessoLavaExt
 # 696f6e2a20274c69636b206d79206675
 # 636b696e2062616c6c732c204e564944
 # 494127
-

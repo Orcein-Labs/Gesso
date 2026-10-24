@@ -23,7 +23,7 @@
         h=tiled ? (hh-1)%nk+1 : (hh-1)÷group+1
         sq=0.0
         sk=0.0
-        @inbounds for d = 1:dk
+        @inbounds for d in 1:dk
             qd=Float64(q[t, h, d])
             kd=Float64(k[t, h, d])
             sq+=qd*qd
@@ -31,7 +31,7 @@
         end
         iq=l2norm ? 1.0/sqrt(sq+eps) : 1.0
         ik=l2norm ? 1.0/sqrt(sk+eps) : 1.0
-        @inbounds for d = 1:dk
+        @inbounds for d in 1:dk
             qnormalized=Float64(q[t, h, d])*iq
             qn[t, hh, d]=qnormalized*scale
             kn[t, hh, d]=Float64(k[t, h, d])*ik
@@ -63,22 +63,22 @@ end
     if i<=n
         hh=(i-1)%nv+1
         j=(i-1)÷nv+1
-        @inbounds for t = 1:seq
+        @inbounds for t in 1:seq
             dt=decay[t, hh]
-            for ii = 1:dk
+            for ii in 1:dk
                 state[hh, ii, j]*=dt
             end
             kv=0.0
-            for ii = 1:dk
+            for ii in 1:dk
                 kv+=Float64(state[hh, ii, j])*kn[t, hh, ii]
             end
             delta=(Float64(v[t, hh, j])-kv)*Float64(beta[t, hh])
-            for ii = 1:dk
+            for ii in 1:dk
                 updated=Float64(state[hh, ii, j])+kn[t, hh, ii]*delta
                 state[hh, ii, j]=Float32(updated)
             end
             acc=0.0
-            for ii = 1:dk
+            for ii in 1:dk
                 acc+=Float64(state[hh, ii, j])*qn[t, hh, ii]
             end
             out[t, hh, j]=Float32(acc)
@@ -98,8 +98,8 @@ function _lava_gdn_reference!(
     g,
     beta,
     state;
-    l2norm::Bool = true,
-    v_head_tiled::Bool = false,
+    l2norm::Bool=true,
+    v_head_tiled::Bool=false,
 )
     seq, nk, dk = size(q)
     nv, dv = size(v, 2), size(v, 3)
@@ -108,7 +108,7 @@ function _lava_gdn_reference!(
     kn = Lava.LavaArray{Float64}(undef, seq, nv, dk)
     decay = Lava.LavaArray{Float32}(undef, seq, nv)
     n = seq * nv
-    _gdn_reference_kernel(_lava_gdn_decay_reference_kernel!, kb)(decay, g, n; ndrange = n)
+    _gdn_reference_kernel(_lava_gdn_decay_reference_kernel!, kb)(decay, g, n; ndrange=n)
     _gdn_reference_kernel(_lava_gdn_qk_reference_kernel!, kb)(
         qn,
         kn,
@@ -123,7 +123,7 @@ function _lava_gdn_reference!(
         Int(nv),
         Int(dk),
         n;
-        ndrange = n,
+        ndrange=n,
     )
     _gdn_reference_kernel(_lava_gdn_recur_reference_kernel!, kb)(
         out,
@@ -138,7 +138,7 @@ function _lava_gdn_reference!(
         Int(dv),
         Int(seq),
         nv * dv;
-        ndrange = nv * dv,
+        ndrange=nv * dv,
     )
     return out
 end

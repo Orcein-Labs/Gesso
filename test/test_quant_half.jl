@@ -14,13 +14,14 @@ const _GH = Gesso.Inference
 
 function _half_random_qm(rng, ty::Int32, nrows::Int, ne0::Int)
     w = randn(rng, Float32, ne0, nrows) .* 0.05f0
-    bits = ty == _GH.GGML_TYPE_BF16 ?
-        map(v -> UInt16(reinterpret(UInt32, v) >> 16), w) :
+    bits =
+        ty == _GH.GGML_TYPE_BF16 ? map(v -> UInt16(reinterpret(UInt32, v) >> 16), w) :
         map(v -> reinterpret(UInt16, Float16(v)), w)
     # two bytes of padding in front, so offset0 is exercised
     data = vcat(UInt8[0xaa, 0x55], collect(reinterpret(UInt8, vec(bits))))
     q = _GH.QuantMatrix(data, 2, ty, ne0, nrows, 2 * ne0, C_NULL, Int64(1))
-    wide = ty == _GH.GGML_TYPE_BF16 ?
+    wide =
+        ty == _GH.GGML_TYPE_BF16 ?
         map(u -> Float64(reinterpret(Float32, UInt32(u) << 16)), bits) :
         map(u -> Float64(reinterpret(Float16, u)), bits)
     return q, wide
@@ -42,7 +43,8 @@ end
         # A row's result is the same for any chunk count and any token count:
         # one serial pass, the threaded pass, and the token alone all agree.
         xs = randn(rng, Float32, 7, ne0)
-        xt = zeros(Float32, ne0, 8); xt[:, 1:7] = permutedims(xs)
+        xt = zeros(Float32, ne0, 8)
+        xt[:, 1:7] = permutedims(xs)
         d1 = Matrix{Float32}(undef, 7, nrows)
         _GH._half_rows!(d1, xt, q, Val(ty), 1, nrows)
         d2 = Matrix{Float32}(undef, 7, nrows)

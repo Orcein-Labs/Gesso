@@ -30,8 +30,12 @@ SELFTEST || isfile(GGUF) || error("saluki_bean_bench: set GESSO_QWEN38_27B_GGUF"
 const BEAN = get(ENV, "GESSO_BEAN_GGUF", "")
 isfile(BEAN) || error("saluki_bean_bench: set GESSO_BEAN_GGUF")
 const NEW = SELFTEST ? 32 : parse(Int, get(ENV, "GESSO_BENCH_NEW", "96"))
-const KS = SELFTEST ? [2, 3, 4] : [parse(Int, s) for s in split(get(ENV, "GESSO_BENCH_DRAFT", "2,3,4"), ',')]
-const TAUS = SELFTEST ? [0.0, 0.6] : [parse(Float64, strip(s)) for s in split(get(ENV, "GESSO_BEAN_TAU", "0"), ',')]
+const KS =
+    SELFTEST ? [2, 3, 4] :
+    [parse(Int, s) for s in split(get(ENV, "GESSO_BENCH_DRAFT", "2,3,4"), ',')]
+const TAUS =
+    SELFTEST ? [0.0, 0.6] :
+    [parse(Float64, strip(s)) for s in split(get(ENV, "GESSO_BEAN_TAU", "0"), ',')]
 const IM_END = 248046
 
 include(joinpath(@__DIR__, "saluki_prompts.jl"))
@@ -39,8 +43,16 @@ include(joinpath(@__DIR__, "saluki_bean_source.jl"))
 
 backend = Gesso.CPUBackend()
 bean, btensors, bspec = Gesso.load_gguf(BEAN)
-bgen(prompt, n; kw...) = Gesso.reference_generate(bean, btensors, prompt; max_new_tokens=n,
-    eps=bspec.rms_norm_eps, backend, eos_ids=(IM_END,), kw...)
+bgen(prompt, n; kw...) = Gesso.reference_generate(
+    bean,
+    btensors,
+    prompt;
+    max_new_tokens=n,
+    eps=bspec.rms_norm_eps,
+    backend,
+    eos_ids=(IM_END,),
+    kw...,
+)
 btk = Gesso.Inference.load_gguf_tokenizer(BEAN)
 
 if SELFTEST
@@ -48,15 +60,35 @@ if SELFTEST
         prompt = Gesso.Inference.encode(btk, chat(msg))
         ids = bgen(prompt, NEW)
         for k in KS, tau in TAUS
-            src = BeanSource(bean, btensors, Float64(bspec.rms_norm_eps), backend,
-                Gesso.GenerateState(4096), k, tau, 0, 0, 0)
+            src = BeanSource(
+                bean,
+                btensors,
+                Float64(bspec.rms_norm_eps),
+                backend,
+                Gesso.GenerateState(4096),
+                k,
+                tau,
+                0,
+                0,
+                0,
+            )
             info = Ref{Any}(nothing)
             w = bgen(prompt, NEW; draft=src, max_draft=k, info)
             w == ids || error("selftest k=$k tau=$tau changed the ids on $tag")
             sp = info[].speculation
-            sp.accepted == sp.drafted || error("selftest k=$k tau=$tau rejected a self-draft on $tag: accepted=$(sp.accepted) drafted=$(sp.drafted)")
-            @printf("SELFTEST %s k=%d tau=%.2f gated=%d windows=%d drafted=%d accepted=%d\n",
-                tag, k, tau, src.gated, sp.windows, sp.drafted, sp.accepted)
+            sp.accepted == sp.drafted || error(
+                "selftest k=$k tau=$tau rejected a self-draft on $tag: accepted=$(sp.accepted) drafted=$(sp.drafted)",
+            )
+            @printf(
+                "SELFTEST %s k=%d tau=%.2f gated=%d windows=%d drafted=%d accepted=%d\n",
+                tag,
+                k,
+                tau,
+                src.gated,
+                sp.windows,
+                sp.drafted,
+                sp.accepted
+            )
         end
     end
     exit(0)
@@ -66,15 +98,33 @@ model, tensors, spec = Gesso.load_gguf(GGUF)
 tk = Gesso.Inference.load_gguf_tokenizer(GGUF)
 size(tensors.embedding.storage, 1) == size(btensors.embedding.storage, 1) ||
     error("saluki_bean_bench: bean and Saluki vocabularies differ")
-gen(prompt, n; kw...) = Gesso.reference_generate(model, tensors, prompt; max_new_tokens=n,
-    eps=spec.rms_norm_eps, backend, eos_ids=(IM_END,), kw...)
+gen(prompt, n; kw...) = Gesso.reference_generate(
+    model,
+    tensors,
+    prompt;
+    max_new_tokens=n,
+    eps=spec.rms_norm_eps,
+    backend,
+    eos_ids=(IM_END,),
+    kw...,
+)
 
 # JIT warm for the plain step and every window size.
 let p = Gesso.Inference.encode(tk, chat("Hi"))
     gen(p, 4)
     for k in KS, tau in TAUS
-        src = BeanSource(bean, btensors, Float64(bspec.rms_norm_eps), backend,
-            Gesso.GenerateState(4096), k, tau, 0, 0, 0)
+        src = BeanSource(
+            bean,
+            btensors,
+            Float64(bspec.rms_norm_eps),
+            backend,
+            Gesso.GenerateState(4096),
+            k,
+            tau,
+            0,
+            0,
+            0,
+        )
         gen(p, 4; draft=src, max_draft=k)
     end
 end
@@ -88,12 +138,28 @@ for (tag, msg) in PROMPTS
     tN = @elapsed ids = gen(prompt, NEW)
     n_dec = length(ids) - P - 1
     plain_ms = 1000 * (tN - t1)
-    @printf("PLAIN %s prompt=%d new=%d step_ms=%.1f\n", tag, P, length(ids) - P, plain_ms / n_dec)
+    @printf(
+        "PLAIN %s prompt=%d new=%d step_ms=%.1f\n",
+        tag,
+        P,
+        length(ids) - P,
+        plain_ms / n_dec
+    )
     flush(stdout)
     for k in KS, tau in TAUS
         # fresh source and state per run, so runs are independent
-        src = BeanSource(bean, btensors, Float64(bspec.rms_norm_eps), backend,
-            Gesso.GenerateState(4096), k, tau, 0, 0, 0)
+        src = BeanSource(
+            bean,
+            btensors,
+            Float64(bspec.rms_norm_eps),
+            backend,
+            Gesso.GenerateState(4096),
+            k,
+            tau,
+            0,
+            0,
+            0,
+        )
         # The bean's prompt prefill belongs to time to first token, like the
         # target's: prime the state outside the timed decode, report it apart.
         bp_ms = 1000 * @elapsed bgen(prompt, 1; state=src.state)
@@ -102,12 +168,21 @@ for (tag, msg) in PROMPTS
         w == ids || error("bean k=$k tau=$tau changed the ids on $tag")
         sp = info[].speculation
         drafted_s = tw - t1
-        @printf("BEAN %s k=%d tau=%.2f gated=%d windows=%d drafted=%d accepted=%d accept_rate=%.2f bean_ms_per_window=%.1f bean_share=%.2f bean_prefill_ms=%.0f speedup=%.2f\n",
-            tag, k, tau, src.gated, sp.windows, sp.drafted, sp.accepted,
+        @printf(
+            "BEAN %s k=%d tau=%.2f gated=%d windows=%d drafted=%d accepted=%d accept_rate=%.2f bean_ms_per_window=%.1f bean_share=%.2f bean_prefill_ms=%.0f speedup=%.2f\n",
+            tag,
+            k,
+            tau,
+            src.gated,
+            sp.windows,
+            sp.drafted,
+            sp.accepted,
             sp.drafted == 0 ? 0.0 : sp.accepted / sp.drafted,
             1e-6 * src.ns / max(sp.windows, 1),
-            (src.ns / 1e9) / drafted_s, bp_ms,
-            plain_ms / (1000 * drafted_s))
+            (src.ns / 1e9) / drafted_s,
+            bp_ms,
+            plain_ms / (1000 * drafted_s)
+        )
         flush(stdout)
     end
 end

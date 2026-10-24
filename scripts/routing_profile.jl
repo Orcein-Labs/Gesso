@@ -11,13 +11,14 @@ length(ARGS) == 2 || error("usage: julia scripts/routing_profile.jl <trace> <pro
 trace, out = ARGS
 isfile(trace) || error("routing_profile: no trace at $trace")
 
-counts = Dict{Tuple{Int,Int},Int}()
-rows = Dict{Int,Int}()
+counts = Dict{Tuple{Int, Int}, Int}()
+rows = Dict{Int, Int}()
 for (ln, raw) in enumerate(eachline(trace))
     line = strip(raw)
     isempty(line) && continue
     f = split(line)
-    length(f) >= 3 || error("routing_profile: $trace:$ln needs layer, token and at least one id")
+    length(f) >= 3 ||
+        error("routing_profile: $trace:$ln needs layer, token and at least one id")
     layer = parse(Int, f[1])
     rows[layer] = get(rows, layer, 0) + 1
     for s in f[3:end]
@@ -36,6 +37,9 @@ open(out, "w") do io
 end
 
 for layer in sort(collect(keys(rows)))
-    println(stderr, "layer $layer rows $(rows[layer]) distinct experts $(count(p -> p[1] == layer, keys(counts)))")
+    println(
+        stderr,
+        "layer $layer rows $(rows[layer]) distinct experts $(count(p -> p[1] == layer, keys(counts)))",
+    )
 end
 println(stderr, "wrote $(length(ranked)) (layer, expert) rows to $out")

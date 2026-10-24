@@ -14,32 +14,66 @@ Wrap a loaded GGUF model as a ChatModel. `model`, `tensors` and `spec` are what
 serialized by the server, so the one GenerateState is never used by two calls at
 once.
 """
-function gguf_chat_model(model, tensors, spec, tk::GGUFBPE;
-        backend, n_ctx::Integer, model_id::AbstractString)
+function gguf_chat_model(
+    model,
+    tensors,
+    spec,
+    tk::GGUFBPE;
+    backend,
+    n_ctx::Integer,
+    model_id::AbstractString,
+)
     n_ctx > 0 || throw(ArgumentError("n_ctx must be positive, got $n_ctx"))
-    tk.chat_template === nothing &&
-        throw(ArgumentError("tokenizer has no chat template; the server cannot render chat requests"))
+    tk.chat_template === nothing && throw(
+        ArgumentError(
+            "tokenizer has no chat template; the server cannot render chat requests",
+        ),
+    )
     eos = _engine_eos_ids(tk)
-    isempty(eos) && throw(ArgumentError("tokenizer names no end-of-turn token; generation would not stop"))
+    isempty(eos) && throw(
+        ArgumentError("tokenizer names no end-of-turn token; generation would not stop"),
+    )
     eps = spec.rms_norm_eps
     state = GenerateState(n_ctx)
 
-    function generate(prompt_ids; max_new_tokens, on_token, sampling=nothing, checkpoint_at::Integer=0)
-        run = wrapped -> begin
-            info = Ref{Any}(nothing)
-            ids = reference_generate(model, tensors, prompt_ids; backend=backend,
-                max_new_tokens=max_new_tokens, info=info, eps=eps, state=state,
-                on_token=wrapped, eos_ids=eos, sampler=sampling, checkpoint_at=checkpoint_at)
-            return (ids, info[].reused)
-        end
+    function generate(
+        prompt_ids;
+        max_new_tokens,
+        on_token,
+        sampling=nothing,
+        checkpoint_at::Integer=0,
+    )
+        run =
+            wrapped -> begin
+                info = Ref{Any}(nothing)
+                ids = reference_generate(
+                    model,
+                    tensors,
+                    prompt_ids;
+                    backend=backend,
+                    max_new_tokens=max_new_tokens,
+                    info=info,
+                    eps=eps,
+                    state=state,
+                    on_token=wrapped,
+                    eos_ids=eos,
+                    sampler=sampling,
+                    checkpoint_at=checkpoint_at,
+                )
+                return (ids, info[].reused)
+            end
         return _run_generation(run, prompt_ids, eos; on_token=on_token)
     end
 
     return ChatModel(
         tokenize=s -> encode(tk, s; parse_special=true),
         detokenize=ids -> decode(tk, ids),
-        render=(msgs, tools, thinking) -> render_chat(msgs; tools=tools,
-            add_generation_prompt=true, enable_thinking=thinking),
+        render=(msgs, tools, thinking) -> render_chat(
+            msgs;
+            tools=tools,
+            add_generation_prompt=true,
+            enable_thinking=thinking,
+        ),
         generate=generate,
         n_ctx=n_ctx,
         model_id=model_id,
@@ -53,10 +87,24 @@ end
 # then resumes from a checkpoint at that boundary. A conversation whose system
 # messages are merged by the template does not begin with the lone rendering,
 # so it gets 0 and no boundary.
-function _system_prefix_len(tk::GGUFBPE, msgs, tools, thinking::Bool, ids::AbstractVector{Int})
+function _system_prefix_len(
+    tk::GGUFBPE,
+    msgs,
+    tools,
+    thinking::Bool,
+    ids::AbstractVector{Int},
+)
     (isempty(msgs) || get(msgs[1], "role", nothing) != "system") && return 0
-    head = encode(tk, render_chat([msgs[1]]; tools=tools,
-        add_generation_prompt=false, enable_thinking=thinking); parse_special=true)
+    head = encode(
+        tk,
+        render_chat(
+            [msgs[1]];
+            tools=tools,
+            add_generation_prompt=false,
+            enable_thinking=thinking,
+        );
+        parse_special=true,
+    )
     L = length(head)
     return 0 < L < length(ids) && view(ids, 1:L) == head ? L : 0
 end
@@ -79,11 +127,15 @@ end
 # the cache. The stop token is sampled, so it is in ids, but the caller must not
 # see it: the server would print it as text, and it would count as a completion
 # token.
-function _run_generation(run::Function, prompt_ids::AbstractVector{Int},
-        eos::AbstractVector{Int}; on_token)
+function _run_generation(
+    run::Function,
+    prompt_ids::AbstractVector{Int},
+    eos::AbstractVector{Int};
+    on_token,
+)
     wrapped = id -> id in eos ? true : on_token(id)
     ids, reused = run(wrapped)
-    generated = Int.(ids[(length(prompt_ids) + 1):end])
+    generated = Int.(ids[(length(prompt_ids)+1):end])
     if !isempty(generated) && last(generated) in eos
         pop!(generated)
     end

@@ -14,27 +14,27 @@
 # rewritten with target rows on the next call.
 
 mutable struct MTPDraft
-    model
-    tensors          # embedding, blocks (one), lm_head, final_rms = shared_head_norm, rope, spec
-    eh_proj          # ProjectionWeight (dim, 2dim)
-    enorm            # FrozenParameter (dim)
-    hnorm            # FrozenParameter (dim)
+    model::Any
+    tensors::Any          # embedding, blocks (one), lm_head, final_rms = shared_head_norm, rope, spec
+    eh_proj::Any          # ProjectionWeight (dim, 2dim)
+    enorm::Any            # FrozenParameter (dim)
+    hnorm::Any            # FrozenParameter (dim)
     kc::Vector{Any}
     vc::Vector{Any}
-    scratch
-    zeros_like
+    scratch::Any
+    zeros_like::Any
     ctx::Int
     hn::Matrix{Float32}   # (ctx, dim): target final-normed row of ids[r] at row r
     have::Int             # hn rows 1..have are filled
     done::Int             # MTP cache rows 1..done hold rows paired with target rows
     eps::Float64
-    theta
-    inv_freq
+    theta::Any
+    inv_freq::Any
     rotary_dim::Int
     d_head::Int
     n_heads::Int
     n_kv_heads::Int
-    cpu
+    cpu::Any
 end
 
 """
@@ -43,9 +43,18 @@ end
 An MTP draft head over a one-block model. `tensors.final_rms` is the head's
 `shared_head_norm`. The KV cache and scratch hold `ctx` rows.
 """
-function MTPDraft(model, tensors, eh_proj, enorm, hnorm; ctx::Int, eps::Real=1e-6,
-    cpu=CPUBackend())
-    length(tensors.blocks) == 1 || error("MTPDraft: the head is one block, got $(length(tensors.blocks))")
+function MTPDraft(
+    model,
+    tensors,
+    eh_proj,
+    enorm,
+    hnorm;
+    ctx::Int,
+    eps::Real=1e-6,
+    cpu=CPUBackend(),
+)
+    length(tensors.blocks) == 1 ||
+        error("MTPDraft: the head is one block, got $(length(tensors.blocks))")
     _block_mixer(tensors.blocks[1]) === :linear_attention &&
         error("MTPDraft: the head block must be full attention")
     dim = model.embedding.dim
@@ -55,15 +64,50 @@ function MTPDraft(model, tensors, eh_proj, enorm, hnorm; ctx::Int, eps::Real=1e-
     theta = _resolved_rope_theta(tensors, nothing)
     vocab = size(tensors.embedding.storage, 1)
     zl = _decode_zeros_like(cpu, tensors)
-    kc = Any[Activation(; shape=(ctx, n_kv_heads, d_head), storage=zl((ctx, n_kv_heads, d_head)))]
-    vc = Any[Activation(; shape=(ctx, n_kv_heads, d_head), storage=zl((ctx, n_kv_heads, d_head)))]
-    scratch = _cpu_decode_scratch(nothing, dim; qdim=n_heads * d_head, ff=_dense_ffn_hidden(model),
-        kdim=n_kv_heads * d_head, n_heads, n_kv_heads, d_head, vocab, ctx,
-        row=_decode_row_type(nothing, tensors))
-    return MTPDraft(model, tensors, eh_proj, enorm, hnorm, kc, vc, scratch, zl, ctx,
-        zeros(Float32, ctx, dim), 0, 0, Float64(eps), theta,
-        tensors_rope_inv_freq(tensors, d_head; theta), _tensor_rotary_dim(tensors),
-        d_head, n_heads, n_kv_heads, cpu)
+    kc = Any[Activation(;
+        shape=(ctx, n_kv_heads, d_head),
+        storage=zl((ctx, n_kv_heads, d_head)),
+    )]
+    vc = Any[Activation(;
+        shape=(ctx, n_kv_heads, d_head),
+        storage=zl((ctx, n_kv_heads, d_head)),
+    )]
+    scratch = _cpu_decode_scratch(
+        nothing,
+        dim;
+        qdim=n_heads * d_head,
+        ff=_dense_ffn_hidden(model),
+        kdim=n_kv_heads * d_head,
+        n_heads,
+        n_kv_heads,
+        d_head,
+        vocab,
+        ctx,
+        row=_decode_row_type(nothing, tensors),
+    )
+    return MTPDraft(
+        model,
+        tensors,
+        eh_proj,
+        enorm,
+        hnorm,
+        kc,
+        vc,
+        scratch,
+        zl,
+        ctx,
+        zeros(Float32, ctx, dim),
+        0,
+        0,
+        Float64(eps),
+        theta,
+        tensors_rope_inv_freq(tensors, d_head; theta),
+        _tensor_rotary_dim(tensors),
+        d_head,
+        n_heads,
+        n_kv_heads,
+        cpu,
+    )
 end
 
 """
@@ -92,7 +136,7 @@ function load_mtp_draft(path::AbstractString; ctx::Int, target=nothing, T::Type=
     source(name) =
         name == "output_norm.weight" ? "blk.$src_blk.nextn.shared_head_norm.weight" :
         startswith(name, "blk.0.") ? "blk.$src_blk." * name[7:end] : name
-    by = Dict{String,Any}()
+    by = Dict{String, Any}()
     for name in _required_gguf_names(pmap, spec)
         s = source(name)
         haskey(info_by, s) || error("load_mtp_draft: missing tensor $s")
@@ -102,18 +146,40 @@ function load_mtp_draft(path::AbstractString; ctx::Int, target=nothing, T::Type=
     model = spec_to_model(spec)
     emb, head = bound.embedding, bound.lm_head
     if target !== nothing
-        size(target.embedding.storage) == size(emb.storage) ||
-            error("load_mtp_draft: target embedding $(size(target.embedding.storage)) ≠ head $(size(emb.storage))")
+        size(target.embedding.storage) == size(emb.storage) || error(
+            "load_mtp_draft: target embedding $(size(target.embedding.storage)) ≠ head $(size(emb.storage))",
+        )
         emb, head = target.embedding, target.lm_head
     end
-    tensors = (embedding=emb, blocks=bound.blocks, lm_head=head, final_rms=bound.final_rms,
-        rope=bound.rope, bindings=bound.bindings, spec=spec, gguf_path=String(path), mtp=nothing)
-    nx(n) = (s = "blk.$src_blk.nextn.$n"; haskey(info_by, s) ? s : error("load_mtp_draft: missing tensor $s"))
+    tensors = (
+        embedding=emb,
+        blocks=bound.blocks,
+        lm_head=head,
+        final_rms=bound.final_rms,
+        rope=bound.rope,
+        bindings=bound.bindings,
+        spec=spec,
+        gguf_path=String(path),
+        mtp=nothing,
+    )
+    nx(n) = (
+        s="blk.$src_blk.nextn.$n";
+        haskey(info_by, s) ? s : error("load_mtp_draft: missing tensor $s")
+    )
     eh = _materialize_gguf_tensor(hdr, info_by[nx("eh_proj.weight")], spec, T)
-    norm(n) = (a = _materialize_gguf_tensor(hdr, info_by[nx(n)], spec, T);
-        FrozenParameter(; shape=size(a), storage=a))
-    return MTPDraft(model, tensors, ProjectionWeight(; shape=size(eh), storage=eh),
-        norm("enorm.weight"), norm("hnorm.weight"); ctx, eps=spec.rms_norm_eps)
+    norm(n) = (
+        a=_materialize_gguf_tensor(hdr, info_by[nx(n)], spec, T);
+        FrozenParameter(; shape=size(a), storage=a)
+    )
+    return MTPDraft(
+        model,
+        tensors,
+        ProjectionWeight(; shape=size(eh), storage=eh),
+        norm("enorm.weight"),
+        norm("hnorm.weight");
+        ctx,
+        eps=spec.rms_norm_eps,
+    )
 end
 
 """
@@ -125,9 +191,10 @@ Takes target rows for ids `pos .. pos+n-1` (the `on_rows` hook of
 """
 function mtp_rows!(m::MTPDraft, pos::Int, M::AbstractMatrix)
     n = size(M, 1)
-    pos + n - 1 <= m.ctx || error("mtp_rows!: rows to $(pos + n - 1) exceed the head's ctx $(m.ctx)")
+    pos + n - 1 <= m.ctx ||
+        error("mtp_rows!: rows to $(pos + n - 1) exceed the head's ctx $(m.ctx)")
     pos <= m.have + 1 || error("mtp_rows!: row $pos leaves a gap after row $(m.have)")
-    m.hn[pos:(pos + n - 1), :] .= M
+    m.hn[pos:(pos+n-1), :] .= M
     m.have = pos + n - 1
     m.done = min(m.done, pos)
     return m
@@ -144,10 +211,25 @@ function _mtp_window!(m::MTPDraft, toks::AbstractVector{Int}, H::AbstractMatrix,
     qdim = m.n_heads * m.d_head
     hidden = model.blocks[1].ffn.hidden
     vocab = size(tensors.embedding.storage, 1)
-    bufs = _decode_row_buffers(m.scratch, zeros_like, dim, kdim, qdim, m.n_heads, m.n_kv_heads,
-        m.d_head, hidden)
+    bufs = _decode_row_buffers(
+        m.scratch,
+        zeros_like,
+        dim,
+        kdim,
+        qdim,
+        m.n_heads,
+        m.n_kv_heads,
+        m.d_head,
+        hidden,
+    )
     E = zeros_like((T, dim))
-    embedding_lookup!(cpu, Activation(; shape=(T, dim), storage=E), tensors.embedding, collect(toks), wl)
+    embedding_lookup!(
+        cpu,
+        Activation(; shape=(T, dim), storage=E),
+        tensors.embedding,
+        collect(toks),
+        wl,
+    )
     X = zeros_like((T, 2dim))
     for t in 1:T
         _win_load!(bufs.hp.storage, E, t)
@@ -155,16 +237,35 @@ function _mtp_window!(m::MTPDraft, toks::AbstractVector{Int}, H::AbstractMatrix,
         @views X[t, 1:dim] .= bufs.normed.storage[1, :]
         _win_load!(bufs.hp.storage, H, t)
         rmsnorm!(cpu, bufs.normed, bufs.hp, m.hnorm, wl; eps=m.eps)
-        @views X[t, (dim + 1):(2dim)] .= bufs.normed.storage[1, :]
+        @views X[t, (dim+1):(2dim)] .= bufs.normed.storage[1, :]
     end
     hwin = zeros_like((T, dim))
     _window_matmul!(cpu, hwin, X, m.eh_proj, wl, zeros_like)
     W = _window_buffers(zeros_like, T, dim, kdim, qdim, 0, 0, hidden, vocab, false)
     bt = tensors.blocks[1]
-    subT = _window_attn_block!(bt, 1, m.kc, m.vc, hwin, W, bufs, cpu, wl, tensors, zeros_like,
-        m.scratch, base; n_heads=m.n_heads, n_kv_heads=m.n_kv_heads, d_head=m.d_head,
-        group=div(m.n_heads, m.n_kv_heads), eps=m.eps, theta=m.theta, inv_freq=m.inv_freq,
-        rotary_dim=m.rotary_dim)
+    subT = _window_attn_block!(
+        bt,
+        1,
+        m.kc,
+        m.vc,
+        hwin,
+        W,
+        bufs,
+        cpu,
+        wl,
+        tensors,
+        zeros_like,
+        m.scratch,
+        base;
+        n_heads=m.n_heads,
+        n_kv_heads=m.n_kv_heads,
+        d_head=m.d_head,
+        group=div(m.n_heads, m.n_kv_heads),
+        eps=m.eps,
+        theta=m.theta,
+        inv_freq=m.inv_freq,
+        rotary_dim=m.rotary_dim,
+    )
     _window_ffn_block!(bt, hwin, subT, W, bufs, cpu, wl, zeros_like; eps=m.eps)
     for t in 1:T
         _win_load!(bufs.hp.storage, hwin, t)
@@ -210,7 +311,7 @@ function mtp_draft!(m::MTPDraft, ids::AbstractVector{Int}, k::Int; p_min::Real=0
     r0 = min(m.done + 1, L)
     H = zeros(Float32, L - r0 + 1, size(m.hn, 2))
     for r in r0:L
-        r >= 2 && (H[r - r0 + 1, :] .= @view m.hn[r - 1, :])
+        r >= 2 && (H[r-r0+1, :] .= @view m.hn[r-1, :])
     end
     hrows, logits = _mtp_window!(m, view(ids, r0:L), H, r0)
     m.done = L

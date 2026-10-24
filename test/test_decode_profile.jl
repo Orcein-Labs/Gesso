@@ -99,7 +99,10 @@ end
             @test occursin("other", out)
             @test occursin("copies/token  d2h=1.0  h2d=0.0", out)
 
-            @test_throws ErrorException DPI.print_decode_profile(IOBuffer(), DPI.DecodeProfile())
+            @test_throws ErrorException DPI.print_decode_profile(
+                IOBuffer(),
+                DPI.DecodeProfile(),
+            )
         end
     finally
         DPI._PROFILE[] = saved

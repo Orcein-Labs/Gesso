@@ -37,12 +37,12 @@ const KVB_D = _kvb_env("KV_TIER_D", 256)
 const KVB_FORMAT = Symbol(lowercase(get(ENV, "KV_TIER_FORMAT", "q8")))
 const KVB_INT = get(ENV, "KV_TIER_INT", "0") == "1"
 
-_median(x) = (s = sort(x); n = length(s); isodd(n) ? s[(n + 1) ÷ 2] : (s[n ÷ 2] + s[n ÷ 2 + 1]) / 2)
+_median(x) = (s=sort(x); n=length(s); isodd(n) ? s[(n+1)÷2] : (s[n÷2] + s[n÷2+1]) / 2)
 
 _kvb_bytes(x::_KVI.QuantKV) = sizeof(x.codes) + sizeof(x.scales)
 _kvb_bytes(x::AbstractArray) = sizeof(x)
 
-function _kvb_cache(fmt::Symbol, x::Array{Float32,3})
+function _kvb_cache(fmt::Symbol, x::Array{Float32, 3})
     rows, n_kv, d = size(x)
     fmt === :f32 && return copy(x)
     fmt === :f16 && return Float16.(x)
@@ -54,8 +54,18 @@ end
 function _kvb_pass!(attn, q, kcs, vcs, times, it, ws)
     for l in eachindex(kcs)
         t0 = time_ns()
-        _KVI._attention_split_cpu!(attn, q, kcs[l], vcs[l], KVB_ROWS, KVB_HEADS, KVB_D,
-            div(KVB_HEADS, KVB_KV_HEADS); ws=ws, int_scores=KVB_INT)
+        _KVI._attention_split_cpu!(
+            attn,
+            q,
+            kcs[l],
+            vcs[l],
+            KVB_ROWS,
+            KVB_HEADS,
+            KVB_D,
+            div(KVB_HEADS, KVB_KV_HEADS);
+            ws=ws,
+            int_scores=KVB_INT,
+        )
         times[l, it] = (time_ns() - t0) / 1.0e6
     end
     return times
@@ -63,7 +73,8 @@ end
 
 function main()
     fmt = KVB_FORMAT
-    fmt in _KVI.KV_FORMATS || error("KV_TIER_FORMAT=$fmt: expected one of $(_KVI.KV_FORMATS)")
+    fmt in _KVI.KV_FORMATS ||
+        error("KV_TIER_FORMAT=$fmt: expected one of $(_KVI.KV_FORMATS)")
     rng = MersenneTwister(0x6b5e)
     kf = randn(rng, Float32, KVB_ROWS, KVB_KV_HEADS, KVB_D)
     vf = randn(rng, Float32, KVB_ROWS, KVB_KV_HEADS, KVB_D)
@@ -84,10 +95,25 @@ function main()
     layer_median = _median(vec(times))
     token_median = _median(sum(times; dims=1)[:])
     gbps = bytes_per_layer / (layer_median * 1.0e-3) / 1.0e9
-    @printf("kv_tier_cpu format=%s scores=%s rows=%d layers=%d iters=%d heads=%d kv_heads=%d d=%d threads=%d\n",
-        fmt, KVB_INT ? "int" : "float", KVB_ROWS, KVB_LAYERS, KVB_ITERS, KVB_HEADS, KVB_KV_HEADS, KVB_D, Threads.nthreads())
-    @printf("kv_tier_cpu median_ms_per_layer=%.4f median_ms_per_token=%.4f kv_bytes_per_layer=%d gb_per_s=%.3f\n",
-        layer_median, token_median, bytes_per_layer, gbps)
+    @printf(
+        "kv_tier_cpu format=%s scores=%s rows=%d layers=%d iters=%d heads=%d kv_heads=%d d=%d threads=%d\n",
+        fmt,
+        KVB_INT ? "int" : "float",
+        KVB_ROWS,
+        KVB_LAYERS,
+        KVB_ITERS,
+        KVB_HEADS,
+        KVB_KV_HEADS,
+        KVB_D,
+        Threads.nthreads()
+    )
+    @printf(
+        "kv_tier_cpu median_ms_per_layer=%.4f median_ms_per_token=%.4f kv_bytes_per_layer=%d gb_per_s=%.3f\n",
+        layer_median,
+        token_median,
+        bytes_per_layer,
+        gbps
+    )
     return nothing
 end
 

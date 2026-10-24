@@ -254,9 +254,29 @@ end
 
 @testset "decode scratch: Q8_K input and row eltype follow the model kind (V3)" begin
     I = Gesso.Inference
-    rowfields = (:hp, :normed, :normed2, :sub, :down, :q, :gate_attn, :k, :v,
-        :qh, :kh, :vh, :attn, :merged_attn, :gate, :up, :act, :probs, :logits,
-        :lastrow, :final_normed)
+    rowfields = (
+        :hp,
+        :normed,
+        :normed2,
+        :sub,
+        :down,
+        :q,
+        :gate_attn,
+        :k,
+        :v,
+        :qh,
+        :kh,
+        :vh,
+        :attn,
+        :merged_attn,
+        :gate,
+        :up,
+        :act,
+        :probs,
+        :logits,
+        :lastrow,
+        :final_normed,
+    )
     shape = (; qdim=8, ff=16, kdim=4, n_heads=2, n_kv_heads=1, d_head=4, vocab=10, ctx=16)
     # the constructor reads only these four fields of a GDN mixer
     mixer = (; num_key_heads=2, num_value_heads=4, key_head_dim=4, value_head_dim=4)
@@ -280,7 +300,10 @@ end
     # reference_generate on a device backend hands _last_logits that backend's
     # head scratch, a NamedTuple; V3 broke CUDA generation by having no method for it
     @testset "device head scratch (NamedTuple) keeps its own xq_dim" begin
-        @test I._decode_xq((; logits=zeros(Float32, 1, 4), xq_dim=nothing), Val(:xq_dim)) === nothing
+        @test I._decode_xq(
+            (; logits=zeros(Float32, 1, 4), xq_dim=nothing),
+            Val(:xq_dim),
+        ) === nothing
         ok = try
             @eval Main using CUDA
             CUDA.functional()
@@ -291,9 +314,15 @@ end
             @test _skip("no functional CUDA device: CUDA reference_generate needs one")
         else
             ts = toy2_tensors()
-            ids = reference_generate(toy2_modelir(), Gesso.to_device(Gesso.CUDABackend(), ts),
-                [1, 3, 4, 5]; backend=Gesso.CUDABackend(), max_new_tokens=4)
-            @test ids == reference_generate(toy2_modelir(), ts, [1, 3, 4, 5]; max_new_tokens=4)
+            ids = reference_generate(
+                toy2_modelir(),
+                Gesso.to_device(Gesso.CUDABackend(), ts),
+                [1, 3, 4, 5];
+                backend=Gesso.CUDABackend(),
+                max_new_tokens=4,
+            )
+            @test ids ==
+                  reference_generate(toy2_modelir(), ts, [1, 3, 4, 5]; max_new_tokens=4)
         end
     end
 end

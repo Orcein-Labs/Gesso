@@ -29,7 +29,7 @@ bytes in ggml `(ne0, ne1)` block order (same layout as `GgufQuantSlice`).
 `A` is `CuArray{UInt8}` on the CUDA FAST path; a host `Vector{UInt8}` is
 legal for tests.
 """
-struct GpuQuantSlice{A<:AbstractVector{UInt8}}
+struct GpuQuantSlice{A <: AbstractVector{UInt8}}
     data::A
     ggml_type::Int32
     n_exp::Int
@@ -82,21 +82,22 @@ end
 
 function _quant_expert_bytes(s::GgufQuantSlice, e::Int)
     off = _quant_expert_off0(s, e)
-    return view(s.data, (off + 1):(off + s.bytes_per_expert))
+    return view(s.data, (off+1):(off+s.bytes_per_expert))
 end
 function _quant_expert_bytes(s::GpuQuantSlice, e::Int)
     off = _quant_expert_off0(s, e)
-    return view(s.data, (off + 1):(off + s.bytes_per_expert))
+    return view(s.data, (off+1):(off+s.bytes_per_expert))
 end
 
 function packed_quant_bytes(s::GgufQuantSlice)
     n = s.n_exp * s.bytes_per_expert
-    return view(s.data, (s.offset0 + 1):(s.offset0 + n))
+    return view(s.data, (s.offset0+1):(s.offset0+n))
 end
 
 function gpu_quant_slice(s::GgufQuantSlice, data::AbstractVector{UInt8})
-    length(data) == s.n_exp * s.bytes_per_expert ||
-        error("gpu_quant_slice: packed length $(length(data)) ≠ $(s.n_exp * s.bytes_per_expert)")
+    length(data) == s.n_exp * s.bytes_per_expert || error(
+        "gpu_quant_slice: packed length $(length(data)) ≠ $(s.n_exp * s.bytes_per_expert)",
+    )
     return GpuQuantSlice(
         data,
         s.ggml_type,
@@ -109,16 +110,14 @@ function gpu_quant_slice(s::GgufQuantSlice, data::AbstractVector{UInt8})
 end
 
 @inline function _ld_u8(q, off0::Int)
-    return q[off0 + 1]
+    return q[off0+1]
 end
 @inline function _ld_u16(q, off0::Int)
     return UInt16(_ld_u8(q, off0)) | (UInt16(_ld_u8(q, off0 + 1)) << 8)
 end
 @inline function _ld_u32(q, off0::Int)
-    return UInt32(_ld_u8(q, off0)) |
-           (UInt32(_ld_u8(q, off0 + 1)) << 8) |
-           (UInt32(_ld_u8(q, off0 + 2)) << 16) |
-           (UInt32(_ld_u8(q, off0 + 3)) << 24)
+    return UInt32(_ld_u8(q, off0)) | (UInt32(_ld_u8(q, off0 + 1)) << 8) |
+           (UInt32(_ld_u8(q, off0 + 2)) << 16) | (UInt32(_ld_u8(q, off0 + 3)) << 24)
 end
 @inline function _ld_f16(q, off0::Int)
     return Float32(reinterpret(Float16, _ld_u16(q, off0)))
@@ -161,7 +160,7 @@ function _qgemv_iq2_xs!(
     @inbounds for j in 1:ne1
         acc = zero(Float32)
         col = (j - 1) * nb * bsz
-        for ib in 0:(nb - 1)
+        for ib in 0:(nb-1)
             boff = col + ib * bsz
             d = _ld_f16(q, boff)
             xoff = ib * QK_K
@@ -171,14 +170,14 @@ function _qgemv_iq2_xs!(
                 db1 = d * (0.5f0 + Float32(sc >> 4)) * 0.25f0
                 for l in 0:3
                     qv = _ld_u16(q, boff + 2 + (4 * ib32 + l) * 2)
-                    grid64 = IQ2XS_GRID[(qv & 0x01ff) + 0x0001]
-                    signs = KSIGNS_IQ2XS[(qv >> 9) + 0x0001]
+                    grid64 = IQ2XS_GRID[(qv&0x01ff)+0x0001]
+                    signs = KSIGNS_IQ2XS[(qv>>9)+0x0001]
                     db = l < 2 ? db0 : db1
                     base = xoff + ib32 * 32 + l * 8
                     for t in 0:7
                         g = Float32((grid64 >> (8 * t)) & 0xff)
-                        sng = (signs & KMASK_IQ2XS[t + 1]) != 0x00 ? -1.0f0 : 1.0f0
-                        acc += db * g * sng * x[base + t + 1]
+                        sng = (signs & KMASK_IQ2XS[t+1]) != 0x00 ? -1.0f0 : 1.0f0
+                        acc += db * g * sng * x[base+t+1]
                     end
                 end
             end
@@ -202,7 +201,7 @@ function _qgemv_iq3_xxs!(
     @inbounds for j in 1:ne1
         acc = zero(Float32)
         col = (j - 1) * nb * bsz
-        for ib in 0:(nb - 1)
+        for ib in 0:(nb-1)
             boff = col + ib * bsz
             d = _ld_f16(q, boff)
             qs0 = boff + 2
@@ -213,15 +212,15 @@ function _qgemv_iq3_xxs!(
                 db = d * (0.5f0 + Float32(aux32 >> 28)) * 0.5f0
                 qbase = qs0 + ib32 * 8
                 for l in 0:3
-                    signs = KSIGNS_IQ2XS[((aux32 >> (7 * l)) & UInt32(127)) + UInt32(1)]
-                    g1 = IQ3XXS_GRID[Int(_ld_u8(q, qbase + 2 * l)) + 1]
-                    g2 = IQ3XXS_GRID[Int(_ld_u8(q, qbase + 2 * l + 1)) + 1]
+                    signs = KSIGNS_IQ2XS[((aux32>>(7*l))&UInt32(127))+UInt32(1)]
+                    g1 = IQ3XXS_GRID[Int(_ld_u8(q, qbase+2*l))+1]
+                    g2 = IQ3XXS_GRID[Int(_ld_u8(q, qbase+2*l+1))+1]
                     base = xoff + ib32 * 32 + l * 8
                     for t in 0:3
-                        s0 = (signs & KMASK_IQ2XS[t + 1]) != 0x00 ? -1.0f0 : 1.0f0
-                        s1 = (signs & KMASK_IQ2XS[t + 5]) != 0x00 ? -1.0f0 : 1.0f0
-                        acc += db * Float32((g1 >> (8 * t)) & 0xff) * s0 * x[base + t + 1]
-                        acc += db * Float32((g2 >> (8 * t)) & 0xff) * s1 * x[base + t + 5]
+                        s0 = (signs & KMASK_IQ2XS[t+1]) != 0x00 ? -1.0f0 : 1.0f0
+                        s1 = (signs & KMASK_IQ2XS[t+5]) != 0x00 ? -1.0f0 : 1.0f0
+                        acc += db * Float32((g1 >> (8 * t)) & 0xff) * s0 * x[base+t+1]
+                        acc += db * Float32((g2 >> (8 * t)) & 0xff) * s1 * x[base+t+5]
                     end
                 end
             end
@@ -245,7 +244,7 @@ function _qgemv_iq4_xs!(
     @inbounds for j in 1:ne1
         acc = zero(Float32)
         col = (j - 1) * nb * bsz
-        for ibk in 0:(nb - 1)
+        for ibk in 0:(nb-1)
             boff = col + ibk * bsz
             d = _ld_f16(q, boff)
             scales_h = _ld_u16(q, boff + 2)
@@ -253,14 +252,16 @@ function _qgemv_iq4_xs!(
             qs0 = boff + 8
             for ib in 0:7
                 sl = _ld_u8(q, boff + 4 + div(ib, 2))
-                ls = Int((sl >> (4 * (ib % 2))) & 0x0f) | Int((scales_h >> (2 * ib)) & 0x0003) << 4
+                ls =
+                    Int((sl >> (4 * (ib % 2))) & 0x0f) |
+                    Int((scales_h >> (2 * ib)) & 0x0003) << 4
                 dl = d * Float32(ls - 32)
                 qsb = qs0 + ib * 16
                 base = xoff + ib * 32
                 for t in 0:15
                     qs = _ld_u8(q, qsb + t)
-                    acc += dl * Float32(KVALUES_IQ4NL[(qs & 0x0f) + 0x01]) * x[base + t + 1]
-                    acc += dl * Float32(KVALUES_IQ4NL[(qs >> 4) + 0x01]) * x[base + t + 17]
+                    acc += dl * Float32(KVALUES_IQ4NL[(qs&0x0f)+0x01]) * x[base+t+1]
+                    acc += dl * Float32(KVALUES_IQ4NL[(qs>>4)+0x01]) * x[base+t+17]
                 end
             end
         end
@@ -352,8 +353,11 @@ function _gemv_chunks_per_thread()::Int
 end
 
 # Chunk count for `rows` output rows: at least _QGEMV_MIN_ROWS rows per chunk.
-_qgemv_nchunks(rows::Int)::Int =
-    clamp(min(Threads.nthreads() * _gemv_chunks_per_thread(), cld(rows, _QGEMV_MIN_ROWS)), 1, max(rows, 1))
+_qgemv_nchunks(rows::Int)::Int = clamp(
+    min(Threads.nthreads() * _gemv_chunks_per_thread(), cld(rows, _QGEMV_MIN_ROWS)),
+    1,
+    max(rows, 1),
+)
 
 # Scheduler for the row-chunk loops above. `f(c)` runs chunk c of 1:nc.
 # `@threads` forks and joins on every call. The persistent pool (cpu_pool.jl,
@@ -379,7 +383,8 @@ _gemv_use_pool(work::Int)::Bool = _gemv_pool_mode() != 0
 
 # The pool lives in Gesso.Runtime, which loads after this module. The lookup
 # runs at call time, so there is no load-order dependency.
-_pool_run_chunks!(f, nc::Int) = getproperty(parentmodule(@__MODULE__), :Runtime).pool_run!(f, nc)
+_pool_run_chunks!(f, nc::Int) =
+    getproperty(parentmodule(@__MODULE__), :Runtime).pool_run!(f, nc)
 
 function _run_row_chunks!(f, nc::Int, work::Int)
     if nc > 1 && _gemv_use_pool(work)
@@ -416,7 +421,20 @@ function _qgemv_bytes_threaded!(
     nq = length(q)
     p = _PROFILE[]
     if p !== nothing && p.window
-        return _qgemv_bytes_threaded_timed!(p, y, x, q, ggml_type, ne0, ne1, alpha, beta, nc, rb, nq)
+        return _qgemv_bytes_threaded_timed!(
+            p,
+            y,
+            x,
+            q,
+            ggml_type,
+            ne0,
+            ne1,
+            alpha,
+            beta,
+            nc,
+            rb,
+            nq,
+        )
     end
     # Pool dispatch, not @threads: the threaded fork/join costs more than a
     # decode-size GEMV, and the pool's workers spin between calls.
@@ -429,7 +447,7 @@ end
 @inline function _qgemv_chunk!(y, x, q, ggml_type, ne0, ne1, alpha, beta, nc, c, rb, nq)
     j0 = div((c - 1) * ne1, nc) + 1
     j1 = div(c * ne1, nc)
-    qc = view(q, ((j0 - 1) * rb + 1):nq)
+    qc = view(q, ((j0-1)*rb+1):nq)
     _qgemv_bytes!(view(y, j0:j1), x, qc, ggml_type, ne0, j1 - j0 + 1, alpha, beta)
     return nothing
 end
@@ -437,7 +455,20 @@ end
 # Profiled twin of the threaded GEMV: times each chunk on its own thread so
 # the fork/join cost (wall minus the slowest chunk) is separated from the
 # kernel work. Same chunks, same arithmetic.
-function _qgemv_bytes_threaded_timed!(p, y, x, q, ggml_type, ne0, ne1, alpha, beta, nc, rb, nq)
+function _qgemv_bytes_threaded_timed!(
+    p,
+    y,
+    x,
+    q,
+    ggml_type,
+    ne0,
+    ne1,
+    alpha,
+    beta,
+    nc,
+    rb,
+    nq,
+)
     length(p.chunk_ns) >= nc || resize!(p.chunk_ns, nc)
     cns = p.chunk_ns
     t_wall = time_ns()
@@ -482,19 +513,37 @@ function _moe_host_experts!(
         e = order[k]
         w = weights[k]
         _qgemv_bytes_threaded!(
-            gacc, xf, _quant_expert_bytes(gate_s, e), gate_s.ggml_type,
-            gate_s.ne0, gate_s.ne1, 1.0f0, 0.0f0,
+            gacc,
+            xf,
+            _quant_expert_bytes(gate_s, e),
+            gate_s.ggml_type,
+            gate_s.ne0,
+            gate_s.ne1,
+            1.0f0,
+            0.0f0,
         )
         _qgemv_bytes_threaded!(
-            uacc, xf, _quant_expert_bytes(up_s, e), up_s.ggml_type,
-            up_s.ne0, up_s.ne1, 1.0f0, 0.0f0,
+            uacc,
+            xf,
+            _quant_expert_bytes(up_s, e),
+            up_s.ggml_type,
+            up_s.ne0,
+            up_s.ne1,
+            1.0f0,
+            0.0f0,
         )
         @inbounds for j in eachindex(hact)
             hact[j] = _cpu_silu(gacc[j]) * uacc[j]
         end
         _qgemv_bytes_threaded!(
-            ybuf, hact, _quant_expert_bytes(down_s, e), down_s.ggml_type,
-            down_s.ne0, down_s.ne1, w, 0.0f0,
+            ybuf,
+            hact,
+            _quant_expert_bytes(down_s, e),
+            down_s.ggml_type,
+            down_s.ne0,
+            down_s.ne1,
+            w,
+            0.0f0,
         )
         @inbounds for i in eachindex(yrow)
             yrow[i] += ybuf[i]

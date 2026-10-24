@@ -28,7 +28,7 @@ receive byte offsets computed on the host, so no device mirror is needed.
 """
 mutable struct ExpertLayerCache{P}
     layer::Int
-    banks::NTuple{3,GgufQuantSlice}
+    banks::NTuple{3, GgufQuantSlice}
     pools::P
     slot_of::Vector{Int32}
     slot_expert::Vector{Int32}
@@ -37,11 +37,24 @@ mutable struct ExpertLayerCache{P}
     traced::Int
 end
 
-function ExpertLayerCache(layer::Int, banks::NTuple{3,GgufQuantSlice}, pools, n_exp::Int, n_slots::Int)
+function ExpertLayerCache(
+    layer::Int,
+    banks::NTuple{3, GgufQuantSlice},
+    pools,
+    n_exp::Int,
+    n_slots::Int,
+)
     n_exp >= 0 || error("ExpertLayerCache: n_exp $n_exp < 0")
     0 <= n_slots <= n_exp || error("ExpertLayerCache: n_slots $n_slots outside 0..$n_exp")
     return ExpertLayerCache(
-        layer, banks, pools, zeros(Int32, n_exp), zeros(Int32, n_slots), 0, 0, 0,
+        layer,
+        banks,
+        pools,
+        zeros(Int32, n_exp),
+        zeros(Int32, n_slots),
+        0,
+        0,
+        0,
     )
 end
 
@@ -68,8 +81,7 @@ Base.length(b::CachedExpertBank) = prod(size(b))
 
 Device bytes of one resident expert: its gate, up and down quant bytes.
 """
-expert_slot_bytes(banks::NTuple{3,GgufQuantSlice}) =
-    sum(b.bytes_per_expert for b in banks)
+expert_slot_bytes(banks::NTuple{3, GgufQuantSlice}) = sum(b.bytes_per_expert for b in banks)
 
 """
     expert_layer_quota(layer_budget_bytes, banks, n_exp) -> Int
@@ -77,8 +89,13 @@ expert_slot_bytes(banks::NTuple{3,GgufQuantSlice}) =
 Slots for one layer: the layer's byte budget over one resident expert,
 capped at `n_exp`. The caller divides the total budget equally across layers.
 """
-function expert_layer_quota(layer_budget_bytes::Integer, banks::NTuple{3,GgufQuantSlice}, n_exp::Integer)
-    layer_budget_bytes >= 0 || error("expert_layer_quota: negative budget $layer_budget_bytes")
+function expert_layer_quota(
+    layer_budget_bytes::Integer,
+    banks::NTuple{3, GgufQuantSlice},
+    n_exp::Integer,
+)
+    layer_budget_bytes >= 0 ||
+        error("expert_layer_quota: negative budget $layer_budget_bytes")
     slot = expert_slot_bytes(banks)
     slot > 0 || return 0
     return Int(min(Int64(n_exp), div(Int64(layer_budget_bytes), Int64(slot))))
@@ -91,7 +108,7 @@ Experts ordered for filling slots. `counts` is a `Dict{Int,Int}` from expert
 to routing count, or `nothing`. With counts: descending count, ties by lower
 id. Without: ascending id.
 """
-function expert_fill_order(counts::Union{Nothing,AbstractDict}, n_exp::Integer)
+function expert_fill_order(counts::Union{Nothing, AbstractDict}, n_exp::Integer)
     order = collect(1:n_exp)
     counts === nothing && return order
     sort!(order; by=e -> (-get(counts, e, 0), e))
@@ -106,12 +123,14 @@ Set the slot tables so the first `length(cache.slot_expert)` experts of
 """
 function expert_fill!(cache::ExpertLayerCache, order::AbstractVector{<:Integer})
     n_slots = length(cache.slot_expert)
-    length(order) >= n_slots || error("expert_fill!: order has $(length(order)) < $n_slots slots")
+    length(order) >= n_slots ||
+        error("expert_fill!: order has $(length(order)) < $n_slots slots")
     fill!(cache.slot_of, 0)
     fill!(cache.slot_expert, 0)
     for s in 1:n_slots
         e = Int(order[s])
-        1 <= e <= length(cache.slot_of) || error("expert_fill!: expert $e outside 1:$(length(cache.slot_of))")
+        1 <= e <= length(cache.slot_of) ||
+            error("expert_fill!: expert $e outside 1:$(length(cache.slot_of))")
         cache.slot_of[e] = Int32(s)
         cache.slot_expert[s] = Int32(e)
     end
@@ -127,16 +146,17 @@ Returns layer -> (expert -> count).
 """
 function read_expert_profile(path::AbstractString)
     isfile(path) || error("read_expert_profile: no such file $path")
-    prof = Dict{Int,Dict{Int,Int}}()
+    prof = Dict{Int, Dict{Int, Int}}()
     for (ln, raw) in enumerate(eachline(path))
         line = strip(raw)
         (isempty(line) || startswith(line, '#')) && continue
         f = split(line)
-        length(f) == 3 || error("read_expert_profile: $path:$ln expects 3 fields, got $(length(f))")
+        length(f) == 3 ||
+            error("read_expert_profile: $path:$ln expects 3 fields, got $(length(f))")
         l = parse(Int, f[1])
         e = parse(Int, f[2])
         c = parse(Int, f[3])
-        d = get!(prof, l, Dict{Int,Int}())
+        d = get!(prof, l, Dict{Int, Int}())
         d[e] = get(d, e, 0) + c
     end
     return prof
@@ -170,7 +190,11 @@ end
 
 Append one routing row for `cache` and advance its row counter.
 """
-function routing_trace_record!(io::IO, cache::ExpertLayerCache, experts::AbstractVector{<:Integer})
+function routing_trace_record!(
+    io::IO,
+    cache::ExpertLayerCache,
+    experts::AbstractVector{<:Integer},
+)
     cache.traced += 1
     print(io, cache.layer, ' ', cache.traced)
     for e in experts
@@ -188,7 +212,7 @@ Per-layer residency and hit counters for every cached MoE block in `blocks`
 (a device `tensors.blocks`). Layers without a cache are skipped.
 """
 function expert_hit_summary(blocks)
-    out = NamedTuple{(:layer, :slots, :hits, :misses),Tuple{Int,Int,Int,Int}}[]
+    out = NamedTuple{(:layer, :slots, :hits, :misses), Tuple{Int, Int, Int, Int}}[]
     for (li, bt) in enumerate(blocks)
         haskey(bt, :wexp_gate) || continue
         s = bt.wexp_gate.storage

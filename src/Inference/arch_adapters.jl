@@ -432,9 +432,11 @@ function _qwen35_rope(text::AbstractDict, head_dim::Int)
             "parse_config: qwen3_5 mrope_section must be an array (got $(typeof(raw_sec)))",
         )
         section = Int[Int(x) for x in raw_sec]
-        rotary_dim == 0 || sum(section) == rotary_dim ÷ 2 || error(
-            "parse_config: qwen3_5 mrope_section $(section) sums to $(sum(section)), expected rotary_dim/2 = $(rotary_dim ÷ 2)",
-        )
+        rotary_dim == 0 ||
+            sum(section) == rotary_dim ÷ 2 ||
+            error(
+                "parse_config: qwen3_5 mrope_section $(section) sums to $(sum(section)), expected rotary_dim/2 = $(rotary_dim ÷ 2)",
+            )
     end
     return RoPEPolicy(; theta, kind, rotary_dim, interleaved=false, mrope_section=section),
     extra
@@ -506,7 +508,11 @@ function param_map(::Qwen35Adapter, spec::ArchitectureSpec)
     ]
     full = ParamRef[
         shared...,
-        ParamRef(SemanticParamId(ROLE_Q, 0, :projection), "self_attn.q_proj.weight", q_rows),
+        ParamRef(
+            SemanticParamId(ROLE_Q, 0, :projection),
+            "self_attn.q_proj.weight",
+            q_rows,
+        ),
         ParamRef(
             SemanticParamId(ROLE_ATTN_GATE, 0, :projection),
             "self_attn.q_proj.weight",
@@ -520,15 +526,33 @@ function param_map(::Qwen35Adapter, spec::ArchitectureSpec)
     ]
     linear = ParamRef[
         shared...,
-        ParamRef(SemanticParamId(ROLE_GDN_QKV, 0, :projection), "linear_attn.in_proj_qkv.weight"),
-        ParamRef(SemanticParamId(ROLE_GDN_Z, 0, :projection), "linear_attn.in_proj_z.weight"),
-        ParamRef(SemanticParamId(ROLE_GDN_A, 0, :projection), "linear_attn.in_proj_a.weight"),
-        ParamRef(SemanticParamId(ROLE_GDN_B, 0, :projection), "linear_attn.in_proj_b.weight"),
-        ParamRef(SemanticParamId(ROLE_GDN_CONV, 0, :projection), "linear_attn.conv1d.weight"),
+        ParamRef(
+            SemanticParamId(ROLE_GDN_QKV, 0, :projection),
+            "linear_attn.in_proj_qkv.weight",
+        ),
+        ParamRef(
+            SemanticParamId(ROLE_GDN_Z, 0, :projection),
+            "linear_attn.in_proj_z.weight",
+        ),
+        ParamRef(
+            SemanticParamId(ROLE_GDN_A, 0, :projection),
+            "linear_attn.in_proj_a.weight",
+        ),
+        ParamRef(
+            SemanticParamId(ROLE_GDN_B, 0, :projection),
+            "linear_attn.in_proj_b.weight",
+        ),
+        ParamRef(
+            SemanticParamId(ROLE_GDN_CONV, 0, :projection),
+            "linear_attn.conv1d.weight",
+        ),
         ParamRef(SemanticParamId(ROLE_GDN_A_LOG, 0, :frozen), "linear_attn.A_log"),
         ParamRef(SemanticParamId(ROLE_GDN_DT_BIAS, 0, :frozen), "linear_attn.dt_bias"),
         ParamRef(SemanticParamId(ROLE_GDN_NORM, 0, :frozen), "linear_attn.norm.weight"),
-        ParamRef(SemanticParamId(ROLE_GDN_O, 0, :projection), "linear_attn.out_proj.weight"),
+        ParamRef(
+            SemanticParamId(ROLE_GDN_O, 0, :projection),
+            "linear_attn.out_proj.weight",
+        ),
     ]
     return FamilyParamMap(
         :qwen3_5,
@@ -555,9 +579,7 @@ family_symbol(::Qwen35MoeAdapter) = :qwen3_5_moe
 function _qwen35_moe_spec(text::AbstractDict)
     n_experts = Int(text["num_experts"])
     n_used = Int(get(text, "num_experts_per_tok", text["num_experts"]))
-    expert_ff = Int(
-        get(text, "moe_intermediate_size", get(text, "intermediate_size", 0)),
-    )
+    expert_ff = Int(get(text, "moe_intermediate_size", get(text, "intermediate_size", 0)))
     shared_ff = Int(get(text, "shared_expert_intermediate_size", expert_ff))
     expert_ff > 0 ||
         error("parse_config: qwen3_5_moe needs moe_intermediate_size or intermediate_size")
@@ -596,9 +618,15 @@ end
 function _qwen35_moe_ffn_refs()
     return ParamRef[
         ParamRef(SemanticParamId(ROLE_ROUTER, 0, :projection), "mlp.gate.weight"),
-        ParamRef(SemanticParamId(ROLE_EXPERT_GATE, 0, :expert), "mlp.experts.gate_proj.weight"),
+        ParamRef(
+            SemanticParamId(ROLE_EXPERT_GATE, 0, :expert),
+            "mlp.experts.gate_proj.weight",
+        ),
         ParamRef(SemanticParamId(ROLE_EXPERT_UP, 0, :expert), "mlp.experts.up_proj.weight"),
-        ParamRef(SemanticParamId(ROLE_EXPERT_DOWN, 0, :expert), "mlp.experts.down_proj.weight"),
+        ParamRef(
+            SemanticParamId(ROLE_EXPERT_DOWN, 0, :expert),
+            "mlp.experts.down_proj.weight",
+        ),
         ParamRef(
             SemanticParamId(ROLE_SHARED_GATE, 0, :projection),
             "mlp.shared_expert.gate_proj.weight",
@@ -690,7 +718,11 @@ function gguf_param_map(::Qwen35Adapter, spec::ArchitectureSpec)
     full = ParamRef[
         shared...,
         ParamRef(SemanticParamId(ROLE_Q, 0, :projection), "attn_q.weight", q_rows),
-        ParamRef(SemanticParamId(ROLE_ATTN_GATE, 0, :projection), "attn_q.weight", gate_rows),
+        ParamRef(
+            SemanticParamId(ROLE_ATTN_GATE, 0, :projection),
+            "attn_q.weight",
+            gate_rows,
+        ),
         ParamRef(SemanticParamId(ROLE_Q_NORM, 0, :frozen), "attn_q_norm.weight"),
         ParamRef(SemanticParamId(ROLE_K, 0, :projection), "attn_k.weight"),
         ParamRef(SemanticParamId(ROLE_K_NORM, 0, :frozen), "attn_k_norm.weight"),
@@ -738,9 +770,15 @@ function gguf_param_map(::Qwen35MoeAdapter, spec::ArchitectureSpec)
         ParamRef(SemanticParamId(ROLE_EXPERT_GATE, 0, :expert), "ffn_gate_exps.weight"),
         ParamRef(SemanticParamId(ROLE_EXPERT_UP, 0, :expert), "ffn_up_exps.weight"),
         ParamRef(SemanticParamId(ROLE_EXPERT_DOWN, 0, :expert), "ffn_down_exps.weight"),
-        ParamRef(SemanticParamId(ROLE_SHARED_GATE, 0, :projection), "ffn_gate_shexp.weight"),
+        ParamRef(
+            SemanticParamId(ROLE_SHARED_GATE, 0, :projection),
+            "ffn_gate_shexp.weight",
+        ),
         ParamRef(SemanticParamId(ROLE_SHARED_UP, 0, :projection), "ffn_up_shexp.weight"),
-        ParamRef(SemanticParamId(ROLE_SHARED_DOWN, 0, :projection), "ffn_down_shexp.weight"),
+        ParamRef(
+            SemanticParamId(ROLE_SHARED_DOWN, 0, :projection),
+            "ffn_down_shexp.weight",
+        ),
         ParamRef(
             SemanticParamId(ROLE_SHARED_GATE_INP, 0, :frozen),
             "ffn_gate_inp_shexp.weight",
@@ -749,7 +787,11 @@ function gguf_param_map(::Qwen35MoeAdapter, spec::ArchitectureSpec)
     full = ParamRef[
         ffn...,
         ParamRef(SemanticParamId(ROLE_Q, 0, :projection), "attn_q.weight", q_rows),
-        ParamRef(SemanticParamId(ROLE_ATTN_GATE, 0, :projection), "attn_q.weight", gate_rows),
+        ParamRef(
+            SemanticParamId(ROLE_ATTN_GATE, 0, :projection),
+            "attn_q.weight",
+            gate_rows,
+        ),
         ParamRef(SemanticParamId(ROLE_Q_NORM, 0, :frozen), "attn_q_norm.weight"),
         ParamRef(SemanticParamId(ROLE_K, 0, :projection), "attn_k.weight"),
         ParamRef(SemanticParamId(ROLE_K_NORM, 0, :frozen), "attn_k_norm.weight"),

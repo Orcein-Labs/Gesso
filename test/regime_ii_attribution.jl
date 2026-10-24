@@ -81,8 +81,15 @@ s = Gesso.Session(
     n_layers = length(model.blocks)
     n_heads = s.n_heads
     audited_ns = max(UInt64(1), round(UInt64, audited_decode_seconds * 1e9))
-    op_ns = snap.embed_ns + snap.rms_ns + snap.rope_ns + snap.matmul_ns + snap.softmax_ns + snap.swiglu_ns
-    residual_ns = audited_ns > (snap.sync_ns + snap.finite_ns + op_ns) ?
+    op_ns =
+        snap.embed_ns +
+        snap.rms_ns +
+        snap.rope_ns +
+        snap.matmul_ns +
+        snap.softmax_ns +
+        snap.swiglu_ns
+    residual_ns =
+        audited_ns > (snap.sync_ns + snap.finite_ns + op_ns) ?
         audited_ns - snap.sync_ns - snap.finite_ns - op_ns : UInt64(0)
 
     Gesso.Inference._session_reset!(s)
@@ -95,7 +102,8 @@ s = Gesso.Session(
     catch e
         e
     end
-    planted_ok = planted isa Gesso.GessoError && planted.code == Gesso.ERR_NUMERICAL_INSTABILITY
+    planted_ok =
+        planted isa Gesso.GessoError && planted.code == Gesso.ERR_NUMERICAL_INSTABILITY
     @test planted_ok
 
     receipt = (;

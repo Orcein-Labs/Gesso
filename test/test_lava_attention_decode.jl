@@ -26,7 +26,10 @@ else
         out = zeros(Float64, 1, n_heads, d)
         for h in 1:n_heads
             hk = div(h - 1, group) + 1
-            s = [sum(Float64(q[1, h, j]) * Float64(kc[u, hk, j]) for j in 1:d) / sqrt(d) for u in 1:K]
+            s = [
+                sum(Float64(q[1, h, j]) * Float64(kc[u, hk, j]) for j in 1:d) / sqrt(d)
+                for u in 1:K
+            ]
             p = exp.(s .- maximum(s))
             p ./= sum(p)
             for j in 1:d, u in 1:K
@@ -42,13 +45,20 @@ else
         q = randn(rng, Float32, 1, n_heads, d)
         kc = randn(rng, Float32, R, n_kv, d)
         vc = randn(rng, Float32, R, n_kv, d)
-        kc[K+1:end, :, :] .= 1.0f3
-        vc[K+1:end, :, :] .= 1.0f3
+        kc[(K+1):end, :, :] .= 1.0f3
+        vc[(K+1):end, :, :] .= 1.0f3
         group = div(n_heads, n_kv)
         attn = Lava.LavaArray{Float32}(zeros(Float32, 1, n_heads, d))
         ok = Gesso.Inference._attention_decode_device!(
-            _attn_lava, attn, Lava.LavaArray{Float32}(q), Lava.LavaArray{Float32}(kc),
-            Lava.LavaArray{Float32}(vc), n_heads, d, group, K,
+            _attn_lava,
+            attn,
+            Lava.LavaArray{Float32}(q),
+            Lava.LavaArray{Float32}(kc),
+            Lava.LavaArray{Float32}(vc),
+            n_heads,
+            d,
+            group,
+            K,
         )
         ok === true || return Inf
         want = _lava_decode_attn_oracle(q, kc, vc, n_heads, group, K, d)
@@ -77,7 +87,15 @@ else
         attn = Lava.LavaArray{Float32}(zeros(Float32, 1, 2, 4))
         kc = Lava.LavaArray{Float32}(zeros(Float32, 1, 1, 4))
         @test_throws ArgumentError Gesso.Inference._attention_decode_device!(
-            _attn_lava, attn, attn, kc, kc, 2, 4, 2, 0,
+            _attn_lava,
+            attn,
+            attn,
+            kc,
+            kc,
+            2,
+            4,
+            2,
+            0,
         )
     end
 end

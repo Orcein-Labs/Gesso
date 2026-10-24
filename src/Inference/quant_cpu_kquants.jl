@@ -36,7 +36,7 @@
 #   Q4_0 (18 B)   d@0 (Float16), qs[16]@2: value j is (qs[j] & 15) - 8 and
 #                 value j + 16 is (qs[j] >> 4) - 8
 
-const _KQ_D_OFFSET = Dict{Int32,Int}(
+const _KQ_D_OFFSET = Dict{Int32, Int}(
     GGML_TYPE_Q2_K => 80,
     GGML_TYPE_Q3_K => 108,
     GGML_TYPE_Q4_K => 0,
@@ -51,7 +51,8 @@ const _KQ_D_OFFSET = Dict{Int32,Int}(
 _q8k_d_offset(ggml_type::Int32) = get(_KQ_D_OFFSET, ggml_type, 0)
 
 # Float16 min (dmin) offset for Q4_K, Q5_K and Q2_K; -1 when the format has none.
-_q8k_dmin_offset(ggml_type::Int32) = ggml_type == GGML_TYPE_Q2_K ? 82 :
+_q8k_dmin_offset(ggml_type::Int32) =
+    ggml_type == GGML_TYPE_Q2_K ? 82 :
     (ggml_type == GGML_TYPE_Q4_K || ggml_type == GGML_TYPE_Q5_K) ? 2 : -1
 
 # ------------------------------------------------- unchecked loads and row checks
@@ -60,21 +61,25 @@ _q8k_dmin_offset(ggml_type::Int32) = ggml_type == GGML_TYPE_Q2_K ? 82 :
 # helpers below carry their own @inbounds: an @inbounds in the caller does not
 # reach a helper loader, which is why the checked form was costing time.
 
-@inline _kq_u8(w, off0::Int) = @inbounds w[off0 + 1]
+@inline _kq_u8(w, off0::Int) = @inbounds w[off0+1]
 @inline _kq_u16(w, off0::Int) = UInt16(_kq_u8(w, off0)) | (UInt16(_kq_u8(w, off0 + 1)) << 8)
-@inline _kq_u32(w, off0::Int) = UInt32(_kq_u8(w, off0)) |
-    (UInt32(_kq_u8(w, off0 + 1)) << 8) |
-    (UInt32(_kq_u8(w, off0 + 2)) << 16) |
-    (UInt32(_kq_u8(w, off0 + 3)) << 24)
+@inline _kq_u32(w, off0::Int) =
+    UInt32(_kq_u8(w, off0)) | (UInt32(_kq_u8(w, off0 + 1)) << 8) |
+    (UInt32(_kq_u8(w, off0 + 2)) << 16) | (UInt32(_kq_u8(w, off0 + 3)) << 24)
 @inline _kq_f16(w, off0::Int) = Float32(reinterpret(Float16, _kq_u16(w, off0)))
 
 # w must hold nb blocks of bytes_per_block from byte woff (0-based); x must hold
 # the same nb blocks in every field the loop reads, because the loops index x
 # without a check.
-function _kq_check_row(w::AbstractVector{UInt8}, woff::Int, nb::Int, bytes_per_block::Int, x)
+function _kq_check_row(
+    w::AbstractVector{UInt8},
+    woff::Int,
+    nb::Int,
+    bytes_per_block::Int,
+    x,
+)
     nbytes = nb * bytes_per_block
-    woff >= 0 && woff + nbytes <= length(w) ||
-        throw(BoundsError(w, (woff + 1):(woff + nbytes)))
+    woff >= 0 && woff + nbytes <= length(w) || throw(BoundsError(w, (woff+1):(woff+nbytes)))
     _kq_x_holds(x, nb) ||
         throw(DimensionMismatch("activation vector does not hold $nb blocks"))
     return nothing
@@ -107,7 +112,7 @@ _kq_x_holds(x::Q80Vec, nb::Int) = length(x.d) >= nb && length(x.qs) >= 32 * nb
 end
 
 # Q3_K: 16 signed scales (6-bit value minus 32) from the 12 packed bytes.
-@inline function _kq_scales_q3(w, sb::Int)::NTuple{16,Int32}
+@inline function _kq_scales_q3(w, sb::Int)::NTuple{16, Int32}
     a0 = _kq_u32(w, sb)
     a1 = _kq_u32(w, sb + 4)
     a2 = _kq_u32(w, sb + 8)
@@ -118,22 +123,25 @@ end
     n0 = (a0 & k2) | (((a2 >> 0) & k1) << 4)
     n1 = (a1 & k2) | (((a2 >> 2) & k1) << 4)
     ws = (n0, n1, n2, n3)
-    return ntuple(j -> Int32((ws[((j - 1) >> 2) + 1] >> (8 * ((j - 1) & 3))) & 0xff) - Int32(32), Val(16))
+    return ntuple(
+        j -> Int32((ws[((j-1)>>2)+1] >> (8 * ((j - 1) & 3))) & 0xff) - Int32(32),
+        Val(16),
+    )
 end
 
-@inline _kq_fsum(s::NTuple{8,Float32}, d::Float32, a::NTuple{8,Int32}) =
+@inline _kq_fsum(s::NTuple{8, Float32}, d::Float32, a::NTuple{8, Int32}) =
     ntuple(l -> s[l] + d * Float32(a[l]), Val(8))
 
-@inline _kq_vec8(sc::NTuple{N,Int32}, off::Int) where {N} =
-    ntuple(l -> VecElement(sc[off + l]), Val(8))
+@inline _kq_vec8(sc::NTuple{N, Int32}, off::Int) where {N} =
+    ntuple(l -> VecElement(sc[off+l]), Val(8))
 
-@inline _kq_unvec8(v::NTuple{8,VecElement{Int32}}) = ntuple(l -> v[l].value, Val(8))
+@inline _kq_unvec8(v::NTuple{8, VecElement{Int32}}) = ntuple(l -> v[l].value, Val(8))
 
 # sum_j bsums[16 ib + j] * mins[j / 2] (Q4_K and Q5_K)
-@inline function _kq_mins_dot(x::Q8KVec, ib::Int, mn::NTuple{8,Int32})::Int32
+@inline function _kq_mins_dot(x::Q8KVec, ib::Int, mn::NTuple{8, Int32})::Int32
     s = Int32(0)
     @inbounds for j in 0:15
-        s += Int32(x.bsums[16 * ib + j + 1]) * mn[(j >> 1) + 1]
+        s += Int32(x.bsums[16*ib+j+1]) * mn[(j>>1)+1]
     end
     return s
 end
@@ -189,7 +197,13 @@ end
     return Int32((_kq_u8(w, b + 16 + 32 * h + l) >> (2 * t)) & 0x03)
 end
 
-function _q4k_ints_ref(w, b::Int, x::Q8KVec, ib::Int, sc::NTuple{8,Int32})::NTuple{8,Int32}
+function _q4k_ints_ref(
+    w,
+    b::Int,
+    x::Q8KVec,
+    ib::Int,
+    sc::NTuple{8, Int32},
+)::NTuple{8, Int32}
     ao = ib * QK_K
     return ntuple(Val(8)) do l
         lane = l - 1
@@ -198,15 +212,21 @@ function _q4k_ints_ref(w, b::Int, x::Q8KVec, ib::Int, sc::NTuple{8,Int32})::NTup
             sub = Int32(0)
             for i in (lane, lane + 8, lane + 16, lane + 24)
                 k = 32 * s + i
-                sub += _q4k_value(w, b, k) * Int32(x.qs[ao + k + 1])
+                sub += _q4k_value(w, b, k) * Int32(x.qs[ao+k+1])
             end
-            acc += sc[s + 1] * sub
+            acc += sc[s+1] * sub
         end
         acc
     end
 end
 
-function _q5k_ints_ref(w, b::Int, x::Q8KVec, ib::Int, sc::NTuple{8,Int32})::NTuple{8,Int32}
+function _q5k_ints_ref(
+    w,
+    b::Int,
+    x::Q8KVec,
+    ib::Int,
+    sc::NTuple{8, Int32},
+)::NTuple{8, Int32}
     ao = ib * QK_K
     return ntuple(Val(8)) do l
         lane = l - 1
@@ -215,15 +235,15 @@ function _q5k_ints_ref(w, b::Int, x::Q8KVec, ib::Int, sc::NTuple{8,Int32})::NTup
             sub = Int32(0)
             for i in (lane, lane + 8, lane + 16, lane + 24)
                 k = 32 * s + i
-                sub += _q5k_value(w, b, k) * Int32(x.qs[ao + k + 1])
+                sub += _q5k_value(w, b, k) * Int32(x.qs[ao+k+1])
             end
-            acc += sc[s + 1] * sub
+            acc += sc[s+1] * sub
         end
         acc
     end
 end
 
-function _q6k_ints_ref(w, b::Int, x::Q8KVec, ib::Int)::NTuple{8,Int32}
+function _q6k_ints_ref(w, b::Int, x::Q8KVec, ib::Int)::NTuple{8, Int32}
     ao = ib * QK_K
     return ntuple(Val(8)) do l
         lane = l - 1
@@ -232,7 +252,7 @@ function _q6k_ints_ref(w, b::Int, x::Q8KVec, ib::Int)::NTuple{8,Int32}
             sub = Int32(0)
             for i in (lane, lane + 8)
                 k = 16 * j + i
-                sub += _q6k_value(w, b, k) * Int32(x.qs[ao + k + 1])
+                sub += _q6k_value(w, b, k) * Int32(x.qs[ao+k+1])
             end
             acc += Int32(reinterpret(Int8, _kq_u8(w, b + 192 + j))) * sub
         end
@@ -240,7 +260,13 @@ function _q6k_ints_ref(w, b::Int, x::Q8KVec, ib::Int)::NTuple{8,Int32}
     end
 end
 
-function _q3k_ints_ref(w, b::Int, x::Q8KVec, ib::Int, sc::NTuple{16,Int32})::NTuple{8,Int32}
+function _q3k_ints_ref(
+    w,
+    b::Int,
+    x::Q8KVec,
+    ib::Int,
+    sc::NTuple{16, Int32},
+)::NTuple{8, Int32}
     ao = ib * QK_K
     return ntuple(Val(8)) do l
         lane = l - 1
@@ -249,15 +275,15 @@ function _q3k_ints_ref(w, b::Int, x::Q8KVec, ib::Int, sc::NTuple{16,Int32})::NTu
             sub = Int32(0)
             for i in (lane, lane + 8)
                 k = 16 * j + i
-                sub += _q3k_value(w, b, k) * Int32(x.qs[ao + k + 1])
+                sub += _q3k_value(w, b, k) * Int32(x.qs[ao+k+1])
             end
-            acc += sc[j + 1] * sub
+            acc += sc[j+1] * sub
         end
         acc
     end
 end
 
-function _q2k_ints_ref(w, b::Int, x::Q8KVec, ib::Int)::NTuple{8,Int32}
+function _q2k_ints_ref(w, b::Int, x::Q8KVec, ib::Int)::NTuple{8, Int32}
     ao = ib * QK_K
     return ntuple(Val(8)) do l
         lane = l - 1
@@ -266,7 +292,7 @@ function _q2k_ints_ref(w, b::Int, x::Q8KVec, ib::Int)::NTuple{8,Int32}
             sub = Int32(0)
             for i in (lane, lane + 8)
                 k = 16 * j + i
-                sub += _q2k_value(w, b, k) * Int32(x.qs[ao + k + 1])
+                sub += _q2k_value(w, b, k) * Int32(x.qs[ao+k+1])
             end
             acc += Int32(_kq_u8(w, b + j) & 0x0f) * sub
         end
@@ -280,23 +306,28 @@ end
 # Only generic vector operations are used (mul, shuffle, extension); the
 # instruction selection comes from the host target, as in quant_cpu_simd.jl.
 
-_kq_idx(lo::Int, n::Int) = join(("i32 $(lo + i)" for i in 0:(n - 1)), ", ")
+_kq_idx(lo::Int, n::Int) = join(("i32 $(lo + i)" for i in 0:(n-1)), ", ")
 
-_kq_ld(io::IOBuffer, dst::String, base::String, off::Int) = print(io,
+_kq_ld(io::IOBuffer, dst::String, base::String, off::Int) = print(
+    io,
     "  %$(dst)_p = getelementptr i8, ptr %$base, i64 $off\n",
-    "  %$dst = load <32 x i8>, ptr %$(dst)_p, align 1\n")
+    "  %$dst = load <32 x i8>, ptr %$(dst)_p, align 1\n",
+)
 
 # Half h (0 or 1) of a <32 x i8> value as <16 x i8>.
-_kq_half(io::IOBuffer, dst::String, src::String, h::Int) = print(io,
+_kq_half(io::IOBuffer, dst::String, src::String, h::Int) = print(
+    io,
     "  %$dst = shufflevector <32 x i8> %$src, <32 x i8> poison, ",
-    "<16 x i32> <$(_kq_idx(16 * h, 16))>\n")
+    "<16 x i32> <$(_kq_idx(16 * h, 16))>\n",
+)
 
 # n copies of one constant, as an LLVM vector literal.
 _kq_rep(ty::String, v::Int, n::Int) = "<" * join(("$ty $v" for _ in 1:n), ", ") * ">"
 
 # Q4_0 weights of the block at %w as %wl16 (values 0-15) and %wh16 (values
 # 16-31), each <16 x i16> in -8..7, in the same lanes as the Q8_0 kernel's.
-_kq_q40_weights(io::IOBuffer) = print(io,
+_kq_q40_weights(io::IOBuffer) = print(
+    io,
     "  %wp = getelementptr i8, ptr %w, i64 2\n",
     "  %wb = load <16 x i8>, ptr %wp, align 1\n",
     "  %wlo = and <16 x i8> %wb, $(_kq_rep("i8", 15, 16))\n",
@@ -304,24 +335,29 @@ _kq_q40_weights(io::IOBuffer) = print(io,
     "  %wlz = zext <16 x i8> %wlo to <16 x i16>\n",
     "  %whz = zext <16 x i8> %whi to <16 x i16>\n",
     "  %wl16 = sub <16 x i16> %wlz, $(_kq_rep("i16", 8, 16))\n",
-    "  %wh16 = sub <16 x i16> %whz, $(_kq_rep("i16", 8, 16))\n")
+    "  %wh16 = sub <16 x i16> %whz, $(_kq_rep("i16", 8, 16))\n",
+)
 
 # Fold a <16 x i16> product to <8 x i32>: lane l = p[l] + p[l+8], which is
 # the sum over the values with index ≡ l (mod 8).
 function _kq_fold(io::IOBuffer, dst::String, p::String)
-    print(io,
+    print(
+        io,
         "  %$(dst)_fa = shufflevector <16 x i16> %$p, <16 x i16> poison, <8 x i32> <$(_kq_idx(0, 8))>\n",
         "  %$(dst)_fb = shufflevector <16 x i16> %$p, <16 x i16> poison, <8 x i32> <$(_kq_idx(8, 8))>\n",
         "  %$(dst)_fc = add <8 x i16> %$(dst)_fa, %$(dst)_fb\n",
-        "  %$dst = sext <8 x i16> %$(dst)_fc to <8 x i32>\n")
+        "  %$dst = sext <8 x i16> %$(dst)_fc to <8 x i32>\n",
+    )
 end
 
 # Lane sums of 16 weight x activation products (<16 x i8> operands).
 function _kq_lanes16(io::IOBuffer, dst::String, w::String, q::String, wext::String)
-    print(io,
+    print(
+        io,
         "  %$(dst)_we = $wext <16 x i8> %$w to <16 x i16>\n",
         "  %$(dst)_qe = sext <16 x i8> %$q to <16 x i16>\n",
-        "  %$(dst)_pr = mul <16 x i16> %$(dst)_we, %$(dst)_qe\n")
+        "  %$(dst)_pr = mul <16 x i16> %$(dst)_we, %$(dst)_qe\n",
+    )
     _kq_fold(io, dst, "$(dst)_pr")
 end
 
@@ -330,10 +366,12 @@ function _kq_lanes32(io::IOBuffer, dst::String, w::String, q::String, wext::Stri
     for h in 0:1
         _kq_half(io, "$(dst)_w$h", w, h)
         _kq_half(io, "$(dst)_q$h", q, h)
-        print(io,
+        print(
+            io,
             "  %$(dst)_we$h = $wext <16 x i8> %$(dst)_w$h to <16 x i16>\n",
             "  %$(dst)_qe$h = sext <16 x i8> %$(dst)_q$h to <16 x i16>\n",
-            "  %$(dst)_pr$h = mul <16 x i16> %$(dst)_we$h, %$(dst)_qe$h\n")
+            "  %$(dst)_pr$h = mul <16 x i16> %$(dst)_we$h, %$(dst)_qe$h\n",
+        )
     end
     print(io, "  %$(dst)_pr = add <16 x i16> %$(dst)_pr0, %$(dst)_pr1\n")
     _kq_fold(io, dst, "$(dst)_pr")
@@ -342,11 +380,13 @@ end
 # acc + lanes * sc (sc is an i32 SSA name); acc is an operand, e.g. "%A3" or
 # "zeroinitializer".
 function _kq_acc(io::IOBuffer, dst::String, acc::String, L::String, sc::String)
-    print(io,
+    print(
+        io,
         "  %$(dst)_s0 = insertelement <8 x i32> poison, i32 %$sc, i32 0\n",
         "  %$(dst)_s = shufflevector <8 x i32> %$(dst)_s0, <8 x i32> poison, <8 x i32> zeroinitializer\n",
         "  %$(dst)_m = mul <8 x i32> %$L, %$(dst)_s\n",
-        "  %$dst = add <8 x i32> $acc, %$(dst)_m\n")
+        "  %$dst = add <8 x i32> $acc, %$(dst)_m\n",
+    )
 end
 
 const _KQ_ATTRS = "\nattributes #0 = { alwaysinline }\n"
@@ -356,10 +396,12 @@ function _kq_ir_q4k()
     print(io, "define <8 x i32> @entry(ptr %w, ptr %q, <8 x i32> %sca) #0 {\n")
     for j in 0:3
         _kq_ld(io, "qv$j", "w", 16 + 32 * j)
-        print(io,
+        print(
+            io,
             "  %lo$j = and <32 x i8> %qv$j, splat (i8 15)\n",
             "  %hs$j = lshr <32 x i8> %qv$j, splat (i8 4)\n",
-            "  %hi$j = and <32 x i8> %hs$j, splat (i8 15)\n")
+            "  %hi$j = and <32 x i8> %hs$j, splat (i8 15)\n",
+        )
     end
     acc = "zeroinitializer"
     for s in 0:7
@@ -379,19 +421,23 @@ function _kq_ir_q5k()
     _kq_ld(io, "qh", "w", 16)
     for j in 0:3
         _kq_ld(io, "qv$j", "w", 48 + 32 * j)
-        print(io,
+        print(
+            io,
             "  %lo$j = and <32 x i8> %qv$j, splat (i8 15)\n",
             "  %hs$j = lshr <32 x i8> %qv$j, splat (i8 4)\n",
-            "  %hi$j = and <32 x i8> %hs$j, splat (i8 15)\n")
+            "  %hi$j = and <32 x i8> %hs$j, splat (i8 15)\n",
+        )
     end
     acc = "zeroinitializer"
     for s in 0:7
         nib = iseven(s) ? "lo$(s >> 1)" : "hi$(s >> 1)"
-        print(io,
+        print(
+            io,
             "  %bs$s = lshr <32 x i8> %qh, splat (i8 $s)\n",
             "  %bo$s = and <32 x i8> %bs$s, splat (i8 1)\n",
             "  %bn$s = shl <32 x i8> %bo$s, splat (i8 4)\n",
-            "  %wv$s = or <32 x i8> %$nib, %bn$s\n")
+            "  %wv$s = or <32 x i8> %$nib, %bn$s\n",
+        )
         _kq_ld(io, "xq$s", "q", 32 * s)
         _kq_lanes32(io, "L$s", "wv$s", "xq$s", "zext")
         print(io, "  %sc$s = extractelement <8 x i32> %sca, i32 $s\n")
@@ -404,10 +450,12 @@ end
 
 function _kq_ir_q6k()
     io = IOBuffer()
-    print(io,
+    print(
+        io,
         "define <8 x i32> @entry(ptr %w, ptr %q) #0 {\n",
         "  %scbp = getelementptr i8, ptr %w, i64 192\n",
-        "  %scb = load <16 x i8>, ptr %scbp, align 1\n")
+        "  %scb = load <16 x i8>, ptr %scbp, align 1\n",
+    )
     acc = "zeroinitializer"
     for h in 0:1
         _kq_ld(io, "qh$h", "w", 128 + 32 * h)
@@ -416,16 +464,20 @@ function _kq_ir_q6k()
             if c < 2
                 print(io, "  %nb$(h)$c = and <32 x i8> %ql$(h)$c, splat (i8 15)\n")
             else
-                print(io,
+                print(
+                    io,
                     "  %nh$(h)$c = lshr <32 x i8> %ql$(h)$c, splat (i8 4)\n",
-                    "  %nb$(h)$c = and <32 x i8> %nh$(h)$c, splat (i8 15)\n")
+                    "  %nb$(h)$c = and <32 x i8> %nh$(h)$c, splat (i8 15)\n",
+                )
             end
-            print(io,
+            print(
+                io,
                 "  %hs$(h)$c = lshr <32 x i8> %qh$h, splat (i8 $(2c))\n",
                 "  %hm$(h)$c = and <32 x i8> %hs$(h)$c, splat (i8 3)\n",
                 "  %hb$(h)$c = shl <32 x i8> %hm$(h)$c, splat (i8 4)\n",
                 "  %vv$(h)$c = or <32 x i8> %nb$(h)$c, %hb$(h)$c\n",
-                "  %wv$(h)$c = sub <32 x i8> %vv$(h)$c, splat (i8 32)\n")
+                "  %wv$(h)$c = sub <32 x i8> %vv$(h)$c, splat (i8 32)\n",
+            )
             _kq_ld(io, "xq$(h)$c", "q", 128 * h + 32 * c)
             _kq_half(io, "wa$(h)$c", "wv$(h)$c", 0)
             _kq_half(io, "wb$(h)$c", "wv$(h)$c", 1)
@@ -433,9 +485,11 @@ function _kq_ir_q6k()
             _kq_half(io, "xb$(h)$c", "xq$(h)$c", 1)
             for half in 0:1
                 i = 8 * h + 2 * c + half
-                print(io,
+                print(
+                    io,
                     "  %scb$i.e = extractelement <16 x i8> %scb, i32 $i\n",
-                    "  %sc$i = sext i8 %scb$i.e to i32\n")
+                    "  %sc$i = sext i8 %scb$i.e to i32\n",
+                )
                 w = half == 0 ? "wa$(h)$c" : "wb$(h)$c"
                 x = half == 0 ? "xa$(h)$c" : "xb$(h)$c"
                 _kq_lanes16(io, "L$i", w, x, "sext")
@@ -450,8 +504,10 @@ end
 
 function _kq_ir_q3k()
     io = IOBuffer()
-    print(io,
-        "define <8 x i32> @entry(ptr %w, ptr %q, <8 x i32> %sca, <8 x i32> %scb) #0 {\n")
+    print(
+        io,
+        "define <8 x i32> @entry(ptr %w, ptr %q, <8 x i32> %sca, <8 x i32> %scb) #0 {\n",
+    )
     _kq_ld(io, "hm", "w", 0)
     for h in 0:1
         _kq_ld(io, "qs$h", "w", 32 + 32 * h)
@@ -459,14 +515,16 @@ function _kq_ir_q3k()
     acc = "zeroinitializer"
     for h in 0:1, t in 0:3
         c = 4 * h + t
-        print(io,
+        print(
+            io,
             "  %qa$(h)$t = lshr <32 x i8> %qs$h, splat (i8 $(2t))\n",
             "  %qb$(h)$t = and <32 x i8> %qa$(h)$t, splat (i8 3)\n",
             "  %hc$(h)$t = lshr <32 x i8> %hm, splat (i8 $c)\n",
             "  %hd$(h)$t = and <32 x i8> %hc$(h)$t, splat (i8 1)\n",
             "  %he$(h)$t = shl <32 x i8> %hd$(h)$t, splat (i8 2)\n",
             "  %uu$(h)$t = or <32 x i8> %qb$(h)$t, %he$(h)$t\n",
-            "  %wv$(h)$t = sub <32 x i8> %uu$(h)$t, splat (i8 4)\n")
+            "  %wv$(h)$t = sub <32 x i8> %uu$(h)$t, splat (i8 4)\n",
+        )
         _kq_ld(io, "xq$(h)$t", "q", 32 * c)
         _kq_half(io, "wa$(h)$t", "wv$(h)$t", 0)
         _kq_half(io, "wb$(h)$t", "wv$(h)$t", 1)
@@ -489,18 +547,22 @@ end
 
 function _kq_ir_q2k()
     io = IOBuffer()
-    print(io,
+    print(
+        io,
         "define <8 x i32> @entry(ptr %w, ptr %q) #0 {\n",
         "  %scb = load <16 x i8>, ptr %w, align 1\n",
-        "  %scl = and <16 x i8> %scb, splat (i8 15)\n")
+        "  %scl = and <16 x i8> %scb, splat (i8 15)\n",
+    )
     for k in 0:1
         _kq_ld(io, "qv$k", "w", 16 + 32 * k)
     end
     acc = "zeroinitializer"
     for k in 0:1, t in 0:3
-        print(io,
+        print(
+            io,
             "  %qa$(k)$t = lshr <32 x i8> %qv$k, splat (i8 $(2t))\n",
-            "  %qb$(k)$t = and <32 x i8> %qa$(k)$t, splat (i8 3)\n")
+            "  %qb$(k)$t = and <32 x i8> %qa$(k)$t, splat (i8 3)\n",
+        )
         _kq_ld(io, "xq$(k)$t", "q", 128 * k + 32 * t)
         _kq_half(io, "wa$(k)$t", "qb$(k)$t", 0)
         _kq_half(io, "wb$(k)$t", "qb$(k)$t", 1)
@@ -508,9 +570,11 @@ function _kq_ir_q2k()
         _kq_half(io, "xb$(k)$t", "xq$(k)$t", 1)
         for half in 0:1
             i = 8 * k + 2 * t + half
-            print(io,
+            print(
+                io,
                 "  %sc$i.e = extractelement <16 x i8> %scl, i32 $i\n",
-                "  %sc$i = zext i8 %sc$i.e to i32\n")
+                "  %sc$i = zext i8 %sc$i.e to i32\n",
+            )
             w = half == 0 ? "wa$(k)$t" : "wb$(k)$t"
             x = half == 0 ? "xa$(k)$t" : "xb$(k)$t"
             _kq_lanes16(io, "L$i", w, x, "zext")
@@ -569,19 +633,23 @@ attributes #0 = { alwaysinline }
 # magnitude, so the pair sums of vpmaddwd cannot overflow.
 function _kq_ir_q40()
     io = IOBuffer()
-    print(io,
+    print(
+        io,
         "declare <8 x i32> @llvm.x86.avx2.pmadd.wd(<16 x i16>, <16 x i16>)\n",
-        "define i32 @entry(ptr %w, ptr %q) #0 {\n")
+        "define i32 @entry(ptr %w, ptr %q) #0 {\n",
+    )
     _kq_q40_weights(io)
     _kq_ld(io, "qv", "q", 0)
     _kq_half(io, "ql", "qv", 0)
     _kq_half(io, "qh", "qv", 1)
-    print(io,
+    print(
+        io,
         "  %ql16 = sext <16 x i8> %ql to <16 x i16>\n",
         "  %qh16 = sext <16 x i8> %qh to <16 x i16>\n",
         "  %pl = call <8 x i32> @llvm.x86.avx2.pmadd.wd(<16 x i16> %wl16, <16 x i16> %ql16)\n",
         "  %ph = call <8 x i32> @llvm.x86.avx2.pmadd.wd(<16 x i16> %wh16, <16 x i16> %qh16)\n",
-        "  %p = add <8 x i32> %pl, %ph\n")
+        "  %p = add <8 x i32> %pl, %ph\n",
+    )
     for l in 0:7
         print(io, "  %e$l = extractelement <8 x i32> %p, i32 $l\n")
     end
@@ -598,49 +666,126 @@ const _KQ_IR_Q40 = _kq_ir_q40()
 # Each AVX2 block kernel: the same lane sums as the scalar reference, for one
 # block. @noinline so the AVX2 code is compiled only when a kernel runs.
 
-@noinline function _q4k_ints_avx2(w::AbstractVector{UInt8}, b::Int, x::Q8KVec, ib::Int, sc::NTuple{8,Int32})::NTuple{8,Int32}
-    v = GC.@preserve w x Base.llvmcall((_KQ_IR_Q4K, "entry"), NTuple{8,VecElement{Int32}},
-            Tuple{Ptr{UInt8},Ptr{Int8},NTuple{8,VecElement{Int32}}},
-            pointer(w, b + 1), pointer(x.qs, ib * QK_K + 1), _kq_vec8(sc, 0))
+@noinline function _q4k_ints_avx2(
+    w::AbstractVector{UInt8},
+    b::Int,
+    x::Q8KVec,
+    ib::Int,
+    sc::NTuple{8, Int32},
+)::NTuple{8, Int32}
+    v = GC.@preserve w x Base.llvmcall(
+        (_KQ_IR_Q4K, "entry"),
+        NTuple{8, VecElement{Int32}},
+        Tuple{Ptr{UInt8}, Ptr{Int8}, NTuple{8, VecElement{Int32}}},
+        pointer(w, b + 1),
+        pointer(x.qs, ib * QK_K + 1),
+        _kq_vec8(sc, 0),
+    )
     return _kq_unvec8(v)
 end
 
-@noinline function _q5k_ints_avx2(w::AbstractVector{UInt8}, b::Int, x::Q8KVec, ib::Int, sc::NTuple{8,Int32})::NTuple{8,Int32}
-    v = GC.@preserve w x Base.llvmcall((_KQ_IR_Q5K, "entry"), NTuple{8,VecElement{Int32}},
-            Tuple{Ptr{UInt8},Ptr{Int8},NTuple{8,VecElement{Int32}}},
-            pointer(w, b + 1), pointer(x.qs, ib * QK_K + 1), _kq_vec8(sc, 0))
+@noinline function _q5k_ints_avx2(
+    w::AbstractVector{UInt8},
+    b::Int,
+    x::Q8KVec,
+    ib::Int,
+    sc::NTuple{8, Int32},
+)::NTuple{8, Int32}
+    v = GC.@preserve w x Base.llvmcall(
+        (_KQ_IR_Q5K, "entry"),
+        NTuple{8, VecElement{Int32}},
+        Tuple{Ptr{UInt8}, Ptr{Int8}, NTuple{8, VecElement{Int32}}},
+        pointer(w, b + 1),
+        pointer(x.qs, ib * QK_K + 1),
+        _kq_vec8(sc, 0),
+    )
     return _kq_unvec8(v)
 end
 
-@noinline function _q6k_ints_avx2(w::AbstractVector{UInt8}, b::Int, x::Q8KVec, ib::Int)::NTuple{8,Int32}
-    v = GC.@preserve w x Base.llvmcall((_KQ_IR_Q6K, "entry"), NTuple{8,VecElement{Int32}},
-            Tuple{Ptr{UInt8},Ptr{Int8}},
-            pointer(w, b + 1), pointer(x.qs, ib * QK_K + 1))
+@noinline function _q6k_ints_avx2(
+    w::AbstractVector{UInt8},
+    b::Int,
+    x::Q8KVec,
+    ib::Int,
+)::NTuple{8, Int32}
+    v = GC.@preserve w x Base.llvmcall(
+        (_KQ_IR_Q6K, "entry"),
+        NTuple{8, VecElement{Int32}},
+        Tuple{Ptr{UInt8}, Ptr{Int8}},
+        pointer(w, b + 1),
+        pointer(x.qs, ib * QK_K + 1),
+    )
     return _kq_unvec8(v)
 end
 
-@noinline function _q3k_ints_avx2(w::AbstractVector{UInt8}, b::Int, x::Q8KVec, ib::Int, sc::NTuple{16,Int32})::NTuple{8,Int32}
-    v = GC.@preserve w x Base.llvmcall((_KQ_IR_Q3K, "entry"), NTuple{8,VecElement{Int32}},
-            Tuple{Ptr{UInt8},Ptr{Int8},NTuple{8,VecElement{Int32}},NTuple{8,VecElement{Int32}}},
-            pointer(w, b + 1), pointer(x.qs, ib * QK_K + 1), _kq_vec8(sc, 0), _kq_vec8(sc, 8))
+@noinline function _q3k_ints_avx2(
+    w::AbstractVector{UInt8},
+    b::Int,
+    x::Q8KVec,
+    ib::Int,
+    sc::NTuple{16, Int32},
+)::NTuple{8, Int32}
+    v = GC.@preserve w x Base.llvmcall(
+        (_KQ_IR_Q3K, "entry"),
+        NTuple{8, VecElement{Int32}},
+        Tuple{
+            Ptr{UInt8},
+            Ptr{Int8},
+            NTuple{8, VecElement{Int32}},
+            NTuple{8, VecElement{Int32}},
+        },
+        pointer(w, b + 1),
+        pointer(x.qs, ib * QK_K + 1),
+        _kq_vec8(sc, 0),
+        _kq_vec8(sc, 8),
+    )
     return _kq_unvec8(v)
 end
 
-@noinline function _q2k_ints_avx2(w::AbstractVector{UInt8}, b::Int, x::Q8KVec, ib::Int)::NTuple{8,Int32}
-    v = GC.@preserve w x Base.llvmcall((_KQ_IR_Q2K, "entry"), NTuple{8,VecElement{Int32}},
-            Tuple{Ptr{UInt8},Ptr{Int8}},
-            pointer(w, b + 1), pointer(x.qs, ib * QK_K + 1))
+@noinline function _q2k_ints_avx2(
+    w::AbstractVector{UInt8},
+    b::Int,
+    x::Q8KVec,
+    ib::Int,
+)::NTuple{8, Int32}
+    v = GC.@preserve w x Base.llvmcall(
+        (_KQ_IR_Q2K, "entry"),
+        NTuple{8, VecElement{Int32}},
+        Tuple{Ptr{UInt8}, Ptr{Int8}},
+        pointer(w, b + 1),
+        pointer(x.qs, ib * QK_K + 1),
+    )
     return _kq_unvec8(v)
 end
 
-@noinline function _q80_sumi_avx2(w::AbstractVector{UInt8}, b::Int, x::Q80Vec, ib::Int)::Int32
-    return GC.@preserve w x Base.llvmcall((_KQ_IR_Q80, "entry"), Int32,
-            Tuple{Ptr{UInt8},Ptr{Int8}}, pointer(w, b + 1), pointer(x.qs, 32 * ib + 1))
+@noinline function _q80_sumi_avx2(
+    w::AbstractVector{UInt8},
+    b::Int,
+    x::Q80Vec,
+    ib::Int,
+)::Int32
+    return GC.@preserve w x Base.llvmcall(
+        (_KQ_IR_Q80, "entry"),
+        Int32,
+        Tuple{Ptr{UInt8}, Ptr{Int8}},
+        pointer(w, b + 1),
+        pointer(x.qs, 32 * ib + 1),
+    )
 end
 
-@noinline function _q40_sumi_avx2(w::AbstractVector{UInt8}, b::Int, x::Q80Vec, ib::Int)::Int32
-    return GC.@preserve w x Base.llvmcall((_KQ_IR_Q40, "entry"), Int32,
-            Tuple{Ptr{UInt8},Ptr{Int8}}, pointer(w, b + 1), pointer(x.qs, 32 * ib + 1))
+@noinline function _q40_sumi_avx2(
+    w::AbstractVector{UInt8},
+    b::Int,
+    x::Q80Vec,
+    ib::Int,
+)::Int32
+    return GC.@preserve w x Base.llvmcall(
+        (_KQ_IR_Q40, "entry"),
+        Int32,
+        Tuple{Ptr{UInt8}, Ptr{Int8}},
+        pointer(w, b + 1),
+        pointer(x.qs, 32 * ib + 1),
+    )
 end
 
 # ------------------------------------------------------------- scalar Q8_0, Q4_0
@@ -649,7 +794,7 @@ end
     s = Int32(0)
     qo = 32 * ib
     for j in 0:31
-        s += Int32(reinterpret(Int8, _kq_u8(w, b + 2 + j))) * Int32(x.qs[qo + j + 1])
+        s += Int32(reinterpret(Int8, _kq_u8(w, b + 2 + j))) * Int32(x.qs[qo+j+1])
     end
     return s
 end
@@ -661,8 +806,8 @@ end
     qo = 32 * ib
     for j in 0:15
         q = _kq_u8(w, b + 2 + j)
-        s0 += (Int32(q & 0x0f) - Int32(8)) * Int32(x.qs[qo + j + 1])
-        s1 += (Int32(q >> 4) - Int32(8)) * Int32(x.qs[qo + j + 17])
+        s0 += (Int32(q & 0x0f) - Int32(8)) * Int32(x.qs[qo+j+1])
+        s1 += (Int32(q >> 4) - Int32(8)) * Int32(x.qs[qo+j+17])
     end
     return s0 + s1
 end
@@ -678,10 +823,10 @@ function _dot_q4k_q8k(w::AbstractVector{UInt8}, woff::Int, x::Q8KVec, simd::Bool
     _kq_check_row(w, woff, nb, 144, x)
     sumf = 0.0f0
     sums = ntuple(_ -> 0.0f0, Val(8))
-    @inbounds for ib in 0:(nb - 1)
+    @inbounds for ib in 0:(nb-1)
         b = woff + ib * 144
-        d = _kq_f16(w, b) * x.d[ib + 1]
-        dmin = _kq_f16(w, b + 2) * x.d[ib + 1]
+        d = _kq_f16(w, b) * x.d[ib+1]
+        dmin = _kq_f16(w, b + 2) * x.d[ib+1]
         sc, mn = _kq_scale_min_k4(w, b + 4)
         aux = simd ? _q4k_ints_avx2(w, b, x, ib, sc) : _q4k_ints_ref(w, b, x, ib, sc)
         sums = _kq_fsum(sums, d, aux)
@@ -698,10 +843,10 @@ function _dot_q5k_q8k(w::AbstractVector{UInt8}, woff::Int, x::Q8KVec, simd::Bool
     _kq_check_row(w, woff, nb, 176, x)
     sumf = 0.0f0
     sums = ntuple(_ -> 0.0f0, Val(8))
-    @inbounds for ib in 0:(nb - 1)
+    @inbounds for ib in 0:(nb-1)
         b = woff + ib * 176
-        d = _kq_f16(w, b) * x.d[ib + 1]
-        dmin = _kq_f16(w, b + 2) * x.d[ib + 1]
+        d = _kq_f16(w, b) * x.d[ib+1]
+        dmin = _kq_f16(w, b + 2) * x.d[ib+1]
         sc, mn = _kq_scale_min_k4(w, b + 4)
         aux = simd ? _q5k_ints_avx2(w, b, x, ib, sc) : _q5k_ints_ref(w, b, x, ib, sc)
         sums = _kq_fsum(sums, d, aux)
@@ -718,9 +863,9 @@ function _dot_q6k_q8k(w::AbstractVector{UInt8}, woff::Int, x::Q8KVec, simd::Bool
     _kq_check_row(w, woff, nb, 210, x)
     sumf = 0.0f0
     sums = ntuple(_ -> 0.0f0, Val(8))
-    @inbounds for ib in 0:(nb - 1)
+    @inbounds for ib in 0:(nb-1)
         b = woff + ib * 210
-        d = _kq_f16(w, b + 208) * x.d[ib + 1]
+        d = _kq_f16(w, b + 208) * x.d[ib+1]
         aux = simd ? _q6k_ints_avx2(w, b, x, ib) : _q6k_ints_ref(w, b, x, ib)
         sums = _kq_fsum(sums, d, aux)
     end
@@ -735,9 +880,9 @@ function _dot_q3k_q8k(w::AbstractVector{UInt8}, woff::Int, x::Q8KVec, simd::Bool
     _kq_check_row(w, woff, nb, 110, x)
     sumf = 0.0f0
     sums = ntuple(_ -> 0.0f0, Val(8))
-    @inbounds for ib in 0:(nb - 1)
+    @inbounds for ib in 0:(nb-1)
         b = woff + ib * 110
-        d = _kq_f16(w, b + 108) * x.d[ib + 1]
+        d = _kq_f16(w, b + 108) * x.d[ib+1]
         sc = _kq_scales_q3(w, b + 96)
         aux = simd ? _q3k_ints_avx2(w, b, x, ib, sc) : _q3k_ints_ref(w, b, x, ib, sc)
         sums = _kq_fsum(sums, d, aux)
@@ -752,10 +897,10 @@ function _dot_q2k_q8k(w::AbstractVector{UInt8}, woff::Int, x::Q8KVec, simd::Bool
     nb = length(x.d)
     _kq_check_row(w, woff, nb, 84, x)
     sumf = 0.0f0
-    @inbounds for ib in 0:(nb - 1)
+    @inbounds for ib in 0:(nb-1)
         b = woff + ib * 84
-        dall = x.d[ib + 1] * _kq_f16(w, b + 80)
-        dmin = x.d[ib + 1] * _kq_f16(w, b + 82)
+        dall = x.d[ib+1] * _kq_f16(w, b + 80)
+        dmin = x.d[ib+1] * _kq_f16(w, b + 82)
         aux = simd ? _q2k_ints_avx2(w, b, x, ib) : _q2k_ints_ref(w, b, x, ib)
         isum = Int32(0)
         for l in 1:8
@@ -763,7 +908,7 @@ function _dot_q2k_q8k(w::AbstractVector{UInt8}, woff::Int, x::Q8KVec, simd::Bool
         end
         summs = Int32(0)
         for j in 0:15
-            summs += Int32(x.bsums[16 * ib + j + 1]) * Int32(_kq_u8(w, b + j) >> 4)
+            summs += Int32(x.bsums[16*ib+j+1]) * Int32(_kq_u8(w, b + j) >> 4)
         end
         sumf += dall * Float32(isum) - dmin * Float32(summs)
     end
@@ -774,10 +919,10 @@ function _dot_q8_0_q8_0(w::AbstractVector{UInt8}, woff::Int, x::Q80Vec, simd::Bo
     nb = length(x.d)
     _kq_check_row(w, woff, nb, 34, x)
     sumf = 0.0f0
-    @inbounds for ib in 0:(nb - 1)
+    @inbounds for ib in 0:(nb-1)
         b = woff + ib * 34
         sumi = simd ? _q80_sumi_avx2(w, b, x, ib) : _q80_sumi_ref(w, b, x, ib)
-        sumf += Float32(sumi) * (_kq_f16(w, b) * x.d[ib + 1])
+        sumf += Float32(sumi) * (_kq_f16(w, b) * x.d[ib+1])
     end
     return sumf
 end
@@ -787,10 +932,10 @@ function _dot_q4_0_q8_0(w::AbstractVector{UInt8}, woff::Int, x::Q80Vec, simd::Bo
     nb = length(x.d)
     _kq_check_row(w, woff, nb, 18, x)
     sumf = 0.0f0
-    @inbounds for ib in 0:(nb - 1)
+    @inbounds for ib in 0:(nb-1)
         b = woff + ib * 18
         sumi = simd ? _q40_sumi_avx2(w, b, x, ib) : _q40_sumi_ref(w, b, x, ib)
-        sumf += (Float32(sumi) * _kq_f16(w, b)) * x.d[ib + 1]
+        sumf += (Float32(sumi) * _kq_f16(w, b)) * x.d[ib+1]
     end
     return sumf
 end
@@ -807,37 +952,44 @@ end
     if j < 4
         return q(j) & 63, q(j + 4) & 63
     else
-        return (q(j + 4) & 0x0f) | ((q(j - 4) >> 6) << 4), (q(j + 4) >> 4) | ((q(j) >> 6) << 4)
+        return (q(j + 4) & 0x0f) | ((q(j - 4) >> 6) << 4),
+        (q(j + 4) >> 4) | ((q(j) >> 6) << 4)
     end
 end
 
-function _kq_dequant_row!(out::AbstractVector{Float32}, w::AbstractVector{UInt8}, woff::Int, ggml_type::Int32, ne0::Int)
+function _kq_dequant_row!(
+    out::AbstractVector{Float32},
+    w::AbstractVector{UInt8},
+    woff::Int,
+    ggml_type::Int32,
+    ne0::Int,
+)
     length(out) == ne0 || error("kq dequant: out length $(length(out)) ≠ ne0 $ne0")
     if ggml_type == GGML_TYPE_Q8_0
         nb = div(ne0, 32)
-        for ib in 0:(nb - 1)
+        for ib in 0:(nb-1)
             b = woff + ib * 34
             d = _kq_f16(w, b)
             for j in 0:31
-                out[32 * ib + j + 1] = d * Float32(reinterpret(Int8, _kq_u8(w, b + 2 + j)))
+                out[32*ib+j+1] = d * Float32(reinterpret(Int8, _kq_u8(w, b + 2 + j)))
             end
         end
         return out
     elseif ggml_type == GGML_TYPE_Q4_0
         nb = div(ne0, 32)
-        for ib in 0:(nb - 1)
+        for ib in 0:(nb-1)
             b = woff + ib * 18
             d = _kq_f16(w, b)
             for j in 0:15
                 q = _kq_u8(w, b + 2 + j)
-                out[32 * ib + j + 1] = Float32(Int32(q & 0x0f) - Int32(8)) * d
-                out[32 * ib + j + 17] = Float32(Int32(q >> 4) - Int32(8)) * d
+                out[32*ib+j+1] = Float32(Int32(q & 0x0f) - Int32(8)) * d
+                out[32*ib+j+17] = Float32(Int32(q >> 4) - Int32(8)) * d
             end
         end
         return out
     end
     nb = div(ne0, QK_K)
-    for ib in 0:(nb - 1)
+    for ib in 0:(nb-1)
         b = woff + ib * _iq_block_bytes(ggml_type)
         y = 256 * ib
         if ggml_type == GGML_TYPE_Q4_K
@@ -846,12 +998,14 @@ function _kq_dequant_row!(out::AbstractVector{Float32}, w::AbstractVector{UInt8}
             for j in 0:3
                 sc1, m1 = _kq_get_scale_min_k4(w, b, 2j)
                 sc2, m2 = _kq_get_scale_min_k4(w, b, 2j + 1)
-                d1 = d * Float32(sc1); mm1 = mn * Float32(m1)
-                d2 = d * Float32(sc2); mm2 = mn * Float32(m2)
+                d1 = d * Float32(sc1)
+                mm1 = mn * Float32(m1)
+                d2 = d * Float32(sc2)
+                mm2 = mn * Float32(m2)
                 for l in 0:31
                     q = _kq_u8(w, b + 16 + 32j + l)
-                    out[y + 64j + l + 1] = d1 * Float32(q & 0x0f) - mm1
-                    out[y + 64j + 32 + l + 1] = d2 * Float32(q >> 4) - mm2
+                    out[y+64j+l+1] = d1 * Float32(q & 0x0f) - mm1
+                    out[y+64j+32+l+1] = d2 * Float32(q >> 4) - mm2
                 end
             end
         elseif ggml_type == GGML_TYPE_Q5_K
@@ -860,8 +1014,10 @@ function _kq_dequant_row!(out::AbstractVector{Float32}, w::AbstractVector{UInt8}
             for j in 0:3
                 sc1, m1 = _kq_get_scale_min_k4(w, b, 2j)
                 sc2, m2 = _kq_get_scale_min_k4(w, b, 2j + 1)
-                d1 = d * Float32(sc1); mm1 = mn * Float32(m1)
-                d2 = d * Float32(sc2); mm2 = mn * Float32(m2)
+                d1 = d * Float32(sc1)
+                mm1 = mn * Float32(m1)
+                d2 = d * Float32(sc2)
+                mm2 = mn * Float32(m2)
                 u1 = UInt8(1) << (2j)
                 u2 = UInt8(2) << (2j)
                 for l in 0:31
@@ -869,8 +1025,8 @@ function _kq_dequant_row!(out::AbstractVector{Float32}, w::AbstractVector{UInt8}
                     qh = _kq_u8(w, b + 16 + l)
                     v1 = Float32((q & 0x0f) + ((qh & u1) != 0 ? 16 : 0))
                     v2 = Float32((q >> 4) + ((qh & u2) != 0 ? 16 : 0))
-                    out[y + 64j + l + 1] = d1 * v1 - mm1
-                    out[y + 64j + 32 + l + 1] = d2 * v2 - mm2
+                    out[y+64j+l+1] = d1 * v1 - mm1
+                    out[y+64j+32+l+1] = d2 * v2 - mm2
                 end
             end
         elseif ggml_type == GGML_TYPE_Q6_K
@@ -888,10 +1044,10 @@ function _kq_dequant_row!(out::AbstractVector{Float32}, w::AbstractVector{UInt8}
                 s2 = Float32(reinterpret(Int8, _kq_u8(w, b + 192 + is + 2)))
                 s4 = Float32(reinterpret(Int8, _kq_u8(w, b + 192 + is + 4)))
                 s6 = Float32(reinterpret(Int8, _kq_u8(w, b + 192 + is + 6)))
-                out[y + 128h + l + 1] = d * s0 * Float32(q1)
-                out[y + 128h + 32 + l + 1] = d * s2 * Float32(q2)
-                out[y + 128h + 64 + l + 1] = d * s4 * Float32(q3)
-                out[y + 128h + 96 + l + 1] = d * s6 * Float32(q4)
+                out[y+128h+l+1] = d * s0 * Float32(q1)
+                out[y+128h+32+l+1] = d * s2 * Float32(q2)
+                out[y+128h+64+l+1] = d * s4 * Float32(q3)
+                out[y+128h+96+l+1] = d * s6 * Float32(q4)
             end
         elseif ggml_type == GGML_TYPE_Q3_K
             dall = _kq_f16(w, b + 108)
@@ -901,12 +1057,12 @@ function _kq_dequant_row!(out::AbstractVector{Float32}, w::AbstractVector{UInt8}
                     c = 4h + t
                     for half in 0:1
                         i = 8h + 2t + half
-                        dl = dall * Float32(sc[i + 1])
-                        for l in 16half:(16half + 15)
+                        dl = dall * Float32(sc[i+1])
+                        for l in 16half:(16half+15)
                             q2 = (_kq_u8(w, b + 32 + 32h + l) >> (2t)) & 0x03
                             hm = (_kq_u8(w, b + l) >> c) & 0x01
                             v = Int32(q2) - (hm != 0 ? 0 : 4)
-                            out[y + 128h + 32t + l + 1] = dl * Float32(v)
+                            out[y+128h+32t+l+1] = dl * Float32(v)
                         end
                     end
                 end
@@ -921,9 +1077,9 @@ function _kq_dequant_row!(out::AbstractVector{Float32}, w::AbstractVector{UInt8}
                         sc = _kq_u8(w, b + i)
                         dl = dall * Float32(sc & 0x0f)
                         ml = dmin * Float32(sc >> 4)
-                        for l in 16half:(16half + 15)
+                        for l in 16half:(16half+15)
                             q2 = (_kq_u8(w, b + 16 + 32h + l) >> (2t)) & 0x03
-                            out[y + 128h + 32t + l + 1] = dl * Float32(q2) - ml
+                            out[y+128h+32t+l+1] = dl * Float32(q2) - ml
                         end
                     end
                 end
@@ -952,12 +1108,23 @@ function _q8k_quantize_act(ggml_type::Int32, x::AbstractVector{Float32})
 end
 
 _kq_supported(ggml_type::Int32) = ggml_type in (
-    GGML_TYPE_Q2_K, GGML_TYPE_Q3_K, GGML_TYPE_Q4_K, GGML_TYPE_Q5_K, GGML_TYPE_Q6_K, GGML_TYPE_Q8_0,
+    GGML_TYPE_Q2_K,
+    GGML_TYPE_Q3_K,
+    GGML_TYPE_Q4_K,
+    GGML_TYPE_Q5_K,
+    GGML_TYPE_Q6_K,
+    GGML_TYPE_Q8_0,
     GGML_TYPE_Q4_0,
 )
 
 # Called from _dot_q8k in quant_cpu_simd.jl.
-@inline function _dot_kq(ggml_type::Int32, w::AbstractVector{UInt8}, woff::Int, x, simd::Bool)::Float32
+@inline function _dot_kq(
+    ggml_type::Int32,
+    w::AbstractVector{UInt8},
+    woff::Int,
+    x,
+    simd::Bool,
+)::Float32
     if ggml_type == GGML_TYPE_Q5_K
         return _dot_q5k_q8k(w, woff, x, simd)
     elseif ggml_type == GGML_TYPE_Q6_K

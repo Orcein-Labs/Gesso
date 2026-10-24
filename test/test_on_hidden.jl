@@ -17,9 +17,14 @@ end
 function _oh_check(ts)
     P = length(_OH_PROMPT)
     plain = reference_generate(ts.model, ts, _OH_PROMPT; max_new_tokens=_OH_NEW)
-    calls = Tuple{Int,Vector{Float32}}[]
-    ids = reference_generate(ts.model, ts, _OH_PROMPT; max_new_tokens=_OH_NEW,
-        on_hidden=(pos, v) -> push!(calls, (pos, v)))
+    calls = Tuple{Int, Vector{Float32}}[]
+    ids = reference_generate(
+        ts.model,
+        ts,
+        _OH_PROMPT;
+        max_new_tokens=_OH_NEW,
+        on_hidden=(pos, v) -> push!(calls, (pos, v)),
+    )
     # 1. the callback changes nothing about the output
     @test ids == plain
     # 2. one call per produced token: the loop runs the head once per new id
@@ -27,14 +32,14 @@ function _oh_check(ts)
     n = length(ids) - P
     @test n == _OH_NEW || ids[end] == _OH_EOS
     @test length(calls) == n
-    @test [pos for (pos, _) in calls] == collect(P:(P + n - 1))
+    @test [pos for (pos, _) in calls] == collect(P:(P+n-1))
     # 3. the head reads v: the argmax of lm_head * v is the next id
     #    (lm_head is tied to the embedding: storage is (vocab, dim))
     W = ts.lm_head.storage
     @test size(W, 2) == ts.model.embedding.dim
     for (pos, v) in calls
         @test length(v) == ts.model.embedding.dim
-        @test argmax(W * v) - 1 == ids[pos + 1]
+        @test argmax(W * v) - 1 == ids[pos+1]
         # 4. v is the final-normed state at pos: the prefill oracle's last column
         #    for the sequence ending at that input
         ref = reference_prefill(ts.model, ts, ids[1:pos]; hidden=true)[:, end]
@@ -60,6 +65,12 @@ end
 
 @testset "on_hidden: exclusive with a speculative draft" begin
     ts = toy2_tensors()
-    @test_throws ArgumentError reference_generate(ts.model, ts, _OH_PROMPT;
-        max_new_tokens=_OH_NEW, draft=SuffixSource(), on_hidden=(pos, v) -> nothing)
+    @test_throws ArgumentError reference_generate(
+        ts.model,
+        ts,
+        _OH_PROMPT;
+        max_new_tokens=_OH_NEW,
+        draft=SuffixSource(),
+        on_hidden=(pos, v) -> nothing,
+    )
 end

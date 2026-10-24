@@ -39,7 +39,7 @@ struct _Scale
     out::Vector{Int}
     k::Int
 end
-(f::_Scale)(c::Int) = (f.out[c] = c * f.k; nothing)
+(f::_Scale)(c::Int) = (f.out[c]=c * f.k; nothing)
 
 struct _Noop end
 (::_Noop)(::Int) = nothing
@@ -48,7 +48,7 @@ struct _Inner
     out::Matrix{Int}
     c::Int
 end
-(f::_Inner)(j::Int) = (f.out[f.c, j] = 10 * f.c + j; nothing)
+(f::_Inner)(j::Int) = (f.out[f.c, j]=10 * f.c + j; nothing)
 
 struct _Outer
     out::Matrix{Int}
@@ -80,7 +80,8 @@ end
 function (g::_GemvChunks)(c::Int)
     j0 = div((c - 1) * g.ne1, g.nc) + 1
     j1 = div(c * g.ne1, g.nc)
-    j0 <= j1 && _QK._qgemv_q8k_rows!(g.y, g.xq, g.W, g.ty, g.ne0, j0, j1, 1.0f0, 0.0f0, g.simd)
+    j0 <= j1 &&
+        _QK._qgemv_q8k_rows!(g.y, g.xq, g.W, g.ty, g.ne0, j0, j1, 1.0f0, 0.0f0, g.simd)
     return nothing
 end
 
@@ -99,10 +100,10 @@ function _random_iq_rows(rng, ty::Int32, nrows::Int, ne0::Int)
     nb = div(ne0, _QK._q8k_block_values(ty))
     doff = _QK._q8k_d_offset(ty)
     w = rand(rng, UInt8, nrows * nb * bsz)
-    for blk in 0:(nrows * nb - 1)
+    for blk in 0:(nrows*nb-1)
         bits = reinterpret(UInt16, Float16(0.005f0 + 0.05f0 * rand(rng, Float32)))
-        w[blk * bsz + doff + 1] = UInt8(bits & 0xff)
-        w[blk * bsz + doff + 2] = UInt8(bits >> 8)
+        w[blk*bsz+doff+1] = UInt8(bits & 0xff)
+        w[blk*bsz+doff+2] = UInt8(bits >> 8)
     end
     return w
 end

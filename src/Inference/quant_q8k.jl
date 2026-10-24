@@ -26,11 +26,8 @@ struct Q8KVec
     bsums::Vector{Int16}
 end
 
-Q8KVec(nb::Integer) = Q8KVec(
-    zeros(Float32, nb),
-    zeros(Int8, QK_K * nb),
-    zeros(Int16, (QK_K ÷ 16) * nb),
-)
+Q8KVec(nb::Integer) =
+    Q8KVec(zeros(Float32, nb), zeros(Int8, QK_K * nb), zeros(Int16, (QK_K ÷ 16) * nb))
 
 Base.length(x::Q8KVec) = QK_K * length(x.d)
 
@@ -58,33 +55,33 @@ function quantize_q8_K!(y::Q8KVec, x::AbstractArray{Float32})
         amax = 0.0f0
         mx = 0.0f0
         for j in 1:QK_K
-            ax = abs(x[xo + j])
+            ax = abs(x[xo+j])
             if ax > amax
                 amax = ax
-                mx = x[xo + j]
+                mx = x[xo+j]
             end
         end
         if amax == 0.0f0
             y.d[i] = 0.0f0
             for j in 1:QK_K
-                y.qs[xo + j] = 0
+                y.qs[xo+j] = 0
             end
             for j in 1:16
-                y.bsums[bo + j] = 0
+                y.bsums[bo+j] = 0
             end
             continue
         end
         iscale = -127.0f0 / mx
         for j in 1:QK_K
-            v = _q8k_nearest_int(iscale * x[xo + j])
-            y.qs[xo + j] = Int8(min(Int32(127), v))
+            v = _q8k_nearest_int(iscale * x[xo+j])
+            y.qs[xo+j] = Int8(min(Int32(127), v))
         end
         for j in 1:16
             s = Int32(0)
             for ii in 1:16
-                s += Int32(y.qs[xo + (j - 1) * 16 + ii])
+                s += Int32(y.qs[xo+(j-1)*16+ii])
             end
-            y.bsums[bo + j] = Int16(s)
+            y.bsums[bo+j] = Int16(s)
         end
         y.d[i] = 1.0f0 / iscale
     end
@@ -145,13 +142,13 @@ function quantize_q8_0!(y::Q80Vec, x::AbstractVector{Float32})
         xo = (i - 1) * 32
         amax = 0.0f0
         for j in 1:32
-            amax = max(amax, abs(x[xo + j]))
+            amax = max(amax, abs(x[xo+j]))
         end
         d = amax / 127.0f0
         id = d != 0.0f0 ? 1.0f0 / d : 0.0f0
         y.d[i] = Float32(Float16(d))
         for j in 1:32
-            y.qs[xo + j] = Int8(round(x[xo + j] * id, RoundNearestTiesAway))
+            y.qs[xo+j] = Int8(round(x[xo+j] * id, RoundNearestTiesAway))
         end
     end
     return y

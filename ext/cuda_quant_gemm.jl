@@ -12,19 +12,25 @@
 
 # The caches are concretely typed: a `Ref{Any}` here made every launch site
 # that reads them dispatch at run time, a few microseconds per op.
-const _QTables = NamedTuple{(:iq2grid, :ksigns, :kmask, :iq3grid, :kv4),Tuple{
-    _CuVec{eltype(Gesso.Inference.IQ2XS_GRID)},_CuVec{eltype(Gesso.Inference.KSIGNS_IQ2XS)},
-    _CuVec{eltype(Gesso.Inference.KMASK_IQ2XS)},_CuVec{eltype(Gesso.Inference.IQ3XXS_GRID)},
-    _CuVec{eltype(Gesso.Inference.KVALUES_IQ4NL)}}}
-const _Q8Bufs = Tuple{_CuVec{Int32},_CuVec{Float32},_CuVec{Int32}}
+const _QTables = NamedTuple{
+    (:iq2grid, :ksigns, :kmask, :iq3grid, :kv4),
+    Tuple{
+        _CuVec{eltype(Gesso.Inference.IQ2XS_GRID)},
+        _CuVec{eltype(Gesso.Inference.KSIGNS_IQ2XS)},
+        _CuVec{eltype(Gesso.Inference.KMASK_IQ2XS)},
+        _CuVec{eltype(Gesso.Inference.IQ3XXS_GRID)},
+        _CuVec{eltype(Gesso.Inference.KVALUES_IQ4NL)},
+    },
+}
+const _Q8Bufs = Tuple{_CuVec{Int32}, _CuVec{Float32}, _CuVec{Int32}}
 
-const _CUDA_Q_TABLES = Ref{Union{Nothing,_QTables}}(nothing)
-const _CUDA_Q_SCRATCH = Ref{Union{Nothing,_CuVec{UInt8}}}(nothing)
+const _CUDA_Q_TABLES = Ref{Union{Nothing, _QTables}}(nothing)
+const _CUDA_Q_SCRATCH = Ref{Union{Nothing, _CuVec{UInt8}}}(nothing)
 # Activation Q8 buffers for expert launches. Kept apart from the dense slot so
 # that a dense matmul never reallocates the expert buffers.
-const _CUDA_Q8_EXPERT = Ref{Union{Nothing,_Q8Bufs}}(nothing)
-const _CUDA_Q8_DENSE = Ref{Union{Nothing,_Q8Bufs}}(nothing)
-const _CUDA_Q_META = Ref{Union{Nothing,_CuVec{Int32}}}(nothing)
+const _CUDA_Q8_EXPERT = Ref{Union{Nothing, _Q8Bufs}}(nothing)
+const _CUDA_Q8_DENSE = Ref{Union{Nothing, _Q8Bufs}}(nothing)
+const _CUDA_Q_META = Ref{Union{Nothing, _CuVec{Int32}}}(nothing)
 const _CUDA_Q_META_HOST = Ref{Vector{Int32}}(Int32[])
 const _CUDA_Q_HOSTPACK = Ref{Vector{UInt8}}(UInt8[])
 const _CUDA_Q_HOSTOFF = Ref{Vector{Int32}}(Int32[])
@@ -36,13 +42,15 @@ function _cuda_q_tables()::_QTables
     # Grid bytes become signed int8 lanes of a dp4a operand. A byte above 127
     # would read back negative, so the table is checked before it is uploaded.
     for g in Inf_.IQ2XS_GRID, tt in 0:7
-        ((g >> (8 * tt)) & 0xff) <= 0x7f || error("IQ2_XS grid byte above 127 breaks the int8 lane")
+        ((g >> (8 * tt)) & 0xff) <= 0x7f ||
+            error("IQ2_XS grid byte above 127 breaks the int8 lane")
     end
     for g in Inf_.IQ3XXS_GRID, tt in 0:3
-        ((g >> (8 * tt)) & 0xff) <= 0x7f || error("IQ3_XXS grid byte above 127 breaks the int8 lane")
+        ((g >> (8 * tt)) & 0xff) <= 0x7f ||
+            error("IQ3_XXS grid byte above 127 breaks the int8 lane")
     end
     for i in 0:127
-        Inf_.KSIGNS_IQ2XS[i + 1] == UInt8(i | ((count_ones(i) & 1) << 7)) ||
+        Inf_.KSIGNS_IQ2XS[i+1] == UInt8(i | ((count_ones(i) & 1) << 7)) ||
             error("ksigns no longer the parity expansion the IQ decoders compute")
     end
     t = (
@@ -67,7 +75,7 @@ end
 
 # Activation buffers for `nblocks` 32-value blocks: (qx, dx, sx). Grown on
 # demand and reused, so a steady decode allocates nothing per call.
-function _cuda_q8_buffers!(slot::Ref{Union{Nothing,_Q8Bufs}}, nblocks::Int)::_Q8Bufs
+function _cuda_q8_buffers!(slot::Ref{Union{Nothing, _Q8Bufs}}, nblocks::Int)::_Q8Bufs
     s = slot[]
     if s === nothing || length(s[2]) < nblocks
         n = max(nblocks, 1)
@@ -78,13 +86,11 @@ function _cuda_q8_buffers!(slot::Ref{Union{Nothing,_Q8Bufs}}, nblocks::Int)::_Q8
 end
 
 @inline function _cu_u16(q, off0)
-    return UInt16(q[off0 + 1]) | (UInt16(q[off0 + 2]) << 8)
+    return UInt16(q[off0+1]) | (UInt16(q[off0+2]) << 8)
 end
 @inline function _cu_u32(q, off0)
-    return UInt32(q[off0 + 1]) |
-           (UInt32(q[off0 + 2]) << 8) |
-           (UInt32(q[off0 + 3]) << 16) |
-           (UInt32(q[off0 + 4]) << 24)
+    return UInt32(q[off0+1]) | (UInt32(q[off0+2]) << 8) | (UInt32(q[off0+3]) << 16) |
+           (UInt32(q[off0+4]) << 24)
 end
 @inline function _cu_f16(q, off0)
     return Float32(reinterpret(Float16, _cu_u16(q, off0)))
@@ -95,12 +101,14 @@ end
 # not DRAM, bounded the GEMV kernels. The caller guarantees `off0` is a
 # multiple of the width; slab bases are allocation-aligned, which the launch
 # sites check.
-@inline _cu_ptr_as(::Type{T}, p::Core.LLVMPtr{UInt8,A}) where {T,A} = reinterpret(Core.LLVMPtr{T,A}, p)
+@inline _cu_ptr_as(::Type{T}, p::Core.LLVMPtr{UInt8, A}) where {T, A} =
+    reinterpret(Core.LLVMPtr{T, A}, p)
 @inline _cu_u32a(q, off0) = unsafe_load(_cu_ptr_as(UInt32, pointer(q) + off0), 1, Val(4))
 @inline _cu_u16a(q, off0) = unsafe_load(_cu_ptr_as(UInt16, pointer(q) + off0), 1, Val(2))
 # A 32-bit word at a 2-aligned offset: block sizes 210, 98, 74 and 34 leave
 # every other block on a half-word boundary.
-@inline _cu_u32h(q, off0) = UInt32(_cu_u16a(q, off0)) | (UInt32(_cu_u16a(q, off0 + 2)) << 16)
+@inline _cu_u32h(q, off0) =
+    UInt32(_cu_u16a(q, off0)) | (UInt32(_cu_u16a(q, off0 + 2)) << 16)
 @inline _cu_f16a(q, off0) = Float32(reinterpret(Float16, _cu_u16a(q, off0)))
 
 _cu_aligned(a, n::Int) = UInt(pointer(a)) % n == 0
@@ -120,18 +128,18 @@ function _cuda_q8_1_quant_cols_kernel!(qx, dx, X, nbk::Int, total::Int)
     @inbounds begin
         amax = 0.0f0
         for l in 1:32
-            amax = max(amax, abs(X[base + l, k]))
+            amax = max(amax, abs(X[base+l, k]))
         end
         inv = amax == 0.0f0 ? 0.0f0 : 127.0f0 / amax
         for w in 0:7
             u = UInt32(0)
             for tt in 0:3
-                v = X[base + 4 * w + tt + 1, k] * inv
+                v = X[base+4*w+tt+1, k] * inv
                 qi = unsafe_trunc(Int32, v + copysign(0.5f0, v))
                 qi = clamp(qi, Int32(-127), Int32(127))
                 u |= UInt32(qi & 0xff) << (8 * tt)
             end
-            qx[gb * 8 + w + 1] = reinterpret(Int32, u)
+            qx[gb*8+w+1] = reinterpret(Int32, u)
         end
         dx[g] = amax / 127.0f0
     end
@@ -167,24 +175,24 @@ end
     @inbounds begin
         ib32 = b & 7
         d = _cu_f16a(Q, boff)
-        sc = Q[boff + 66 + ib32 + 1]
+        sc = Q[boff+66+ib32+1]
         db0 = d * (0.5f0 + Float32(sc & 0x0f)) * 0.25f0
         db1 = d * (0.5f0 + Float32(sc >> 4)) * 0.25f0
         s_lo = Int32(0)
         s_hi = Int32(0)
         for l in 0:3
             qv = UInt32(_cu_u16a(Q, boff + 2 + (4 * ib32 + l) * 2))
-            g64 = grid[Int(qv & 0x01ff) + 1]
+            g64 = grid[Int(qv&0x01ff)+1]
             sg = _iq_signs8(qv >> 9)
-            p = _iq_signed_dp4a(g64 % UInt32, sg, qx[gb * 8 + 2 * l + 1], Int32(0))
-            p = _iq_signed_dp4a(UInt32(g64 >> 32), sg >> 4, qx[gb * 8 + 2 * l + 2], p)
+            p = _iq_signed_dp4a(g64 % UInt32, sg, qx[gb*8+2*l+1], Int32(0))
+            p = _iq_signed_dp4a(UInt32(g64 >> 32), sg >> 4, qx[gb*8+2*l+2], p)
             if l < 2
                 s_lo += p
             else
                 s_hi += p
             end
         end
-        return dx[gb + 1] * (db0 * Float32(s_lo) + db1 * Float32(s_hi))
+        return dx[gb+1] * (db0 * Float32(s_lo) + db1 * Float32(s_hi))
     end
 end
 
@@ -203,11 +211,11 @@ end
             sg = _iq_signs8(aux32 >> (7 * l))
             qq = _cu_u16a(Q, qbase + 2 * l)
             for h in 0:1
-                gv = grid[Int((qq >> (8 * h)) & 0x00ff) + 1]
-                isum = _iq_signed_dp4a(gv, sg >> (4 * h), qx[gb * 8 + 2 * l + h + 1], isum)
+                gv = grid[Int((qq>>(8*h))&0x00ff)+1]
+                isum = _iq_signed_dp4a(gv, sg >> (4 * h), qx[gb*8+2*l+h+1], isum)
             end
         end
-        return dx[gb + 1] * db * Float32(isum)
+        return dx[gb+1] * db * Float32(isum)
     end
 end
 
@@ -229,15 +237,15 @@ end
         sh = UInt32(2 * (s & 3))
         d = _cu_f16a(Q, boff + 80)
         dmin = _cu_f16a(Q, boff + 82)
-        sa = Q[boff + 2 * s + 1]
-        sb = Q[boff + 2 * s + 2]
+        sa = Q[boff+2*s+1]
+        sb = Q[boff+2*s+2]
         ia = Int32(0)
         ib = Int32(0)
         xa = Int32(0)
         xb = Int32(0)
         for w in 0:7
             v = reinterpret(Int32, (_cu_u32a(Q, qs0 + 4 * w) >> sh) & 0x03030303)
-            xw = qx[gb * 8 + w + 1]
+            xw = qx[gb*8+w+1]
             if w < 4
                 ia = CUDA.dp4a(v, xw, ia)
                 xa = _eq_asum(xa, xw)
@@ -246,7 +254,7 @@ end
                 xb = _eq_asum(xb, xw)
             end
         end
-        return dx[gb + 1] * (
+        return dx[gb+1] * (
             d * Float32(sa & 0x0f) * Float32(ia) - dmin * Float32(sa >> 4) * Float32(xa) +
             d * Float32(sb & 0x0f) * Float32(ib) - dmin * Float32(sb >> 4) * Float32(xb)
         )
@@ -290,7 +298,7 @@ end
             qv = (_cu_u32h(Q, qs0 + 4 * w) >> sh) & 0x03030303
             hv = (_cu_u32h(Q, boff + 4 * w) >> hb) & 0x01010101
             v = reinterpret(Int32, qv | (hv << 2))
-            xw = qx[gb * 8 + w + 1]
+            xw = qx[gb*8+w+1]
             if w < 4
                 ia = CUDA.dp4a(v, xw, ia)
                 xa = _eq_asum(xa, xw)
@@ -299,7 +307,9 @@ end
                 xb = _eq_asum(xb, xw)
             end
         end
-        return dx[gb + 1] * d * (sca * Float32(ia - Int32(4) * xa) + scb * Float32(ib - Int32(4) * xb))
+        return dx[gb+1] *
+               d *
+               (sca * Float32(ia - Int32(4) * xa) + scb * Float32(ib - Int32(4) * xb))
     end
 end
 
@@ -314,11 +324,11 @@ end
         dmin = Float32(reinterpret(Float16, UInt16(dd >> 16)))
         sbase = boff + 4
         if s < 4
-            sc = Float32(Q[sbase + s + 1] & 0x3f)
-            mn = Float32(Q[sbase + s + 5] & 0x3f)
+            sc = Float32(Q[sbase+s+1] & 0x3f)
+            mn = Float32(Q[sbase+s+5] & 0x3f)
         else
-            sc = Float32((Q[sbase + s + 5] & 0x0f) | ((Q[sbase + s - 3] >> 6) << 4))
-            mn = Float32((Q[sbase + s + 5] >> 4) | ((Q[sbase + s + 1] >> 6) << 4))
+            sc = Float32((Q[sbase+s+5] & 0x0f) | ((Q[sbase+s-3] >> 6) << 4))
+            mn = Float32((Q[sbase+s+5] >> 4) | ((Q[sbase+s+1] >> 6) << 4))
         end
         qs0 = boff + 16 + 32 * (s >> 1)
         sh = UInt32(4 * (s & 1))
@@ -326,30 +336,102 @@ end
         xs = Int32(0)
         for w in 0:7
             v = reinterpret(Int32, (_cu_u32a(Q, qs0 + 4 * w) >> sh) & 0x0f0f0f0f)
-            xw = qx[gb * 8 + w + 1]
+            xw = qx[gb*8+w+1]
             isum = CUDA.dp4a(v, xw, isum)
             xs = _eq_asum(xs, xw)
         end
-        return dx[gb + 1] * (d * sc * Float32(isum) - dmin * mn * Float32(xs))
+        return dx[gb+1] * (d * sc * Float32(isum) - dmin * mn * Float32(xs))
     end
 end
 
-@inline function _eq_block(::Val{:iq2_xs}, Q, boff::Int, b::Int, gb::Int, qx, dx, grid, kv, ksigns, kmask)
+@inline function _eq_block(
+    ::Val{:iq2_xs},
+    Q,
+    boff::Int,
+    b::Int,
+    gb::Int,
+    qx,
+    dx,
+    grid,
+    kv,
+    ksigns,
+    kmask,
+)
     return _eq_iq2xs(Q, boff, b, gb, qx, dx, grid, ksigns, kmask)
 end
-@inline function _eq_block(::Val{:q2_k}, Q, boff::Int, b::Int, gb::Int, qx, dx, grid, kv, ksigns, kmask)
+@inline function _eq_block(
+    ::Val{:q2_k},
+    Q,
+    boff::Int,
+    b::Int,
+    gb::Int,
+    qx,
+    dx,
+    grid,
+    kv,
+    ksigns,
+    kmask,
+)
     return _eq_q2k(Q, boff, b, gb, qx, dx)
 end
-@inline function _eq_block(::Val{:q3_k}, Q, boff::Int, b::Int, gb::Int, qx, dx, grid, kv, ksigns, kmask)
+@inline function _eq_block(
+    ::Val{:q3_k},
+    Q,
+    boff::Int,
+    b::Int,
+    gb::Int,
+    qx,
+    dx,
+    grid,
+    kv,
+    ksigns,
+    kmask,
+)
     return _eq_q3k(Q, boff, b, gb, qx, dx)
 end
-@inline function _eq_block(::Val{:q4_k}, Q, boff::Int, b::Int, gb::Int, qx, dx, grid, kv, ksigns, kmask)
+@inline function _eq_block(
+    ::Val{:q4_k},
+    Q,
+    boff::Int,
+    b::Int,
+    gb::Int,
+    qx,
+    dx,
+    grid,
+    kv,
+    ksigns,
+    kmask,
+)
     return _eq_q4k(Q, boff, b, gb, qx, dx)
 end
-@inline function _eq_block(::Val{:iq3_xxs}, Q, boff::Int, b::Int, gb::Int, qx, dx, grid, kv, ksigns, kmask)
+@inline function _eq_block(
+    ::Val{:iq3_xxs},
+    Q,
+    boff::Int,
+    b::Int,
+    gb::Int,
+    qx,
+    dx,
+    grid,
+    kv,
+    ksigns,
+    kmask,
+)
     return _eq_iq3xxs(Q, boff, b, gb, qx, dx, grid, ksigns, kmask)
 end
-@inline function _eq_block(::Val{:iq4_xs}, Q, boff::Int, b::Int, gb::Int, qx, dx, grid, kv, ksigns, kmask)
+@inline function _eq_block(
+    ::Val{:iq4_xs},
+    Q,
+    boff::Int,
+    b::Int,
+    gb::Int,
+    qx,
+    dx,
+    grid,
+    kv,
+    ksigns,
+    kmask,
+)
     return _dq_iq4xs(Q, boff, b, gb, qx, dx, kv)
 end
 
@@ -360,22 +442,51 @@ end
 # pairs each read their token's activation. When x has one column it is shared.
 
 function _cuda_eqgemv_kernel!(
-    y, Q, qx, dx, meta, coloff::Int, xcoloff::Int, xshared::Bool, nrows::Int, nbk::Int, bsz::Int,
-    row_bytes::Int, alpha::Float32, beta::Float32, ::Val{K}, grid, kv, ksigns, kmask,
+    y,
+    Q,
+    qx,
+    dx,
+    meta,
+    coloff::Int,
+    xcoloff::Int,
+    xshared::Bool,
+    nrows::Int,
+    nbk::Int,
+    bsz::Int,
+    row_bytes::Int,
+    alpha::Float32,
+    beta::Float32,
+    ::Val{K},
+    grid,
+    kv,
+    ksigns,
+    kmask,
 ) where {K}
     lane = Int((threadIdx().x - 1) % 32)
     row = Int((blockIdx().x - 1) * 4 + (threadIdx().x - 1) ÷ 32 + 1)
     i = Int(blockIdx().y)
     row > nrows && return
     @inbounds begin
-        k = Int(meta[coloff + i])
-        xk = xcoloff > 0 ? Int(meta[xcoloff + i]) : k
+        k = Int(meta[coloff+i])
+        xk = xcoloff > 0 ? Int(meta[xcoloff+i]) : k
         gbase = (xshared ? 0 : (xk - 1) * nbk)
         rowoff = Int(meta[i]) + (row - 1) * row_bytes
         acc = 0.0f0
         b = lane
         while b < nbk
-            acc += _eq_block(Val{K}(), Q, rowoff + (b >> 3) * bsz, b, gbase + b, qx, dx, grid, kv, ksigns, kmask)
+            acc += _eq_block(
+                Val{K}(),
+                Q,
+                rowoff + (b >> 3) * bsz,
+                b,
+                gbase + b,
+                qx,
+                dx,
+                grid,
+                kv,
+                ksigns,
+                kmask,
+            )
             b += 32
         end
         off = 16
@@ -392,11 +503,21 @@ function _cuda_eqgemv_kernel!(
 end
 
 # F32 experts stay naive: one thread per output row, reading the slab directly.
-function _cuda_qgemv_f32_kernel!(y, x, q, meta, coloff::Int, ne0::Int, ne1::Int, alpha::Float32, beta::Float32)
+function _cuda_qgemv_f32_kernel!(
+    y,
+    x,
+    q,
+    meta,
+    coloff::Int,
+    ne0::Int,
+    ne1::Int,
+    alpha::Float32,
+    beta::Float32,
+)
     j0 = Int((blockIdx().x - 1) * blockDim().x + threadIdx().x) - 1
     i = Int(blockIdx().y)
     j0 >= ne1 && return
-    k = Int(meta[coloff + i])
+    k = Int(meta[coloff+i])
     base = Int(meta[i]) + j0 * ne0 * 4
     acc = 0.0f0
     c = 0
@@ -415,11 +536,11 @@ end
 # nothing means launch i writes column i.
 function _cuda_meta_upload(offs::AbstractVector{Int32}, cols, n::Int)
     host = _CUDA_Q_META_HOST[]
-    length(host) >= 2n || (host = Vector{Int32}(undef, 2n); _CUDA_Q_META_HOST[] = host)
+    length(host) >= 2n || (host=Vector{Int32}(undef, 2n); _CUDA_Q_META_HOST[]=host)
     copyto!(host, 1, offs, 1, n)
     if cols === nothing
         @inbounds for i in 1:n
-            host[n + i] = Int32(i)
+            host[n+i] = Int32(i)
         end
     else
         copyto!(host, n + 1, cols, 1, n)
@@ -435,9 +556,15 @@ end
 
 # Expert types the launcher below has a kernel for. Whole-slab placement in
 # to_device reads this too, so a bank is only uploaded when a kernel can run it.
-const _CUDA_QGEMV_TYPES = (Gesso.Inference.GGML_TYPE_F32,
-    Gesso.Inference.GGML_TYPE_IQ2_XS, Gesso.Inference.GGML_TYPE_IQ3_XXS, Gesso.Inference.GGML_TYPE_IQ4_XS,
-    Gesso.Inference.GGML_TYPE_Q2_K, Gesso.Inference.GGML_TYPE_Q3_K, Gesso.Inference.GGML_TYPE_Q4_K)
+const _CUDA_QGEMV_TYPES = (
+    Gesso.Inference.GGML_TYPE_F32,
+    Gesso.Inference.GGML_TYPE_IQ2_XS,
+    Gesso.Inference.GGML_TYPE_IQ3_XXS,
+    Gesso.Inference.GGML_TYPE_IQ4_XS,
+    Gesso.Inference.GGML_TYPE_Q2_K,
+    Gesso.Inference.GGML_TYPE_Q3_K,
+    Gesso.Inference.GGML_TYPE_Q4_K,
+)
 
 function _cuda_launch_qgemv!(
     y::CuMatrix{Float32},
@@ -460,7 +587,15 @@ function _cuda_launch_qgemv!(
         nthreads = min(256, ne1)
         nblocks = cld(ne1, nthreads)
         @fastcuda threads = nthreads blocks = (nblocks, n_used) _cuda_qgemv_f32_kernel!(
-            y, x, q, meta, coloff, ne0, ne1, alpha, beta,
+            y,
+            x,
+            q,
+            meta,
+            coloff,
+            ne0,
+            ne1,
+            alpha,
+            beta,
         )
         return y
     end
@@ -472,9 +607,31 @@ function _cuda_launch_qgemv!(
     total = ncols * nbk
     qx, dx, _ = _cuda_q8_buffers!(_CUDA_Q8_EXPERT, total)
     # quantize=false: the caller just quantized this same x into these buffers
-    quantize && @fastcuda threads = 256 blocks = cld(total, 256) _cuda_q8_1_quant_cols_kernel!(qx, dx, x, nbk, total)
+    quantize &&
+        @fastcuda threads = 256 blocks = cld(total, 256) _cuda_q8_1_quant_cols_kernel!(
+            qx,
+            dx,
+            x,
+            nbk,
+            total,
+        )
     # One launch per type so each `Val` is a compile-time constant.
-    args = (y, q, qx, dx, meta, coloff, xcoloff, ncols == 1, ne1, nbk, alpha, beta, n_used, tables)
+    args = (
+        y,
+        q,
+        qx,
+        dx,
+        meta,
+        coloff,
+        xcoloff,
+        ncols == 1,
+        ne1,
+        nbk,
+        alpha,
+        beta,
+        n_used,
+        tables,
+    )
     if ggml_type == I.GGML_TYPE_IQ2_XS
         _cuda_eqgemv_launch!(Val(:iq2_xs), 74, tables.iq2grid, args...)
     elseif ggml_type == I.GGML_TYPE_IQ3_XXS
@@ -491,11 +648,45 @@ function _cuda_launch_qgemv!(
     return y
 end
 
-@inline function _cuda_eqgemv_launch!(vk::Val, bsz, grid, y, q, qx, dx, meta, coloff, xcoloff,
-                                      onecol, ne1, nbk, alpha, beta, n_used, tables)
+@inline function _cuda_eqgemv_launch!(
+    vk::Val,
+    bsz,
+    grid,
+    y,
+    q,
+    qx,
+    dx,
+    meta,
+    coloff,
+    xcoloff,
+    onecol,
+    ne1,
+    nbk,
+    alpha,
+    beta,
+    n_used,
+    tables,
+)
     @fastcuda threads = 128 blocks = (cld(ne1, 4), n_used) _cuda_eqgemv_kernel!(
-        y, q, qx, dx, meta, coloff, xcoloff, onecol, ne1, nbk, bsz, (nbk ÷ 8) * bsz, alpha, beta,
-        vk, grid, tables.kv4, tables.ksigns, tables.kmask,
+        y,
+        q,
+        qx,
+        dx,
+        meta,
+        coloff,
+        xcoloff,
+        onecol,
+        ne1,
+        nbk,
+        bsz,
+        (nbk ÷ 8) * bsz,
+        alpha,
+        beta,
+        vk,
+        grid,
+        tables.kv4,
+        tables.ksigns,
+        tables.kmask,
     )
     return nothing
 end
@@ -534,7 +725,8 @@ function _cuda_bind_experts!(bank, experts::AbstractVector{Int}, ranks)
     n_used = length(experts)
     nbytes = bank.bytes_per_expert
     hostoff = _CUDA_Q_HOSTOFF[]
-    length(hostoff) >= n_used || (hostoff = Vector{Int32}(undef, n_used); _CUDA_Q_HOSTOFF[] = hostoff)
+    length(hostoff) >= n_used ||
+        (hostoff=Vector{Int32}(undef, n_used); _CUDA_Q_HOSTOFF[]=hostoff)
     if bank isa Inf_.GpuQuantSlice
         @inbounds for k in 1:n_used
             hostoff[k] = Int32(Inf_._quant_expert_off0(bank, experts[k]))
@@ -543,7 +735,8 @@ function _cuda_bind_experts!(bank, experts::AbstractVector{Int}, ranks)
     elseif bank isa Inf_.GgufQuantSlice
         total = nbytes * n_used
         hostpack = _CUDA_Q_HOSTPACK[]
-        length(hostpack) >= total || (hostpack = Vector{UInt8}(undef, total); _CUDA_Q_HOSTPACK[] = hostpack)
+        length(hostpack) >= total ||
+            (hostpack=Vector{UInt8}(undef, total); _CUDA_Q_HOSTPACK[]=hostpack)
         timed = Inf_._profile_window_open()
         t_gather = timed ? time_ns() : UInt64(0)
         @inbounds for k in 1:n_used
@@ -572,10 +765,24 @@ function _cuda_qgemv_experts!(
     beta::Float32=0.0f0,
 )
     n_used = length(experts)
-    q, meta = Gesso.Inference.@decode_stage :moe_qupload _CUDASync() _cuda_bind_experts!(bank, experts, nothing)
+    q, meta = Gesso.Inference.@decode_stage :moe_qupload _CUDASync() _cuda_bind_experts!(
+        bank,
+        experts,
+        nothing,
+    )
     xx = ndims(x) == 1 ? reshape(x, length(x), 1) : x
     return Gesso.Inference.@decode_stage :moe_qgemv _CUDASync() _cuda_launch_qgemv!(
-        y, xx, q, bank.ggml_type, meta, n_used, n_used, bank.ne0, bank.ne1, alpha, beta,
+        y,
+        xx,
+        q,
+        bank.ggml_type,
+        meta,
+        n_used,
+        n_used,
+        bank.ne0,
+        bank.ne1,
+        alpha,
+        beta,
     )
 end
 
@@ -606,15 +813,38 @@ function _cuda_cached_project!(
         meta = _cuda_meta_upload(offs, hit_rank[1:nh], nh)
         Inf_._profile_copy!(false)
         Gesso.Inference.@decode_stage :moe_qgemv _CUDASync() _cuda_launch_qgemv!(
-            out, xin, layer.pools[role], bank.ggml_type, meta, nh, nh, bank.ne0, bank.ne1, 1.0f0, 0.0f0,
+            out,
+            xin,
+            layer.pools[role],
+            bank.ggml_type,
+            meta,
+            nh,
+            nh,
+            bank.ne0,
+            bank.ne1,
+            1.0f0,
+            0.0f0,
         )
     end
     if nm > 0
-        q, meta = Gesso.Inference.@decode_stage :moe_qupload _CUDASync() _cuda_bind_experts!(
-            bank, miss_exp[1:nm], miss_rank[1:nm],
-        )
+        q, meta =
+            Gesso.Inference.@decode_stage :moe_qupload _CUDASync() _cuda_bind_experts!(
+                bank,
+                miss_exp[1:nm],
+                miss_rank[1:nm],
+            )
         Gesso.Inference.@decode_stage :moe_qgemv _CUDASync() _cuda_launch_qgemv!(
-            out, xin, q, bank.ggml_type, meta, nm, nm, bank.ne0, bank.ne1, 1.0f0, 0.0f0,
+            out,
+            xin,
+            q,
+            bank.ggml_type,
+            meta,
+            nm,
+            nm,
+            bank.ne0,
+            bank.ne1,
+            1.0f0,
+            0.0f0,
         )
     end
     return out
@@ -642,7 +872,17 @@ function _cuda_qgemv_expert!(
     Inf_ = Gesso.Inference
     if bank isa Inf_.GpuQuantSlice
         off = Inf_._quant_expert_off0(bank, e)
-        return _cuda_launch_qgemv!(y, x, bank.data, bank.ggml_type, off, bank.ne0, bank.ne1, alpha, beta)
+        return _cuda_launch_qgemv!(
+            y,
+            x,
+            bank.data,
+            bank.ggml_type,
+            off,
+            bank.ne0,
+            bank.ne1,
+            alpha,
+            beta,
+        )
     elseif bank isa Inf_.GgufQuantSlice
         nbytes = bank.bytes_per_expert
         scratch = _cuda_q_scratch(nbytes)
@@ -650,7 +890,17 @@ function _cuda_qgemv_expert!(
         GC.@preserve bank begin
             CUDA.unsafe_copyto!(pointer(scratch), pointer(bank.data, off + 1), nbytes)
         end
-        return _cuda_launch_qgemv!(y, x, scratch, bank.ggml_type, 0, bank.ne0, bank.ne1, alpha, beta)
+        return _cuda_launch_qgemv!(
+            y,
+            x,
+            scratch,
+            bank.ggml_type,
+            0,
+            bank.ne0,
+            bank.ne1,
+            alpha,
+            beta,
+        )
     else
         error("cuda qgemv: not a quantized expert bank $(typeof(bank))")
     end

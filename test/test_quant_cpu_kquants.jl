@@ -34,8 +34,8 @@ _kq_nvals(ty::Int32) = _KQ._q80_act_type(ty) ? 32 : _KQ.QK_K
 
 function _kq_put_f16!(w::Vector{UInt8}, off0::Int, v::Float32)
     bits = reinterpret(UInt16, Float16(v))
-    w[off0 + 1] = UInt8(bits & 0xff)
-    w[off0 + 2] = UInt8(bits >> 8)
+    w[off0+1] = UInt8(bits & 0xff)
+    w[off0+2] = UInt8(bits >> 8)
     return w
 end
 
@@ -46,7 +46,7 @@ function _kq_random_rows(rng, ty::Int32, nrows::Int, nb::Int)
     w = rand(rng, UInt8, nrows * nb * bsz)
     doff = _KQ._q8k_d_offset(ty)
     dmo = _KQ._q8k_dmin_offset(ty)
-    for blk in 0:(nrows * nb - 1)
+    for blk in 0:(nrows*nb-1)
         _kq_put_f16!(w, blk * bsz + doff, 0.005f0 + 0.05f0 * rand(rng, Float32))
         dmo >= 0 && _kq_put_f16!(w, blk * bsz + dmo, 0.005f0 + 0.05f0 * rand(rng, Float32))
     end
@@ -56,12 +56,13 @@ end
 function _kq_dequant_q80(x::_KQ.Q80Vec)
     out = Vector{Float32}(undef, length(x))
     @inbounds for i in eachindex(out)
-        out[i] = x.d[(i - 1) ÷ 32 + 1] * Float32(x.qs[i])
+        out[i] = x.d[(i-1)÷32+1] * Float32(x.qs[i])
     end
     return out
 end
 
-_kq_dequant_act(ty::Int32, xq) = _KQ._q80_act_type(ty) ? _kq_dequant_q80(xq) : _KQ.dequantize_q8_K(xq)
+_kq_dequant_act(ty::Int32, xq) =
+    _KQ._q80_act_type(ty) ? _kq_dequant_q80(xq) : _KQ.dequantize_q8_K(xq)
 
 # Independent port of quantize_row_q8_0_ref. roundf (half away from zero) is
 # written out with trunc, so this does not share the implementation under test.
@@ -70,7 +71,7 @@ function _kq_ref_quantize_q80(x::AbstractVector{Float32})
     d = zeros(Float32, nb)
     qs = zeros(Int8, length(x))
     for i in 1:nb
-        blk = x[((i - 1) * 32 + 1):(i * 32)]
+        blk = x[((i-1)*32+1):(i*32)]
         amax = maximum(abs, blk)
         dd = amax / 127.0f0
         id = dd != 0 ? 1.0f0 / dd : 0.0f0
@@ -79,7 +80,7 @@ function _kq_ref_quantize_q80(x::AbstractVector{Float32})
             v = blk[j] * id
             t = trunc(v)
             r = abs(v - t) >= 0.5f0 ? t + sign(v) : t
-            qs[(i - 1) * 32 + j] = Int8(r)
+            qs[(i-1)*32+j] = Int8(r)
         end
     end
     return d, qs
@@ -152,7 +153,9 @@ end
 @testset "F32 dequant reference bit-equal to ggml to_float" begin
     ggml_dir = get(ENV, "GESSO_GGML_DIR", "")
     if !isfile(joinpath(ggml_dir, "libggml-base.so"))
-        _skip("set GESSO_GGML_DIR to a directory with libggml-base.so — dequant vs ggml to_float skipped")
+        _skip(
+            "set GESSO_GGML_DIR to a directory with libggml-base.so — dequant vs ggml to_float skipped",
+        )
     else
         rng = Xoshiro(22)
         for (name, ty) in _KQTYPES
@@ -163,7 +166,7 @@ end
             for j in 1:2
                 mine = Vector{Float32}(undef, ne0)
                 _KQ._kq_dequant_row!(mine, W, (j - 1) * rb, ty, ne0)
-                row = W[((j - 1) * rb + 1):(j * rb)]
+                row = W[((j-1)*rb+1):(j*rb)]
                 ggml = _KQ._dequant_f32(row, 0, ty, ne0)
                 @testset "$name row $j" begin
                     @test reinterpret.(UInt32, mine) == reinterpret.(UInt32, ggml)
@@ -215,7 +218,7 @@ end
                 bsz = _KQ._iq_block_bytes(ty)
                 nval = _kq_nvals(ty)
                 W = fill(UInt8(0xff), nb * bsz)
-                for ib in 0:(nb - 1)
+                for ib in 0:(nb-1)
                     _kq_put_f16!(W, ib * bsz + _KQ._q8k_d_offset(ty), 0.0f0)
                     dmo = _KQ._q8k_dmin_offset(ty)
                     dmo >= 0 && _kq_put_f16!(W, ib * bsz + dmo, 0.0f0)
@@ -227,7 +230,7 @@ end
                 @test r === 0.0f0
                 @test reinterpret(UInt32, r) == reinterpret(UInt32, a)
                 # large scales, all-saturated fields and extreme activations
-                for ib in 0:(nb - 1)
+                for ib in 0:(nb-1)
                     _kq_put_f16!(W, ib * bsz + _KQ._q8k_d_offset(ty), 60000.0f0)
                     dmo = _KQ._q8k_dmin_offset(ty)
                     dmo >= 0 && _kq_put_f16!(W, ib * bsz + dmo, -60000.0f0)
@@ -287,22 +290,62 @@ end
 @testset "K-quant GEMV: shape checks fail explicitly" begin
     xq = _KQ._q8k_quantize_act(_KQ.GGML_TYPE_Q5_K, zeros(Float32, 256))
     W = zeros(UInt8, 176 * 2)
-    @test_throws ErrorException _KQ._qgemv_q8k!(zeros(Float32, 2), xq, W, _KQ.GGML_TYPE_Q5_K, 100, 2)
-    @test_throws ErrorException _KQ._qgemv_q8k_f32!(zeros(Float32, 2), zeros(Float32, 100), W, _KQ.GGML_TYPE_Q5_K, 100, 2)
-    @test_throws ErrorException _KQ._qgemv_q8k_f32!(zeros(Float32, 2), zeros(Float32, 40), zeros(UInt8, 34 * 2), _KQ.GGML_TYPE_Q8_0, 40, 2)
-    @test_throws ErrorException _KQ._qgemv_q8k_f32!(zeros(Float32, 2), zeros(Float32, 256), W, _KQ.GGML_TYPE_F32, 256, 2)
+    @test_throws ErrorException _KQ._qgemv_q8k!(
+        zeros(Float32, 2),
+        xq,
+        W,
+        _KQ.GGML_TYPE_Q5_K,
+        100,
+        2,
+    )
+    @test_throws ErrorException _KQ._qgemv_q8k_f32!(
+        zeros(Float32, 2),
+        zeros(Float32, 100),
+        W,
+        _KQ.GGML_TYPE_Q5_K,
+        100,
+        2,
+    )
+    @test_throws ErrorException _KQ._qgemv_q8k_f32!(
+        zeros(Float32, 2),
+        zeros(Float32, 40),
+        zeros(UInt8, 34 * 2),
+        _KQ.GGML_TYPE_Q8_0,
+        40,
+        2,
+    )
+    @test_throws ErrorException _KQ._qgemv_q8k_f32!(
+        zeros(Float32, 2),
+        zeros(Float32, 256),
+        W,
+        _KQ.GGML_TYPE_F32,
+        256,
+        2,
+    )
     # Q8_0 with ne0 = 64 is valid (two blocks per row)
     y = zeros(Float32, 2)
-    @test _KQ._qgemv_q8k_f32!(y, zeros(Float32, 64), zeros(UInt8, 34 * 2 * 2), _KQ.GGML_TYPE_Q8_0, 64, 2; threaded=false) === y
+    @test _KQ._qgemv_q8k_f32!(
+        y,
+        zeros(Float32, 64),
+        zeros(UInt8, 34 * 2 * 2),
+        _KQ.GGML_TYPE_Q8_0,
+        64,
+        2;
+        threaded=false,
+    ) === y
 end
 
 @testset "K-quant dots reject an activation shorter than the row" begin
     # d holds 2 blocks but qs holds only 1: the loop would index qs past its end
     short_k = _KQ.Q8KVec(zeros(Float32, 2), zeros(Int8, 256), zeros(Int16, 16))
     short_q80 = _KQ.Q80Vec(zeros(Float32, 2), zeros(Int8, 32))
-    for (ty, bpb) in ((_KQ.GGML_TYPE_Q2_K, 84), (_KQ.GGML_TYPE_Q3_K, 110),
-                      (_KQ.GGML_TYPE_Q4_K, 144), (_KQ.GGML_TYPE_Q5_K, 176),
-                      (_KQ.GGML_TYPE_Q6_K, 210))
+    for (ty, bpb) in (
+        (_KQ.GGML_TYPE_Q2_K, 84),
+        (_KQ.GGML_TYPE_Q3_K, 110),
+        (_KQ.GGML_TYPE_Q4_K, 144),
+        (_KQ.GGML_TYPE_Q5_K, 176),
+        (_KQ.GGML_TYPE_Q6_K, 210),
+    )
         W = zeros(UInt8, bpb * 2)
         @test_throws DimensionMismatch _KQ._dot_q8k(ty, W, 0, short_k, false)
         @test_throws DimensionMismatch _KQ._dot_q8k(ty, W, 0, short_k, true)
@@ -318,7 +361,7 @@ end
 # file, and the rest of the model is never touched.
 function _kq_real_tensors(path::AbstractString)
     hdr = Gesso.gguf_header(path)
-    found = Dict{Int32,Any}()
+    found = Dict{Int32, Any}()
     for info in hdr.tensors
         length(info.dims) == 2 || continue
         occursin("_exps", info.name) && continue
@@ -366,9 +409,9 @@ function _kq_ggml_act_bytes(xq)
         for i in 1:nb
             o = 34 * (i - 1)
             bits = reinterpret(UInt16, Float16(xq.d[i]))
-            out[o + 1] = UInt8(bits & 0xff)
-            out[o + 2] = UInt8(bits >> 8)
-            out[(o + 3):(o + 34)] = reinterpret(UInt8, xq.qs[(32 * (i - 1) + 1):(32 * i)])
+            out[o+1] = UInt8(bits & 0xff)
+            out[o+2] = UInt8(bits >> 8)
+            out[(o+3):(o+34)] = reinterpret(UInt8, xq.qs[(32*(i-1)+1):(32*i)])
         end
         return out
     end
@@ -376,25 +419,37 @@ function _kq_ggml_act_bytes(xq)
     out = Vector{UInt8}(undef, 292 * nb)
     for i in 1:nb
         o = 292 * (i - 1)
-        out[(o + 1):(o + 4)] = reinterpret(UInt8, [xq.d[i]])
-        out[(o + 5):(o + 260)] = reinterpret(UInt8, xq.qs[(256 * (i - 1) + 1):(256 * i)])
-        out[(o + 261):(o + 292)] = reinterpret(UInt8, xq.bsums[(16 * (i - 1) + 1):(16 * i)])
+        out[(o+1):(o+4)] = reinterpret(UInt8, [xq.d[i]])
+        out[(o+5):(o+260)] = reinterpret(UInt8, xq.qs[(256*(i-1)+1):(256*i)])
+        out[(o+261):(o+292)] = reinterpret(UInt8, xq.bsums[(16*(i-1)+1):(16*i)])
     end
     return out
 end
 
 function _kq_ggml_generic_dot(fp::Ptr{Cvoid}, ne0::Int, w::Vector{UInt8}, a::Vector{UInt8})
     s = Ref{Float32}(0.0f0)
-    ccall(fp, Cvoid,
+    ccall(
+        fp,
+        Cvoid,
         (Cint, Ptr{Float32}, Csize_t, Ptr{Cvoid}, Csize_t, Ptr{Cvoid}, Csize_t, Cint),
-        Cint(ne0), s, Csize_t(0), pointer(w), Csize_t(0), pointer(a), Csize_t(0), Cint(1))
+        Cint(ne0),
+        s,
+        Csize_t(0),
+        pointer(w),
+        Csize_t(0),
+        pointer(a),
+        Csize_t(0),
+        Cint(1),
+    )
     return s[]
 end
 
 @testset "optional oracle: scalar vs compiled ggml generic kernels (ulp bound)" begin
     ggml_dir = get(ENV, "GESSO_GGML_DIR", "")
     if !isfile(joinpath(ggml_dir, "libggml-cpu.so"))
-        _skip("GESSO_GGML_DIR unset or has no libggml-cpu.so — optional ggml oracle skipped")
+        _skip(
+            "GESSO_GGML_DIR unset or has no libggml-cpu.so — optional ggml oracle skipped",
+        )
     else
         for (name, ty) in _KQTYPES
             fp = _kq_ggml_generic_sym(ty)
@@ -417,11 +472,22 @@ end
                 a = _KQ._dot_q8k(ty, W, 0, xq, true)
                 ntrial += 1
                 _, mag = _kq_ref_dot(ty, W, 0, ne0, xq)
-                maxerr = max(maxerr, abs(Float64(r) - Float64(g)) / (mag * Float64(eps(Float32))))
+                maxerr = max(
+                    maxerr,
+                    abs(Float64(r) - Float64(g)) / (mag * Float64(eps(Float32))),
+                )
                 @test reinterpret(UInt32, a) == reinterpret(UInt32, r)  # hard gate
             end
-            println("ggml oracle ", name, " max_err_over_sum_abs_terms_eps32=", round(maxerr; digits=3),
-                " bound=", _KQ_GGML_ORACLE_MAX_EPS, " trials=", ntrial)
+            println(
+                "ggml oracle ",
+                name,
+                " max_err_over_sum_abs_terms_eps32=",
+                round(maxerr; digits=3),
+                " bound=",
+                _KQ_GGML_ORACLE_MAX_EPS,
+                " trials=",
+                ntrial,
+            )
             @testset "$name" begin
                 @test maxerr <= _KQ_GGML_ORACLE_MAX_EPS
                 @test ntrial == 60
@@ -461,13 +527,23 @@ end
 end
 
 @testset "real tensors: K-quant path vs F32 reference" begin
-    named = ("blk.0.attn_qkv.weight", "blk.0.ssm_out.weight", "output.weight", "blk.0.ffn_down_shexp.weight")
+    named = (
+        "blk.0.attn_qkv.weight",
+        "blk.0.ssm_out.weight",
+        "output.weight",
+        "blk.0.ffn_down_shexp.weight",
+    )
     ggml_ok_dir = isfile(joinpath(get(ENV, "GESSO_GGML_DIR", ""), "libggml-base.so"))
     ran = false
-    for path in (get(ENV, "GESSO_ORNITH35_GGUF", ""), get(ENV, "GESSO_QWEN38_27B_IQ4XS_GGUF", ""),
-                 get(ENV, "GESSO_QWEN38_MTP_GGUF", ""))
+    for path in (
+        get(ENV, "GESSO_ORNITH35_GGUF", ""),
+        get(ENV, "GESSO_QWEN38_27B_IQ4XS_GGUF", ""),
+        get(ENV, "GESSO_QWEN38_MTP_GGUF", ""),
+    )
         if !isfile(path)
-            _skip("set GESSO_ORNITH35_GGUF / GESSO_QWEN38_27B_IQ4XS_GGUF / GESSO_QWEN38_MTP_GGUF to a GGUF — real tensors skipped")
+            _skip(
+                "set GESSO_ORNITH35_GGUF / GESSO_QWEN38_27B_IQ4XS_GGUF / GESSO_QWEN38_MTP_GGUF to a GGUF — real tensors skipped",
+            )
             continue
         end
         ran = true
@@ -477,7 +553,15 @@ end
             info = findfirst(t -> t.name == nm, hdr.tensors)
             info === nothing || push!(targets, hdr.tensors[info])
         end
-        for ty in (_KQ.GGML_TYPE_Q5_K, _KQ.GGML_TYPE_Q6_K, _KQ.GGML_TYPE_Q4_K, _KQ.GGML_TYPE_Q3_K, _KQ.GGML_TYPE_Q2_K, _KQ.GGML_TYPE_Q8_0, _KQ.GGML_TYPE_Q4_0)
+        for ty in (
+            _KQ.GGML_TYPE_Q5_K,
+            _KQ.GGML_TYPE_Q6_K,
+            _KQ.GGML_TYPE_Q4_K,
+            _KQ.GGML_TYPE_Q3_K,
+            _KQ.GGML_TYPE_Q2_K,
+            _KQ.GGML_TYPE_Q8_0,
+            _KQ.GGML_TYPE_Q4_0,
+        )
             haskey(found, ty) && push!(targets, found[ty])
         end
         rng = Xoshiro(70)
@@ -516,16 +600,37 @@ end
                     off = base + (j - 1) * rb
                     mine = Vector{Float32}(undef, ne0)
                     _KQ._kq_dequant_row!(mine, hdr.data, off, ty, ne0)
-                    gg = _KQ._dequant_f32(Vector{UInt8}(hdr.data[(off + 1):(off + rb)]), 0, ty, ne0)
+                    gg = _KQ._dequant_f32(
+                        Vector{UInt8}(hdr.data[(off+1):(off+rb)]),
+                        0,
+                        ty,
+                        ne0,
+                    )
                     ggml_ok &= reinterpret.(UInt32, mine) == reinterpret.(UInt32, gg)
                 end
             end
             relrms = sqrt(err_exact2 / sig2)
-            println("real ", basename(path), " ", info.name, " type=", ty, " ne0=", ne0, " ne1=", ne1,
-                " rows=", length(rows), " rel_rms_err_vs_f32=", relrms,
-                " rel_rms_dot_vs_dequant=", sqrt(err_deq2 / sig2),
-                " avx2_eq_scalar=", nmis == 0,
-                ggml_ok_dir ? " dequant_eq_ggml=$ggml_ok" : "")
+            println(
+                "real ",
+                basename(path),
+                " ",
+                info.name,
+                " type=",
+                ty,
+                " ne0=",
+                ne0,
+                " ne1=",
+                ne1,
+                " rows=",
+                length(rows),
+                " rel_rms_err_vs_f32=",
+                relrms,
+                " rel_rms_dot_vs_dequant=",
+                sqrt(err_deq2 / sig2),
+                " avx2_eq_scalar=",
+                nmis == 0,
+                ggml_ok_dir ? " dequant_eq_ggml=$ggml_ok" : "",
+            )
             @test nmis == 0
             @test relrms <= 2.0e-2
             ggml_ok_dir && @test ggml_ok

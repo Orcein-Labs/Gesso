@@ -25,13 +25,13 @@ const _BLK_BYTES = Dict(_T_Q2K => 84, _T_IQ3XXS => 98, _T_IQ4XS => 136)
 function _random_quant_bytes(rng, t::Int32, nblocks::Int)
     bsz = _BLK_BYTES[t]
     b = rand(rng, UInt8, nblocks * bsz)
-    for k in 0:(nblocks - 1)
+    for k in 0:(nblocks-1)
         o = k * bsz
         if t == _T_Q2K
-            b[o+81:o+82] .= reinterpret(UInt8, [Float16(1.0e-3)])
-            b[o+83:o+84] .= reinterpret(UInt8, [Float16(1.0e-3)])
+            b[(o+81):(o+82)] .= reinterpret(UInt8, [Float16(1.0e-3)])
+            b[(o+83):(o+84)] .= reinterpret(UInt8, [Float16(1.0e-3)])
         else
-            b[o+1:o+2] .= reinterpret(UInt8, [Float16(1.0e-3)])
+            b[(o+1):(o+2)] .= reinterpret(UInt8, [Float16(1.0e-3)])
         end
     end
     return b
@@ -55,23 +55,31 @@ end
 function _gguf_kv!(io, key::AbstractString, val)
     _gguf_str!(io, key)
     if val isa AbstractString
-        write(io, UInt32(8)); _gguf_str!(io, val)
+        write(io, UInt32(8))
+        _gguf_str!(io, val)
     elseif val isa Float32
-        write(io, UInt32(6)); write(io, val)
+        write(io, UInt32(6))
+        write(io, val)
     elseif val isa Float64
-        write(io, UInt32(12)); write(io, val)
+        write(io, UInt32(12))
+        write(io, val)
     elseif val isa AbstractVector{<:AbstractString}
-        write(io, UInt32(9)); write(io, UInt32(8)); write(io, UInt64(length(val)))
+        write(io, UInt32(9))
+        write(io, UInt32(8))
+        write(io, UInt64(length(val)))
         for v in val
             _gguf_str!(io, v)
         end
     elseif val isa AbstractVector{<:Integer}
-        write(io, UInt32(9)); write(io, UInt32(4)); write(io, UInt64(length(val)))
+        write(io, UInt32(9))
+        write(io, UInt32(4))
+        write(io, UInt64(length(val)))
         for v in val
             write(io, UInt32(v))
         end
     elseif val isa Integer
-        write(io, UInt32(4)); write(io, UInt32(val))
+        write(io, UInt32(4))
+        write(io, UInt32(val))
     else
         error("fixture: unsupported kv value $(typeof(val))")
     end
@@ -79,7 +87,7 @@ function _gguf_kv!(io, key::AbstractString, val)
 end
 
 # tensors: (name, dims (ne0 first), ggml type, raw bytes)
-function _write_gguf(path::AbstractString, kvs::Vector{Pair{String,Any}}, tensors)
+function _write_gguf(path::AbstractString, kvs::Vector{Pair{String, Any}}, tensors)
     align = 32
     io = IOBuffer()
     write(io, b"GGUF")
@@ -126,32 +134,32 @@ end
 # --- spec derivation -------------------------------------------------------------
 
 function _dense_kv(; arch="qwen35", block_count=65, nextn=1)
-    kv = Pair{String,Any}[
-        "general.architecture" => arch,
-        "$arch.block_count" => block_count,
-        "$arch.nextn_predict_layers" => nextn,
-        "$arch.embedding_length" => 320,
-        "$arch.feed_forward_length" => 960,
-        "$arch.attention.head_count" => 6,
-        "$arch.attention.head_count_kv" => 2,
-        "$arch.attention.key_length" => 64,
-        "$arch.attention.layer_norm_rms_epsilon" => Float32(1e-6),
-        "$arch.full_attention_interval" => 4,
-        "$arch.rope.dimension_count" => 32,
-        "$arch.rope.dimension_sections" => [8, 8, 0, 0],
-        "$arch.rope.freq_base" => 1.0e7,
-        "$arch.ssm.conv_kernel" => 4,
-        "$arch.ssm.group_count" => 2,
-        "$arch.ssm.state_size" => 16,
-        "$arch.ssm.time_step_rank" => 6,
-        "$arch.ssm.inner_size" => 96,
-        "tokenizer.ggml.tokens" => ["t$i" for i in 1:8],
+    kv = Pair{String, Any}[
+        "general.architecture"=>arch,
+        "$arch.block_count"=>block_count,
+        "$arch.nextn_predict_layers"=>nextn,
+        "$arch.embedding_length"=>320,
+        "$arch.feed_forward_length"=>960,
+        "$arch.attention.head_count"=>6,
+        "$arch.attention.head_count_kv"=>2,
+        "$arch.attention.key_length"=>64,
+        "$arch.attention.layer_norm_rms_epsilon"=>Float32(1e-6),
+        "$arch.full_attention_interval"=>4,
+        "$arch.rope.dimension_count"=>32,
+        "$arch.rope.dimension_sections"=>[8, 8, 0, 0],
+        "$arch.rope.freq_base"=>1.0e7,
+        "$arch.ssm.conv_kernel"=>4,
+        "$arch.ssm.group_count"=>2,
+        "$arch.ssm.state_size"=>16,
+        "$arch.ssm.time_step_rank"=>6,
+        "$arch.ssm.inner_size"=>96,
+        "tokenizer.ggml.tokens"=>["t$i" for i in 1:8],
     ]
     return kv
 end
 
 @testset "dense qwen35 spec: moe is nothing, layers exclude MTP" begin
-    kv = Dict{String,Any}(_dense_kv())
+    kv = Dict{String, Any}(_dense_kv())
     spec = _GI.spec_from_gguf_kv(kv)
     @test spec.family === :qwen3_5
     @test spec.moe === nothing
@@ -174,7 +182,7 @@ end
 end
 
 @testset "spec: qwen35moe path unchanged, unknown arch refused" begin
-    kv = Dict{String,Any}(
+    kv = Dict{String, Any}(
         "general.architecture" => "qwen35moe",
         "qwen35moe.block_count" => 4,
         "qwen35moe.embedding_length" => 320,
@@ -205,7 +213,8 @@ end
     tied = _GI.spec_from_gguf_kv(kv; tensor_names=names)
     @test tied.tie_word_embeddings
     @test _GI._gguf_param_map(tied).lm_head_external === nothing
-    @test _GI.spec_from_gguf_kv(kv; tensor_names=push!(copy(names), "output.weight")).tie_word_embeddings == false
+    @test _GI.spec_from_gguf_kv(kv; tensor_names=push!(copy(names), "output.weight")).tie_word_embeddings ==
+          false
 
     @test spec.num_layers == 4
 
@@ -300,7 +309,8 @@ end
     da = Gesso.Activation(; shape=(2, 64), storage=zeros(Float32, 2, 64))
     Gesso.matmul!(Gesso.CPUBackend(), da, xa, w, Gesso.PrefillWorkload())
     # Q8_K-quantized activations (native kernel): the same bound as above.
-    @test maximum(abs, da.storage .- x * transpose(W)) <= 2.0e-2 * maximum(abs, x * transpose(W))
+    @test maximum(abs, da.storage .- x * transpose(W)) <=
+          2.0e-2 * maximum(abs, x * transpose(W))
 
     tab = Gesso.EmbeddingTable((64, 512), q)
     dst = Gesso.Activation(; shape=(2, 512), storage=zeros(Float32, 2, 512))
@@ -319,62 +329,198 @@ function _tiny_dense_tensors(rng)
     QD = 8 * 128
     KVD = 2 * 128
     tens = Any[]
-    push!(tens, ("token_embd.weight", [H, H], _T_Q2K, _random_quant_bytes(rng, _T_Q2K, H * div(H, 256))))
-    push!(tens, ("output_norm.weight", [H], Int32(0), reinterpret(UInt8, 1.0f0 .+ 0.05f0 .* randn(rng, Float32, H))))
-    push!(tens, ("output.weight", [H, H], _T_IQ4XS, _random_quant_bytes(rng, _T_IQ4XS, H * div(H, 256))))
+    push!(
+        tens,
+        (
+            "token_embd.weight",
+            [H, H],
+            _T_Q2K,
+            _random_quant_bytes(rng, _T_Q2K, H * div(H, 256)),
+        ),
+    )
+    push!(
+        tens,
+        (
+            "output_norm.weight",
+            [H],
+            Int32(0),
+            reinterpret(UInt8, 1.0f0 .+ 0.05f0 .* randn(rng, Float32, H)),
+        ),
+    )
+    push!(
+        tens,
+        (
+            "output.weight",
+            [H, H],
+            _T_IQ4XS,
+            _random_quant_bytes(rng, _T_IQ4XS, H * div(H, 256)),
+        ),
+    )
     fp(n, s=0.05f0) = reinterpret(UInt8, s .* randn(rng, Float32, n))
     for L in 0:1
         p = "blk.$L."
-        push!(tens, (p * "attn_norm.weight", [H], Int32(0), reinterpret(UInt8, 1.0f0 .+ 0.05f0 .* randn(rng, Float32, H))))
-        push!(tens, (p * "post_attention_norm.weight", [H], Int32(0), reinterpret(UInt8, 1.0f0 .+ 0.05f0 .* randn(rng, Float32, H))))
-        push!(tens, (p * "ffn_gate.weight", [H, FF], _T_Q2K, _random_quant_bytes(rng, _T_Q2K, FF * div(H, 256))))
-        push!(tens, (p * "ffn_up.weight", [H, FF], _T_IQ3XXS, _random_quant_bytes(rng, _T_IQ3XXS, FF * div(H, 256))))
-        push!(tens, (p * "ffn_down.weight", [FF, H], _T_IQ4XS, _random_quant_bytes(rng, _T_IQ4XS, H * div(FF, 256))))
+        push!(
+            tens,
+            (
+                p * "attn_norm.weight",
+                [H],
+                Int32(0),
+                reinterpret(UInt8, 1.0f0 .+ 0.05f0 .* randn(rng, Float32, H)),
+            ),
+        )
+        push!(
+            tens,
+            (
+                p * "post_attention_norm.weight",
+                [H],
+                Int32(0),
+                reinterpret(UInt8, 1.0f0 .+ 0.05f0 .* randn(rng, Float32, H)),
+            ),
+        )
+        push!(
+            tens,
+            (
+                p * "ffn_gate.weight",
+                [H, FF],
+                _T_Q2K,
+                _random_quant_bytes(rng, _T_Q2K, FF * div(H, 256)),
+            ),
+        )
+        push!(
+            tens,
+            (
+                p * "ffn_up.weight",
+                [H, FF],
+                _T_IQ3XXS,
+                _random_quant_bytes(rng, _T_IQ3XXS, FF * div(H, 256)),
+            ),
+        )
+        push!(
+            tens,
+            (
+                p * "ffn_down.weight",
+                [FF, H],
+                _T_IQ4XS,
+                _random_quant_bytes(rng, _T_IQ4XS, H * div(FF, 256)),
+            ),
+        )
         if L == 0
             push!(tens, (p * "attn_qkv.weight", [H, CD], Int32(0), fp(H * CD)))
             push!(tens, (p * "attn_gate.weight", [H, VD], Int32(0), fp(H * VD)))
             push!(tens, (p * "ssm_alpha.weight", [H, NV], Int32(0), fp(H * NV)))
             push!(tens, (p * "ssm_beta.weight", [H, NV], Int32(0), fp(H * NV)))
             push!(tens, (p * "ssm_conv1d.weight", [4, CD], Int32(0), fp(4 * CD)))
-            push!(tens, (p * "ssm_a", [NV], Int32(0), reinterpret(UInt8, -(0.2f0 .+ rand(rng, Float32, NV)))))
+            push!(
+                tens,
+                (
+                    p * "ssm_a",
+                    [NV],
+                    Int32(0),
+                    reinterpret(UInt8, -(0.2f0 .+ rand(rng, Float32, NV))),
+                ),
+            )
             push!(tens, (p * "ssm_dt.bias", [NV], Int32(0), fp(NV)))
-            push!(tens, (p * "ssm_norm.weight", [DV], Int32(0), reinterpret(UInt8, 1.0f0 .+ 0.05f0 .* randn(rng, Float32, DV))))
+            push!(
+                tens,
+                (
+                    p * "ssm_norm.weight",
+                    [DV],
+                    Int32(0),
+                    reinterpret(UInt8, 1.0f0 .+ 0.05f0 .* randn(rng, Float32, DV)),
+                ),
+            )
             push!(tens, (p * "ssm_out.weight", [VD, H], Int32(0), fp(VD * H)))
         else
-            push!(tens, (p * "attn_q.weight", [H, 2 * QD], _T_IQ3XXS, _random_quant_bytes(rng, _T_IQ3XXS, 2 * QD * div(H, 256))))
-            push!(tens, (p * "attn_k.weight", [H, KVD], _T_IQ3XXS, _random_quant_bytes(rng, _T_IQ3XXS, KVD * div(H, 256))))
-            push!(tens, (p * "attn_v.weight", [H, KVD], _T_IQ3XXS, _random_quant_bytes(rng, _T_IQ3XXS, KVD * div(H, 256))))
-            push!(tens, (p * "attn_output.weight", [QD, H], _T_IQ4XS, _random_quant_bytes(rng, _T_IQ4XS, H * div(QD, 256))))
-            push!(tens, (p * "attn_q_norm.weight", [128], Int32(0), reinterpret(UInt8, 1.0f0 .+ 0.05f0 .* randn(rng, Float32, 128))))
-            push!(tens, (p * "attn_k_norm.weight", [128], Int32(0), reinterpret(UInt8, 1.0f0 .+ 0.05f0 .* randn(rng, Float32, 128))))
+            push!(
+                tens,
+                (
+                    p * "attn_q.weight",
+                    [H, 2 * QD],
+                    _T_IQ3XXS,
+                    _random_quant_bytes(rng, _T_IQ3XXS, 2 * QD * div(H, 256)),
+                ),
+            )
+            push!(
+                tens,
+                (
+                    p * "attn_k.weight",
+                    [H, KVD],
+                    _T_IQ3XXS,
+                    _random_quant_bytes(rng, _T_IQ3XXS, KVD * div(H, 256)),
+                ),
+            )
+            push!(
+                tens,
+                (
+                    p * "attn_v.weight",
+                    [H, KVD],
+                    _T_IQ3XXS,
+                    _random_quant_bytes(rng, _T_IQ3XXS, KVD * div(H, 256)),
+                ),
+            )
+            push!(
+                tens,
+                (
+                    p * "attn_output.weight",
+                    [QD, H],
+                    _T_IQ4XS,
+                    _random_quant_bytes(rng, _T_IQ4XS, H * div(QD, 256)),
+                ),
+            )
+            push!(
+                tens,
+                (
+                    p * "attn_q_norm.weight",
+                    [128],
+                    Int32(0),
+                    reinterpret(UInt8, 1.0f0 .+ 0.05f0 .* randn(rng, Float32, 128)),
+                ),
+            )
+            push!(
+                tens,
+                (
+                    p * "attn_k_norm.weight",
+                    [128],
+                    Int32(0),
+                    reinterpret(UInt8, 1.0f0 .+ 0.05f0 .* randn(rng, Float32, 128)),
+                ),
+            )
         end
     end
     # MTP block: must be excluded from the main layers and only recorded.
-    push!(tens, ("blk.2.nextn.enorm.weight", [H], Int32(0), reinterpret(UInt8, 1.0f0 .+ 0.0f0 .* ones(Float32, H))))
+    push!(
+        tens,
+        (
+            "blk.2.nextn.enorm.weight",
+            [H],
+            Int32(0),
+            reinterpret(UInt8, 1.0f0 .+ 0.0f0 .* ones(Float32, H)),
+        ),
+    )
     return tens
 end
 
 function _tiny_kv()
-    kv = Pair{String,Any}[
-        "general.architecture" => "qwen35",
-        "qwen35.block_count" => 3,
-        "qwen35.nextn_predict_layers" => 1,
-        "qwen35.embedding_length" => 1024,
-        "qwen35.feed_forward_length" => 1024,
-        "qwen35.attention.head_count" => 8,
-        "qwen35.attention.head_count_kv" => 2,
-        "qwen35.attention.key_length" => 128,
-        "qwen35.attention.layer_norm_rms_epsilon" => Float32(1e-6),
-        "qwen35.full_attention_interval" => 2,
-        "qwen35.rope.dimension_count" => 64,
-        "qwen35.rope.dimension_sections" => [16, 16, 0, 0],
-        "qwen35.rope.freq_base" => 1.0e4,
-        "qwen35.ssm.conv_kernel" => 4,
-        "qwen35.ssm.group_count" => 2,
-        "qwen35.ssm.state_size" => 16,
-        "qwen35.ssm.time_step_rank" => 6,
-        "qwen35.ssm.inner_size" => 96,
-        "tokenizer.ggml.tokens" => ["t$i" for i in 1:1024],
+    kv = Pair{String, Any}[
+        "general.architecture"=>"qwen35",
+        "qwen35.block_count"=>3,
+        "qwen35.nextn_predict_layers"=>1,
+        "qwen35.embedding_length"=>1024,
+        "qwen35.feed_forward_length"=>1024,
+        "qwen35.attention.head_count"=>8,
+        "qwen35.attention.head_count_kv"=>2,
+        "qwen35.attention.key_length"=>128,
+        "qwen35.attention.layer_norm_rms_epsilon"=>Float32(1e-6),
+        "qwen35.full_attention_interval"=>2,
+        "qwen35.rope.dimension_count"=>64,
+        "qwen35.rope.dimension_sections"=>[16, 16, 0, 0],
+        "qwen35.rope.freq_base"=>1.0e4,
+        "qwen35.ssm.conv_kernel"=>4,
+        "qwen35.ssm.group_count"=>2,
+        "qwen35.ssm.state_size"=>16,
+        "qwen35.ssm.time_step_rank"=>6,
+        "qwen35.ssm.inner_size"=>96,
+        "tokenizer.ggml.tokens"=>["t$i" for i in 1:1024],
     ]
     return kv
 end
@@ -418,8 +564,20 @@ end
         @test !(tf.blocks[1].wgate.storage isa _GI.QuantMatrix)
         @test tq.blocks[1].wgdn_qkv.storage isa Matrix{Float32}   # small, F32
 
-        ids_q = Gesso.reference_generate(model_q, tq, [5]; max_new_tokens=4, eps=spec_q.rms_norm_eps)
-        ids_f = Gesso.reference_generate(model_f, tf, [5]; max_new_tokens=4, eps=spec_f.rms_norm_eps)
+        ids_q = Gesso.reference_generate(
+            model_q,
+            tq,
+            [5];
+            max_new_tokens=4,
+            eps=spec_q.rms_norm_eps,
+        )
+        ids_f = Gesso.reference_generate(
+            model_f,
+            tf,
+            [5];
+            max_new_tokens=4,
+            eps=spec_f.rms_norm_eps,
+        )
         @test length(ids_q) == 5   # prompt + 4 generated
         @test ids_q == ids_f
 
@@ -435,8 +593,11 @@ end
         # the bound covers the Q8_K error, not a gap in the kernels.
         @test maximum(abs, Lq .- Lf) <= 3.0e-2 * maximum(abs, Lf)
         m2, t2, s2 = Gesso.load_gguf(
-            _write_gguf(joinpath(dir, "other.gguf"), _tiny_kv(),
-                _f32_twin(_tiny_dense_tensors(MersenneTwister(4051)))),
+            _write_gguf(
+                joinpath(dir, "other.gguf"),
+                _tiny_kv(),
+                _f32_twin(_tiny_dense_tensors(MersenneTwister(4051))),
+            ),
         )
         L2 = Gesso.reference_prefill(m2, t2, prompt; eps=s2.rms_norm_eps)
         @test maximum(abs, L2 .- Lf) > 1.0e-1 * maximum(abs, Lf)

@@ -9,14 +9,14 @@
         sd = Lava.LavaArray(shared)
         expected = copy(y0)
         _lh_inf._shared_gate_add!(Gesso.CPUBackend(), expected, x, shared, g)
-        for _ = 1:3
+        for _ in 1:3
             output = Lava.LavaArray(y0)
             @test _lh_inf._shared_gate_add!(_lh_lava, output, xd, sd, gd) === output
             @test bitsequal(Array(output), expected)
         end
         output = Lava.LavaArray(y0)
         carried = copy(y0)
-        for _ = 1:3
+        for _ in 1:3
             _lh_inf._shared_gate_add!(Gesso.CPUBackend(), carried, x, shared, g)
             _lh_inf._shared_gate_add!(_lh_lava, output, xd, sd, gd)
             @test bitsequal(Array(output), carried)
@@ -51,7 +51,12 @@
         Float32[-floatmax(Float32), -floatmax(Float32)],
     )
         h = length(xv)
-        check_case(reshape(xv, 1, h), ones(Float32, h), fill(0.25f0, 1, h), fill(0.5f0, 1, h))
+        check_case(
+            reshape(xv, 1, h),
+            ones(Float32, h),
+            fill(0.25f0, 1, h),
+            fill(0.5f0, 1, h),
+        )
     end
     for a in Float32[
         -87,
@@ -71,13 +76,27 @@
         0.0,
         87,
     ]
-        check_case(reshape([a], 1, 1), ones(Float32, 1), zeros(Float32, 1, 1), ones(Float32, 1, 1))
+        check_case(
+            reshape([a], 1, 1),
+            ones(Float32, 1),
+            zeros(Float32, 1, 1),
+            ones(Float32, 1, 1),
+        )
     end
     minsub = reinterpret(Float32, UInt32(1))
     sdvalues =
         reinterpret(
             Float32,
-            UInt32[1, 0x80000001, 0x007fffff, 0x00800000, 0x00800001, 0x00ffffff, 0x80000000, 0],
+            UInt32[
+                1,
+                0x80000001,
+                0x007fffff,
+                0x00800000,
+                0x00800001,
+                0x00ffffff,
+                0x80000000,
+                0,
+            ],
         ) |> collect
     append!(sdvalues, Float32[1.2345678, -1.2345678, floatmax(Float32), -floatmax(Float32)])
     for a in Float32[0, 1, 87], sdval in sdvalues

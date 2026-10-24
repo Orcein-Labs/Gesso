@@ -8,4 +8,7 @@ const PROMPTS = [
     "prose" => "Write a short paragraph about a lighthouse keeper who finds a letter in a bottle.",
 ]
 
-chat(msg) = "<|im_start|>user\n" * msg * "<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n"
+chat(msg) =
+    "<|im_start|>user\n" *
+    msg *
+    "<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n"

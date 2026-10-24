@@ -31,8 +31,20 @@ _adec_bits(a::AbstractArray{Float32}) = reinterpret(UInt32, vec(a))
         scores = _GI.TemporaryWorkspace(; shape=(1, K), storage=zeros(Float32, 1, K))
         probs = _GI.TemporaryWorkspace(; shape=(1, K), storage=zeros(Float32, 1, K))
         ref = zeros(Float32, 1, n_heads, d)
-        _GI._attention_heads!(backend, ref, scores, probs, q, kx.storage, vx.storage,
-            n_heads, d, 1, K, wl)
+        _GI._attention_heads!(
+            backend,
+            ref,
+            scores,
+            probs,
+            q,
+            kx.storage,
+            vx.storage,
+            n_heads,
+            d,
+            1,
+            K,
+            wl,
+        )
 
         fused = fill(NaN32, 1, n_heads, d)
         buf = zeros(Float32, cap)

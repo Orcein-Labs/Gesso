@@ -26,7 +26,8 @@ const DIR = get(ENV, "GESSO_CAPTURE_DIR", "")
 isempty(DIR) && error("saluki_capture_hidden: set GESSO_CAPTURE_DIR")
 mkpath(DIR)
 const NEW = parse(Int, get(ENV, "GESSO_CAPTURE_NEW", "256"))
-const ONLY = Set(String.(filter(!isempty, strip.(split(get(ENV, "GESSO_CAPTURE_ONLY", ""), ',')))))
+const ONLY =
+    Set(String.(filter(!isempty, strip.(split(get(ENV, "GESSO_CAPTURE_ONLY", ""), ',')))))
 const IM_END = 248046
 Base.ENDIAN_BOM == 0x04030201 || error("saluki_capture_hidden: little-endian host required")
 
@@ -37,13 +38,36 @@ backend = Gesso.CPUBackend()
 model, tensors, spec = Gesso.load_gguf(GGUF)
 tk = Gesso.Inference.load_gguf_tokenizer(GGUF)
 dim = model.embedding.dim
-gen(prompt, n; kw...) = Gesso.reference_generate(model, tensors, prompt; max_new_tokens=n,
-    eps=spec.rms_norm_eps, backend, eos_ids=(IM_END,), kw...)
+gen(prompt, n; kw...) = Gesso.reference_generate(
+    model,
+    tensors,
+    prompt;
+    max_new_tokens=n,
+    eps=spec.rms_norm_eps,
+    backend,
+    eos_ids=(IM_END,),
+    kw...,
+)
 
 index_path = joinpath(DIR, "index.tsv")
 new_index = !isfile(index_path)
 open(index_path, "a") do io
-    new_index && println(io, join(["idx", "tag", "prompt_len", "n_ids", "n_hidden", "dim", "first_pos", "seconds"], '\t'))
+    new_index && println(
+        io,
+        join(
+            [
+                "idx",
+                "tag",
+                "prompt_len",
+                "n_ids",
+                "n_hidden",
+                "dim",
+                "first_pos",
+                "seconds",
+            ],
+            '\t',
+        ),
+    )
     for (i, (tag, msg)) in enumerate(CAPTURE_PROMPTS)
         (isempty(ONLY) || tag in ONLY) || continue
         stem = joinpath(DIR, "$(lpad(string(i), 2, '0'))_$(tag)")
@@ -62,8 +86,12 @@ open(index_path, "a") do io
 
         n_ids = length(ids)
         n_hid = length(cols)
-        n_hid == n_ids - P || error("saluki_capture_hidden: $tag made $n_hid hidden calls for $(n_ids - P) new ids")
-        firsts == collect(P:(P + n_hid - 1)) || error("saluki_capture_hidden: $tag hidden positions are not P:(P+n-1) with P=$P (first=$(isempty(firsts) ? 0 : firsts[1]))")
+        n_hid == n_ids - P || error(
+            "saluki_capture_hidden: $tag made $n_hid hidden calls for $(n_ids - P) new ids",
+        )
+        firsts == collect(P:(P+n_hid-1)) || error(
+            "saluki_capture_hidden: $tag hidden positions are not P:(P+n-1) with P=$P (first=$(isempty(firsts) ? 0 : firsts[1]))",
+        )
 
         H = Matrix{Float32}(undef, dim, n_hid)
         for (j, v) in enumerate(cols)
@@ -76,9 +104,31 @@ open(index_path, "a") do io
         open(f -> write(f, H), hid_tmp, "w")
         mv(hid_tmp, stem * ".hid"; force=true)
 
-        println(io, join([i, tag, P, n_ids, n_hid, dim, isempty(firsts) ? 0 : firsts[1], @sprintf("%.2f", secs)], '\t'))
+        println(
+            io,
+            join(
+                [
+                    i,
+                    tag,
+                    P,
+                    n_ids,
+                    n_hid,
+                    dim,
+                    isempty(firsts) ? 0 : firsts[1],
+                    @sprintf("%.2f", secs)
+                ],
+                '\t',
+            ),
+        )
         flush(io)
-        @printf("CAPTURE %s prompt=%d new=%d hidden=%d seconds=%.1f\n", tag, P, n_ids - P, n_hid, secs)
+        @printf(
+            "CAPTURE %s prompt=%d new=%d hidden=%d seconds=%.1f\n",
+            tag,
+            P,
+            n_ids - P,
+            n_hid,
+            secs
+        )
         flush(stdout)
     end
 end

@@ -54,7 +54,10 @@ _is_quant_storage(::QuantMatrix) = true
 _quant_q8k_native(t::Int32) = _q8k_supported_type(t)
 
 _quant_native(t::Int32) =
-    t == GGML_TYPE_F32 || t == GGML_TYPE_IQ2_XS || t == GGML_TYPE_IQ3_XXS || t == GGML_TYPE_IQ4_XS ||
+    t == GGML_TYPE_F32 ||
+    t == GGML_TYPE_IQ2_XS ||
+    t == GGML_TYPE_IQ3_XXS ||
+    t == GGML_TYPE_IQ4_XS ||
     _quant_q8k_native(t)
 
 const GGML_TYPE_F16 = Int32(1)
@@ -62,7 +65,7 @@ const GGML_TYPE_BF16 = Int32(30)
 
 _quant_half(t::Int32) = t == GGML_TYPE_F16 || t == GGML_TYPE_BF16
 
-_contiguous_rows(rows) = all(i -> rows[i + 1] == rows[i] + 1, 1:(length(rows) - 1))
+_contiguous_rows(rows) = all(i -> rows[i+1] == rows[i] + 1, 1:(length(rows)-1))
 
 """
     q[rows, :]
@@ -73,13 +76,20 @@ Q|gate split of `attn_q` takes this path; it is a one-time load copy).
 """
 function Base.getindex(q::QuantMatrix, rows::AbstractVector{<:Integer}, ::Colon)
     isempty(rows) && error("QuantMatrix: empty row selection")
-    all(r -> 1 <= r <= q.nrows, rows) || error("QuantMatrix: row selection out of 1:$(q.nrows)")
+    all(r -> 1 <= r <= q.nrows, rows) ||
+        error("QuantMatrix: row selection out of 1:$(q.nrows)")
     rb = q.row_bytes
     rs = collect(Int, rows)
     if _contiguous_rows(rs)
         return QuantMatrix(
-            q.data, q.offset0 + (rs[1] - 1) * rb, q.ggml_type, q.ne0, length(rs), rb,
-            q.to_float, q.blck_size,
+            q.data,
+            q.offset0 + (rs[1] - 1) * rb,
+            q.ggml_type,
+            q.ne0,
+            length(rs),
+            rb,
+            q.to_float,
+            q.blck_size,
         )
     end
     packed = Vector{UInt8}(undef, length(rs) * rb)
@@ -87,11 +97,18 @@ function Base.getindex(q::QuantMatrix, rows::AbstractVector{<:Integer}, ::Colon)
         copyto!(packed, (k - 1) * rb + 1, q.data, q.offset0 + (r - 1) * rb + 1, rb)
     end
     return QuantMatrix(
-        packed, 0, q.ggml_type, q.ne0, length(rs), rb, q.to_float, q.blck_size,
+        packed,
+        0,
+        q.ggml_type,
+        q.ne0,
+        length(rs),
+        rb,
+        q.to_float,
+        q.blck_size,
     )
 end
 
-_quant_bytes(q::QuantMatrix) = view(q.data, (q.offset0 + 1):(q.offset0 + q.nrows * q.row_bytes))
+_quant_bytes(q::QuantMatrix) = view(q.data, (q.offset0+1):(q.offset0+q.nrows*q.row_bytes))
 
 """
     _quant_host_f32(q) -> Matrix{Float32} (nrows, ne0)
@@ -165,9 +182,26 @@ function _quant_matmul!(dst::AbstractMatrix, x::AbstractMatrix, q::QuantMatrix)
                     xf[i] = Float32(x[t, i])
                 end
                 if _quant_q8k_native(q.ggml_type)
-                    _qgemv_q8k_f32!(y, xf, bytes, q.ggml_type, q.ne0, q.nrows; threaded=true)
+                    _qgemv_q8k_f32!(
+                        y,
+                        xf,
+                        bytes,
+                        q.ggml_type,
+                        q.ne0,
+                        q.nrows;
+                        threaded=true,
+                    )
                 else
-                    _qgemv_bytes_threaded!(y, xf, bytes, q.ggml_type, q.ne0, q.nrows, 1.0f0, 0.0f0)
+                    _qgemv_bytes_threaded!(
+                        y,
+                        xf,
+                        bytes,
+                        q.ggml_type,
+                        q.ne0,
+                        q.nrows,
+                        1.0f0,
+                        0.0f0,
+                    )
                 end
                 @inbounds for r in 1:q.nrows
                     dst[t, r] = y[r]
@@ -186,12 +220,17 @@ function _quant_matmul!(dst::AbstractMatrix, x::AbstractMatrix, q::QuantMatrix)
     while r0 <= q.nrows
         r1 = min(q.nrows, r0 + nc - 1)
         nr = r1 - r0 + 1
-        buf = _dequant_f32(q.data, q.offset0 + (r0 - 1) * q.row_bytes, q.ggml_type, nr * q.ne0)
+        buf = _dequant_f32(
+            q.data,
+            q.offset0 + (r0 - 1) * q.row_bytes,
+            q.ggml_type,
+            nr * q.ne0,
+        )
         Wc = reshape(buf, q.ne0, nr)
         out = Matrix{Float32}(undef, seq, nr)
         mul!(out, xf, Wc)
         @inbounds for c in 1:nr, t in 1:seq
-            dst[t, r0 + c - 1] = out[t, c]
+            dst[t, r0+c-1] = out[t, c]
         end
         r0 = r1 + 1
     end
@@ -242,7 +281,7 @@ function _half_matmul!(dst::AbstractMatrix, x::AbstractMatrix, q::QuantMatrix)
         oc = view(out, :, 1:nr)
         mul!(oc, xf, view(W, :, 1:nr))
         @inbounds for c in 1:nr, t in 1:seq
-            dst[t, r0 + c - 1] = oc[t, c]
+            dst[t, r0+c-1] = oc[t, c]
         end
         r0 = r1 + 1
     end
@@ -276,23 +315,44 @@ end
 # Explicit 8-wide vectors for the row dot. `llvm.fma` is a correctly rounded
 # fused multiply-add on every target (a libm call where the CPU lacks FMA),
 # so the bits do not depend on what the vectorizer would have chosen.
-const _V8 = NTuple{8,VecElement{Float32}}
+const _V8 = NTuple{8, VecElement{Float32}}
 
-@inline _v8load(p::Ptr{Float32}) = Base.llvmcall("""
-    %v = load <8 x float>, ptr %0, align 4
-    ret <8 x float> %v""", _V8, Tuple{Ptr{Float32}}, p)
+@inline _v8load(p::Ptr{Float32}) = Base.llvmcall(
+    """
+%v = load <8 x float>, ptr %0, align 4
+ret <8 x float> %v""",
+    _V8,
+    Tuple{Ptr{Float32}},
+    p,
+)
 
-@inline _v8fma(a::_V8, b::_V8, c::_V8) = Base.llvmcall(("""
-    declare <8 x float> @llvm.fma.v8f32(<8 x float>, <8 x float>, <8 x float>)
-    define <8 x float> @entry(<8 x float> %a, <8 x float> %b, <8 x float> %c) #0 {
-        %r = call <8 x float> @llvm.fma.v8f32(<8 x float> %a, <8 x float> %b, <8 x float> %c)
-        ret <8 x float> %r
-    }
-    attributes #0 = { alwaysinline }""", "entry"), _V8, Tuple{_V8,_V8,_V8}, a, b, c)
+@inline _v8fma(a::_V8, b::_V8, c::_V8) = Base.llvmcall(
+    (
+        """
+declare <8 x float> @llvm.fma.v8f32(<8 x float>, <8 x float>, <8 x float>)
+define <8 x float> @entry(<8 x float> %a, <8 x float> %b, <8 x float> %c) #0 {
+    %r = call <8 x float> @llvm.fma.v8f32(<8 x float> %a, <8 x float> %b, <8 x float> %c)
+    ret <8 x float> %r
+}
+attributes #0 = { alwaysinline }""",
+        "entry",
+    ),
+    _V8,
+    Tuple{_V8, _V8, _V8},
+    a,
+    b,
+    c,
+)
 
-@inline _v8add(a::_V8, b::_V8) = Base.llvmcall("""
-    %r = fadd <8 x float> %0, %1
-    ret <8 x float> %r""", _V8, Tuple{_V8,_V8}, a, b)
+@inline _v8add(a::_V8, b::_V8) = Base.llvmcall(
+    """
+%r = fadd <8 x float> %0, %1
+ret <8 x float> %r""",
+    _V8,
+    Tuple{_V8, _V8},
+    a,
+    b,
+)
 
 # 16 lanes (two vectors) summed in a fixed tree.
 @inline function _v8sum(a::_V8, b::_V8)
@@ -305,35 +365,55 @@ end
 # elements i ≡ k (mod 16) in index order; the n % 16 tail is a scalar fma
 # chain added last. The order is fixed in the source, so a token gets the
 # same bits in any tile slot and in any call.
-@inline function _half_dot4(pb::Ptr{Float32}, p1::Ptr{Float32}, p2::Ptr{Float32},
-                            p3::Ptr{Float32}, p4::Ptr{Float32}, n::Int)
+@inline function _half_dot4(
+    pb::Ptr{Float32},
+    p1::Ptr{Float32},
+    p2::Ptr{Float32},
+    p3::Ptr{Float32},
+    p4::Ptr{Float32},
+    n::Int,
+)
     z = ntuple(_ -> VecElement(0.0f0), Val(8))
     a1 = b1 = a2 = b2 = a3 = b3 = a4 = b4 = z
     i = 0
     while i + 16 <= n
         wa = _v8load(pb + 4i)
         wb = _v8load(pb + 4i + 32)
-        a1 = _v8fma(wa, _v8load(p1 + 4i), a1); b1 = _v8fma(wb, _v8load(p1 + 4i + 32), b1)
-        a2 = _v8fma(wa, _v8load(p2 + 4i), a2); b2 = _v8fma(wb, _v8load(p2 + 4i + 32), b2)
-        a3 = _v8fma(wa, _v8load(p3 + 4i), a3); b3 = _v8fma(wb, _v8load(p3 + 4i + 32), b3)
-        a4 = _v8fma(wa, _v8load(p4 + 4i), a4); b4 = _v8fma(wb, _v8load(p4 + 4i + 32), b4)
+        a1 = _v8fma(wa, _v8load(p1 + 4i), a1)
+        b1 = _v8fma(wb, _v8load(p1 + 4i + 32), b1)
+        a2 = _v8fma(wa, _v8load(p2 + 4i), a2)
+        b2 = _v8fma(wb, _v8load(p2 + 4i + 32), b2)
+        a3 = _v8fma(wa, _v8load(p3 + 4i), a3)
+        b3 = _v8fma(wb, _v8load(p3 + 4i + 32), b3)
+        a4 = _v8fma(wa, _v8load(p4 + 4i), a4)
+        b4 = _v8fma(wb, _v8load(p4 + 4i + 32), b4)
         i += 16
     end
     t1 = t2 = t3 = t4 = 0.0f0
-    for k in i+1:n
+    for k in (i+1):n
         w = unsafe_load(pb, k)
         t1 = fma(w, unsafe_load(p1, k), t1)
         t2 = fma(w, unsafe_load(p2, k), t2)
         t3 = fma(w, unsafe_load(p3, k), t3)
         t4 = fma(w, unsafe_load(p4, k), t4)
     end
-    return _v8sum(a1, b1) + t1, _v8sum(a2, b2) + t2, _v8sum(a3, b3) + t3, _v8sum(a4, b4) + t4
+    return _v8sum(a1, b1) + t1,
+    _v8sum(a2, b2) + t2,
+    _v8sum(a3, b3) + t3,
+    _v8sum(a4, b4) + t4
 end
 
 # Rows widened per pass over the token tiles once a call has more than 16 tokens.
 const _HALF_ROW_BLOCK = 2
 
-function _half_rows!(dst::Matrix{Float32}, xt::Matrix{Float32}, q::QuantMatrix, v::Val, j0::Int, j1::Int)
+function _half_rows!(
+    dst::Matrix{Float32},
+    xt::Matrix{Float32},
+    q::QuantMatrix,
+    v::Val,
+    j0::Int,
+    j1::Int,
+)
     n = q.ne0
     seq = size(dst, 1)
     # Short calls stream row by row so the widened row stays in L1.
@@ -355,11 +435,12 @@ function _half_rows!(dst::Matrix{Float32}, xt::Matrix{Float32}, q::QuantMatrix, 
                 p3 = p2 + 4n
                 p4 = p3 + 4n
                 for j in b0:b1
-                    a1, a2, a3, a4 = _half_dot4(pointer(buf, (j - b0) * n + 1), p1, p2, p3, p4, n)
+                    a1, a2, a3, a4 =
+                        _half_dot4(pointer(buf, (j - b0) * n + 1), p1, p2, p3, p4, n)
                     dst[t0, j] = a1
-                    t0 + 1 <= seq && (dst[t0 + 1, j] = a2)
-                    t0 + 2 <= seq && (dst[t0 + 2, j] = a3)
-                    t0 + 3 <= seq && (dst[t0 + 3, j] = a4)
+                    t0 + 1 <= seq && (dst[t0+1, j] = a2)
+                    t0 + 2 <= seq && (dst[t0+2, j] = a3)
+                    t0 + 3 <= seq && (dst[t0+3, j] = a4)
                 end
             end
         end
@@ -396,26 +477,42 @@ function _quant_matmul_multi!(dst::AbstractMatrix, x::AbstractMatrix, q::QuantMa
     seq = size(x, 1)
     simd = q8k_simd_enabled()
     # Q6_K: shuffle each activation once here rather than once per weight row.
-    xqs = _prefill_quantize(q.ggml_type, x, seq, q.ne0, simd && q.ggml_type == GGML_TYPE_Q6_K)
+    xqs =
+        _prefill_quantize(q.ggml_type, x, seq, q.ne0, simd && q.ggml_type == GGML_TYPE_Q6_K)
     # Ticketed chunks as in the decode GEMV: one chunk per thread waits on the
     # slowest thread (2-3x on the 27B's verify window). Rows are independent,
     # so the bits do not depend on the chunk count.
     nc = _qgemv_nchunks(q.nrows)
     # The Q6_K, Q8_0 and Q4_0 tiles read their columns' d values from one table.
-    dt = simd && (q.ggml_type == GGML_TYPE_Q6_K || _q80_act_type(q.ggml_type)) ? _multi_d_table(xqs) : nothing
-    chunk = _PrefillChunk(dst, _quant_bytes(q), xqs, dt, q.ggml_type, q.ne0, q.nrows, nc, simd)
+    dt =
+        simd && (q.ggml_type == GGML_TYPE_Q6_K || _q80_act_type(q.ggml_type)) ?
+        _multi_d_table(xqs) : nothing
+    chunk =
+        _PrefillChunk(dst, _quant_bytes(q), xqs, dt, q.ggml_type, q.ne0, q.nrows, nc, simd)
     _run_row_chunks!(chunk, nc, q.nrows * q.ne0 * seq)
     return dst
 end
 
 # Quantizes each token row (and preps it, for Q6_K), with the tokens split
 # across threads.
-function _prefill_quantize(ggml_type::Int32, x::AbstractMatrix, seq::Int, ne0::Int, prep::Bool=false)
+function _prefill_quantize(
+    ggml_type::Int32,
+    x::AbstractMatrix,
+    seq::Int,
+    ne0::Int,
+    prep::Bool=false,
+)
     x1 = _prefill_quantize_row(ggml_type, x, 1, Vector{Float32}(undef, ne0), prep)
     return _prefill_quantize_rest!(fill(x1, seq), ggml_type, x, prep)
 end
 
-function _prefill_quantize_row(ggml_type::Int32, x::AbstractMatrix, t::Int, xf::Vector{Float32}, prep::Bool)
+function _prefill_quantize_row(
+    ggml_type::Int32,
+    x::AbstractMatrix,
+    t::Int,
+    xf::Vector{Float32},
+    prep::Bool,
+)
     @inbounds for i in eachindex(xf)
         xf[i] = Float32(x[t, i])
     end
@@ -423,13 +520,18 @@ function _prefill_quantize_row(ggml_type::Int32, x::AbstractMatrix, t::Int, xf::
     return prep ? _q6k_prep(xq) : xq
 end
 
-function _prefill_quantize_rest!(xqs::Vector, ggml_type::Int32, x::AbstractMatrix, prep::Bool)
+function _prefill_quantize_rest!(
+    xqs::Vector,
+    ggml_type::Int32,
+    x::AbstractMatrix,
+    prep::Bool,
+)
     seq = length(xqs)
     ne0 = size(x, 2)
     nc = max(1, min(Threads.nthreads(), seq - 1))
     _run_row_chunks!(nc, (seq - 1) * ne0 * 16) do c
         xf = Vector{Float32}(undef, ne0)
-        for t in (div((c - 1) * (seq - 1), nc) + 2):(div(c * (seq - 1), nc) + 1)
+        for t in (div((c-1)*(seq-1), nc)+2):(div(c*(seq-1), nc)+1)
             xqs[t] = _prefill_quantize_row(ggml_type, x, t, xf, prep)
         end
     end
@@ -442,7 +544,12 @@ end
 const _MULTI_ROW_BLOCK = 32
 
 # One row chunk of _quant_matmul_multi!, as a callable struct (see _GroupChunk).
-struct _PrefillChunk{D<:AbstractMatrix,B<:AbstractVector{UInt8},X<:AbstractVector,T}
+struct _PrefillChunk{
+    D <: AbstractMatrix,
+    B <: AbstractVector{UInt8},
+    X <: AbstractVector,
+    T,
+}
     dst::D
     bytes::B
     xqs::X
@@ -466,8 +573,18 @@ function (p::_PrefillChunk)(c::Int)
         while t0 <= seq
             K = min(_MULTI_TILE, seq - t0 + 1)
             for j in b0:b1
-                _dot_q8k_multi!(buf, p.ggml_type, p.bytes, (j - 1) * rb, p.xqs, t0, K, p.simd, p.dt)
-                for t in t0:(t0 + K - 1)
+                _dot_q8k_multi!(
+                    buf,
+                    p.ggml_type,
+                    p.bytes,
+                    (j - 1) * rb,
+                    p.xqs,
+                    t0,
+                    K,
+                    p.simd,
+                    p.dt,
+                )
+                for t in t0:(t0+K-1)
                     # Same expression as the per-token path, so -0.0 becomes +0.0 identically.
                     p.dst[t, j] = 1.0f0 * buf[t] + 0.0f0
                 end
@@ -494,7 +611,8 @@ end
 # True when `q` multiplies through the Q8_K integer kernel, so one Q8_K
 # quantization of its input serves every weight that reads that input. Q8_0 and
 # Q4_0 weights use a Q8_0 activation and fall back to the per-weight path.
-_quant_q8k_kind(q::QuantMatrix) = _quant_q8k_native(q.ggml_type) && !_q80_act_type(q.ggml_type)
+_quant_q8k_kind(q::QuantMatrix) =
+    _quant_q8k_native(q.ggml_type) && !_q80_act_type(q.ggml_type)
 
 """
     _quant_matmul_group!(dsts, xq, ws; simd) -> dsts
@@ -508,10 +626,17 @@ single threaded pass. Each output row is the same `_dot_q8k` on the same
 `xq` as `_quant_matmul!` uses for that weight alone, so the outputs are
 bit-identical to separate matmuls for any chunk count.
 """
-function _quant_matmul_group!(dsts::Tuple, xq::Q8KVec, ws::Tuple; simd::Bool=q8k_simd_enabled())
+function _quant_matmul_group!(
+    dsts::Tuple,
+    xq::Q8KVec,
+    ws::Tuple;
+    simd::Bool=q8k_simd_enabled(),
+)
     for w in ws
-        _quant_q8k_kind(w) || error("quant group: weight type $(w.ggml_type) has no Q8_K kernel")
-        w.ne0 == length(xq) || error("quant group: x has $(length(xq)) features, weight has $(w.ne0)")
+        _quant_q8k_kind(w) ||
+            error("quant group: weight type $(w.ggml_type) has no Q8_K kernel")
+        w.ne0 == length(xq) ||
+            error("quant group: x has $(length(xq)) features, weight has $(w.ne0)")
     end
     for (d, w) in zip(dsts, ws)
         size(d) == (1, w.nrows) || error("quant group: dst $(size(d)) ≠ (1, $(w.nrows))")
@@ -524,7 +649,7 @@ end
 
 # One chunk of a group pass, as a callable struct: the pool keeps a reference to
 # it for the call, so it is built once per call and its fields never change.
-struct _GroupChunk{D<:Tuple,W<:Tuple}
+struct _GroupChunk{D <: Tuple, W <: Tuple}
     dsts::D
     ws::W
     xq::Q8KVec
@@ -545,20 +670,43 @@ _group_rows(ws::Tuple) = sum(w -> w.nrows, ws; init=0)
 # Walks the weights in order. `base` is the global row offset of the first
 # weight in the tuple, so the chunk's global rows [g0, g1] intersect each
 # weight's own rows [base+1, base+nrows] at most once.
-@inline function _group_segments!(dsts::Tuple, ws::Tuple, base::Int, g0::Int, g1::Int, xq::Q8KVec, simd::Bool)
+@inline function _group_segments!(
+    dsts::Tuple,
+    ws::Tuple,
+    base::Int,
+    g0::Int,
+    g1::Int,
+    xq::Q8KVec,
+    simd::Bool,
+)
     w = first(ws)
     lo = max(g0, base + 1)
     hi = min(g1, base + w.nrows)
     lo <= hi && _gemv_q8k_rows_into!(first(dsts), xq, w, lo - base, hi - base, simd)
-    return _group_segments!(Base.tail(dsts), Base.tail(ws), base + w.nrows, g0, g1, xq, simd)
+    return _group_segments!(
+        Base.tail(dsts),
+        Base.tail(ws),
+        base + w.nrows,
+        g0,
+        g1,
+        xq,
+        simd,
+    )
 end
-@inline _group_segments!(::Tuple{}, ::Tuple{}, ::Int, ::Int, ::Int, ::Q8KVec, ::Bool) = nothing
+@inline _group_segments!(::Tuple{}, ::Tuple{}, ::Int, ::Int, ::Int, ::Q8KVec, ::Bool) =
+    nothing
 
 # Rows j0:j1 of `w` into row 1 of `dst`, written as `alpha * acc + beta * y`
 # with alpha = 1 and beta = 0, the expression `_qgemv_q8k_rows!` evaluates.
 # The weight bytes are read in place at the file offset: no view is built.
-function _gemv_q8k_rows_into!(dst::AbstractMatrix{Float32}, xq::Q8KVec, w::QuantMatrix,
-    j0::Int, j1::Int, simd::Bool)
+function _gemv_q8k_rows_into!(
+    dst::AbstractMatrix{Float32},
+    xq::Q8KVec,
+    w::QuantMatrix,
+    j0::Int,
+    j1::Int,
+    simd::Bool,
+)
     t = w.ggml_type
     rb = _qrow_bytes(t, w.ne0)
     data = w.data

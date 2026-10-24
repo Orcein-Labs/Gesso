@@ -15,7 +15,11 @@ mutable struct MTPSource <: Gesso.Speculation.DraftSource
 end
 MTPSource(m, max_draft; p_min=0.0) = MTPSource(m, max_draft, Float64(p_min), 0, 0, 0)
 
-function Gesso.Speculation.propose(src::MTPSource, ctx::Gesso.Speculation.DraftContext; max_tokens::Int)
+function Gesso.Speculation.propose(
+    src::MTPSource,
+    ctx::Gesso.Speculation.DraftContext;
+    max_tokens::Int,
+)
     k = min(max_tokens, src.max_draft)
     k <= 0 && return Gesso.Speculation.Draft(Int[], :mtp)
     t0 = time_ns()

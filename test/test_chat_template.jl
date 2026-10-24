@@ -25,10 +25,12 @@ end
     for f in files
         fx = _chat_json_parse(read(joinpath(CHAT_FIXDIR, f), String))
         inp = fx["input"]
-        got = render_chat(inp["messages"];
-                          tools = get(inp, "tools", nothing),
-                          add_generation_prompt = inp["add_generation_prompt"],
-                          enable_thinking = inp["enable_thinking"])
+        got = render_chat(
+            inp["messages"];
+            tools=get(inp, "tools", nothing),
+            add_generation_prompt=inp["add_generation_prompt"],
+            enable_thinking=inp["enable_thinking"],
+        )
         @test got == fx["expected"]
     end
 end
@@ -63,14 +65,24 @@ end
     @test _error_text(() -> chat_family("<tool_response> <think>")) !== nothing
     @test _error_text(() -> chat_family("<function=x> <think>")) !== nothing
     @test _error_text(() -> chat_family("<function=x> <tool_response>")) !== nothing
-    @test _error_text(() -> chat_family("{% for m in messages %}{{ m.content }}{% endfor %}")) !== nothing
+    @test _error_text(
+        () -> chat_family("{% for m in messages %}{{ m.content }}{% endfor %}"),
+    ) !== nothing
 end
 
 @testset "chat template: input errors are explicit" begin
     user(c) = Dict{String, Any}("role" => "user", "content" => c)
-    asst(; kw...) = Dict{String, Any}("role" => "assistant", "content" => "",
-        (string(k) => v for (k, v) in kw)...)
-    image = [Dict{String, Any}("type" => "image_url", "image_url" => Dict{String, Any}("url" => "x"))]
+    asst(; kw...) = Dict{String, Any}(
+        "role" => "assistant",
+        "content" => "",
+        (string(k) => v for (k, v) in kw)...,
+    )
+    image = [
+        Dict{String, Any}(
+            "type" => "image_url",
+            "image_url" => Dict{String, Any}("url" => "x"),
+        ),
+    ]
     video = [Dict{String, Any}("type" => "video", "video" => "x")]
 
     @test occursin("image", something(_error_text(() -> render_chat([user(image)])), ""))
@@ -78,13 +90,26 @@ end
     @test occursin("no messages", something(_error_text(() -> render_chat(Any[])), ""))
     # A mid-conversation assistant is rendered in full, so its arguments are parsed.
     # A trailing assistant is a prefill and drops its tool calls, so it is not used here.
-    bad_call = [Dict{String, Any}("type" => "function",
-        "function" => Dict{String, Any}("name" => "f", "arguments" => "not json"))]
-    @test occursin("JSON", something(_error_text(() ->
-        render_chat([user("q"), asst(tool_calls = bad_call), user("next")])), ""))
+    bad_call = [
+        Dict{String, Any}(
+            "type" => "function",
+            "function" => Dict{String, Any}("name" => "f", "arguments" => "not json"),
+        ),
+    ]
+    @test occursin(
+        "JSON",
+        something(
+            _error_text(
+                () -> render_chat([user("q"), asst(tool_calls=bad_call), user("next")]),
+            ),
+            "",
+        ),
+    )
     @test _error_text(() -> render_chat([user(5)])) !== nothing
-    @test _error_text(() -> render_chat([user("q"), asst(reasoning_content = 3)])) !== nothing
-    @test _error_text(() -> render_chat([user([Dict{String, Any}("type" => "text")])])) !== nothing
-    @test _error_text(() -> render_chat([user("q")]; enable_thinking = "false")) !== nothing
-    @test _error_text(() -> render_chat([user("q")]; add_generation_prompt = "true")) !== nothing
+    @test _error_text(() -> render_chat([user("q"), asst(reasoning_content=3)])) !== nothing
+    @test _error_text(() -> render_chat([user([Dict{String, Any}("type" => "text")])])) !==
+          nothing
+    @test _error_text(() -> render_chat([user("q")]; enable_thinking="false")) !== nothing
+    @test _error_text(() -> render_chat([user("q")]; add_generation_prompt="true")) !==
+          nothing
 end

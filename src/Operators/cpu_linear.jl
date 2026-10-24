@@ -3,11 +3,11 @@
 # PORTABLE_CORRECTNESS bodies for Qwen3.5 / Ornith. They live next to cpu.jl
 # so the interpreter can compose them without a second operator vocabulary.
 
-function _cpu_silu(x::T) where {T<:AbstractFloat}
+function _cpu_silu(x::T) where {T <: AbstractFloat}
     return x / (one(T) + exp(-x))
 end
 
-function _cpu_sigmoid(x::T) where {T<:AbstractFloat}
+function _cpu_sigmoid(x::T) where {T <: AbstractFloat}
     return one(T) / (one(T) + exp(-x))
 end
 
@@ -40,7 +40,7 @@ function _cpu_geglu!(dst::AbstractArray, gate::AbstractArray, up::AbstractArray)
     return dst
 end
 
-function _cpu_softplus(x::T) where {T<:AbstractFloat}
+function _cpu_softplus(x::T) where {T <: AbstractFloat}
     # log(1+exp(x)) with the usual split so large |x| stays finite
     return x > T(20) ? x : log1p(exp(x))
 end
@@ -88,7 +88,8 @@ function _cpu_causal_conv1d_silu!(
 )
     seq, channels = size(x)
     k = size(weight, 3)
-    size(weight, 1) == channels || error("causal_conv1d: weight channels $(size(weight,1)) ≠ $channels")
+    size(weight, 1) == channels ||
+        error("causal_conv1d: weight channels $(size(weight,1)) ≠ $channels")
     size(conv_state, 1) == channels && size(conv_state, 2) == k - 1 || error(
         "causal_conv1d: conv_state must be (channels, kernel-1) = ($channels, $(k-1)), got $(size(conv_state))",
     )
@@ -203,8 +204,12 @@ end
 # across experts. Each logit still sums over i in order, so the result is
 # bit-identical to the per-expert dot product: on the 35B (256 x 2048, 40
 # layers) that strided form cost 60 ms per token against 6.5 ms for this one.
-function _cpu_router_logits!(logits::AbstractVector{T}, x::AbstractMatrix, t::Int,
-    router::AbstractMatrix) where {T}
+function _cpu_router_logits!(
+    logits::AbstractVector{T},
+    x::AbstractMatrix,
+    t::Int,
+    router::AbstractMatrix,
+) where {T}
     n_exp, h = size(router)
     fill!(logits, zero(T))
     @inbounds for i in 1:h

@@ -15,16 +15,16 @@
 # selector walks a predecessor/successor chain over those candidates.
 
 mutable struct DFlashDraft
-    target              # target tensors: embedding (EmbeddingTable), lm_head (ProjectionWeight), blocks
+    target::Any              # target tensors: embedding (EmbeddingTable), lm_head (ProjectionWeight), blocks
     layers::Vector{Any} # per draft block: NamedTuple of norms, projections and conv bases
-    fc                  # ProjectionWeight (dim, n_target*dim)
-    enc_norm            # FrozenParameter (dim): enc.output_norm, applied to fc's output
-    output_norm         # FrozenParameter (dim): applied to the block before the lm_head
-    sel_hidden          # ProjectionWeight (rank, dim): selector gate
-    sel_pred            # EmbeddingTable (vocab_d, rank): predecessor rows
-    sel_succ            # EmbeddingTable (vocab_d, rank): successor rows
-    kc::Vector{Array{Float32,3}}   # per layer (d_head, n_kv, ctx): a cached head vector is contiguous
-    vc::Vector{Array{Float32,3}}
+    fc::Any                  # ProjectionWeight (dim, n_target*dim)
+    enc_norm::Any            # FrozenParameter (dim): enc.output_norm, applied to fc's output
+    output_norm::Any         # FrozenParameter (dim): applied to the block before the lm_head
+    sel_hidden::Any          # ProjectionWeight (rank, dim): selector gate
+    sel_pred::Any            # EmbeddingTable (vocab_d, rank): predecessor rows
+    sel_succ::Any            # EmbeddingTable (vocab_d, rank): successor rows
+    kc::Vector{Array{Float32, 3}}   # per layer (d_head, n_kv, ctx): a cached head vector is contiguous
+    vc::Vector{Array{Float32, 3}}
     ctx::Int
     have::Int           # context rows 1..have are injected
     block_size::Int
@@ -39,8 +39,8 @@ mutable struct DFlashDraft
     n_heads::Int
     n_kv_heads::Int
     d_head::Int
-    cpu
-    zeros_like
+    cpu::Any
+    zeros_like::Any
     target_layers::Vector{Int}  # target block counts whose residual rows feed `fc`, in order
 end
 
@@ -53,17 +53,39 @@ and lm_head are used). `layers` is a vector of NamedTuples with the fields
 ffn_norm, ffn_conv_proj, ffn_conv_base, gate, up, down`. The KV caches hold
 `ctx` rows.
 """
-function DFlashDraft(target, layers, fc, enc_norm, output_norm, sel_hidden, sel_pred, sel_succ;
-    ctx::Int, block_size::Int, mask_token::Int, conv_kernel::Int=2, conv_group::Int,
-    top_k::Int, rank::Int, window::Int, eps::Real=1e-6, theta::Real=1e7,
-    n_heads::Int, n_kv_heads::Int, d_head::Int, target_layers::AbstractVector{<:Integer}=Int[],
-    cpu=CPUBackend())
+function DFlashDraft(
+    target,
+    layers,
+    fc,
+    enc_norm,
+    output_norm,
+    sel_hidden,
+    sel_pred,
+    sel_succ;
+    ctx::Int,
+    block_size::Int,
+    mask_token::Int,
+    conv_kernel::Int=2,
+    conv_group::Int,
+    top_k::Int,
+    rank::Int,
+    window::Int,
+    eps::Real=1e-6,
+    theta::Real=1e7,
+    n_heads::Int,
+    n_kv_heads::Int,
+    d_head::Int,
+    target_layers::AbstractVector{<:Integer}=Int[],
+    cpu=CPUBackend(),
+)
     ctx >= 1 || error("DFlashDraft: ctx must be positive, got $ctx")
     block_size >= 2 || error("DFlashDraft: block_size must be at least 2, got $block_size")
     isempty(layers) && error("DFlashDraft: no draft layers")
     dim = fc.shape[1]
-    dim % conv_group == 0 || error("DFlashDraft: dim $dim is not a multiple of conv_group $conv_group")
-    n_heads % n_kv_heads == 0 || error("DFlashDraft: n_heads $n_heads is not a multiple of n_kv_heads $n_kv_heads")
+    dim % conv_group == 0 ||
+        error("DFlashDraft: dim $dim is not a multiple of conv_group $conv_group")
+    n_heads % n_kv_heads == 0 ||
+        error("DFlashDraft: n_heads $n_heads is not a multiple of n_kv_heads $n_kv_heads")
     qdim = n_heads * d_head
     kdim = n_kv_heads * d_head
     ng = div(dim, conv_group)
@@ -71,30 +93,69 @@ function DFlashDraft(target, layers, fc, enc_norm, output_norm, sel_hidden, sel_
         error("DFlashDraft: selector gate $(sel_hidden.shape) ≠ ($rank, $dim)")
     for (l, lay) in enumerate(layers)
         ffn = lay.gate.shape[1]
-        lay.attn_conv_proj.shape == (2 * conv_kernel * ng, dim) ||
-            error("DFlashDraft: layer $l attn_conv_proj $(lay.attn_conv_proj.shape) ≠ ($(2 * conv_kernel * ng), $dim)")
-        lay.ffn_conv_proj.shape == (2 * conv_kernel * ng, dim) ||
-            error("DFlashDraft: layer $l ffn_conv_proj $(lay.ffn_conv_proj.shape) ≠ ($(2 * conv_kernel * ng), $dim)")
-        size(lay.attn_conv_base) == (dim, conv_kernel, 2) ||
-            error("DFlashDraft: layer $l attn_conv_base $(size(lay.attn_conv_base)) ≠ ($dim, $conv_kernel, 2)")
-        size(lay.ffn_conv_base) == (dim, conv_kernel, 2) ||
-            error("DFlashDraft: layer $l ffn_conv_base $(size(lay.ffn_conv_base)) ≠ ($dim, $conv_kernel, 2)")
-        lay.wq.shape == (qdim, dim) || error("DFlashDraft: layer $l wq $(lay.wq.shape) ≠ ($qdim, $dim)")
-        lay.wk.shape == (kdim, dim) || error("DFlashDraft: layer $l wk $(lay.wk.shape) ≠ ($kdim, $dim)")
-        lay.wv.shape == (kdim, dim) || error("DFlashDraft: layer $l wv $(lay.wv.shape) ≠ ($kdim, $dim)")
-        lay.wo.shape == (dim, qdim) || error("DFlashDraft: layer $l wo $(lay.wo.shape) ≠ ($dim, $qdim)")
-        lay.gate.shape == (ffn, dim) || error("DFlashDraft: layer $l gate $(lay.gate.shape) ≠ ($ffn, $dim)")
-        lay.up.shape == (ffn, dim) || error("DFlashDraft: layer $l up $(lay.up.shape) ≠ ($ffn, $dim)")
-        lay.down.shape == (dim, ffn) || error("DFlashDraft: layer $l down $(lay.down.shape) ≠ ($dim, $ffn)")
+        lay.attn_conv_proj.shape == (2 * conv_kernel * ng, dim) || error(
+            "DFlashDraft: layer $l attn_conv_proj $(lay.attn_conv_proj.shape) ≠ ($(2 * conv_kernel * ng), $dim)",
+        )
+        lay.ffn_conv_proj.shape == (2 * conv_kernel * ng, dim) || error(
+            "DFlashDraft: layer $l ffn_conv_proj $(lay.ffn_conv_proj.shape) ≠ ($(2 * conv_kernel * ng), $dim)",
+        )
+        size(lay.attn_conv_base) == (dim, conv_kernel, 2) || error(
+            "DFlashDraft: layer $l attn_conv_base $(size(lay.attn_conv_base)) ≠ ($dim, $conv_kernel, 2)",
+        )
+        size(lay.ffn_conv_base) == (dim, conv_kernel, 2) || error(
+            "DFlashDraft: layer $l ffn_conv_base $(size(lay.ffn_conv_base)) ≠ ($dim, $conv_kernel, 2)",
+        )
+        lay.wq.shape == (qdim, dim) ||
+            error("DFlashDraft: layer $l wq $(lay.wq.shape) ≠ ($qdim, $dim)")
+        lay.wk.shape == (kdim, dim) ||
+            error("DFlashDraft: layer $l wk $(lay.wk.shape) ≠ ($kdim, $dim)")
+        lay.wv.shape == (kdim, dim) ||
+            error("DFlashDraft: layer $l wv $(lay.wv.shape) ≠ ($kdim, $dim)")
+        lay.wo.shape == (dim, qdim) ||
+            error("DFlashDraft: layer $l wo $(lay.wo.shape) ≠ ($dim, $qdim)")
+        lay.gate.shape == (ffn, dim) ||
+            error("DFlashDraft: layer $l gate $(lay.gate.shape) ≠ ($ffn, $dim)")
+        lay.up.shape == (ffn, dim) ||
+            error("DFlashDraft: layer $l up $(lay.up.shape) ≠ ($ffn, $dim)")
+        lay.down.shape == (dim, ffn) ||
+            error("DFlashDraft: layer $l down $(lay.down.shape) ≠ ($dim, $ffn)")
     end
     # the activation prototype walks `blocks` when the embedding is quantized
-    zl = _decode_zeros_like(cpu, hasproperty(target, :blocks) ? target : merge(target, (; blocks=())))
+    zl = _decode_zeros_like(
+        cpu,
+        hasproperty(target, :blocks) ? target : merge(target, (; blocks=())),
+    )
     kc = [zeros(Float32, d_head, n_kv_heads, ctx) for _ in layers]
     vc = [zeros(Float32, d_head, n_kv_heads, ctx) for _ in layers]
-    return DFlashDraft(target, collect(Any, layers), fc, enc_norm, output_norm, sel_hidden,
-        sel_pred, sel_succ, kc, vc, ctx, 0, block_size, mask_token, conv_kernel, conv_group,
-        top_k, rank, window, Float64(eps), Float64(theta), n_heads, n_kv_heads, d_head, cpu, zl,
-        collect(Int, target_layers))
+    return DFlashDraft(
+        target,
+        collect(Any, layers),
+        fc,
+        enc_norm,
+        output_norm,
+        sel_hidden,
+        sel_pred,
+        sel_succ,
+        kc,
+        vc,
+        ctx,
+        0,
+        block_size,
+        mask_token,
+        conv_kernel,
+        conv_group,
+        top_k,
+        rank,
+        window,
+        Float64(eps),
+        Float64(theta),
+        n_heads,
+        n_kv_heads,
+        d_head,
+        cpu,
+        zl,
+        collect(Int, target_layers),
+    )
 end
 
 # Metadata lookup: the first spelling present wins. Fails listing the keys the
@@ -103,8 +164,10 @@ function _dflash_meta(kv, names::Tuple{Vararg{String}})
     for n in names
         haskey(kv, n) && return kv[n]
     end
-    error("load_dflash_draft: missing metadata $(join(names, " or ")); keys present: " *
-          join(sort!(collect(keys(kv))), ", "))
+    error(
+        "load_dflash_draft: missing metadata $(join(names, " or ")); keys present: " *
+        join(sort!(collect(keys(kv))), ", "),
+    )
 end
 
 function _dflash_tensor(info_by, names::Tuple{Vararg{String}})
@@ -114,19 +177,30 @@ function _dflash_tensor(info_by, names::Tuple{Vararg{String}})
     error("load_dflash_draft: missing tensor $(join(names, " or "))")
 end
 
-_dflash_proj_load(hdr, info) = (w = _quant_resident(info) ? _quant_matrix(hdr, info) : _gguf_array(hdr, info);
-    ProjectionWeight(; shape=size(w), storage=w))
+_dflash_proj_load(hdr, info) = (
+    w=_quant_resident(info) ? _quant_matrix(hdr, info) : _gguf_array(hdr, info);
+    ProjectionWeight(; shape=size(w), storage=w)
+)
 
-_dflash_table_load(hdr, info) = (w = _quant_resident(info) ? _quant_matrix(hdr, info) : _gguf_array(hdr, info);
-    EmbeddingTable(; shape=size(w), storage=w))
+_dflash_table_load(hdr, info) = (
+    w=_quant_resident(info) ? _quant_matrix(hdr, info) : _gguf_array(hdr, info);
+    EmbeddingTable(; shape=size(w), storage=w)
+)
 
-_dflash_norm_load(hdr, info) = (a = _gguf_array(hdr, info); FrozenParameter(; shape=size(a), storage=a))
+_dflash_norm_load(hdr, info) =
+    (a=_gguf_array(hdr, info); FrozenParameter(; shape=size(a), storage=a))
 
 # Conv bases are 3-D F32. `_gguf_array` reverses the axes, so read the raw
 # ggml order: base[c, tap, side], 1-based.
 _dflash_conv_load(hdr, info) = reshape(
-    _dequant_f32(hdr.data, Int(hdr.data_start) + Int(info.offset), info.ggml_type, prod(info.dims)),
-    info.dims...)
+    _dequant_f32(
+        hdr.data,
+        Int(hdr.data_start) + Int(info.offset),
+        info.ggml_type,
+        prod(info.dims),
+    ),
+    info.dims...,
+)
 
 """
     load_dflash_draft(path; ctx::Int, target) -> DFlashDraft
@@ -155,7 +229,8 @@ function load_dflash_draft(path::AbstractString; ctx::Int, target)
     rank = Int(meta("dflash.selector_rank"))
     top_k = Int(meta("dflash.selector_top_k"))
     tl = meta("dflash.target_layers")
-    tl isa Integer && error("load_dflash_draft: dflash.target_layers is a count, not a layer list")
+    tl isa Integer &&
+        error("load_dflash_draft: dflash.target_layers is a count, not a layer list")
     target_layers = collect(Int, tl)
     n_target = length(target_layers)
     window = Int(meta("dflash.attention.sliding_window", "dflash.sliding_window"))
@@ -170,33 +245,64 @@ function load_dflash_draft(path::AbstractString; ctx::Int, target)
     sel_pred = _dflash_table_load(hdr, need("selector_predecessor.weight"))
     sel_succ = _dflash_table_load(hdr, need("selector_successor.weight"))
     layers = Any[]
-    for i in 0:(nblk - 1)
+    for i in 0:(nblk-1)
         p = "blk.$i."
-        push!(layers, (
-            attn_norm=_dflash_norm_load(hdr, need(p * "attn_norm.weight")),
-            attn_conv_proj=_dflash_proj_load(hdr, need(p * "attn_conv_proj.weight")),
-            attn_conv_base=_dflash_conv_load(hdr, need(p * "attn_conv_base.weight", p * "attn_conv_base")),
-            wq=_dflash_proj_load(hdr, need(p * "attn_q.weight")),
-            wk=_dflash_proj_load(hdr, need(p * "attn_k.weight")),
-            wv=_dflash_proj_load(hdr, need(p * "attn_v.weight")),
-            q_norm=_dflash_norm_load(hdr, need(p * "attn_q_norm.weight")),
-            k_norm=_dflash_norm_load(hdr, need(p * "attn_k_norm.weight")),
-            wo=_dflash_proj_load(hdr, need(p * "attn_output.weight")),
-            ffn_norm=_dflash_norm_load(hdr, need(p * "ffn_norm.weight")),
-            ffn_conv_proj=_dflash_proj_load(hdr, need(p * "ffn_conv_proj.weight")),
-            ffn_conv_base=_dflash_conv_load(hdr, need(p * "ffn_conv_base.weight", p * "ffn_conv_base")),
-            gate=_dflash_proj_load(hdr, need(p * "ffn_gate.weight")),
-            up=_dflash_proj_load(hdr, need(p * "ffn_up.weight")),
-            down=_dflash_proj_load(hdr, need(p * "ffn_down.weight")),
-        ))
+        push!(
+            layers,
+            (
+                attn_norm=_dflash_norm_load(hdr, need(p * "attn_norm.weight")),
+                attn_conv_proj=_dflash_proj_load(hdr, need(p * "attn_conv_proj.weight")),
+                attn_conv_base=_dflash_conv_load(
+                    hdr,
+                    need(p * "attn_conv_base.weight", p * "attn_conv_base"),
+                ),
+                wq=_dflash_proj_load(hdr, need(p * "attn_q.weight")),
+                wk=_dflash_proj_load(hdr, need(p * "attn_k.weight")),
+                wv=_dflash_proj_load(hdr, need(p * "attn_v.weight")),
+                q_norm=_dflash_norm_load(hdr, need(p * "attn_q_norm.weight")),
+                k_norm=_dflash_norm_load(hdr, need(p * "attn_k_norm.weight")),
+                wo=_dflash_proj_load(hdr, need(p * "attn_output.weight")),
+                ffn_norm=_dflash_norm_load(hdr, need(p * "ffn_norm.weight")),
+                ffn_conv_proj=_dflash_proj_load(hdr, need(p * "ffn_conv_proj.weight")),
+                ffn_conv_base=_dflash_conv_load(
+                    hdr,
+                    need(p * "ffn_conv_base.weight", p * "ffn_conv_base"),
+                ),
+                gate=_dflash_proj_load(hdr, need(p * "ffn_gate.weight")),
+                up=_dflash_proj_load(hdr, need(p * "ffn_up.weight")),
+                down=_dflash_proj_load(hdr, need(p * "ffn_down.weight")),
+            ),
+        )
     end
     length(layers) == nblk || error("load_dflash_draft: expected $nblk blocks")
     # the feature matrix is the target layers' rows side by side
-    fc.shape[2] == n_target * dim ||
-        error("load_dflash_draft: fc in-width $(fc.shape[2]) ≠ $n_target target layers × $dim")
-    return DFlashDraft(target, layers, fc, enc_norm, output_norm, sel_hidden, sel_pred, sel_succ;
-        ctx, block_size=block, mask_token=mask, conv_kernel=conv_k, conv_group=conv_g,
-        top_k, rank, window, eps, theta, n_heads, n_kv_heads=n_kv, d_head, target_layers)
+    fc.shape[2] == n_target * dim || error(
+        "load_dflash_draft: fc in-width $(fc.shape[2]) ≠ $n_target target layers × $dim",
+    )
+    return DFlashDraft(
+        target,
+        layers,
+        fc,
+        enc_norm,
+        output_norm,
+        sel_hidden,
+        sel_pred,
+        sel_succ;
+        ctx,
+        block_size=block,
+        mask_token=mask,
+        conv_kernel=conv_k,
+        conv_group=conv_g,
+        top_k,
+        rank,
+        window,
+        eps,
+        theta,
+        n_heads,
+        n_kv_heads=n_kv,
+        d_head,
+        target_layers,
+    )
 end
 
 # --- per-vector and per-row helpers -----------------------------------------
@@ -227,19 +333,26 @@ function _dflash_rope!(x::AbstractVector, pos::Integer, theta::Real)
         c = cos(ang)
         s = sin(ang)
         a = x[i]
-        b = x[i + half]
+        b = x[i+half]
         x[i] = a * c - b * s
-        x[i + half] = a * s + b * c
+        x[i+half] = a * s + b * c
     end
     return x
 end
 
 # RMS-norms every head of every row of X in place, then ropes it. Row r sits at
 # position pos0 + r - 1.
-function _dflash_heads!(X::AbstractMatrix, nrm::FrozenParameter, n_h::Int, d::Int, pos0::Int,
-    eps::Real, theta::Real)
+function _dflash_heads!(
+    X::AbstractMatrix,
+    nrm::FrozenParameter,
+    n_h::Int,
+    d::Int,
+    pos0::Int,
+    eps::Real,
+    theta::Real,
+)
     for r in axes(X, 1), h in 1:n_h
-        seg = view(X, r, ((h - 1) * d + 1):(h * d))
+        seg = view(X, r, ((h-1)*d+1):(h*d))
         _df_rmsnorm!(seg, seg, nrm.storage, eps)
         _dflash_rope!(seg, pos0 + r - 1, theta)
     end
@@ -254,10 +367,19 @@ function _dflash_proj(m::DFlashDraft, X::AbstractMatrix, w)
 end
 
 # Rows of an embedding-shaped table for token ids (0-based).
-function _dflash_table_rows(m::DFlashDraft, table::EmbeddingTable, toks::AbstractVector{Int})
+function _dflash_table_rows(
+    m::DFlashDraft,
+    table::EmbeddingTable,
+    toks::AbstractVector{Int},
+)
     E = zeros(Float32, length(toks), table.shape[2])
-    embedding_lookup!(m.cpu, Activation(; shape=size(E), storage=E), table, collect(Int, toks),
-        DecodeWorkload())
+    embedding_lookup!(
+        m.cpu,
+        Activation(; shape=size(E), storage=E),
+        table,
+        collect(Int, toks),
+        DecodeWorkload(),
+    )
     return E
 end
 
@@ -265,8 +387,13 @@ end
 # grp = (c-1) ÷ G takes its taps from dyn[i, 1 + grp + n_groups*(a + K*side)]
 # plus the static base. Row i reads rows i-a for a in 0:K-1, and rows before
 # the block's first row are zero.
-function _dflash_conv(hid::AbstractMatrix, dyn::AbstractMatrix, base::AbstractArray{<:Any,3},
-    side::Int, G::Int)
+function _dflash_conv(
+    hid::AbstractMatrix,
+    dyn::AbstractMatrix,
+    base::AbstractArray{<:Any, 3},
+    side::Int,
+    G::Int,
+)
     B, dim = size(hid)
     K = size(base, 2)
     ng = div(dim, G)
@@ -274,10 +401,10 @@ function _dflash_conv(hid::AbstractMatrix, dyn::AbstractMatrix, base::AbstractAr
     for i in 1:B, c in 1:dim
         grp = div(c - 1, G)
         acc = 0.0f0
-        for a in 0:(min(K, B) - 1)
+        for a in 0:(min(K, B)-1)
             i - a >= 1 || break
-            w = dyn[i, 1 + grp + ng * (a + K * side)] + base[c, a + 1, side + 1]
-            acc += w * hid[i - a, c]
+            w = dyn[i, 1+grp+ng*(a+K*side)] + base[c, a+1, side+1]
+            acc += w * hid[i-a, c]
         end
         out[i, c] = acc
     end
@@ -297,7 +424,7 @@ function _dflash_top_k(lg::AbstractVector, k::Int)
             pop!(top)
         end
         p = length(top) + 1
-        while p > 1 && lg[top[p - 1]] < v
+        while p > 1 && lg[top[p-1]] < v
             p -= 1
         end
         insert!(top, p, i)
@@ -393,8 +520,15 @@ end
 # r-1. A context row is kept while its distance to the query is below the
 # sliding window. The block is not causal. Each (row, head) pair is one job;
 # large calls split the jobs across threads.
-function _dflash_block_attn(m::DFlashDraft, l::Int, q::AbstractMatrix, kb::AbstractMatrix,
-    vb::AbstractMatrix, L::Int; threaded::Union{Nothing,Bool}=nothing)
+function _dflash_block_attn(
+    m::DFlashDraft,
+    l::Int,
+    q::AbstractMatrix,
+    kb::AbstractMatrix,
+    vb::AbstractMatrix,
+    L::Int;
+    threaded::Union{Nothing, Bool}=nothing,
+)
     B = size(q, 1)
     d = m.d_head
     nh = m.n_heads
@@ -419,7 +553,7 @@ function _dflash_block_attn(m::DFlashDraft, l::Int, q::AbstractMatrix, kb::Abstr
             qp = L + i - 2
             r_lo = max(1, qp - m.window + 2)
             nk = 0
-            for r in r_lo:(L - 1)
+            for r in r_lo:(L-1)
                 nk += 1
                 s = 0.0f0
                 @simd for e in 1:d
@@ -442,7 +576,7 @@ function _dflash_block_attn(m::DFlashDraft, l::Int, q::AbstractMatrix, kb::Abstr
                 tot += sc[z]
             end
             z = 0
-            for r in r_lo:(L - 1)
+            for r in r_lo:(L-1)
                 z += 1
                 w = Float32(sc[z] / tot)
                 @simd for e in 1:d
@@ -477,9 +611,11 @@ and V cache. Same bookkeeping as `mtp_rows!`: gaps and overflow are errors.
 function dflash_rows!(m::DFlashDraft, pos::Int, X::AbstractMatrix)
     n = size(X, 1)
     pos >= 1 || error("dflash_rows!: position $pos is below 1")
-    size(X, 2) == m.fc.shape[2] ||
-        error("dflash_rows!: features are $(size(X, 2)) wide, the drafter takes $(m.fc.shape[2])")
-    pos + n - 1 <= m.ctx || error("dflash_rows!: rows to $(pos + n - 1) exceed the drafter's ctx $(m.ctx)")
+    size(X, 2) == m.fc.shape[2] || error(
+        "dflash_rows!: features are $(size(X, 2)) wide, the drafter takes $(m.fc.shape[2])",
+    )
+    pos + n - 1 <= m.ctx ||
+        error("dflash_rows!: rows to $(pos + n - 1) exceed the drafter's ctx $(m.ctx)")
     pos <= m.have + 1 || error("dflash_rows!: row $pos leaves a gap after row $(m.have)")
     n == 0 && return m
     d = m.d_head
@@ -491,7 +627,7 @@ function dflash_rows!(m::DFlashDraft, pos::Int, X::AbstractMatrix)
         for r in 1:n
             p = pos + r - 1
             for h in 1:m.n_kv_heads
-                seg = ((h - 1) * d + 1):(h * d)
+                seg = ((h-1)*d+1):(h*d)
                 m.kc[l][:, h, p] .= view(K, r, seg)
                 m.vc[l][:, h, p] .= view(V, r, seg)
             end
@@ -510,8 +646,13 @@ so context rows must cover those. The block is `[ids[end], mask, ...]`, sized
 caches are left as they were. Returns an empty vector if fewer than `n_min`
 ids pass the `p_min` gate.
 """
-function dflash_draft!(m::DFlashDraft, ids::AbstractVector{Int}, k::Int; p_min::Real=0.0,
-    n_min::Int=0)
+function dflash_draft!(
+    m::DFlashDraft,
+    ids::AbstractVector{Int},
+    k::Int;
+    p_min::Real=0.0,
+    n_min::Int=0,
+)
     L = length(ids)
     L >= 1 || error("dflash_draft!: no ids")
     m.have >= L - 1 || error("dflash_draft!: context rows end at $(m.have), need $(L - 1)")
@@ -520,15 +661,15 @@ function dflash_draft!(m::DFlashDraft, ids::AbstractVector{Int}, k::Int; p_min::
     t, lg = _dflash_block(m, ids, n_draft)
     K = min(m.top_k, size(lg, 2))
     cands = [_dflash_top_k(view(lg, i, :), K) for i in 1:n_draft]
-    unary = [Float32[lg[i, c + 1] for c in cands[i]] for i in 1:n_draft]
-    G = _dflash_proj(m, t[2:(n_draft + 1), :], m.sel_hidden)
+    unary = [Float32[lg[i, c+1] for c in cands[i]] for i in 1:n_draft]
+    G = _dflash_proj(m, t[2:(n_draft+1), :], m.sel_hidden)
     gate = [collect(view(G, i, :)) for i in 1:n_draft]
     cflat = reduce(vcat, cands)
     succ_flat = _dflash_table_rows(m, m.sel_succ, cflat)
     pred_flat = _dflash_table_rows(m, m.sel_pred, cflat)
     anchor = _dflash_table_rows(m, m.sel_pred, [ids[L]])
-    succ_rows = [succ_flat[((i - 1) * K + 1):(i * K), :] for i in 1:n_draft]
-    pred_rows = [i == 1 ? anchor : pred_flat[((i - 2) * K + 1):((i - 1) * K), :] for i in 1:n_draft]
+    succ_rows = [succ_flat[((i-1)*K+1):(i*K), :] for i in 1:n_draft]
+    pred_rows = [i == 1 ? anchor : pred_flat[((i-2)*K+1):((i-1)*K), :] for i in 1:n_draft]
     scores = _dflash_select(cands, unary, gate, succ_rows, pred_rows)
     return _dflash_walk(cands, scores; p_min, n_min)
 end

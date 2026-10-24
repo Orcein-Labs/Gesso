@@ -24,19 +24,42 @@ mutable struct _VWDraft <: Gesso.Speculation.DraftSource
     empty::Bool
     overrun::Bool
     vocab::Int
-    log::Vector{Tuple{Int,Int}}   # (drafted, accepted) per window, from observe!
+    log::Vector{Tuple{Int, Int}}   # (drafted, accepted) per window, from observe!
 end
 
-function _vw_draft(target, plen, vocab; width=8, wrong=0, allwrong=false, empty=false, overrun=false)
-    return _VWDraft(target, plen, width, wrong, allwrong, empty, overrun, vocab, Tuple{Int,Int}[])
+function _vw_draft(
+    target,
+    plen,
+    vocab;
+    width=8,
+    wrong=0,
+    allwrong=false,
+    empty=false,
+    overrun=false,
+)
+    return _VWDraft(
+        target,
+        plen,
+        width,
+        wrong,
+        allwrong,
+        empty,
+        overrun,
+        vocab,
+        Tuple{Int, Int}[],
+    )
 end
 
-function Gesso.Speculation.propose(src::_VWDraft, ctx::Gesso.Speculation.DraftContext; max_tokens::Int)
+function Gesso.Speculation.propose(
+    src::_VWDraft,
+    ctx::Gesso.Speculation.DraftContext;
+    max_tokens::Int,
+)
     src.empty && return Gesso.Speculation.Draft(Int[], :vw_empty)
     steps = length(ctx.ids) - src.plen
     n = src.overrun ? src.width : max_tokens
     hi = min(length(src.target), steps + n)
-    d = src.target[(steps + 1):hi]
+    d = src.target[(steps+1):hi]
     if src.allwrong
         d = [mod(t + 1, src.vocab) for t in d]
     elseif 1 <= src.wrong <= length(d)
@@ -45,7 +68,11 @@ function Gesso.Speculation.propose(src::_VWDraft, ctx::Gesso.Speculation.DraftCo
     return Gesso.Speculation.Draft(d, :vw_oracle)
 end
 
-function Gesso.Speculation.observe!(src::_VWDraft, d::Gesso.Speculation.Draft, accepted::Int)
+function Gesso.Speculation.observe!(
+    src::_VWDraft,
+    d::Gesso.Speculation.Draft,
+    accepted::Int,
+)
     push!(src.log, (length(d.ids), accepted))
     return nothing
 end
@@ -54,9 +81,12 @@ end
 # the CPU GGUF models do. The hybrid fixture is F64 end to end, so its tensors are
 # converted to F32 for the window cases. Structure and values are kept.
 _vw_f32(a::AbstractArray{Float64}) = Float32.(a)
-_vw_f32(w::Gesso.ProjectionWeight) = Gesso.ProjectionWeight(; shape=w.shape, storage=_vw_f32(w.storage))
-_vw_f32(w::Gesso.FrozenParameter) = Gesso.FrozenParameter(; shape=w.shape, storage=_vw_f32(w.storage))
-_vw_f32(w::Gesso.EmbeddingTable) = Gesso.EmbeddingTable(; shape=w.shape, storage=_vw_f32(w.storage))
+_vw_f32(w::Gesso.ProjectionWeight) =
+    Gesso.ProjectionWeight(; shape=w.shape, storage=_vw_f32(w.storage))
+_vw_f32(w::Gesso.FrozenParameter) =
+    Gesso.FrozenParameter(; shape=w.shape, storage=_vw_f32(w.storage))
+_vw_f32(w::Gesso.EmbeddingTable) =
+    Gesso.EmbeddingTable(; shape=w.shape, storage=_vw_f32(w.storage))
 _vw_f32(x::NamedTuple) = map(_vw_f32, x)
 _vw_f32(x::Tuple) = map(_vw_f32, x)
 _vw_f32(x) = x
@@ -77,8 +107,10 @@ function _vw_state_diff(A::GenerateState, B::GenerateState)
     n = length(A.ids)
     for bi in eachindex(A.kc)
         size(A.kc[bi].storage, 1) >= n || continue
-        A.kc[bi].storage[1:n, :, :] == B.kc[bi].storage[1:n, :, :] || push!(diffs, "kc[$bi]")
-        A.vc[bi].storage[1:n, :, :] == B.vc[bi].storage[1:n, :, :] || push!(diffs, "vc[$bi]")
+        A.kc[bi].storage[1:n, :, :] == B.kc[bi].storage[1:n, :, :] ||
+            push!(diffs, "kc[$bi]")
+        A.vc[bi].storage[1:n, :, :] == B.vc[bi].storage[1:n, :, :] ||
+            push!(diffs, "vc[$bi]")
     end
     return diffs
 end
@@ -91,15 +123,37 @@ function _vw_check(ts; max_new::Int, eos=(), max_draft::Int=8, draft=nothing)
     base = GenerateState(_VW_CTX)
     win = GenerateState(_VW_CTX)
     try
-        G = reference_generate(ts.model, ts, _VW_PROMPT; max_new_tokens=max_new, eos_ids=eos, state=base)
+        G = reference_generate(
+            ts.model,
+            ts,
+            _VW_PROMPT;
+            max_new_tokens=max_new,
+            eos_ids=eos,
+            state=base,
+        )
         src = nothing
         if draft !== nothing
-            long = reference_generate(ts.model, ts, _VW_PROMPT; max_new_tokens=_VW_LONG, eos_ids=eos)
-            src = _vw_draft(long[(plen + 1):end], plen, vocab; draft...)
+            long = reference_generate(
+                ts.model,
+                ts,
+                _VW_PROMPT;
+                max_new_tokens=_VW_LONG,
+                eos_ids=eos,
+            )
+            src = _vw_draft(long[(plen+1):end], plen, vocab; draft...)
         end
         info = Ref{Any}(nothing)
-        W = reference_generate(ts.model, ts, _VW_PROMPT; max_new_tokens=max_new, eos_ids=eos,
-            state=win, draft=src, max_draft, info)
+        W = reference_generate(
+            ts.model,
+            ts,
+            _VW_PROMPT;
+            max_new_tokens=max_new,
+            eos_ids=eos,
+            state=win,
+            draft=src,
+            max_draft,
+            info,
+        )
         diffs = _vw_state_diff(base, win)
         cold = reference_generate(ts.model, ts, W; max_new_tokens=2, eos_ids=())
         nextW = reference_generate(ts.model, ts, W; max_new_tokens=2, eos_ids=(), state=win)
@@ -151,9 +205,15 @@ function _vw_suite(ts)
 
     @testset "EOS inside a window" begin
         plen = length(_VW_PROMPT)
-        G0 = reference_generate(ts.model, ts, _VW_PROMPT; max_new_tokens=_VW_LONG, eos_ids=())
-        eos = G0[plen + 5]
-        @test findfirst(==(eos), G0[(plen + 1):end]) == 5
+        G0 = reference_generate(
+            ts.model,
+            ts,
+            _VW_PROMPT;
+            max_new_tokens=_VW_LONG,
+            eos_ids=(),
+        )
+        eos = G0[plen+5]
+        @test findfirst(==(eos), G0[(plen+1):end]) == 5
         r = _vw_check(ts; max_new=_VW_LONG, eos=(eos,), max_draft=7, draft=NamedTuple())
         _vw_assert(r)
         @test r.G[end] == eos

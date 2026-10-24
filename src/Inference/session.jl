@@ -227,11 +227,7 @@ function Session(
     proto = _embedding_prototype(tensors)
     T = typeof(proto)
     h = fill!(
-        similar(
-            proto,
-            T <: Array ? Float64 : eltype(T),
-            (context_length, dim),
-        ),
+        similar(proto, T <: Array ? Float64 : eltype(T), (context_length, dim)),
         zero(eltype(T)),
     )
 
@@ -934,9 +930,12 @@ function _session_consume!(s::Session, tok::Int)
             storage=view(ws.scores_out.storage, 1:n_heads, 1:K),
         )
     else
-        scores = TemporaryWorkspace(; shape=(1, K), storage=view(ws.scores.storage, 1:1, 1:K))
-        scores_out =
-            TemporaryWorkspace(; shape=(1, K), storage=view(ws.scores_out.storage, 1:1, 1:K))
+        scores =
+            TemporaryWorkspace(; shape=(1, K), storage=view(ws.scores.storage, 1:1, 1:K))
+        scores_out = TemporaryWorkspace(;
+            shape=(1, K),
+            storage=view(ws.scores_out.storage, 1:1, 1:K),
+        )
     end
     if group == 1
         kx = view(ws.k_gather.storage, 1:K, :, :)      # MHA: identity, no copy

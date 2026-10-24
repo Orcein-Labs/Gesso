@@ -6,9 +6,10 @@
 # caches alone, for non-causal attention across block rows, and for the
 # context bookkeeping errors.
 
-_dft_w(seed, shape...) = reshape(Float32.(0.3 .* sin.(0.37 .* (1:prod(shape)) .+ 1.3 * seed)), shape)
+_dft_w(seed, shape...) =
+    reshape(Float32.(0.3 .* sin.(0.37 .* (1:prod(shape)) .+ 1.3 * seed)), shape)
 _dft_norm(seed, n) = Float32.(1 .+ 0.1 .* sin.(0.9 .* (1:n) .+ seed))
-_dft_x(n) = reshape(Float32.(0.5 .* cos.(0.61 .* (1:(n * 16)) .+ 0.2)), n, 16)
+_dft_x(n) = reshape(Float32.(0.5 .* cos.(0.61 .* (1:(n*16)) .+ 0.2)), n, 16)
 
 # One block of the toy: 2 heads over 1 kv head of width 4, FFN 12, and a conv
 # kernel of 2 with groups of 2 channels. dim is 8 unless a target sets it.
@@ -16,7 +17,10 @@ function _dft_layer(s; dim=8)
     K, ng, qd, kd, ffn = 2, div(dim, 2), 8, 4, 12
     return (
         attn_norm=Gesso.FrozenParameter(; shape=(dim,), storage=_dft_norm(s, dim)),
-        attn_conv_proj=Gesso.ProjectionWeight(; shape=(2 * K * ng, dim), storage=_dft_w(s + 1, 2 * K * ng, dim)),
+        attn_conv_proj=Gesso.ProjectionWeight(;
+            shape=(2 * K * ng, dim),
+            storage=_dft_w(s + 1, 2 * K * ng, dim),
+        ),
         attn_conv_base=_dft_w(s + 2, dim, K, 2),
         wq=Gesso.ProjectionWeight(; shape=(qd, dim), storage=_dft_w(s + 3, qd, dim)),
         wk=Gesso.ProjectionWeight(; shape=(kd, dim), storage=_dft_w(s + 4, kd, dim)),
@@ -25,7 +29,10 @@ function _dft_layer(s; dim=8)
         k_norm=Gesso.FrozenParameter(; shape=(4,), storage=_dft_norm(s + 7, 4)),
         wo=Gesso.ProjectionWeight(; shape=(dim, qd), storage=_dft_w(s + 8, dim, qd)),
         ffn_norm=Gesso.FrozenParameter(; shape=(dim,), storage=_dft_norm(s + 9, dim)),
-        ffn_conv_proj=Gesso.ProjectionWeight(; shape=(2 * K * ng, dim), storage=_dft_w(s + 10, 2 * K * ng, dim)),
+        ffn_conv_proj=Gesso.ProjectionWeight(;
+            shape=(2 * K * ng, dim),
+            storage=_dft_w(s + 10, 2 * K * ng, dim),
+        ),
         ffn_conv_base=_dft_w(s + 11, dim, K, 2),
         gate=Gesso.ProjectionWeight(; shape=(ffn, dim), storage=_dft_w(s + 12, ffn, dim)),
         up=Gesso.ProjectionWeight(; shape=(ffn, dim), storage=_dft_w(s + 13, ffn, dim)),
@@ -37,19 +44,40 @@ function _dft_toy(; ctx=32, target=nothing, n_in=16, window=6)
     dim = target === nothing ? 8 : target.model.embedding.dim
     vocab = target === nothing ? 20 : size(target.embedding.storage, 1)
     rank = 3
-    tgt = target === nothing ? (
-        embedding=Gesso.EmbeddingTable(; shape=(vocab, dim), storage=_dft_w(1, vocab, dim)),
-        lm_head=Gesso.ProjectionWeight(; shape=(vocab, dim), storage=_dft_w(2, vocab, dim)),
-    ) : target
-    return Gesso.Inference.DFlashDraft(tgt, [_dft_layer(10; dim), _dft_layer(40; dim)],
+    tgt =
+        target === nothing ?
+        (
+            embedding=Gesso.EmbeddingTable(;
+                shape=(vocab, dim),
+                storage=_dft_w(1, vocab, dim),
+            ),
+            lm_head=Gesso.ProjectionWeight(;
+                shape=(vocab, dim),
+                storage=_dft_w(2, vocab, dim),
+            ),
+        ) : target
+    return Gesso.Inference.DFlashDraft(
+        tgt,
+        [_dft_layer(10; dim), _dft_layer(40; dim)],
         Gesso.ProjectionWeight(; shape=(dim, n_in), storage=_dft_w(3, dim, n_in)),
         Gesso.FrozenParameter(; shape=(dim,), storage=_dft_norm(4, dim)),
         Gesso.FrozenParameter(; shape=(dim,), storage=_dft_norm(5, dim)),
         Gesso.ProjectionWeight(; shape=(rank, dim), storage=_dft_w(6, rank, dim)),
         Gesso.EmbeddingTable(; shape=(vocab, rank), storage=_dft_w(7, vocab, rank)),
         Gesso.EmbeddingTable(; shape=(vocab, rank), storage=_dft_w(8, vocab, rank));
-        ctx, block_size=4, mask_token=vocab - 1, conv_kernel=2, conv_group=2, top_k=4, rank,
-        window, theta=1e4, n_heads=2, n_kv_heads=1, d_head=4)
+        ctx,
+        block_size=4,
+        mask_token=vocab - 1,
+        conv_kernel=2,
+        conv_group=2,
+        top_k=4,
+        rank,
+        window,
+        theta=1e4,
+        n_heads=2,
+        n_kv_heads=1,
+        d_head=4,
+    )
 end
 
 @testset "DFlash conv: taps, zero left pad, causal per row" begin
@@ -62,10 +90,11 @@ end
         ref = zeros(Float32, B, dim)
         for c in 1:dim, i in 1:B
             grp = div(c - 1, G)
-            for a in 0:(K - 1)
+            for a in 0:(K-1)
                 src = i - a
                 src >= 1 || continue
-                ref[i, c] += (dyn[i, 1 + grp + ng * (a + K * side)] + base[c, a + 1, side + 1]) * hid[src, c]
+                ref[i, c] +=
+                    (dyn[i, 1+grp+ng*(a+K*side)] + base[c, a+1, side+1]) * hid[src, c]
             end
         end
         @test isapprox(out, ref; rtol=1e-6, atol=1e-7)
@@ -197,10 +226,10 @@ end
         ref = zeros(Float64, B, 8)
         for i in 1:B, hd in 1:2
             qp = L + i - 2
-            qv = q[i, ((hd - 1) * d + 1):(hd * d)]
+            qv = q[i, ((hd-1)*d+1):(hd*d)]
             keys = Vector{Float64}[]
             vals = Vector{Float64}[]
-            for r in 1:(L - 1)
+            for r in 1:(L-1)
                 qp - (r - 1) >= window && continue
                 push!(keys, m.kc[1][:, 1, r])
                 push!(vals, m.vc[1][:, 1, r])
@@ -212,7 +241,7 @@ end
             s = [sum(qv .* k) / sqrt(d) for k in keys]
             w = exp.(s .- maximum(s))
             w ./= sum(w)
-            ref[i, ((hd - 1) * d + 1):(hd * d)] = sum(w[z] .* vals[z] for z in eachindex(w))
+            ref[i, ((hd-1)*d+1):(hd*d)] = sum(w[z] .* vals[z] for z in eachindex(w))
         end
         @test isapprox(out, ref; rtol=1e-5, atol=1e-6)
         push!(outs, out)
@@ -223,11 +252,15 @@ end
 
 # Draft source over a DFlash drafter, as scripts/saluki_dflash_source.jl does it.
 mutable struct _DFTSource <: Gesso.Speculation.DraftSource
-    m
+    m::Any
     k::Int
-    log::Vector{Tuple{Int,Int}}
+    log::Vector{Tuple{Int, Int}}
 end
-function Gesso.Speculation.propose(src::_DFTSource, ctx::Gesso.Speculation.DraftContext; max_tokens::Int)
+function Gesso.Speculation.propose(
+    src::_DFTSource,
+    ctx::Gesso.Speculation.DraftContext;
+    max_tokens::Int,
+)
     d = Gesso.Inference.dflash_draft!(src.m, collect(ctx.ids), min(max_tokens, src.k))
     return Gesso.Speculation.Draft(d, :dflash)
 end
@@ -240,13 +273,23 @@ Gesso.Speculation.observe!(src::_DFTSource, d::Gesso.Speculation.Draft, a::Integ
     prompt = [1, 3, 4, 5]
     plain = reference_generate(ts.model, ts, prompt; max_new_tokens=12, eos_ids=())
     for k in (1, 3)
-        src = _DFTSource(_dft_toy(; ctx=64, target=ts, n_in=2dim), k, Tuple{Int,Int}[])
+        src = _DFTSource(_dft_toy(; ctx=64, target=ts, n_in=2dim), k, Tuple{Int, Int}[])
         st = GenerateState(64)
         try
             info = Ref{Any}(nothing)
-            ids = reference_generate(ts.model, ts, prompt; max_new_tokens=12, eos_ids=(),
-                state=st, draft=src, max_draft=k, info, taps=[0, 1],
-                on_taps=(p, X) -> Gesso.Inference.dflash_rows!(src.m, p, X))
+            ids = reference_generate(
+                ts.model,
+                ts,
+                prompt;
+                max_new_tokens=12,
+                eos_ids=(),
+                state=st,
+                draft=src,
+                max_draft=k,
+                info,
+                taps=[0, 1],
+                on_taps=(p, X) -> Gesso.Inference.dflash_rows!(src.m, p, X),
+            )
             @test ids == plain
             @test info[].speculation.windows == length(src.log) >= 1
             @test all(t -> t[1] <= k, src.log)

@@ -11,7 +11,7 @@ const _KVT = Gesso.Inference
 
 _kvt_relerr(a, b) = maximum(abs.(a .- b)) / maximum(abs.(b))
 
-function _kvt_cache(fmt::Symbol, x::Array{Float32,3})
+function _kvt_cache(fmt::Symbol, x::Array{Float32, 3})
     rows, n_kv, d = size(x)
     fmt === :f32 && return copy(x)
     fmt === :f16 && return Float16.(x)
@@ -34,7 +34,7 @@ end
 function _kvt_split(rng, K::Int, n::Int)
     cuts = sort(rand(rng, 0:K, n - 1))
     bounds = vcat(0, cuts, K)
-    return [(bounds[i] + 1):bounds[i + 1] for i in 1:n]
+    return [(bounds[i]+1):bounds[i+1] for i in 1:n]
 end
 
 function _kvt_merged(q, kc, vc, ranges, n_heads, d, group; int_scores::Bool=false)
@@ -63,21 +63,35 @@ const _KVT_FORMATS = (:f32, :f16, :q8, :q4h)
         ref = _kvt_reference(qq, kc, vc, n_heads, d, group, K)
 
         @test _kvt_relerr(_kvt_merged(qq, kc, vc, [1:K], n_heads, d, group), ref) <= 1e-5
-        @test _kvt_relerr(_kvt_merged(qq, kc, vc, [1:0, 1:K], n_heads, d, group), ref) <= 1e-5
-        @test _kvt_relerr(_kvt_merged(qq, kc, vc, [1:K, (K + 1):K], n_heads, d, group), ref) <= 1e-5
-        @test _kvt_relerr(_kvt_merged(qq, kc, vc, [1:1, 2:K], n_heads, d, group), ref) <= 1e-5
+        @test _kvt_relerr(_kvt_merged(qq, kc, vc, [1:0, 1:K], n_heads, d, group), ref) <=
+              1e-5
+        @test _kvt_relerr(
+            _kvt_merged(qq, kc, vc, [1:K, (K+1):K], n_heads, d, group),
+            ref,
+        ) <= 1e-5
+        @test _kvt_relerr(_kvt_merged(qq, kc, vc, [1:1, 2:K], n_heads, d, group), ref) <=
+              1e-5
 
         worst2 = 0.0
         worst3 = 0.0
         for _ in 1:20
             r2 = _kvt_split(rng, K, 2)
-            worst2 = max(worst2, _kvt_relerr(_kvt_merged(qq, kc, vc, r2, n_heads, d, group), ref))
+            worst2 = max(
+                worst2,
+                _kvt_relerr(_kvt_merged(qq, kc, vc, r2, n_heads, d, group), ref),
+            )
             r3 = _kvt_split(rng, K, 3)
-            worst3 = max(worst3, _kvt_relerr(_kvt_merged(qq, kc, vc, r3, n_heads, d, group), ref))
+            worst3 = max(
+                worst3,
+                _kvt_relerr(_kvt_merged(qq, kc, vc, r3, n_heads, d, group), ref),
+            )
         end
-        a = rand(rng, 2:(K - 1))
-        single = [1:a, (a + 1):(a + 1), (a + 2):K]
-        worst3 = max(worst3, _kvt_relerr(_kvt_merged(qq, kc, vc, single, n_heads, d, group), ref))
+        a = rand(rng, 2:(K-1))
+        single = [1:a, (a+1):(a+1), (a+2):K]
+        worst3 = max(
+            worst3,
+            _kvt_relerr(_kvt_merged(qq, kc, vc, single, n_heads, d, group), ref),
+        )
         @test worst2 <= 1e-5
         @test worst3 <= 1e-5
         @info "kv tier split" fmt worst_relerr_2range=worst2 worst_relerr_3range=worst3
@@ -113,7 +127,7 @@ end
     block = 512
     threaded = zeros(Float32, 1, n_heads, d)
     _KVT._attention_split_cpu!(threaded, q, kc, vc, K, n_heads, d, group; block_rows=block)
-    ranges = [((b - 1) * block + 1):min(K, b * block) for b in 1:cld(K, block)]
+    ranges = [((b-1)*block+1):min(K, b*block) for b in 1:cld(K, block)]
     serial = _kvt_merged(q, kc, vc, ranges, n_heads, d, group)
     @test threaded == serial
     ref = _kvt_reference(q, kc, vc, n_heads, d, group, K)
@@ -131,8 +145,15 @@ end
     vf = randn(rng, Float32, K, n_kv, d)
     f32 = _kvt_reference(q, kf, vf, n_heads, d, group, K)
     for fmt in (:q8, :q4h)
-        out = _kvt_merged(_kvt_query(fmt, q), _kvt_cache(fmt, kf), _kvt_cache(fmt, vf),
-            [1:400, 401:K], n_heads, d, group)
+        out = _kvt_merged(
+            _kvt_query(fmt, q),
+            _kvt_cache(fmt, kf),
+            _kvt_cache(fmt, vf),
+            [1:400, 401:K],
+            n_heads,
+            d,
+            group,
+        )
         fmt === :q4h && _KVT._kv_rotate!(out, false)
         @test _kvt_relerr(out, f32) <= (fmt === :q8 ? 0.05 : 0.25)
     end
@@ -145,14 +166,18 @@ end
     kc = randn(rng, Float32, 30, 2, d)
     vc = randn(rng, Float32, 30, 2, d)
     full = _kvt_merged(q, kc, vc, [1:30], n_heads, d, 2)
-    @test _kvt_merged(q, kc, vc, [1:0, 1:15, 16:16, 17:17, 18:30], n_heads, d, 2) ≈ full atol = 1e-6
+    @test _kvt_merged(q, kc, vc, [1:0, 1:15, 16:16, 17:17, 18:30], n_heads, d, 2) ≈ full atol =
+        1e-6
     empty = _KVT._kv_partial(n_heads, d)
-    @test_throws Gesso.GessoError _KVT._partial_finish!(zeros(Float32, 1, n_heads, d), empty)
+    @test_throws Gesso.GessoError _KVT._partial_finish!(
+        zeros(Float32, 1, n_heads, d),
+        empty,
+    )
 end
 
 # Forwards to a cache's getindex without being a QuantKV, so the generic methods
 # run over the same codes and scales the q8 fast path reads.
-struct _KVTGeneric{C<:AbstractArray} <: AbstractArray{Float32,3}
+struct _KVTGeneric{C <: AbstractArray} <: AbstractArray{Float32, 3}
     x::C
 end
 Base.size(w::_KVTGeneric) = size(w.x)
@@ -208,7 +233,16 @@ end
         kc = _kvt_cache(:q8, randn(rng, Float32, K, n_kv, d))
         vc = _kvt_cache(:q8, randn(rng, Float32, K, n_kv, d))
         ref = _kvt_exact64(q, kc, vc, n_heads, d, group, K)
-        out = _kvt_merged(q, kc, vc, [1:333, 334:700, 701:K], n_heads, d, group; int_scores=true)
+        out = _kvt_merged(
+            q,
+            kc,
+            vc,
+            [1:333, 334:700, 701:K],
+            n_heads,
+            d,
+            group;
+            int_scores=true,
+        )
         err = maximum(abs.(out .- ref)) / maximum(abs.(ref))
         @test all(isfinite, out)
         @test err <= 5e-3
@@ -263,10 +297,30 @@ end
     kc = _kvt_cache(:q8, randn(rng, Float32, K, n_kv, d))
     vc = _kvt_cache(:q8, randn(rng, Float32, K, n_kv, d))
     single = _kvt_merged(q, kc, vc, [1:K], n_heads, d, group; int_scores=true)
-    split = _kvt_merged(q, kc, vc, [1:1, 2:700, 701:1400, 1401:K], n_heads, d, group; int_scores=true)
+    split = _kvt_merged(
+        q,
+        kc,
+        vc,
+        [1:1, 2:700, 701:1400, 1401:K],
+        n_heads,
+        d,
+        group;
+        int_scores=true,
+    )
     @test _kvt_relerr(split, single) <= 1e-5
     fresh = zeros(Float32, 1, n_heads, d)
-    _KVT._attention_split_cpu!(fresh, q, kc, vc, K, n_heads, d, group; block_rows=512, int_scores=true)
+    _KVT._attention_split_cpu!(
+        fresh,
+        q,
+        kc,
+        vc,
+        K,
+        n_heads,
+        d,
+        group;
+        block_rows=512,
+        int_scores=true,
+    )
     @test _kvt_relerr(fresh, single) <= 1e-5
 end
 
@@ -282,7 +336,8 @@ end
     ref = _kvt_exact64(q, kc, vc, n_heads, d, group, K)
     bad = _KVT.QuantKV{:q8}(kc.codes, copy(kc.scales), kc.d)
     bad.scales[:, :, 1] .*= Float16(2)
-    out = _kvt_merged(q, bad, vc, [1:333, 334:700, 701:K], n_heads, d, group; int_scores=true)
+    out =
+        _kvt_merged(q, bad, vc, [1:333, 334:700, 701:K], n_heads, d, group; int_scores=true)
     corrupt_err = _kvt_relerr(out, ref)
     @info "kv tier corrupted-scale control" relerr=corrupt_err
     @test corrupt_err > 5e-3

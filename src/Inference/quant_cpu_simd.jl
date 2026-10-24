@@ -28,43 +28,77 @@ using ..Gesso.Log: glog, LOG_INFO
 
 # Dequantized values per 4-bit nibble, duplicated across both 128-bit lanes so
 # one vpshufb serves a full 32-byte vector.
-const _Q8K_KV_IQ4NL_X2 = ntuple(i -> VecElement(KVALUES_IQ4NL[((i - 1) & 15) + 1]), 32)
+const _Q8K_KV_IQ4NL_X2 = ntuple(i -> VecElement(KVALUES_IQ4NL[((i-1)&15)+1]), 32)
 
 # ---------------------------------------------------------------- CPU features
 
 # CPUID leaves as single-register asm calls. Each cpuid clobbers the other
 # three registers, so every call declares them clobbered.
-@noinline _cpuid_eax(leaf::UInt32, sub::UInt32)::UInt32 = Base.llvmcall(("""
+@noinline _cpuid_eax(leaf::UInt32, sub::UInt32)::UInt32 = Base.llvmcall(
+    (
+        """
 define i32 @entry(i32 %leaf, i32 %sub) #0 {
   %r = call i32 asm sideeffect "cpuid", "={ax},{ax},{cx},~{bx},~{cx},~{dx},~{dirflag},~{fpsr},~{flags}"(i32 %leaf, i32 %sub)
   ret i32 %r
 }
 attributes #0 = { alwaysinline }
-""", "entry"), UInt32, Tuple{UInt32,UInt32}, leaf, sub)
+""",
+        "entry",
+    ),
+    UInt32,
+    Tuple{UInt32, UInt32},
+    leaf,
+    sub,
+)
 
-@noinline _cpuid_ebx(leaf::UInt32, sub::UInt32)::UInt32 = Base.llvmcall(("""
+@noinline _cpuid_ebx(leaf::UInt32, sub::UInt32)::UInt32 = Base.llvmcall(
+    (
+        """
 define i32 @entry(i32 %leaf, i32 %sub) #0 {
   %r = call i32 asm sideeffect "cpuid", "={bx},{ax},{cx},~{ax},~{cx},~{dx},~{dirflag},~{fpsr},~{flags}"(i32 %leaf, i32 %sub)
   ret i32 %r
 }
 attributes #0 = { alwaysinline }
-""", "entry"), UInt32, Tuple{UInt32,UInt32}, leaf, sub)
+""",
+        "entry",
+    ),
+    UInt32,
+    Tuple{UInt32, UInt32},
+    leaf,
+    sub,
+)
 
-@noinline _cpuid_ecx(leaf::UInt32, sub::UInt32)::UInt32 = Base.llvmcall(("""
+@noinline _cpuid_ecx(leaf::UInt32, sub::UInt32)::UInt32 = Base.llvmcall(
+    (
+        """
 define i32 @entry(i32 %leaf, i32 %sub) #0 {
   %r = call i32 asm sideeffect "cpuid", "={cx},{ax},{cx},~{ax},~{bx},~{dx},~{dirflag},~{fpsr},~{flags}"(i32 %leaf, i32 %sub)
   ret i32 %r
 }
 attributes #0 = { alwaysinline }
-""", "entry"), UInt32, Tuple{UInt32,UInt32}, leaf, sub)
+""",
+        "entry",
+    ),
+    UInt32,
+    Tuple{UInt32, UInt32},
+    leaf,
+    sub,
+)
 
-@noinline _xgetbv_lo()::UInt32 = Base.llvmcall(("""
+@noinline _xgetbv_lo()::UInt32 = Base.llvmcall(
+    (
+        """
 define i32 @entry() #0 {
   %r = call i32 asm sideeffect "xgetbv", "={ax},{cx},~{dx},~{dirflag},~{fpsr},~{flags}"(i32 0)
   ret i32 %r
 }
 attributes #0 = { alwaysinline }
-""", "entry"), UInt32, Tuple{})
+""",
+        "entry",
+    ),
+    UInt32,
+    Tuple{},
+)
 
 # AVX2 needs CPUID.7:EBX[5], AVX and OSXSAVE in CPUID.1:ECX[28,27], and
 # XCR0 bits 1 and 2 (the OS saves XMM and YMM state).
@@ -110,22 +144,25 @@ end
 function _dot_iq4_xs_q8k_ref(w::AbstractVector{UInt8}, woff::Int, x::Q8KVec)::Float32
     nb = length(x.d)
     sumf = 0.0f0
-    @inbounds for ib in 0:(nb - 1)
+    @inbounds for ib in 0:(nb-1)
         b = woff + ib * 136
-        d4d8 = _ld_f16(w, b) * x.d[ib + 1]
+        d4d8 = _ld_f16(w, b) * x.d[ib+1]
         h = _ld_u16(w, b + 2)
         ao = ib * QK_K
         for s in 0:7
             sl = _ld_u8(w, b + 4 + (s >> 1))
-            ls = (Int32((sl >> (4 * (s & 1))) & 0x0f) | (Int32((h >> (2 * s)) & 0x0003) << 4)) -
-                 Int32(32)
+            ls =
+                (
+                    Int32((sl >> (4 * (s & 1))) & 0x0f) |
+                    (Int32((h >> (2 * s)) & 0x0003) << 4)
+                ) - Int32(32)
             dl = d4d8 * Float32(ls)
             t = Int32(0)
             qb = b + 8 + 16 * s
             for j in 0:15
                 q = _ld_u8(w, qb + j)
-                t += Int32(x.qs[ao + 32 * s + j + 1]) * Int32(KVALUES_IQ4NL[(q & 0x0f) + 1])
-                t += Int32(x.qs[ao + 32 * s + j + 17]) * Int32(KVALUES_IQ4NL[(q >> 4) + 1])
+                t += Int32(x.qs[ao+32*s+j+1]) * Int32(KVALUES_IQ4NL[(q&0x0f)+1])
+                t += Int32(x.qs[ao+32*s+j+17]) * Int32(KVALUES_IQ4NL[(q>>4)+1])
             end
             sumf += dl * Float32(t)
         end
@@ -137,9 +174,9 @@ end
 function _dot_iq2_xs_q8k_ref(w::AbstractVector{UInt8}, woff::Int, x::Q8KVec)::Float32
     nb = length(x.d)
     sumf = 0.0f0
-    @inbounds for ib in 0:(nb - 1)
+    @inbounds for ib in 0:(nb-1)
         b = woff + ib * 74
-        d = _ld_f16(w, b) * x.d[ib + 1]
+        d = _ld_f16(w, b) * x.d[ib+1]
         bsum = Int32(0)
         for ib32 in 0:7
             sc = _ld_u8(w, b + 66 + ib32)
@@ -150,12 +187,12 @@ function _dot_iq2_xs_q8k_ref(w::AbstractVector{UInt8}, woff::Int, x::Q8KVec)::Fl
             sumi2 = Int32(0)
             for l in 0:3
                 qv = _ld_u16(w, b + 2 + 8 * ib32 + 2 * l)
-                grid = IQ2XS_GRID[Int(qv & 0x01ff) + 1]
-                signs = KSIGNS_IQ2XS[Int(qv >> 9) + 1]
+                grid = IQ2XS_GRID[Int(qv&0x01ff)+1]
+                signs = KSIGNS_IQ2XS[Int(qv>>9)+1]
                 for j in 0:7
                     g = Int32((grid >> (8 * j)) & 0xff)
-                    sg = (signs & KMASK_IQ2XS[j + 1]) != 0x00 ? Int32(-1) : Int32(1)
-                    v = g * Int32(x.qs[ao + 8 * l + j + 1]) * sg
+                    sg = (signs & KMASK_IQ2XS[j+1]) != 0x00 ? Int32(-1) : Int32(1)
+                    v = g * Int32(x.qs[ao+8*l+j+1]) * sg
                     if l < 2
                         sumi1 += v
                     else
@@ -175,9 +212,9 @@ end
 function _dot_iq3_xxs_q8k_ref(w::AbstractVector{UInt8}, woff::Int, x::Q8KVec)::Float32
     nb = length(x.d)
     sumf = 0.0f0
-    @inbounds for ib in 0:(nb - 1)
+    @inbounds for ib in 0:(nb-1)
         b = woff + ib * 98
-        d = _ld_f16(w, b) * x.d[ib + 1]
+        d = _ld_f16(w, b) * x.d[ib+1]
         bsum = Int32(0)
         for ib32 in 0:7
             aux = _ld_u32(w, b + 66 + 4 * ib32)
@@ -185,14 +222,14 @@ function _dot_iq3_xxs_q8k_ref(w::AbstractVector{UInt8}, woff::Int, x::Q8KVec)::F
             ao = ib * QK_K + 32 * ib32
             sumi = Int32(0)
             for l in 0:3
-                g1 = IQ3XXS_GRID[Int(_ld_u8(w, b + 2 + 8 * ib32 + 2 * l)) + 1]
-                g2 = IQ3XXS_GRID[Int(_ld_u8(w, b + 2 + 8 * ib32 + 2 * l + 1)) + 1]
-                signs = KSIGNS_IQ2XS[Int((aux >> (7 * l)) & UInt32(127)) + 1]
+                g1 = IQ3XXS_GRID[Int(_ld_u8(w, b+2+8*ib32+2*l))+1]
+                g2 = IQ3XXS_GRID[Int(_ld_u8(w, b+2+8*ib32+2*l+1))+1]
+                signs = KSIGNS_IQ2XS[Int((aux>>(7*l))&UInt32(127))+1]
                 for j in 0:3
-                    s0 = (signs & KMASK_IQ2XS[j + 1]) != 0x00 ? Int32(-1) : Int32(1)
-                    s1 = (signs & KMASK_IQ2XS[j + 5]) != 0x00 ? Int32(-1) : Int32(1)
-                    sumi += Int32((g1 >> (8 * j)) & 0xff) * Int32(x.qs[ao + 8 * l + j + 1]) * s0
-                    sumi += Int32((g2 >> (8 * j)) & 0xff) * Int32(x.qs[ao + 8 * l + j + 5]) * s1
+                    s0 = (signs & KMASK_IQ2XS[j+1]) != 0x00 ? Int32(-1) : Int32(1)
+                    s1 = (signs & KMASK_IQ2XS[j+5]) != 0x00 ? Int32(-1) : Int32(1)
+                    sumi += Int32((g1 >> (8 * j)) & 0xff) * Int32(x.qs[ao+8*l+j+1]) * s0
+                    sumi += Int32((g2 >> (8 * j)) & 0xff) * Int32(x.qs[ao+8*l+j+5]) * s1
                 end
             end
             bsum += sumi * ls
@@ -321,44 +358,86 @@ $(_q8k_hsum4_ir("%pa", "%tot"))
 attributes #0 = { alwaysinline }
 """
 
-function _iq4_sub_avx2(tab::NTuple{32,VecElement{Int8}}, qs::Ptr{UInt8}, q8::Ptr{Int8})::Int32
-    Base.llvmcall((_Q8K_IR_IQ4, "entry"), Int32,
-        Tuple{NTuple{32,VecElement{Int8}}, Ptr{UInt8}, Ptr{Int8}}, tab, qs, q8)
+function _iq4_sub_avx2(
+    tab::NTuple{32, VecElement{Int8}},
+    qs::Ptr{UInt8},
+    q8::Ptr{Int8},
+)::Int32
+    Base.llvmcall(
+        (_Q8K_IR_IQ4, "entry"),
+        Int32,
+        Tuple{NTuple{32, VecElement{Int8}}, Ptr{UInt8}, Ptr{Int8}},
+        tab,
+        qs,
+        q8,
+    )
 end
 
 const _IQ_ACC_ZERO = ntuple(_ -> VecElement(Int32(0)), 8)
 
 @inline function _iq2_sub_acc(
-    acc::NTuple{8,VecElement{Int32}},
-    g::NTuple{4,VecElement{UInt64}},
-    s::NTuple{4,VecElement{UInt64}},
+    acc::NTuple{8, VecElement{Int32}},
+    g::NTuple{4, VecElement{UInt64}},
+    s::NTuple{4, VecElement{UInt64}},
     q8::Ptr{Int8},
     ls1::Int32,
     ls2::Int32,
-)::NTuple{8,VecElement{Int32}}
-    Base.llvmcall((_Q8K_IR_IQ2, "entry"), NTuple{8,VecElement{Int32}},
-        Tuple{NTuple{8,VecElement{Int32}}, NTuple{4,VecElement{UInt64}}, NTuple{4,VecElement{UInt64}},
-            Ptr{Int8}, Int32, Int32},
-        acc, g, s, q8, ls1, ls2)
+)::NTuple{8, VecElement{Int32}}
+    Base.llvmcall(
+        (_Q8K_IR_IQ2, "entry"),
+        NTuple{8, VecElement{Int32}},
+        Tuple{
+            NTuple{8, VecElement{Int32}},
+            NTuple{4, VecElement{UInt64}},
+            NTuple{4, VecElement{UInt64}},
+            Ptr{Int8},
+            Int32,
+            Int32,
+        },
+        acc,
+        g,
+        s,
+        q8,
+        ls1,
+        ls2,
+    )
 end
 
 @inline function _iq3_sub_acc(
-    acc::NTuple{8,VecElement{Int32}},
-    g::NTuple{8,VecElement{UInt32}},
-    s::NTuple{4,VecElement{UInt64}},
+    acc::NTuple{8, VecElement{Int32}},
+    g::NTuple{8, VecElement{UInt32}},
+    s::NTuple{4, VecElement{UInt64}},
     q8::Ptr{Int8},
     ls::Int32,
-)::NTuple{8,VecElement{Int32}}
-    Base.llvmcall((_Q8K_IR_IQ3, "entry"), NTuple{8,VecElement{Int32}},
-        Tuple{NTuple{8,VecElement{Int32}}, NTuple{8,VecElement{UInt32}}, NTuple{4,VecElement{UInt64}},
-            Ptr{Int8}, Int32},
-        acc, g, s, q8, ls)
+)::NTuple{8, VecElement{Int32}}
+    Base.llvmcall(
+        (_Q8K_IR_IQ3, "entry"),
+        NTuple{8, VecElement{Int32}},
+        Tuple{
+            NTuple{8, VecElement{Int32}},
+            NTuple{8, VecElement{UInt32}},
+            NTuple{4, VecElement{UInt64}},
+            Ptr{Int8},
+            Int32,
+        },
+        acc,
+        g,
+        s,
+        q8,
+        ls,
+    )
 end
 
 # Horizontal sum of the eight int32 lanes. Integer, so the order is immaterial.
-@inline function _iq_hsum8(acc::NTuple{8,VecElement{Int32}})::Int32
-    return acc[1].value + acc[2].value + acc[3].value + acc[4].value +
-           acc[5].value + acc[6].value + acc[7].value + acc[8].value
+@inline function _iq_hsum8(acc::NTuple{8, VecElement{Int32}})::Int32
+    return acc[1].value +
+           acc[2].value +
+           acc[3].value +
+           acc[4].value +
+           acc[5].value +
+           acc[6].value +
+           acc[7].value +
+           acc[8].value
 end
 
 # f16 super-scale at a raw byte pointer, the same value as _ld_f16.
@@ -376,22 +455,33 @@ end
 # Same loop structure and float operations as the scalar reference, with the
 # integer sub-block sums taken from the primitives above.
 
-@noinline function _dot_iq4_xs_q8k_avx2(w::AbstractVector{UInt8}, woff::Int, x::Q8KVec)::Float32
+@noinline function _dot_iq4_xs_q8k_avx2(
+    w::AbstractVector{UInt8},
+    woff::Int,
+    x::Q8KVec,
+)::Float32
     nb = length(x.d)
     sumf = 0.0f0
     GC.@preserve w x begin
         pq = pointer(x.qs)
-        @inbounds for ib in 0:(nb - 1)
+        @inbounds for ib in 0:(nb-1)
             b = woff + ib * 136
-            d4d8 = _ld_f16(w, b) * x.d[ib + 1]
+            d4d8 = _ld_f16(w, b) * x.d[ib+1]
             h = _ld_u16(w, b + 2)
             ao = ib * QK_K
             for s in 0:7
                 sl = _ld_u8(w, b + 4 + (s >> 1))
-                ls = (Int32((sl >> (4 * (s & 1))) & 0x0f) | (Int32((h >> (2 * s)) & 0x0003) << 4)) -
-                     Int32(32)
+                ls =
+                    (
+                        Int32((sl >> (4 * (s & 1))) & 0x0f) |
+                        (Int32((h >> (2 * s)) & 0x0003) << 4)
+                    ) - Int32(32)
                 dl = d4d8 * Float32(ls)
-                t = _iq4_sub_avx2(_Q8K_KV_IQ4NL_X2, pointer(w, b + 9 + 16 * s), pq + (ao + 32 * s))
+                t = _iq4_sub_avx2(
+                    _Q8K_KV_IQ4NL_X2,
+                    pointer(w, b + 9 + 16 * s),
+                    pq + (ao + 32 * s),
+                )
                 sumf += dl * Float32(t)
             end
         end
@@ -403,7 +493,11 @@ end
 # the per-byte loaders in gguf_quants.jl check every byte, which the hot loop
 # cannot afford. Each block's int32 sum is accumulated in a vector across its
 # eight sub-blocks, and reduced once per block.
-@noinline function _dot_iq2_xs_q8k_avx2(w::AbstractVector{UInt8}, woff::Int, x::Q8KVec)::Float32
+@noinline function _dot_iq2_xs_q8k_avx2(
+    w::AbstractVector{UInt8},
+    woff::Int,
+    x::Q8KVec,
+)::Float32
     nb = length(x.d)
     _q8k_check_row(w, woff, 74 * nb)
     sumf = 0.0f0
@@ -413,9 +507,9 @@ end
         pq = pointer(x.qs)
         pg = pointer(IQ2XS_GRID)
         ps = pointer(_IQ_SIGN8_TAB)
-        @inbounds for ib in 0:(nb - 1)
+        @inbounds for ib in 0:(nb-1)
             b = pw + 74 * ib
-            d = _iq_f16_at(b) * x.d[ib + 1]
+            d = _iq_f16_at(b) * x.d[ib+1]
             acc = _IQ_ACC_ZERO
             for ib32 in 0:7
                 sc = unsafe_load(b + 66 + ib32)
@@ -443,7 +537,11 @@ end
     return 0.125f0 * sumf
 end
 
-@noinline function _dot_iq3_xxs_q8k_avx2(w::AbstractVector{UInt8}, woff::Int, x::Q8KVec)::Float32
+@noinline function _dot_iq3_xxs_q8k_avx2(
+    w::AbstractVector{UInt8},
+    woff::Int,
+    x::Q8KVec,
+)::Float32
     nb = length(x.d)
     _q8k_check_row(w, woff, 98 * nb)
     sumf = 0.0f0
@@ -453,9 +551,9 @@ end
         pq = pointer(x.qs)
         pg = pointer(IQ3XXS_GRID)
         ps = pointer(_IQ_SIGN8_TAB)
-        @inbounds for ib in 0:(nb - 1)
+        @inbounds for ib in 0:(nb-1)
             b = pw + 98 * ib
-            d = _iq_f16_at(b) * x.d[ib + 1]
+            d = _iq_f16_at(b) * x.d[ib+1]
             acc = _IQ_ACC_ZERO
             for ib32 in 0:7
                 aux = ltoh(unsafe_load(Ptr{UInt32}(b + 66 + 4 * ib32)))
@@ -496,7 +594,13 @@ Dot product of one weight row (IQ4_XS, IQ2_XS or IQ3_XXS, starting at 0-based
 byte `woff` of `w`) with the Q8_K activation `x`. `simd=true` takes the AVX2
 kernel, `false` the scalar reference. The two agree bit for bit.
 """
-@inline function _dot_q8k(ggml_type::Int32, w::AbstractVector{UInt8}, woff::Int, x, simd::Bool)::Float32
+@inline function _dot_q8k(
+    ggml_type::Int32,
+    w::AbstractVector{UInt8},
+    woff::Int,
+    x,
+    simd::Bool,
+)::Float32
     if ggml_type == GGML_TYPE_IQ4_XS
         return simd ? _dot_iq4_xs_q8k_avx2(w, woff, x) : _dot_iq4_xs_q8k_ref(w, woff, x)
     elseif ggml_type == GGML_TYPE_IQ2_XS
@@ -511,8 +615,9 @@ end
 
 function _q8k_check_gemv(y, ggml_type::Int32, ne0::Int, ne1::Int, q)
     _q8k_check_type(ggml_type)
-    ne0 % _q8k_block_values(ggml_type) == 0 ||
-        error("q8k gemv: ne0 $ne0 is not a multiple of the block size $(_q8k_block_values(ggml_type))")
+    ne0 % _q8k_block_values(ggml_type) == 0 || error(
+        "q8k gemv: ne0 $ne0 is not a multiple of the block size $(_q8k_block_values(ggml_type))",
+    )
     length(y) == ne1 || error("q8k gemv: y length $(length(y)) ≠ ne1 $ne1")
     need = ne1 * _qrow_bytes(ggml_type, ne0)
     length(q) >= need || error("q8k gemv: weight bytes $(length(q)) < required $need")
@@ -522,7 +627,9 @@ end
 # Weight types with a native Q8_K (or Q8_0) integer kernel: the i-quants here
 # and in quant_cpu_iq_s.jl, and the K-quants and Q8_0 in quant_cpu_kquants.jl.
 _q8k_supported_type(t::Int32) =
-    t in (GGML_TYPE_IQ4_XS, GGML_TYPE_IQ2_XS, GGML_TYPE_IQ3_XXS) || _q8k_iq_s_type(t) || _kq_supported(t)
+    t in (GGML_TYPE_IQ4_XS, GGML_TYPE_IQ2_XS, GGML_TYPE_IQ3_XXS) ||
+    _q8k_iq_s_type(t) ||
+    _kq_supported(t)
 
 function _q8k_check_type(ggml_type::Int32)
     _q8k_supported_type(ggml_type) || error("q8k gemv: unsupported ggml type $ggml_type")
@@ -624,8 +731,9 @@ function _qgemv_q8k_f32!(
 )
     length(x) == ne0 || error("q8k gemv: x length $(length(x)) ≠ ne0 $ne0")
     _q8k_check_type(ggml_type)
-    ne0 % _q8k_block_values(ggml_type) == 0 ||
-        error("q8k gemv: ne0 $ne0 is not a multiple of the block size $(_q8k_block_values(ggml_type))")
+    ne0 % _q8k_block_values(ggml_type) == 0 || error(
+        "q8k gemv: ne0 $ne0 is not a multiple of the block size $(_q8k_block_values(ggml_type))",
+    )
     xq = _q8k_quantize_act(ggml_type, x)
     if threaded
         return _qgemv_q8k_threaded!(y, xq, q, ggml_type, ne0, ne1; alpha, beta, simd)

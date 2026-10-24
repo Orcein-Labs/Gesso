@@ -85,7 +85,8 @@ struct RoPEPolicy
                 "RoPEPolicy: :llama3 scaling requires original_max_position_embeddings > 0",
             )
         end
-        isempty(mrope_section) || sum(mrope_section) > 0 ||
+        isempty(mrope_section) ||
+            sum(mrope_section) > 0 ||
             error("RoPEPolicy: mrope_section must sum to a positive rotary pair count")
         return new(
             Float64(theta),

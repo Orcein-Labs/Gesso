@@ -72,10 +72,36 @@ struct GGUFBPE <: Tokenizer
 end
 
 # The qwen35 tokenizer, for callers that predate the `pre` field.
-GGUFBPE(tokens, token_type, vocab, byte_id, merge_rank, merge_left, merge_right,
-    merge_target, specials, bos, eos, pad, chat_template) =
-    GGUFBPE(tokens, token_type, vocab, byte_id, merge_rank, merge_left, merge_right,
-        merge_target, specials, bos, eos, pad, chat_template, :qwen35)
+GGUFBPE(
+    tokens,
+    token_type,
+    vocab,
+    byte_id,
+    merge_rank,
+    merge_left,
+    merge_right,
+    merge_target,
+    specials,
+    bos,
+    eos,
+    pad,
+    chat_template,
+) = GGUFBPE(
+    tokens,
+    token_type,
+    vocab,
+    byte_id,
+    merge_rank,
+    merge_left,
+    merge_right,
+    merge_target,
+    specials,
+    bos,
+    eos,
+    pad,
+    chat_template,
+    :qwen35,
+)
 
 const _GGUF_PRE = Dict("qwen35" => :qwen35, "spark2_5" => :spark2_5)
 
@@ -127,19 +153,24 @@ function _load_gguf_tokenizer_impl(path::AbstractString)
     end
 
     model = get(kv, "tokenizer.ggml.model", nothing)
-    model == "gpt2" || error("load_gguf_tokenizer: tokenizer.ggml.model is $(repr(model)), want \"gpt2\"")
+    model == "gpt2" ||
+        error("load_gguf_tokenizer: tokenizer.ggml.model is $(repr(model)), want \"gpt2\"")
     pre = get(kv, "tokenizer.ggml.pre", nothing)
     haskey(_GGUF_PRE, pre) || error(
         "load_gguf_tokenizer: tokenizer.ggml.pre is $(repr(pre)), want one of $(join(repr.(sort!(collect(keys(_GGUF_PRE)))), ", "))",
     )
-    haskey(kv, "tokenizer.ggml.tokens") || error("load_gguf_tokenizer: no tokenizer.ggml.tokens in $path")
-    haskey(kv, "tokenizer.ggml.token_type") || error("load_gguf_tokenizer: no tokenizer.ggml.token_type in $path")
-    haskey(kv, "tokenizer.ggml.merges") || error("load_gguf_tokenizer: no tokenizer.ggml.merges in $path")
+    haskey(kv, "tokenizer.ggml.tokens") ||
+        error("load_gguf_tokenizer: no tokenizer.ggml.tokens in $path")
+    haskey(kv, "tokenizer.ggml.token_type") ||
+        error("load_gguf_tokenizer: no tokenizer.ggml.token_type in $path")
+    haskey(kv, "tokenizer.ggml.merges") ||
+        error("load_gguf_tokenizer: no tokenizer.ggml.merges in $path")
 
     tokens = kv["tokenizer.ggml.tokens"]
     types = kv["tokenizer.ggml.token_type"]
-    length(types) == length(tokens) ||
-        error("load_gguf_tokenizer: token_type has $(length(types)) entries, tokens has $(length(tokens))")
+    length(types) == length(tokens) || error(
+        "load_gguf_tokenizer: token_type has $(length(types)) entries, tokens has $(length(tokens))",
+    )
     isempty(tokens) && error("load_gguf_tokenizer: tokenizer.ggml.tokens is empty")
 
     vocab = Dict{String, Int}()
@@ -152,7 +183,9 @@ function _load_gguf_tokenizer_impl(path::AbstractString)
         elseif types[j+1] == _GGUF_TOK_UNUSED && types[i] != _GGUF_TOK_UNUSED
             vocab[t] = i - 1
         elseif types[j+1] != _GGUF_TOK_UNUSED && types[i] != _GGUF_TOK_UNUSED
-            error("load_gguf_tokenizer: duplicate token text $(repr(t)) at ids $j and $(i - 1)")
+            error(
+                "load_gguf_tokenizer: duplicate token text $(repr(t)) at ids $j and $(i - 1)",
+            )
         end
     end
 
@@ -183,10 +216,12 @@ function _load_gguf_tokenizer_impl(path::AbstractString)
         a = get(vocab, a_s, nothing)
         b = get(vocab, b_s, nothing)
         m = get(vocab, a_s * b_s, nothing)
-        (a === nothing || b === nothing || m === nothing) &&
-            error("load_gguf_tokenizer: merge $(repr(line)) names a token missing from the vocabulary")
+        (a === nothing || b === nothing || m === nothing) && error(
+            "load_gguf_tokenizer: merge $(repr(line)) names a token missing from the vocabulary",
+        )
         key = (UInt64(a) << 32) | UInt64(b)
-        haskey(merge_rank, key) && error("load_gguf_tokenizer: duplicate merge $(repr(line))")
+        haskey(merge_rank, key) &&
+            error("load_gguf_tokenizer: duplicate merge $(repr(line))")
         push!(merge_left, a)
         push!(merge_right, b)
         push!(merge_target, m)
@@ -208,8 +243,14 @@ function _load_gguf_tokenizer_impl(path::AbstractString)
         v === nothing ? nothing : Int(v)
     end
     return GGUFBPE(
-        tokens, types, vocab, byte_id,
-        merge_rank, merge_left, merge_right, merge_target,
+        tokens,
+        types,
+        vocab,
+        byte_id,
+        merge_rank,
+        merge_left,
+        merge_right,
+        merge_target,
         specials,
         _special_id("tokenizer.ggml.bos_token_id"),
         _special_id("tokenizer.ggml.eos_token_id"),
@@ -222,9 +263,17 @@ end
 # --- qwen35 pre-tokenizer ------------------------------------------------------
 
 function _q35_is_ws(c::UInt32)
-    (0x09 <= c <= 0x0d) || c == 0x20 || c == 0x85 || c == 0xa0 || c == 0x1680 ||
-        (0x2000 <= c <= 0x200a) || c == 0x2028 || c == 0x2029 || c == 0x202f ||
-        c == 0x205f || c == 0x3000
+    (0x09 <= c <= 0x0d) ||
+        c == 0x20 ||
+        c == 0x85 ||
+        c == 0xa0 ||
+        c == 0x1680 ||
+        (0x2000 <= c <= 0x200a) ||
+        c == 0x2028 ||
+        c == 0x2029 ||
+        c == 0x202f ||
+        c == 0x205f ||
+        c == 0x3000
 end
 
 function _q35_flags(c::UInt32)::UInt8
@@ -267,14 +316,16 @@ function _qwen35_split(cp::Vector{UInt32})
             c1 = _q35_lower(getc(pos + 1))
             if c1 == 0x73 || c1 == 0x74 || c1 == 0x6d || c1 == 0x64   # s t m d
                 pos += 2
-                push!(out, (prev, pos)); prev = pos
+                push!(out, (prev, pos))
+                prev = pos
                 continue
             end
             if pos + 2 < n
                 c2 = _q35_lower(getc(pos + 2))
                 if ((c1 == 0x72 || c1 == 0x76) && c2 == 0x65) || (c1 == 0x6c && c2 == 0x6c)   # re ve ll
                     pos += 3
-                    push!(out, (prev, pos)); prev = pos
+                    push!(out, (prev, pos))
+                    prev = pos
                     continue
                 end
             end
@@ -287,7 +338,8 @@ function _qwen35_split(cp::Vector{UInt32})
                 while (getf(pos) & LM) != 0
                     pos += 1
                 end
-                push!(out, (prev, pos)); prev = pos
+                push!(out, (prev, pos))
+                prev = pos
                 continue
             end
         end
@@ -295,7 +347,8 @@ function _qwen35_split(cp::Vector{UInt32})
         # \p{N}
         if (f & _Q35_N) != 0
             pos += 1
-            push!(out, (prev, pos)); prev = pos
+            push!(out, (prev, pos))
+            prev = pos
             continue
         end
 
@@ -315,7 +368,8 @@ function _qwen35_split(cp::Vector{UInt32})
                 pos += 1
                 c2 = getc(pos)
             end
-            push!(out, (prev, pos)); prev = pos
+            push!(out, (prev, pos))
+            prev = pos
             continue
         end
 
@@ -338,7 +392,8 @@ function _qwen35_split(cp::Vector{UInt32})
         else
             pos += 1
         end
-        push!(out, (prev, pos)); prev = pos
+        push!(out, (prev, pos))
+        prev = pos
     end
     return out
 end
@@ -460,7 +515,7 @@ function _merge_ids!(syms::Vector{Int}, tk::GGUFBPE)
     n = length(syms)
     while n > 1
         best = typemax(Int)
-        for i in 1:(n - 1)
+        for i in 1:(n-1)
             r = get(tk.merge_rank, _pair_key(syms[i], syms[i+1]), typemax(Int))
             r < best && (best = r)
         end
@@ -568,8 +623,9 @@ end
 # --- decode and streaming ---------------------------------------------------------
 
 function _token_bytes!(buf::Vector{UInt8}, tk::GGUFBPE, id::Integer)
-    0 <= id < length(tk.tokens) ||
-        error("decode: token id $id is outside the vocabulary of $(length(tk.tokens)) tokens")
+    0 <= id < length(tk.tokens) || error(
+        "decode: token id $id is outside the vocabulary of $(length(tk.tokens)) tokens",
+    )
     i = Int(id) + 1
     ty = tk.token_type[i]
     text = tk.tokens[i]

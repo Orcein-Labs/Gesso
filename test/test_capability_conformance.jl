@@ -201,23 +201,12 @@ function _probe(backend, cap::Symbol)
         q = _act(reshape(randn(rng, 16), (2, 2, 4)))
         k = _act(reshape(randn(rng, 16), (2, 2, 4)))
         return _conformance_run(
-            () -> Gesso.rope!(
-                backend,
-                q,
-                k,
-                [0, 1],
-                wl;
-                theta=10000.0,
-                interleaved=true,
-            ),
+            () -> Gesso.rope!(backend, q, k, [0, 1], wl; theta=10000.0, interleaved=true),
         )
     elseif cap === :mrope
         q = _act(reshape(randn(rng, 16), (2, 2, 4)))
         k = _act(reshape(randn(rng, 16), (2, 2, 4)))
-        inv = Gesso.rope_inv_freq(
-            Gesso.RoPEPolicy(; rotary_dim=4, mrope_section=[1, 1]),
-            4,
-        )
+        inv = Gesso.rope_inv_freq(Gesso.RoPEPolicy(; rotary_dim=4, mrope_section=[1, 1]), 4)
         return _conformance_run(
             () -> Gesso.rope!(
                 backend,
@@ -244,11 +233,15 @@ function _probe(backend, cap::Symbol)
     elseif cap === :geglu_ffn
         g = _act(randn(rng, 2, 4))
         u = _act(randn(rng, 2, 4))
-        return _conformance_run(() -> Gesso.Inference._geglu!(backend, _act(zeros(2, 4)), g, u))
+        return _conformance_run(
+            () -> Gesso.Inference._geglu!(backend, _act(zeros(2, 4)), g, u),
+        )
     elseif cap === :attn_head_gate
         merged = randn(rng, 2, 2 * 4)
         g = randn(rng, 2, 2)
-        return _conformance_run(() -> Gesso.Inference._head_gate_mul!(backend, merged, g, 4))
+        return _conformance_run(
+            () -> Gesso.Inference._head_gate_mul!(backend, merged, g, 4),
+        )
     elseif cap === :sliding_window_attention
         sc = randn(rng, 3, 5)
         return _conformance_run(() -> Gesso.Inference._window_mask!(sc, 3, 5, 2))

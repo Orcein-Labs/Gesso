@@ -37,18 +37,31 @@ include(joinpath(@__DIR__, "saluki_prompts.jl"))
 struct TranscriptSource <: Gesso.Speculation.DraftSource
     ids::Vector{Int}
 end
-function Gesso.Speculation.propose(s::TranscriptSource, ctx::Gesso.Speculation.DraftContext; max_tokens::Int)
+function Gesso.Speculation.propose(
+    s::TranscriptSource,
+    ctx::Gesso.Speculation.DraftContext;
+    max_tokens::Int,
+)
     i = length(ctx.ids)
     stop = min(length(s.ids), i + max_tokens)
-    return Gesso.Speculation.Draft(s.ids[i+1:stop], :transcript)
+    return Gesso.Speculation.Draft(s.ids[(i+1):stop], :transcript)
 end
-Gesso.Speculation.observe!(::TranscriptSource, ::Gesso.Speculation.Draft, ::Integer) = nothing
+Gesso.Speculation.observe!(::TranscriptSource, ::Gesso.Speculation.Draft, ::Integer) =
+    nothing
 
 backend = Gesso.CPUBackend()
 model, tensors, spec = Gesso.load_gguf(GGUF)
 tk = Gesso.Inference.load_gguf_tokenizer(GGUF)
-gen(prompt, n; kw...) = Gesso.reference_generate(model, tensors, prompt; max_new_tokens=n,
-    eps=spec.rms_norm_eps, backend, eos_ids=(IM_END,), kw...)
+gen(prompt, n; kw...) = Gesso.reference_generate(
+    model,
+    tensors,
+    prompt;
+    max_new_tokens=n,
+    eps=spec.rms_norm_eps,
+    backend,
+    eos_ids=(IM_END,),
+    kw...,
+)
 
 # JIT warm for the plain step and every window size.
 let p = Gesso.Inference.encode(tk, chat("Hi"))
@@ -58,9 +71,9 @@ let p = Gesso.Inference.encode(tk, chat("Hi"))
     end
 end
 
-transcripts = Dict{String,Tuple{Int,Vector{Int}}}()
-step_ms = Dict{String,Float64}()
-round_ms = Dict{Tuple{String,Int},Float64}()
+transcripts = Dict{String, Tuple{Int, Vector{Int}}}()
+step_ms = Dict{String, Float64}()
+round_ms = Dict{Tuple{String, Int}, Float64}()
 for (tag, msg) in PROMPTS
     prompt = Gesso.Inference.encode(tk, chat(msg))
     P = length(prompt)
@@ -71,11 +84,18 @@ for (tag, msg) in PROMPTS
     n_dec = length(ids) - P - 1
     step_ms[tag] = 1000 * (tN - t1) / n_dec
     transcripts[tag] = (P, ids)
-    @printf("PLAIN %s prompt=%d new=%d step_ms=%.1f\n", tag, P, length(ids) - P, step_ms[tag])
-    println("TEXT ", tag, " ", repr(Gesso.Inference.decode(tk, ids[P+1:end])))
+    @printf(
+        "PLAIN %s prompt=%d new=%d step_ms=%.1f\n",
+        tag,
+        P,
+        length(ids) - P,
+        step_ms[tag]
+    )
+    println("TEXT ", tag, " ", repr(Gesso.Inference.decode(tk, ids[(P+1):end])))
     for T in TS
         info = Ref{Any}(nothing)
-        tw = @elapsed w = gen(prompt, NEW; draft=TranscriptSource(ids), max_draft=T - 1, info)
+        tw = @elapsed w =
+            gen(prompt, NEW; draft=TranscriptSource(ids), max_draft=T - 1, info)
         w == ids || error("window T=$T changed the ids on $tag")
         sp = info[].speculation
         # every decode step after the first token is either a window round or a
@@ -85,8 +105,16 @@ for (tag, msg) in PROMPTS
         plain = max(0, n_dec - sp.windows - sp.accepted)
         ms = (1000 * (tw - t1) - plain * step_ms[tag]) / sp.windows
         round_ms[(tag, T)] = ms
-        @printf("WINDOW %s T=%d windows=%d accepted=%d plain=%d round_ms=%.1f W=%.3f ids_ok=true\n",
-            tag, T, sp.windows, sp.accepted, plain, ms, ms / step_ms[tag])
+        @printf(
+            "WINDOW %s T=%d windows=%d accepted=%d plain=%d round_ms=%.1f W=%.3f ids_ok=true\n",
+            tag,
+            T,
+            sp.windows,
+            sp.accepted,
+            plain,
+            ms,
+            ms / step_ms[tag]
+        )
     end
 end
 
@@ -95,8 +123,15 @@ model = tensors = nothing
 GC.gc()
 
 bean, btensors, bspec = Gesso.load_gguf(BEAN)
-bgen(prompt, n) = Gesso.reference_generate(bean, btensors, prompt; max_new_tokens=n,
-    eps=bspec.rms_norm_eps, backend, eos_ids=(IM_END,))
+bgen(prompt, n) = Gesso.reference_generate(
+    bean,
+    btensors,
+    prompt;
+    max_new_tokens=n,
+    eps=bspec.rms_norm_eps,
+    backend,
+    eos_ids=(IM_END,),
+)
 let p = transcripts["prose"][2][1:transcripts["prose"][1]]
     bgen(p, 4)
     t1 = @elapsed bgen(p, 1)
@@ -110,8 +145,8 @@ for (tag, _) in PROMPTS
     P, ids = transcripts[tag]
     logits = Gesso.reference_prefill(bean, btensors, ids; eps=bspec.rms_norm_eps, backend)
     # m[j]: the bean's greedy id after ids[1:j] equals ids[j+1].
-    m = [argmax(view(logits, :, j)) - 1 == ids[j+1] for j in 1:length(ids)-1]
-    top1 = count(m[P+1:end]) / length(m[P+1:end])
+    m = [argmax(view(logits, :, j)) - 1 == ids[j+1] for j in 1:(length(ids)-1)]
+    top1 = count(m[(P+1):end]) / length(m[(P+1):end])
     for T in TS
         # A round starts after the anchor ids[L] is known: the bean drafts up to
         # T - 1 ids, the window accepts the matching prefix n, and the round
@@ -132,7 +167,14 @@ for (tag, _) in PROMPTS
         per_round = gen_ids / rounds
         cost = rounds * round_ms[(tag, T)] + drafted * bean_ms
         speedup = gen_ids * step_ms[tag] / cost
-        @printf("ORACLE %s T=%d top1=%.3f tok_per_round=%.2f bean_ms_per_round=%.1f speedup=%.2f\n",
-            tag, T, top1, per_round, drafted * bean_ms / rounds, speedup)
+        @printf(
+            "ORACLE %s T=%d top1=%.3f tok_per_round=%.2f bean_ms_per_round=%.1f speedup=%.2f\n",
+            tag,
+            T,
+            top1,
+            per_round,
+            drafted * bean_ms / rounds,
+            speedup
+        )
     end
 end

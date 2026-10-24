@@ -17,7 +17,17 @@ using Gesso
     function _run(; tiled)
         out = zeros(seq, nv, dv)
         state = zeros(nv, dk, dv)
-        Gesso._cpu_gated_delta_rule!(out, q, k, v, g, beta, state; l2norm=false, v_head_tiled=tiled)
+        Gesso._cpu_gated_delta_rule!(
+            out,
+            q,
+            k,
+            v,
+            g,
+            beta,
+            state;
+            l2norm=false,
+            v_head_tiled=tiled,
+        )
         return [out[1, hh, 1] for hh in 1:nv]
     end
     grouped = _run(; tiled=false)
@@ -52,7 +62,11 @@ end
 end
 
 @testset "Qwen3.5-0.8B local snapshot materializes" begin
-    dir = get(ENV, "GESSO_QWEN35_08B_DIR", joinpath(@__DIR__, "..", "snapshots", "Qwen3.5-0.8B"))
+    dir = get(
+        ENV,
+        "GESSO_QWEN35_08B_DIR",
+        joinpath(@__DIR__, "..", "snapshots", "Qwen3.5-0.8B"),
+    )
     cfg = joinpath(dir, "config.json")
     if !isfile(cfg)
         @info "skip 0.8B snapshot: $dir missing"
@@ -109,7 +123,13 @@ end
     # continue exactly like one pass.
     prompt = [(i * 7919) % 50000 + 100 for i in 1:300]
     gen(c) = withenv("GESSO_PREFILL_CHUNK" => c) do
-        Gesso.reference_generate(model, tensors, prompt; max_new_tokens=6, eps=spec.rms_norm_eps)
+        Gesso.reference_generate(
+            model,
+            tensors,
+            prompt;
+            max_new_tokens=6,
+            eps=spec.rms_norm_eps,
+        )
     end
     @test gen("128") == gen("0")
 
@@ -117,8 +137,17 @@ end
     # restores the GDN snapshot taken where the last prefill ended.
     st = Gesso.GenerateState(400)
     info = Ref{Any}(nothing)
-    fresh(p) = Gesso.reference_generate(model, tensors, p; max_new_tokens=6, eps=spec.rms_norm_eps)
-    turn(p) = Gesso.reference_generate(model, tensors, p; max_new_tokens=6, eps=spec.rms_norm_eps, state=st, info=info)
+    fresh(p) =
+        Gesso.reference_generate(model, tensors, p; max_new_tokens=6, eps=spec.rms_norm_eps)
+    turn(p) = Gesso.reference_generate(
+        model,
+        tensors,
+        p;
+        max_new_tokens=6,
+        eps=spec.rms_norm_eps,
+        state=st,
+        info=info,
+    )
     a = turn(prompt[1:200])
     @test a == fresh(prompt[1:200])
     p2 = vcat(a, prompt[201:300])

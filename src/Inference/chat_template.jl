@@ -22,7 +22,7 @@ struct _OrderedDict <: AbstractDict{String, Any}
 end
 _OrderedDict() = _OrderedDict(String[], Dict{String, Any}())
 Base.length(d::_OrderedDict) = length(d.keys)
-Base.iterate(d::_OrderedDict, i::Int = 1) =
+Base.iterate(d::_OrderedDict, i::Int=1) =
     i > length(d.keys) ? nothing : (d.keys[i] => d.data[d.keys[i]], i + 1)
 Base.getindex(d::_OrderedDict, k) = d.data[k]
 Base.haskey(d::_OrderedDict, k) = haskey(d.data, k)
@@ -34,7 +34,7 @@ function Base.setindex!(d::_OrderedDict, v, k)
     return d
 end
 
-_chat_json_parse(text::AbstractString) = JSON.parse(String(text); dicttype = _OrderedDict)
+_chat_json_parse(text::AbstractString) = JSON.parse(String(text); dicttype=_OrderedDict)
 
 # ---------------------------------------------------------------------------
 # ASCII-only trim (minja): space, \t, \n, \v, \f, \r. NBSP and NEL are kept.
@@ -86,8 +86,8 @@ function _fmt_g6(x::Float64)::String
         return sign * mant * "e" * (e < 0 ? "-" : "+") * lpad(string(abs(e)), 2, '0')
     end
     if e >= 0
-        ip = d[1:(e + 1)]
-        frac = rstrip(d[(e + 2):6], '0')
+        ip = d[1:(e+1)]
+        frac = rstrip(d[(e+2):6], '0')
     else
         ip = "0"
         frac = rstrip("0"^(-e - 1) * d, '0')
@@ -113,7 +113,7 @@ function _json_escape!(io::IO, s::AbstractString)
         elseif c == '\t'
             write(io, "\\t")
         elseif c < ' '
-            write(io, "\\u", lpad(string(UInt32(c), base = 16), 4, '0'))
+            write(io, "\\u", lpad(string(UInt32(c), base=16), 4, '0'))
         else
             write(io, c)
         end
@@ -176,10 +176,16 @@ function _render_content(content)::String
         parts = String[]
         for item in content
             item isa AbstractDict || error("chat template: unexpected content part")
-            if haskey(item, "image") || haskey(item, "image_url") || get(item, "type", nothing) == "image"
-                error("chat template: image content is not supported by the text-only renderer")
+            if haskey(item, "image") ||
+               haskey(item, "image_url") ||
+               get(item, "type", nothing) == "image"
+                error(
+                    "chat template: image content is not supported by the text-only renderer",
+                )
             elseif haskey(item, "video") || get(item, "type", nothing) == "video"
-                error("chat template: video content is not supported by the text-only renderer")
+                error(
+                    "chat template: video content is not supported by the text-only renderer",
+                )
             elseif haskey(item, "text")
                 t = item["text"]
                 t isa AbstractString || error("chat template: text part must be a string")
@@ -254,7 +260,9 @@ function _render_arguments!(io::IO, args)
     elseif args === nothing || args isa AbstractVector
         nothing
     else
-        error("chat template: tool call arguments must be an object or a JSON object string")
+        error(
+            "chat template: tool call arguments must be an object or a JSON object string",
+        )
     end
     return io
 end
@@ -264,13 +272,15 @@ function _tool_call_function(tc)
     haskey(tc, "type") || error("chat template: tool call is missing 'type'")
     fn = haskey(tc, "function") ? tc["function"] : tc
     fn isa AbstractDict || error("chat template: tool call 'function' must be an object")
-    haskey(fn, "name") && fn["name"] isa AbstractString || error("chat template: tool call is missing a string 'name'")
+    haskey(fn, "name") && fn["name"] isa AbstractString ||
+        error("chat template: tool call is missing a string 'name'")
     return fn
 end
 
 # ---------------------------------------------------------------------------
 # Splitting helpers mirror Python's str.split(sep)[0] and [-1].
-_before_first(s::AbstractString, sep::AbstractString) = String(first(split(s, sep; limit = 2)))
+_before_first(s::AbstractString, sep::AbstractString) =
+    String(first(split(s, sep; limit=2)))
 _after_last(s::AbstractString, sep::AbstractString) = String(last(split(s, sep)))
 
 # Mid-conversation assistant turn, a closed message.
@@ -283,7 +293,10 @@ function _render_assistant!(io::IO, m)
     else
         rc === nothing || error("chat template: reasoning_content must be a string")
         if occursin("</think>", content)
-            reasoning = lstrip(_after_last(rstrip(_before_first(content, "</think>"), '\n'), "<think>"), '\n')
+            reasoning = lstrip(
+                _after_last(rstrip(_before_first(content, "</think>"), '\n'), "<think>"),
+                '\n',
+            )
             content = lstrip(_after_last(content, "</think>"), '\n')
         end
     end
@@ -294,7 +307,11 @@ function _render_assistant!(io::IO, m)
         for (k, tc) in enumerate(tool_calls)
             fn = _tool_call_function(tc)
             if k == 1
-                write(io, _ct_trim(content) != "" ? "\n\n<tool_call>\n<function=" : "<tool_call>\n<function=")
+                write(
+                    io,
+                    _ct_trim(content) != "" ? "\n\n<tool_call>\n<function=" :
+                    "<tool_call>\n<function=",
+                )
             else
                 write(io, "\n<tool_call>\n<function=")
             end
@@ -313,7 +330,9 @@ end
 function _render_prefill_assistant!(io::IO, m)
     content = _render_content(get(m, "content", nothing))
     rc = get(m, "reasoning_content", nothing)
-    rc === nothing || rc isa AbstractString || error("chat template: reasoning_content must be a string")
+    rc === nothing ||
+        rc isa AbstractString ||
+        error("chat template: reasoning_content must be a string")
     reasoning = rc === nothing ? "" : String(rc)
     tool_calls = get(m, "tool_calls", nothing)
     has_tools = tool_calls isa AbstractVector && !isempty(tool_calls)
@@ -337,10 +356,12 @@ llama-server's `/apply-template` byte-for-byte on the covered fixtures.
 A trailing assistant message is rendered as a prefill, and `add_generation_prompt`
 does not apply to it.
 """
-function render_chat(messages::AbstractVector;
-                     tools = nothing,
-                     add_generation_prompt::Bool = true,
-                     enable_thinking::Bool = true)::String
+function render_chat(
+    messages::AbstractVector;
+    tools=nothing,
+    add_generation_prompt::Bool=true,
+    enable_thinking::Bool=true,
+)::String
     isempty(messages) && error("chat template: no messages provided")
     io = IOBuffer()
     n = length(messages)
@@ -373,11 +394,16 @@ function render_chat(messages::AbstractVector;
     end
 
     prefill = _role(messages[n]) == "assistant"
-    for i in (num_sys + 1):n
+    for i in (num_sys+1):n
         m = messages[i]
         role = _role(m)
         if role == "user"
-            write(io, "<|im_start|>user\n", _ct_trim(_render_content(get(m, "content", nothing))), "<|im_end|>\n")
+            write(
+                io,
+                "<|im_start|>user\n",
+                _ct_trim(_render_content(get(m, "content", nothing))),
+                "<|im_end|>\n",
+            )
         elseif role == "assistant"
             if prefill && i == n
                 _render_prefill_assistant!(io, m)
@@ -385,11 +411,16 @@ function render_chat(messages::AbstractVector;
                 _render_assistant!(io, m)
             end
         elseif role == "tool"
-            if i > 1 && _role(messages[i - 1]) != "tool"
+            if i > 1 && _role(messages[i-1]) != "tool"
                 write(io, "<|im_start|>user")
             end
-            write(io, "\n<tool_response>\n", _ct_trim(_render_content(get(m, "content", nothing))), "\n</tool_response>")
-            if i < n && _role(messages[i + 1]) != "tool"
+            write(
+                io,
+                "\n<tool_response>\n",
+                _ct_trim(_render_content(get(m, "content", nothing))),
+                "\n</tool_response>",
+            )
+            if i < n && _role(messages[i+1]) != "tool"
                 write(io, "<|im_end|>\n")
             elseif i == n
                 write(io, "<|im_end|>\n")
@@ -412,10 +443,14 @@ Qwen3.5 XML family (`<function=`, `<tool_response>`, `<think>`). Any other
 template is an error.
 """
 function chat_family(template::AbstractString)::Symbol
-    if occursin("<function=", template) && occursin("<tool_response>", template) && occursin("<think>", template)
+    if occursin("<function=", template) &&
+       occursin("<tool_response>", template) &&
+       occursin("<think>", template)
         return :qwen35_xml
     end
-    error("chat_family: template is not a supported chat family (expected Qwen3.5 XML markers)")
+    error(
+        "chat_family: template is not a supported chat family (expected Qwen3.5 XML markers)",
+    )
 end
 
 """
@@ -426,7 +461,8 @@ Read `tokenizer.chat_template` from a GGUF. This goes through
 """
 function load_gguf_chat_template(path::AbstractString)::String
     tpl = load_gguf_tokenizer(path).chat_template
-    tpl === nothing && error("load_gguf_chat_template: $(basename(path)) has no tokenizer.chat_template")
+    tpl === nothing &&
+        error("load_gguf_chat_template: $(basename(path)) has no tokenizer.chat_template")
     return tpl
 end
 

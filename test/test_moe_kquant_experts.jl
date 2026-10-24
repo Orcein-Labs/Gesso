@@ -30,12 +30,12 @@ function _mke_random_bytes(rng, ty::Int32, nexp::Int, nrows::Int, ne0::Int)
     w = rand(rng, UInt8, nexp * nrows * nb * bsz)
     doff = _MKE._q8k_d_offset(ty)
     dmo = _MKE._q8k_dmin_offset(ty)
-    for blk in 0:(nexp * nrows * nb - 1)
+    for blk in 0:(nexp*nrows*nb-1)
         for off in (doff, dmo)
             off < 0 && continue
             bits = reinterpret(UInt16, Float16(0.005f0 + 0.05f0 * rand(rng, Float32)))
-            w[blk * bsz + off + 1] = UInt8(bits & 0xff)
-            w[blk * bsz + off + 2] = UInt8(bits >> 8)
+            w[blk*bsz+off+1] = UInt8(bits & 0xff)
+            w[blk*bsz+off+2] = UInt8(bits >> 8)
         end
     end
     return w
@@ -46,14 +46,24 @@ _mke_dequant_act(xq::_MKE.Q8KVec) = _MKE.dequantize_q8_K(xq)
 function _mke_dequant_act(xq::_MKE.Q80Vec)
     out = Vector{Float32}(undef, length(xq))
     for i in eachindex(out)
-        out[i] = xq.d[(i - 1) ÷ 32 + 1] * Float32(xq.qs[i])
+        out[i] = xq.d[(i-1)÷32+1] * Float32(xq.qs[i])
     end
     return out
 end
 
 function _mke_slice(w::Vector{UInt8}, ty::Int32, nexp::Int, ne0::Int, ne1::Int)
     rb = _MKE._qrow_bytes(ty, ne0)
-    return Gesso.GgufQuantSlice(w, 0, ty, nexp, ne0, ne1, ne1 * rb, C_NULL, Int64(_mke_qblock(ty)))
+    return Gesso.GgufQuantSlice(
+        w,
+        0,
+        ty,
+        nexp,
+        ne0,
+        ne1,
+        ne1 * rb,
+        C_NULL,
+        Int64(_mke_qblock(ty)),
+    )
 end
 
 # F32 dequant of rows 1:nrows of a slab at byte offset off0 (0-based).
@@ -103,8 +113,24 @@ const _MKE_TYPES = (
             if _MKE._cpu_has_avx2()
                 ys = zeros(Float32, ne1)
                 ya = zeros(Float32, ne1)
-                _MKE._qgemv_q8k!(ys, xq, _MKE._quant_expert_bytes(s, e), ty, ne0, ne1; simd=false)
-                _MKE._qgemv_q8k!(ya, xq, _MKE._quant_expert_bytes(s, e), ty, ne0, ne1; simd=true)
+                _MKE._qgemv_q8k!(
+                    ys,
+                    xq,
+                    _MKE._quant_expert_bytes(s, e),
+                    ty,
+                    ne0,
+                    ne1;
+                    simd=false,
+                )
+                _MKE._qgemv_q8k!(
+                    ya,
+                    xq,
+                    _MKE._quant_expert_bytes(s, e),
+                    ty,
+                    ne0,
+                    ne1;
+                    simd=true,
+                )
                 @test reinterpret.(UInt32, ys) == reinterpret.(UInt32, ya)
             end
         end
@@ -116,9 +142,24 @@ end
     rng = Xoshiro(41)
     h, ff, nexp, nused = 512, 256, 4, 2
     cases = (
-        ("Q4_K gate/up, Q6_K down", _MKE.GGML_TYPE_Q4_K, _MKE.GGML_TYPE_Q4_K, _MKE.GGML_TYPE_Q6_K),
-        ("Q2_K gate/up, Q3_K down", _MKE.GGML_TYPE_Q2_K, _MKE.GGML_TYPE_Q2_K, _MKE.GGML_TYPE_Q3_K),
-        ("Q8_0 gate/up, Q5_K down", _MKE.GGML_TYPE_Q8_0, _MKE.GGML_TYPE_Q8_0, _MKE.GGML_TYPE_Q5_K),
+        (
+            "Q4_K gate/up, Q6_K down",
+            _MKE.GGML_TYPE_Q4_K,
+            _MKE.GGML_TYPE_Q4_K,
+            _MKE.GGML_TYPE_Q6_K,
+        ),
+        (
+            "Q2_K gate/up, Q3_K down",
+            _MKE.GGML_TYPE_Q2_K,
+            _MKE.GGML_TYPE_Q2_K,
+            _MKE.GGML_TYPE_Q3_K,
+        ),
+        (
+            "Q8_0 gate/up, Q5_K down",
+            _MKE.GGML_TYPE_Q8_0,
+            _MKE.GGML_TYPE_Q8_0,
+            _MKE.GGML_TYPE_Q5_K,
+        ),
     )
     for (label, tg, tu, td) in cases
         wg = _mke_random_bytes(rng, tg, nexp, ff, h)
@@ -135,7 +176,20 @@ end
         uacc = zeros(Float32, ff)
         hact = zeros(Float32, ff)
         ybuf = zeros(Float32, h)
-        _MKE._moe_host_experts!(yrow, x, order, weights, nused, gate_s, up_s, down_s, gacc, uacc, hact, ybuf)
+        _MKE._moe_host_experts!(
+            yrow,
+            x,
+            order,
+            weights,
+            nused,
+            gate_s,
+            up_s,
+            down_s,
+            gacc,
+            uacc,
+            hact,
+            ybuf,
+        )
 
         # reference: each matmul sees the activation the kernel quantizes it to
         xq_in = _MKE._q8k_quantize_act(tg, x)
@@ -161,19 +215,28 @@ end
 @testset "Kolibri-1 Q2_K expert rows vs dequant + F32" begin
     path = get(ENV, "GESSO_KOLIBRI_Q2K_GGUF", "")
     if !isfile(path)
-        _skip("set GESSO_KOLIBRI_Q2K_GGUF to the Kolibri-1 Q2_K GGUF — real expert rows skipped")
+        _skip(
+            "set GESSO_KOLIBRI_Q2K_GGUF to the Kolibri-1 Q2_K GGUF — real expert rows skipped",
+        )
     else
         hdr = _MKE.gguf_header(path)
         rng = Xoshiro(42)
         wanted = (
-            "blk.0.ffn_gate_exps.weight", "blk.0.ffn_up_exps.weight", "blk.0.ffn_down_exps.weight",
+            "blk.0.ffn_gate_exps.weight",
+            "blk.0.ffn_up_exps.weight",
+            "blk.0.ffn_down_exps.weight",
         )
         for nm in wanted
             idx = findfirst(t -> t.name == nm, hdr.tensors)
             idx === nothing && continue
             info = hdr.tensors[idx]
             ty = info.ggml_type
-            ty in (_MKE.GGML_TYPE_Q2_K, _MKE.GGML_TYPE_Q3_K, _MKE.GGML_TYPE_Q4_K, _MKE.GGML_TYPE_Q6_K) || continue
+            ty in (
+                _MKE.GGML_TYPE_Q2_K,
+                _MKE.GGML_TYPE_Q3_K,
+                _MKE.GGML_TYPE_Q4_K,
+                _MKE.GGML_TYPE_Q6_K,
+            ) || continue
             ne0, ne1 = info.dims[1], info.dims[2]
             rb = _MKE._qrow_bytes(ty, ne0)
             base = Int(hdr.data_start) + Int(info.offset)
@@ -183,14 +246,25 @@ end
             xr = _mke_dequant_act(xq)
             for j in rows
                 # the single-row byte view is the only file read
-                wrow = view(hdr.data, (base + (j - 1) * rb + 1):(base + j * rb))
+                wrow = view(hdr.data, (base+(j-1)*rb+1):(base+j*rb))
                 y = zeros(Float32, 1)
                 _MKE._qgemv_bytes!(y, x, wrow, ty, ne0, 1, 1.0f0, 0.0f0)
                 wd = _mke_dequant_rows(hdr.data, base + (j - 1) * rb, ty, ne0, 1)
                 yref = sum(Float64.(wd[1, :]) .* Float64.(xr))
                 @test abs(Float64(y[1]) - yref) <= 1.0e-4 * max(abs(yref), 1.0e-3)
             end
-            println("kolibri ", nm, " type=", ty, " ne0=", ne0, " ne1=", ne1, " rows_checked=", length(rows))
+            println(
+                "kolibri ",
+                nm,
+                " type=",
+                ty,
+                " ne0=",
+                ne0,
+                " ne1=",
+                ne1,
+                " rows_checked=",
+                length(rows),
+            )
         end
     end
 end

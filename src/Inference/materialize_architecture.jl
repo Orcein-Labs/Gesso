@@ -265,8 +265,8 @@ function materialize_architecture(
             slots[:ffn_geglu] = true
         end
         refs =
-            mixer === :linear_attention && !isempty(pmap.linear_refs) ? pmap.linear_refs :
-            pmap.layer_refs
+            mixer === :linear_attention && !isempty(pmap.linear_refs) ?
+            pmap.linear_refs : pmap.layer_refs
         for ref in refs
             external = external_name(pmap, ref, i)
             arr = grab(external)
@@ -280,7 +280,10 @@ function materialize_architecture(
             want = expected_shape(spec, ref.id.role)
             # Some converters write 1-D roles as a 2-D tensor with a unit axis
             # (GSQ Ornith stores ffn_gate_inp_shexp as 1x2048); the values are the same.
-            if length(want) == 1 && slice isa AbstractMatrix && length(slice) == want[1] && 1 in size(slice)
+            if length(want) == 1 &&
+               slice isa AbstractMatrix &&
+               length(slice) == want[1] &&
+               1 in size(slice)
                 slice = vec(slice)
             end
             size(slice) == want || error(

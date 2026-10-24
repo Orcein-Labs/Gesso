@@ -6,26 +6,42 @@
 using Gesso.Serve: _run_generation, _engine_eos_ids, _parse_body, _normalize_messages
 
 # A GGUFBPE with only the fields the engine binding reads. Ids are as given.
-function sv_bpe(; eos::Union{Nothing,Int}=nothing, vocab::Dict{String,Int}=Dict{String,Int}(),
-        template::Union{Nothing,String}="{{ template }}")
-    return Gesso.Inference.GGUFBPE(String[], Int32[], vocab, Int[], Dict{UInt64,Int}(),
-        Int[], Int[], Int[], Gesso.Inference._GGUFSpecial[], nothing, eos, nothing, template)
+function sv_bpe(;
+    eos::Union{Nothing, Int}=nothing,
+    vocab::Dict{String, Int}=Dict{String, Int}(),
+    template::Union{Nothing, String}="{{ template }}",
+)
+    return Gesso.Inference.GGUFBPE(
+        String[],
+        Int32[],
+        vocab,
+        Int[],
+        Dict{UInt64, Int}(),
+        Int[],
+        Int[],
+        Int[],
+        Gesso.Inference._GGUFSpecial[],
+        nothing,
+        eos,
+        nothing,
+        template,
+    )
 end
 
 # An engine whose generate runs the same stop rule as reference_generate: the
 # stop token is sampled, reported to on_token, and ends the loop.
 function sv_engine(script::Vector{Int}; eos::Vector{Int}, cached::Integer=2)
-    return (prompt_ids; max_new_tokens, on_token) -> _run_generation(prompt_ids, eos;
-            on_token=on_token) do wrapped
-        ids = copy(prompt_ids)
-        for id in script
-            length(ids) - length(prompt_ids) >= max_new_tokens && break
-            push!(ids, id)
-            keep = wrapped(id)
-            (keep === false || id in eos) && break
+    return (prompt_ids; max_new_tokens, on_token) ->
+        _run_generation(prompt_ids, eos; on_token=on_token) do wrapped
+            ids = copy(prompt_ids)
+            for id in script
+                length(ids) - length(prompt_ids) >= max_new_tokens && break
+                push!(ids, id)
+                keep = wrapped(id)
+                (keep === false || id in eos) && break
+            end
+            return (ids, cached)
         end
-        return (ids, cached)
-    end
 end
 
 @testset "engine: the stop token is not forwarded and not counted" begin
@@ -76,8 +92,15 @@ end
 
 @testset "engine: a tokenizer with no chat template is refused before any weights" begin
     tk = sv_bpe(eos=3, template=nothing)
-    @test_throws ArgumentError gguf_chat_model(nothing, nothing, nothing, tk;
-        backend=nothing, n_ctx=64, model_id="x")
+    @test_throws ArgumentError gguf_chat_model(
+        nothing,
+        nothing,
+        nothing,
+        tk;
+        backend=nothing,
+        n_ctx=64,
+        model_id="x",
+    )
 end
 
 @testset "engine: the stop token never reaches the client over HTTP" begin
@@ -88,7 +111,8 @@ end
     engine = ChatModel(
         tokenize=s -> Int.(codeunits(s)),
         detokenize=ids -> String(UInt8.(filter(<(256), ids))),
-        render=(msgs, tools, thinking) -> join((string(m["content"]) for m in msgs), "\n"),
+        render=(msgs, tools, thinking) ->
+            join((string(m["content"]) for m in msgs), "\n"),
         generate=sv_engine(script; eos=eos, cached=2),
         n_ctx=4096,
         model_id="gesso-eos",
@@ -125,8 +149,11 @@ const SV_ORDERED_BODY = """
     msgs = _normalize_messages(body["messages"])
     rendered = Gesso.Inference.render_chat(msgs; tools=collect(Any, body["tools"]))
     @test findfirst("zeta", rendered) !== nothing
-    @test findfirst("zeta", rendered)[1] < findfirst("alpha", rendered)[1] < findfirst("mid", rendered)[1]
-    @test findfirst("<parameter=zeta>", rendered)[1] < findfirst("<parameter=alpha>", rendered)[1]
+    @test findfirst("zeta", rendered)[1] <
+          findfirst("alpha", rendered)[1] <
+          findfirst("mid", rendered)[1]
+    @test findfirst("<parameter=zeta>", rendered)[1] <
+          findfirst("<parameter=alpha>", rendered)[1]
 end
 
 @testset "gguf tokenizer: Ornith turn-end ids (GESSO_ORNITH35_GGUF)" begin
@@ -148,34 +175,74 @@ function sv_qwen_bpe()
     types = vcat(fill(Int32(1), 256), fill(Int32(3), 2))
     vocab = Dict(t => i - 1 for (i, t) in enumerate(tokens))
     specials = [Gesso.Inference._GGUFSpecial(marks[k], 255 + k, true) for k in 1:2]
-    return Gesso.Inference.GGUFBPE(tokens, types, vocab, collect(0:255), Dict{UInt64,Int}(),
-        Int[], Int[], Int[], specials, nothing, 257, nothing, "{{ template }}")
+    return Gesso.Inference.GGUFBPE(
+        tokens,
+        types,
+        vocab,
+        collect(0:255),
+        Dict{UInt64, Int}(),
+        Int[],
+        Int[],
+        Int[],
+        specials,
+        nothing,
+        257,
+        nothing,
+        "{{ template }}",
+    )
 end
 
 @testset "engine: prefix_len is the lone system rendering when the prompt starts with it" begin
     tk = sv_qwen_bpe()
-    cm = gguf_chat_model(nothing, nothing, (; rms_norm_eps=1e-6), tk;
-        backend=nothing, n_ctx=4096, model_id="x")
-    sys = Dict{String,Any}("role" => "system", "content" => "be terse")
-    usr = Dict{String,Any}("role" => "user", "content" => "hi")
-    render(msgs) = Gesso.Inference.render_chat(msgs; tools=Any[], add_generation_prompt=true,
-        enable_thinking=true)
+    cm = gguf_chat_model(
+        nothing,
+        nothing,
+        (; rms_norm_eps=1e-6),
+        tk;
+        backend=nothing,
+        n_ctx=4096,
+        model_id="x",
+    )
+    sys = Dict{String, Any}("role" => "system", "content" => "be terse")
+    usr = Dict{String, Any}("role" => "user", "content" => "hi")
+    render(msgs) = Gesso.Inference.render_chat(
+        msgs;
+        tools=Any[],
+        add_generation_prompt=true,
+        enable_thinking=true,
+    )
     ids = Gesso.Inference.encode(tk, render([sys, usr]); parse_special=true)
-    head = Gesso.Inference.encode(tk, Gesso.Inference.render_chat([sys]; tools=Any[],
-        add_generation_prompt=false, enable_thinking=true); parse_special=true)
+    head = Gesso.Inference.encode(
+        tk,
+        Gesso.Inference.render_chat(
+            [sys];
+            tools=Any[],
+            add_generation_prompt=false,
+            enable_thinking=true,
+        );
+        parse_special=true,
+    )
 
     @test cm.prefix_len([sys, usr], Any[], true, ids) == length(head)
     @test length(head) > 0
     @test ids[1:length(head)] == head
 
     # a system prompt that differs from the shared one is not a boundary
-    other = Dict{String,Any}("role" => "system", "content" => "be verbose")
+    other = Dict{String, Any}("role" => "system", "content" => "be verbose")
     @test cm.prefix_len([other, usr], Any[], true, ids) == 0
 
     # no system message, or a prompt that is only the system message: no boundary
     usr_ids = Gesso.Inference.encode(tk, render([usr]); parse_special=true)
     @test cm.prefix_len([usr], Any[], true, usr_ids) == 0
-    sys_only = Gesso.Inference.encode(tk, Gesso.Inference.render_chat([sys]; tools=Any[],
-        add_generation_prompt=false, enable_thinking=true); parse_special=true)
+    sys_only = Gesso.Inference.encode(
+        tk,
+        Gesso.Inference.render_chat(
+            [sys];
+            tools=Any[],
+            add_generation_prompt=false,
+            enable_thinking=true,
+        );
+        parse_special=true,
+    )
     @test cm.prefix_len([sys], Any[], true, sys_only) == 0
 end

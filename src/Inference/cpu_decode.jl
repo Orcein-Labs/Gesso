@@ -17,7 +17,7 @@ Preallocated per-generate buffers for the CPU seq = 1 GDN decode path. The
 delta rule is threaded over value-dim slabs; slab `c` owns column `c` of
 `kvm`, so no buffer is indexed by thread id.
 """
-struct CPUDecodeScratch{R<:AbstractFloat}
+struct CPUDecodeScratch{R <: AbstractFloat}
     nk::Int
     nv::Int
     dk::Int
@@ -60,10 +60,10 @@ struct CPUDecodeScratch{R<:AbstractFloat}
     gate_head::Matrix{R}    # (1, n_heads) per-head attention output gate
     k::Matrix{R}            # (1, kdim)
     v::Matrix{R}            # (1, kdim)
-    qh::Array{R,3}          # (1, n_heads, d_head)
-    kh::Array{R,3}          # (1, n_kv_heads, d_head)
-    vh::Array{R,3}          # (1, n_kv_heads, d_head)
-    attn::Array{R,3}        # (1, n_heads, d_head)
+    qh::Array{R, 3}          # (1, n_heads, d_head)
+    kh::Array{R, 3}          # (1, n_kv_heads, d_head)
+    vh::Array{R, 3}          # (1, n_kv_heads, d_head)
+    attn::Array{R, 3}        # (1, n_heads, d_head)
     merged_attn::Matrix{R}  # (1, qdim)
     gate::Matrix{R}         # (1, ff)
     up::Matrix{R}           # (1, ff)
@@ -79,18 +79,31 @@ end
 # model without that layer; `ctx` is the KV capacity (prompt + new tokens).
 # A dense model has no GDN mixer (`mx === nothing`), so its GDN buffers are
 # zero-width and the one scratch type serves both kinds of model.
-function _cpu_decode_scratch(mx, dim::Integer; qdim::Integer=0, ff::Integer=0,
-    kdim::Integer=0, n_heads::Integer=0, n_kv_heads::Integer=0, d_head::Integer=0,
-    vocab::Integer=0, ctx::Integer=0,
-    row::Type{R}=Float32) where {R<:AbstractFloat}
-    nk, nv, dk, dv = mx === nothing ? (0, 0, 0, 0) :
+function _cpu_decode_scratch(
+    mx,
+    dim::Integer;
+    qdim::Integer=0,
+    ff::Integer=0,
+    kdim::Integer=0,
+    n_heads::Integer=0,
+    n_kv_heads::Integer=0,
+    d_head::Integer=0,
+    vocab::Integer=0,
+    ctx::Integer=0,
+    row::Type{R}=Float32,
+) where {R <: AbstractFloat}
+    nk, nv, dk, dv =
+        mx === nothing ? (0, 0, 0, 0) :
         (mx.num_key_heads, mx.num_value_heads, mx.key_head_dim, mx.value_head_dim)
     key_dim = nk * dk
     value_dim = nv * dv
     conv_dim = 2 * key_dim + value_dim
     nslab = max(1, min(Threads.nthreads(), dv))
     return CPUDecodeScratch(
-        nk, nv, dk, dv,
+        nk,
+        nv,
+        dk,
+        dv,
         zeros(Float32, 1, conv_dim),
         zeros(Float32, conv_dim),
         zeros(Float32, 1, value_dim),
@@ -149,7 +162,8 @@ end
 # Storage for one decode activation: the scratch buffer when there is one,
 # a fresh zero array otherwise. `Val` makes the field lookup static.
 @inline _decode_buf(::Nothing, ::Val, zl, dims::Tuple) = zl(dims)
-@inline _decode_buf(sc::CPUDecodeScratch, ::Val{N}, zl, dims::Tuple) where {N} = getfield(sc, N)
+@inline _decode_buf(sc::CPUDecodeScratch, ::Val{N}, zl, dims::Tuple) where {N} =
+    getfield(sc, N)
 
 # The Q8_K input of one decode projection group, or `nothing` for the generic
 # matmul. Only a hybrid model takes the Q8_K route. A dense model keeps the
@@ -163,7 +177,7 @@ _decode_xq(buf::NamedTuple, ::Val{N}) where {N} = getfield(buf, N)
 # RoPE position argument for one decode token: the scratch's one-element
 # vector on the CPU path, a fresh vector otherwise.
 _decode_pos(::Nothing, p::Int) = [p]
-_decode_pos(sc::CPUDecodeScratch, p::Int) = (sc.pos1[1] = p; sc.pos1)
+_decode_pos(sc::CPUDecodeScratch, p::Int) = (sc.pos1[1]=p; sc.pos1)
 
 # Row `row` of `src` into the one-row matrix `dst`, without a copied slice.
 function _copy_row!(dst::AbstractMatrix, src::AbstractMatrix, row::Int)
@@ -178,7 +192,8 @@ end
 # group (`_quant_matmul_group!`). Otherwise, and whenever `xq` is `nothing`
 # (prefill, the reference path), the backend runs them as `_matmul_shared_input!`.
 function _dec_matmul_group!(cpu, dsts::Tuple, xq, x::Activation, ws::Tuple, wl)
-    if xq !== nothing && all(w -> w.storage isa QuantMatrix && _quant_q8k_kind(w.storage), ws)
+    if xq !== nothing &&
+       all(w -> w.storage isa QuantMatrix && _quant_q8k_kind(w.storage), ws)
         quantize_q8_K!(xq, x.storage)
         _quant_matmul_group!(map(d -> d.storage, dsts), xq, map(w -> w.storage, ws))
         return dsts
@@ -199,12 +214,12 @@ end
 # Projection weights of any format go through `matmul!` unchanged.
 function _cpu_gdn_fast_ok(bt, conv_state, rec_state, h)
     return h.storage isa Matrix{Float32} &&
-        conv_state isa Matrix{Float32} &&
-        rec_state isa Array{Float32,3} &&
-        bt.wgdn_conv.storage isa Array{Float32,3} &&
-        bt.wgdn_A_log.storage isa Vector{Float32} &&
-        bt.wgdn_dt_bias.storage isa Vector{Float32} &&
-        bt.wgdn_norm.storage isa Vector{Float32}
+           conv_state isa Matrix{Float32} &&
+           rec_state isa Array{Float32, 3} &&
+           bt.wgdn_conv.storage isa Array{Float32, 3} &&
+           bt.wgdn_A_log.storage isa Vector{Float32} &&
+           bt.wgdn_dt_bias.storage isa Vector{Float32} &&
+           bt.wgdn_norm.storage isa Vector{Float32}
 end
 
 # Depthwise causal conv + SiLU for one token, then the conv-state shift.
@@ -213,16 +228,16 @@ function _gdn_conv_decode!(out, x, weight, conv_state, ksz::Int)
     channels = length(out)
     @inbounds for c in 1:channels
         acc = 0.0f0
-        for p in 1:(ksz - 1)
+        for p in 1:(ksz-1)
             acc += weight[c, 1, p] * conv_state[c, p]
         end
         xc = x[c]
         acc += weight[c, 1, ksz] * xc
         out[c] = acc / (1.0f0 + exp(-acc))
-        for p in 1:(ksz - 2)
-            conv_state[c, p] = conv_state[c, p + 1]
+        for p in 1:(ksz-2)
+            conv_state[c, p] = conv_state[c, p+1]
         end
-        conv_state[c, ksz - 1] = xc
+        conv_state[c, ksz-1] = xc
     end
     return out
 end
@@ -231,7 +246,20 @@ end
 # slab `j` columns are contiguous in `rec`. Per value head this is the reference
 # recurrence: decay, kv_mem, delta, rank-1 update, and output. Each j column is
 # independent, so slabs need no synchronization.
-function _gdn_delta_slab!(rec, core, qn, kn, v, decay, beta, delta, jlo::Int, jhi::Int, nv::Int, dk::Int)
+function _gdn_delta_slab!(
+    rec,
+    core,
+    qn,
+    kn,
+    v,
+    decay,
+    beta,
+    delta,
+    jlo::Int,
+    jhi::Int,
+    nv::Int,
+    dk::Int,
+)
     @inbounds for j in jlo:jhi
         base = nv * dk * (j - 1)
         vb = nv * (j - 1)
@@ -241,21 +269,21 @@ function _gdn_delta_slab!(rec, core, qn, kn, v, decay, beta, delta, jlo::Int, jh
         for i in 1:dk
             ib = nv * (i - 1)
             for hh in 1:nv
-                s = rec[base + ib + hh] * decay[hh]
-                delta[hh] += s * kn[ib + hh]
+                s = rec[base+ib+hh] * decay[hh]
+                delta[hh] += s * kn[ib+hh]
             end
         end
         for hh in 1:nv
-            delta[hh] = (v[vb + hh] - delta[hh]) * beta[hh]
-            core[vb + hh] = 0.0f0
+            delta[hh] = (v[vb+hh] - delta[hh]) * beta[hh]
+            core[vb+hh] = 0.0f0
         end
         for i in 1:dk
             ib = nv * (i - 1)
             for hh in 1:nv
                 idx = base + ib + hh
-                s = rec[idx] * decay[hh] + kn[ib + hh] * delta[hh]
+                s = rec[idx] * decay[hh] + kn[ib+hh] * delta[hh]
                 rec[idx] = s
-                core[vb + hh] += s * qn[ib + hh]
+                core[vb+hh] += s * qn[ib+hh]
             end
         end
     end
@@ -265,7 +293,7 @@ end
 # One slab of the delta-rule recurrence. It runs on the shared CPU pool, not
 # `Threads.@threads`: the pool workers are still spinning from the projection
 # matvecs, and a scheduler fan-out here would compete with them for cores.
-struct _GDNSlabChunk{R,S}
+struct _GDNSlabChunk{R, S}
     rec::R
     sc::S
     dv::Int
@@ -278,8 +306,20 @@ function (g::_GDNSlabChunk)(c::Int)
     nslab = sc.nslab
     jlo = div((c - 1) * g.dv, nslab) + 1
     jhi = div(c * g.dv, nslab)
-    _gdn_delta_slab!(g.rec, sc.core, sc.qn, sc.kn, sc.vn, sc.decay, sc.beta,
-        view(sc.delta, :, c), jlo, jhi, g.nv, g.dk)
+    _gdn_delta_slab!(
+        g.rec,
+        sc.core,
+        sc.qn,
+        sc.kn,
+        sc.vn,
+        sc.decay,
+        sc.beta,
+        view(sc.delta, :, c),
+        jlo,
+        jhi,
+        g.nv,
+        g.dk,
+    )
     return nothing
 end
 
@@ -288,8 +328,17 @@ end
 # output in `sc.convout`; advances `conv_state` by one token. The verify window
 # runs this per row and copies `sc.mixed` and `sc.z` into its records before the
 # next row overwrites them.
-function _gdn_project_conv!(cpu, h::Activation, normed::Activation, bt, spec, wl, eps,
-    conv_state, sc::CPUDecodeScratch)
+function _gdn_project_conv!(
+    cpu,
+    h::Activation,
+    normed::Activation,
+    bt,
+    spec,
+    wl,
+    eps,
+    conv_state,
+    sc::CPUDecodeScratch,
+)
     mx = spec.mixer
     nk, nv, dk, dv = sc.nk, sc.nv, sc.dk, sc.dv
     key_dim = nk * dk
@@ -306,8 +355,7 @@ function _gdn_project_conv!(cpu, h::Activation, normed::Activation, bt, spec, wl
     @decode_sub :gdn_proj cpu begin
         # wgdn_a and wgdn_b are dense Float32, so only qkv and z share the
         # quantized activation. a and b stay on plain matmul!.
-        _dec_matmul_group!(cpu, (mixed, z), sc.xq_dim, normed,
-            (bt.wgdn_qkv, bt.wgdn_z), wl)
+        _dec_matmul_group!(cpu, (mixed, z), sc.xq_dim, normed, (bt.wgdn_qkv, bt.wgdn_z), wl)
         matmul!(cpu, a, normed, bt.wgdn_a, wl)
         matmul!(cpu, b, normed, bt.wgdn_b, wl)
     end
@@ -318,10 +366,32 @@ function _gdn_project_conv!(cpu, h::Activation, normed::Activation, bt, spec, wl
     return sc
 end
 
-function _gdn_decode_cpu!(cpu, h::Activation, normed::Activation, sub::Activation, bt, spec,
-    wl, eps, conv_state, rec_state, sc::CPUDecodeScratch)
+function _gdn_decode_cpu!(
+    cpu,
+    h::Activation,
+    normed::Activation,
+    sub::Activation,
+    bt,
+    spec,
+    wl,
+    eps,
+    conv_state,
+    rec_state,
+    sc::CPUDecodeScratch,
+)
     _gdn_project_conv!(cpu, h, normed, bt, spec, wl, eps, conv_state, sc)
-    return _gdn_decode_finish!(cpu, sub, bt, spec, wl, eps, conv_state, rec_state, sc, Float32(eps))
+    return _gdn_decode_finish!(
+        cpu,
+        sub,
+        bt,
+        spec,
+        wl,
+        eps,
+        conv_state,
+        rec_state,
+        sc,
+        Float32(eps),
+    )
 end
 
 # Gates and q/k normalization for one token. Reads the conv output in `sc.convout`
@@ -350,7 +420,7 @@ function _gdn_gates_qk!(cpu, bt, spec, sc::CPUDecodeScratch)
     @decode_sub :gdn_qk cpu begin
         # value heads: head-major in conv output, (nv, dv) in scratch
         @inbounds for hh in 1:nv, j in 1:dv
-            sc.vn[hh + nv * (j - 1)] = conv[2 * key_dim + (hh - 1) * dv + j]
+            sc.vn[hh+nv*(j-1)] = conv[2*key_dim+(hh-1)*dv+j]
         end
         # L2-normalize each key head once (q and k), then map key heads onto
         # value heads with the same pairing as the reference rule.
@@ -358,8 +428,8 @@ function _gdn_gates_qk!(cpu, bt, spec, sc::CPUDecodeScratch)
             qss = 0.0f0
             kss = 0.0f0
             for d in 1:dk
-                qv = conv[(hk - 1) * dk + d]
-                kv = conv[key_dim + (hk - 1) * dk + d]
+                qv = conv[(hk-1)*dk+d]
+                kv = conv[key_dim+(hk-1)*dk+d]
                 qss += qv * qv
                 kss += kv * kv
             end
@@ -370,10 +440,10 @@ function _gdn_gates_qk!(cpu, bt, spec, sc::CPUDecodeScratch)
                 kh = tiled ? mod(hh - 1, nk) + 1 : div(hh - 1, group) + 1
                 kh == hk || continue
                 for d in 1:dk
-                    qv = conv[(hk - 1) * dk + d]
-                    kv = conv[key_dim + (hk - 1) * dk + d]
-                    sc.qn[hh + nv * (d - 1)] = (qv * qinv) * scale
-                    sc.kn[hh + nv * (d - 1)] = kv * kinv
+                    qv = conv[(hk-1)*dk+d]
+                    kv = conv[key_dim+(hk-1)*dk+d]
+                    sc.qn[hh+nv*(d-1)] = (qv * qinv) * scale
+                    sc.kn[hh+nv*(d-1)] = kv * kinv
                 end
             end
         end
@@ -387,31 +457,54 @@ end
 # Gated RMS norm of one token's delta-rule output into `merged` (value_dim). The
 # per-head loop is shared by the single-token path and the verify window, so the
 # window's per-row norm is the decode arithmetic, not a copy of it.
-function _gdn_gnorm_merge!(merged::AbstractVector{Float32}, nv::Int, dv::Int,
-    core::AbstractVector{Float32}, zv::AbstractVector{Float32}, scale_norm::Vector{Float32}, epsf::Float32)
+function _gdn_gnorm_merge!(
+    merged::AbstractVector{Float32},
+    nv::Int,
+    dv::Int,
+    core::AbstractVector{Float32},
+    zv::AbstractVector{Float32},
+    scale_norm::Vector{Float32},
+    epsf::Float32,
+)
     @inbounds for hh in 1:nv
         ss = 0.0f0
         for j in 1:dv
-            cv = core[hh + nv * (j - 1)]
+            cv = core[hh+nv*(j-1)]
             ss += cv * cv
         end
         r = sqrt(ss / dv + epsf)
         for j in 1:dv
-            cv = core[hh + nv * (j - 1)]
-            zj = zv[(hh - 1) * dv + j]
-            merged[(hh - 1) * dv + j] = (cv / r * scale_norm[j]) * (zj / (1.0f0 + exp(-zj)))
+            cv = core[hh+nv*(j-1)]
+            zj = zv[(hh-1)*dv+j]
+            merged[(hh-1)*dv+j] = (cv / r * scale_norm[j]) * (zj / (1.0f0 + exp(-zj)))
         end
     end
     return merged
 end
 
-function _gdn_gnorm_out!(cpu, sub::Activation, bt, wl, sc::CPUDecodeScratch,
-    core::AbstractVector{Float32}, zv::AbstractVector{Float32}, epsf::Float32)
+function _gdn_gnorm_out!(
+    cpu,
+    sub::Activation,
+    bt,
+    wl,
+    sc::CPUDecodeScratch,
+    core::AbstractVector{Float32},
+    zv::AbstractVector{Float32},
+    epsf::Float32,
+)
     nv, dv = sc.nv, sc.dv
     value_dim = nv * dv
     scale_norm = bt.wgdn_norm.storage::Vector{Float32}
 
-    @decode_sub :gdn_gnorm cpu _gdn_gnorm_merge!(vec(sc.merged), nv, dv, core, zv, scale_norm, epsf)
+    @decode_sub :gdn_gnorm cpu _gdn_gnorm_merge!(
+        vec(sc.merged),
+        nv,
+        dv,
+        core,
+        zv,
+        scale_norm,
+        epsf,
+    )
 
     @decode_sub :gdn_outproj cpu begin
         merged_act = Activation(; shape=(1, value_dim), storage=sc.merged)
@@ -423,8 +516,18 @@ end
 # Gates, q/k normalization, delta rule, gated norm, and output projection for
 # one token, reading `sc.convout` (conv output) and the gate inputs in `sc.a`,
 # `sc.b`, `sc.z`.
-function _gdn_decode_finish!(cpu, sub::Activation, bt, spec, wl, eps, conv_state, rec_state,
-    sc::CPUDecodeScratch, epsf::Float32)
+function _gdn_decode_finish!(
+    cpu,
+    sub::Activation,
+    bt,
+    spec,
+    wl,
+    eps,
+    conv_state,
+    rec_state,
+    sc::CPUDecodeScratch,
+    epsf::Float32,
+)
     _gdn_gates_qk!(cpu, bt, spec, sc)
     @decode_sub :gdn_recur cpu begin
         _pool_run_chunks!(_GDNSlabChunk(rec_state, sc, sc.dv, sc.nv, sc.dk), sc.nslab)
@@ -445,8 +548,18 @@ end
 # A sliding `window` reads only the last `window` rows. The reference masks the
 # rows before them to -Inf, which the softmax turns into exact zeros, so the
 # skipped rows add nothing there either and the outputs stay identical.
-function _attention_decode_cpu!(attn, q, kc, vc, probs::AbstractVector,
-    n_heads::Int, d_head::Int, group::Int, K::Int; window::Int=0)
+function _attention_decode_cpu!(
+    attn,
+    q,
+    kc,
+    vc,
+    probs::AbstractVector,
+    n_heads::Int,
+    d_head::Int,
+    group::Int,
+    K::Int;
+    window::Int=0,
+)
     fill!(attn, 0.0f0)
     lo = window > 0 ? max(1, K - window + 1) : 1
     sqd = sqrt(d_head)

@@ -11,15 +11,21 @@
 # not be shared by concurrent tasks, so any other task gets CUDA.jl's own.
 mutable struct _GessoBlas
     handle::CUDA.CUBLAS.cublasHandle_t
-    ctx::Union{Nothing,CUDA.CuContext}
-    task::Union{Nothing,Task}
-    stream::Union{Nothing,CUDA.CuStream}
+    ctx::Union{Nothing, CUDA.CuContext}
+    task::Union{Nothing, Task}
+    stream::Union{Nothing, CUDA.CuStream}
     math_mode::CUDA.CUDACore.MathMode
     math_precision::Symbol
 end
 
-const _BLAS = _GessoBlas(CUDA.CUBLAS.cublasHandle_t(C_NULL), nothing, nothing, nothing,
-    CUDA.CUDACore.DEFAULT_MATH, :none)
+const _BLAS = _GessoBlas(
+    CUDA.CUBLAS.cublasHandle_t(C_NULL),
+    nothing,
+    nothing,
+    nothing,
+    CUDA.CUDACore.DEFAULT_MATH,
+    :none,
+)
 
 function _blas_reserve!()
     C = CUDA.CUBLAS
@@ -56,32 +62,77 @@ end
 
 # CUBLAS.gemm! and gemv! on the Gesso handle, same argument checks and
 # leading dimensions. Element types without a case here go to CUDA.jl.
-for (gemm, gemv, T) in ((:cublasSgemm_v2_64, :cublasSgemv_v2_64, :Float32),
-                        (:cublasDgemm_v2_64, :cublasDgemv_v2_64, :Float64))
+for (gemm, gemv, T) in (
+    (:cublasSgemm_v2_64, :cublasSgemv_v2_64, :Float32),
+    (:cublasDgemm_v2_64, :cublasDgemv_v2_64, :Float64),
+)
     @eval begin
-        function _blas_gemm!(tA::Char, tB::Char, alpha, A::CUDA.StridedCuVecOrMat{$T},
-                             B::CUDA.StridedCuVecOrMat{$T}, beta, Cm::CUDA.StridedCuVecOrMat{$T})
-            CUDA.CUBLAS.version() >= v"12.0" || return CUDA.CUBLAS.gemm!(tA, tB, alpha, A, B, beta, Cm)
+        function _blas_gemm!(
+            tA::Char,
+            tB::Char,
+            alpha,
+            A::CUDA.StridedCuVecOrMat{$T},
+            B::CUDA.StridedCuVecOrMat{$T},
+            beta,
+            Cm::CUDA.StridedCuVecOrMat{$T},
+        )
+            CUDA.CUBLAS.version() >= v"12.0" ||
+                return CUDA.CUBLAS.gemm!(tA, tB, alpha, A, B, beta, Cm)
             m = size(A, tA == 'N' ? 1 : 2)
             k = size(A, tA == 'N' ? 2 : 1)
             n = size(B, tB == 'N' ? 2 : 1)
             (m == size(Cm, 1) && n == size(Cm, 2) && k == size(B, tB == 'N' ? 1 : 2)) ||
                 throw(DimensionMismatch("gemm: A $(size(A)), B $(size(B)), C $(size(Cm))"))
-            CUDA.CUBLAS.$gemm(_blas_handle(), tA, tB, m, n, k, alpha, A, max(1, stride(A, 2)),
-                B, max(1, stride(B, 2)), beta, Cm, max(1, stride(Cm, 2)))
+            CUDA.CUBLAS.$gemm(
+                _blas_handle(),
+                tA,
+                tB,
+                m,
+                n,
+                k,
+                alpha,
+                A,
+                max(1, stride(A, 2)),
+                B,
+                max(1, stride(B, 2)),
+                beta,
+                Cm,
+                max(1, stride(Cm, 2)),
+            )
             return Cm
         end
-        function _blas_gemv!(tr::Char, alpha, A::CUDA.StridedCuMatrix{$T},
-                             x::CUDA.StridedCuVector{$T}, beta, y::CUDA.StridedCuVector{$T})
-            CUDA.CUBLAS.version() >= v"12.0" || return CUDA.CUBLAS.gemv!(tr, alpha, A, x, beta, y)
+        function _blas_gemv!(
+            tr::Char,
+            alpha,
+            A::CUDA.StridedCuMatrix{$T},
+            x::CUDA.StridedCuVector{$T},
+            beta,
+            y::CUDA.StridedCuVector{$T},
+        )
+            CUDA.CUBLAS.version() >= v"12.0" ||
+                return CUDA.CUBLAS.gemv!(tr, alpha, A, x, beta, y)
             m, n = size(A)
-            (length(x) == (tr == 'N' ? n : m) && length(y) == (tr == 'N' ? m : n)) ||
-                throw(DimensionMismatch("gemv: A $(size(A)), x $(length(x)), y $(length(y))"))
-            CUDA.CUBLAS.$gemv(_blas_handle(), tr, m, n, alpha, A, max(1, stride(A, 2)),
-                x, stride(x, 1), beta, y, stride(y, 1))
+            (length(x) == (tr == 'N' ? n : m) && length(y) == (tr == 'N' ? m : n)) || throw(
+                DimensionMismatch("gemv: A $(size(A)), x $(length(x)), y $(length(y))"),
+            )
+            CUDA.CUBLAS.$gemv(
+                _blas_handle(),
+                tr,
+                m,
+                n,
+                alpha,
+                A,
+                max(1, stride(A, 2)),
+                x,
+                stride(x, 1),
+                beta,
+                y,
+                stride(y, 1),
+            )
             return y
         end
     end
 end
-_blas_gemm!(tA, tB, alpha, A, B, beta, Cm) = CUDA.CUBLAS.gemm!(tA, tB, alpha, A, B, beta, Cm)
+_blas_gemm!(tA, tB, alpha, A, B, beta, Cm) =
+    CUDA.CUBLAS.gemm!(tA, tB, alpha, A, B, beta, Cm)
 _blas_gemv!(tr, alpha, A, x, beta, y) = CUDA.CUBLAS.gemv!(tr, alpha, A, x, beta, y)

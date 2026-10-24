@@ -59,10 +59,19 @@ else
             base = (r - 1) * rb + (j - 1) * bbytes
             for off in scale_offs
                 v = Float16((rand(rng) * 0.04 + 0.002) * (rand(rng) < 0.5 ? -1 : 1))
-                data[base + off + 1:base + off + 2] .= reinterpret(UInt8, [v])
+                data[(base+off+1):(base+off+2)] .= reinterpret(UInt8, [v])
             end
         end
-        return _lq_inf.QuantMatrix(data, 0, _LQ_TYPE[kind], k, nrows, rb, C_NULL, Int64(bvals))
+        return _lq_inf.QuantMatrix(
+            data,
+            0,
+            _LQ_TYPE[kind],
+            k,
+            nrows,
+            rb,
+            C_NULL,
+            Int64(bvals),
+        )
     end
 
     # Device path: to_device places the weight; matmul! runs the GEMV.
@@ -72,9 +81,15 @@ else
         dev = Gesso.to_device(_lq_lava, (; embedding=emb, blocks=[(; w=pw)], lm_head=emb))
         w = dev.blocks[1].w
         @test w.storage isa _lq_ext.LavaDenseQuant
-        @test w.storage isa (qm.ggml_type == _lq_inf.GGML_TYPE_Q8_0 ? _lq_ext.LavaQ8Quant : _lq_ext.LavaBlockQuant)
+        @test w.storage isa (
+            qm.ggml_type == _lq_inf.GGML_TYPE_Q8_0 ? _lq_ext.LavaQ8Quant :
+            _lq_ext.LavaBlockQuant
+        )
         n, nrows = size(X, 1), size(qm, 1)
-        dst = Gesso.Activation(; shape=(n, nrows), storage=fill!(Lava.LavaArray{Float32}(undef, n, nrows), 0.0f0))
+        dst = Gesso.Activation(;
+            shape=(n, nrows),
+            storage=fill!(Lava.LavaArray{Float32}(undef, n, nrows), 0.0f0),
+        )
         x = Gesso.Activation(; shape=size(X), storage=Lava.LavaArray{Float32}(X))
         Gesso.matmul!(_lq_lava, dst, x, w, _lq_wl)
         return Array(dst.storage)
@@ -83,7 +98,9 @@ else
     # Per-element error against the F32-activation bound, host F64 accumulation.
     function _lq_check(qm, X, dev; label::AbstractString, rtol::Float64=5.0e-5)
         if !isfile(joinpath(get(ENV, "GESSO_GGML_DIR", ""), "libggml-base.so"))
-            _skip("set GESSO_GGML_DIR to a directory with libggml-base.so — $label host reference skipped")
+            _skip(
+                "set GESSO_GGML_DIR to a directory with libggml-base.so — $label host reference skipped",
+            )
             return nothing
         end
         W = Float64.(_lq_inf._quant_host_f32(qm))
@@ -93,7 +110,8 @@ else
         tol = rtol .* A .+ 1.0e-9
         err = abs.(Float64.(dev) .- ref)
         ratio = maximum(err ./ tol)
-        @info "lava dense quant GEMV" label maxerr = maximum(err) max_ref = maximum(abs, ref) worst_err_over_tol = ratio
+        @info "lava dense quant GEMV" label maxerr = maximum(err) max_ref =
+            maximum(abs, ref) worst_err_over_tol = ratio
         @test all(err .<= tol)
         return nothing
     end
@@ -121,19 +139,37 @@ else
             @testset "$kind staged shape" begin
                 qm = _lq_random_matrix(rng, kind, 37, 512)
                 X = randn(rng, Float32, 40, 512)
-                _lq_check(qm, X, _lq_device_matmul(qm, X); label="prefill $kind 37x512 n40", rtol=2.0e-3)
+                _lq_check(
+                    qm,
+                    X,
+                    _lq_device_matmul(qm, X);
+                    label="prefill $kind 37x512 n40",
+                    rtol=2.0e-3,
+                )
             end
         end
         @testset "cooperative-matrix shape" begin
             qm = _lq_random_matrix(rng, :q5_k, 64, 512)
             X = randn(rng, Float32, 32, 512)
-            _lq_check(qm, X, _lq_device_matmul(qm, X); label="prefill q5_k 64x512 n32", rtol=2.0e-3)
+            _lq_check(
+                qm,
+                X,
+                _lq_device_matmul(qm, X);
+                label="prefill q5_k 64x512 n32",
+                rtol=2.0e-3,
+            )
         end
         @testset "chunked scratch with a partial last chunk" begin
             withenv("GESSO_DQ_GEMM_SCRATCH_MIB" => "1") do
                 qm = _lq_random_matrix(rng, :q5_k, 2300, 512)
                 X = randn(rng, Float32, 40, 512)
-                _lq_check(qm, X, _lq_device_matmul(qm, X); label="prefill q5_k 2300x512 n40 chunked", rtol=2.0e-3)
+                _lq_check(
+                    qm,
+                    X,
+                    _lq_device_matmul(qm, X);
+                    label="prefill q5_k 2300x512 n40 chunked",
+                    rtol=2.0e-3,
+                )
             end
         end
     end
@@ -142,7 +178,16 @@ else
         rng = MersenneTwister(7)
         qm = _lq_random_matrix(rng, :q4_k, 8, 256)
         @test _lq_ext._lq_eligible(qm)
-        bad = _lq_inf.QuantMatrix(qm.data, 0, _lq_inf.GGML_TYPE_Q4_K, 100, 8, qm.row_bytes, C_NULL, Int64(256))
+        bad = _lq_inf.QuantMatrix(
+            qm.data,
+            0,
+            _lq_inf.GGML_TYPE_Q4_K,
+            100,
+            8,
+            qm.row_bytes,
+            C_NULL,
+            Int64(256),
+        )
         @test !_lq_ext._lq_eligible(bad)
     end
 
@@ -153,8 +198,13 @@ else
         data = reduce(vcat, [collect(_lq_inf._quant_bytes(q)) for q in qms])
         q1 = qms[1]
         return _lq_inf.GpuQuantSlice(
-            Lava.LavaArray{UInt8}(data), q1.ggml_type, length(qms), q1.ne0, q1.nrows,
-            q1.nrows * q1.row_bytes, q1.blck_size,
+            Lava.LavaArray{UInt8}(data),
+            q1.ggml_type,
+            length(qms),
+            q1.ne0,
+            q1.nrows,
+            q1.nrows * q1.row_bytes,
+            q1.blck_size,
         )
     end
 
@@ -185,7 +235,8 @@ else
     # smallest row lengths, and with an odd row count so the last workgroup is partial.
     @testset "LavaQ8Quant: GEMV at ntok=1, small k and odd nrows" begin
         rng = MersenneTwister(20261015)
-        for (nrows, k, ntok) in ((37, 512, 1), (37, 96, 1), (37, 96, 3), (37, 32, 1), (37, 32, 3))
+        for (nrows, k, ntok) in
+            ((37, 512, 1), (37, 96, 1), (37, 96, 3), (37, 32, 1), (37, 32, 3))
             qm = _lq_random_matrix(rng, :q8_0, nrows, k)
             X = randn(rng, Float32, ntok, k)
             _lq_check(qm, X, _lq_device_matmul(qm, X); label="q8_0 $(nrows)x$k ntok=$ntok")
@@ -199,13 +250,25 @@ else
         @testset "staged shape, ntok=32" begin
             qm = _lq_random_matrix(rng, :q8_0, 37, 512)
             X = randn(rng, Float32, 32, 512)
-            _lq_check(qm, X, _lq_device_matmul(qm, X); label="prefill q8_0 37x512 n32", rtol=2.0e-3)
+            _lq_check(
+                qm,
+                X,
+                _lq_device_matmul(qm, X);
+                label="prefill q8_0 37x512 n32",
+                rtol=2.0e-3,
+            )
         end
         @testset "chunked scratch with a partial last chunk" begin
             withenv("GESSO_DQ_GEMM_SCRATCH_MIB" => "1") do
                 qm = _lq_random_matrix(rng, :q8_0, 2300, 512)
                 X = randn(rng, Float32, 40, 512)
-                _lq_check(qm, X, _lq_device_matmul(qm, X); label="prefill q8_0 2300x512 n40 chunked", rtol=2.0e-3)
+                _lq_check(
+                    qm,
+                    X,
+                    _lq_device_matmul(qm, X);
+                    label="prefill q8_0 2300x512 n40 chunked",
+                    rtol=2.0e-3,
+                )
             end
         end
     end
@@ -221,7 +284,12 @@ else
                 xv = randn(rng, Float32, k)
                 for e in (1, 3)
                     y = _lq_expert_gemv(bank, e, xv)
-                    _lq_check(qms[e], reshape(xv, 1, k), reshape(y, 1, nrows); label="$kind expert $e")
+                    _lq_check(
+                        qms[e],
+                        reshape(xv, 1, k),
+                        reshape(y, 1, nrows);
+                        label="$kind expert $e",
+                    )
                 end
             end
         end
@@ -231,8 +299,18 @@ else
         rng = MersenneTwister(20261013)
         k = 300
         nrows = 37
-        qms = [_lq_inf.QuantMatrix(collect(reinterpret(UInt8, randn(rng, Float32, nrows * k))),
-            0, _lq_inf.GGML_TYPE_F32, k, nrows, k * 4, C_NULL, Int64(1)) for _ in 1:2]
+        qms = [
+            _lq_inf.QuantMatrix(
+                collect(reinterpret(UInt8, randn(rng, Float32, nrows * k))),
+                0,
+                _lq_inf.GGML_TYPE_F32,
+                k,
+                nrows,
+                k * 4,
+                C_NULL,
+                Int64(1),
+            ) for _ in 1:2
+        ]
         bank = _lq_expert_bank(qms)
         xv = randn(rng, Float32, k)
         y1 = _lq_expert_gemv(bank, 2, xv)

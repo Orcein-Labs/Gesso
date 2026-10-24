@@ -20,7 +20,8 @@ if !CUDA_LOADED || !CUDA.functional()
     _skip("no NVIDIA device — CUDA tier partial tests skipped (§LXXVII skip law)")
 else
     const _kvtg_be = Gesso.CUDABackend()
-    const _kvtg_cfgs = ((16, 2, 256, 5000), (8, 2, 256, 1000), (4, 2, 256, 300), (2, 2, 256, 1000))
+    const _kvtg_cfgs =
+        ((16, 2, 256, 5000), (8, 2, 256, 1000), (4, 2, 256, 300), (2, 2, 256, 1000))
     const _kvtg_tol = 1e-5
 
     _kvtg_dev(x) = CUDA.CUDACore.Adapt.adapt(CuArray, x)
@@ -30,7 +31,19 @@ else
         pm = CUDA.zeros(Float32, n_heads)
         pl = CUDA.zeros(Float32, n_heads)
         pacc = CUDA.zeros(Float32, n_heads, d)
-        _KVT._attention_partial_device!(_kvtg_be, pm, pl, pacc, CuArray(q), kc, vc, rows, n_heads, d, group)
+        _KVT._attention_partial_device!(
+            _kvtg_be,
+            pm,
+            pl,
+            pacc,
+            CuArray(q),
+            kc,
+            vc,
+            rows,
+            n_heads,
+            d,
+            group,
+        )
         return _KVT._partial_download!(_KVT._kv_partial(n_heads, d), pm, pl, pacc)
     end
 
@@ -50,7 +63,17 @@ else
     # Device decode over all K rows, the reference for the device partials.
     function _kvtg_decode(qq, kd_k, vd_v, n_heads, d, group, K)
         attn = CUDA.zeros(Float32, 1, n_heads, d)
-        ok = _KVT._attention_decode_device!(_kvtg_be, attn, CuArray(qq), kd_k, vd_v, n_heads, d, group, K)
+        ok = _KVT._attention_decode_device!(
+            _kvtg_be,
+            attn,
+            CuArray(qq),
+            kd_k,
+            vd_v,
+            n_heads,
+            d,
+            group,
+            K,
+        )
         ok === true || error("decode hook declined")
         return Array(attn)
     end
@@ -66,7 +89,11 @@ else
             qq = _kvt_query(fmt, q)
             kd, vd = _kvtg_dev(kh), _kvtg_dev(vh)
             dec = _kvtg_decode(qq, kd, vd, n_heads, d, group, K)
-            out = _kvtg_finish([_kvtg_gpu_partial(qq, kd, vd, 1:K, n_heads, d, group)], n_heads, d)
+            out = _kvtg_finish(
+                [_kvtg_gpu_partial(qq, kd, vd, 1:K, n_heads, d, group)],
+                n_heads,
+                d,
+            )
             e = _kvt_relerr(out, dec)
             worst = max(worst, e)
             @test e <= _kvtg_tol
@@ -90,19 +117,20 @@ else
             for a in splits
                 0 <= a <= K || continue
                 gpu_head = _kvtg_gpu_partial(qq, kd, vd, 1:a, n_heads, d, group)
-                cpu_tail = _kvtg_cpu_partial(qq, kh, vh, (a + 1):K, n_heads, d, group)
+                cpu_tail = _kvtg_cpu_partial(qq, kh, vh, (a+1):K, n_heads, d, group)
                 e = _kvt_relerr(_kvtg_finish([gpu_head, cpu_tail], n_heads, d), dec)
                 worst = max(worst, e)
                 @test e <= _kvtg_tol
                 # the other orientation: host head, device tail
                 cpu_head = _kvtg_cpu_partial(qq, kh, vh, 1:a, n_heads, d, group)
-                gpu_tail = _kvtg_gpu_partial(qq, kd, vd, (a + 1):K, n_heads, d, group)
+                gpu_tail = _kvtg_gpu_partial(qq, kd, vd, (a+1):K, n_heads, d, group)
                 e2 = _kvt_relerr(_kvtg_finish([cpu_head, gpu_tail], n_heads, d), dec)
                 worst_rev = max(worst_rev, e2)
                 @test e2 <= _kvtg_tol
             end
         end
-        @info "cuda tier partial head/tail" worst_relerr = worst worst_relerr_host_head = worst_rev
+        @info "cuda tier partial head/tail" worst_relerr = worst worst_relerr_host_head =
+            worst_rev
     end
 
     @testset "cuda tier partial: q8 agrees across aligned and unaligned range starts" begin
@@ -119,7 +147,7 @@ else
         for r0 in (1, 2, 3, 4, 5, 6, 7, 8, 12, 13, 64, 65)
             # the device range starts at r0 + 1, so its tiles start at r0
             # (vector loads when r0 % 4 == 0)
-            gpu_tail = _kvtg_gpu_partial(q, kd, vd, (r0 + 1):K, n_heads, d, group)
+            gpu_tail = _kvtg_gpu_partial(q, kd, vd, (r0+1):K, n_heads, d, group)
             cpu_head = _kvtg_cpu_partial(q, kh, vh, 1:r0, n_heads, d, group)
             e = _kvt_relerr(_kvtg_finish([cpu_head, gpu_tail], n_heads, d), dec)
             if r0 % 4 == 0
@@ -132,9 +160,13 @@ else
         # the device partial over all rows against the host partial over the same rows
         full_gpu = _kvtg_gpu_partial(q, kd, vd, 1:K, n_heads, d, group)
         full_cpu = _kvtg_cpu_partial(q, kh, vh, 1:K, n_heads, d, group)
-        e_host = _kvt_relerr(_kvtg_finish([full_gpu], n_heads, d), _kvtg_finish([full_cpu], n_heads, d))
+        e_host = _kvt_relerr(
+            _kvtg_finish([full_gpu], n_heads, d),
+            _kvtg_finish([full_cpu], n_heads, d),
+        )
         @test e_host <= _kvtg_tol
-        @info "cuda tier q8" worst_aligned = worst_al worst_unaligned = worst_un device_vs_host = e_host
+        @info "cuda tier q8" worst_aligned = worst_al worst_unaligned = worst_un device_vs_host =
+            e_host
     end
 
     @testset "cuda tier partial: negative control, a skipped row must fail the comparison" begin
@@ -151,7 +183,7 @@ else
             a = K ÷ 2
             # the tail starts at a + 2, so row a + 1 is in neither range
             gpu_head = _kvtg_gpu_partial(qq, kd, vd, 1:a, n_heads, d, group)
-            bad_tail = _kvtg_cpu_partial(qq, kh, vh, (a + 2):K, n_heads, d, group)
+            bad_tail = _kvtg_cpu_partial(qq, kh, vh, (a+2):K, n_heads, d, group)
             e = _kvt_relerr(_kvtg_finish([gpu_head, bad_tail], n_heads, d), dec)
             smallest = min(smallest, e)
             @test e > _kvtg_tol

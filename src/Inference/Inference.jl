@@ -146,8 +146,7 @@ function _tensor_head_dim(model, tensors)
     end
     n_heads = model.blocks[1].attention.n_heads
     dim = model.embedding.dim
-    dim % n_heads == 0 ||
-        error("dim $dim is not divisible by n_heads $n_heads")
+    dim % n_heads == 0 || error("dim $dim is not divisible by n_heads $n_heads")
     return div(dim, n_heads)
 end
 
@@ -260,65 +259,65 @@ function reference_prefill(
             )
             h.storage .+= sub.storage
         else
-        rmsnorm!(cpu, normed, h, bt.attn_rms, wl; eps)
-        matmul!(cpu, q, normed, bt.wq, wl)
-        matmul!(cpu, k, normed, bt.wk, wl)
-        matmul!(cpu, v, normed, bt.wv, wl)
+            rmsnorm!(cpu, normed, h, bt.attn_rms, wl; eps)
+            matmul!(cpu, q, normed, bt.wq, wl)
+            matmul!(cpu, k, normed, bt.wk, wl)
+            matmul!(cpu, v, normed, bt.wv, wl)
 
-        # split heads: feature f (0-based) = head * d_head + j (head-major
-        # packing, matching the packed Wk/Wv rows of the weight walk)
-        _split_heads!(qh, q, n_heads, d_head)
-        _split_heads!(kh, k, n_kv_heads, d_head)
-        _split_heads!(vh, v, n_kv_heads, d_head)
-        if haskey(bt, :wq_norm)
-            rmsnorm!(cpu, qh, qh, bt.wq_norm, wl; eps)
-            rmsnorm!(cpu, kh, kh, bt.wk_norm, wl; eps)
-        end
+            # split heads: feature f (0-based) = head * d_head + j (head-major
+            # packing, matching the packed Wk/Wv rows of the weight walk)
+            _split_heads!(qh, q, n_heads, d_head)
+            _split_heads!(kh, k, n_kv_heads, d_head)
+            _split_heads!(vh, v, n_kv_heads, d_head)
+            if haskey(bt, :wq_norm)
+                rmsnorm!(cpu, qh, qh, bt.wq_norm, wl; eps)
+                rmsnorm!(cpu, kh, kh, bt.wk_norm, wl; eps)
+            end
 
-        br = _block_rope(bt, theta, inv_freq, rotary_dim)
-        rope!(
-            cpu,
-            qh,
-            kh,
-            positions,
-            wl;
-            theta=br.theta,
-            inv_freq=br.inv_freq,
-            interleaved=_tensors_rope_interleaved(tensors),
-            rotary_dim=br.rotary_dim,
-        )
+            br = _block_rope(bt, theta, inv_freq, rotary_dim)
+            rope!(
+                cpu,
+                qh,
+                kh,
+                positions,
+                wl;
+                theta=br.theta,
+                inv_freq=br.inv_freq,
+                interleaved=_tensors_rope_interleaved(tensors),
+                rotary_dim=br.rotary_dim,
+            )
 
-        # repeat KV heads for the contraction only (identity when MHA)
-        kx = _repeat_heads(kh, group)
-        vx = _repeat_heads(vh, group)
+            # repeat KV heads for the contraction only (identity when MHA)
+            kx = _repeat_heads(kh, group)
+            vx = _repeat_heads(vh, group)
 
-        _attention_heads!(
-            cpu,
-            attn.storage,
-            scores,
-            scores_out,
-            qh.storage,
-            kx.storage,
-            vx.storage,
-            n_heads,
-            d_head,
-            seq,
-            seq,
-            wl;
-            window=_block_window(bt),
-        )
+            _attention_heads!(
+                cpu,
+                attn.storage,
+                scores,
+                scores_out,
+                qh.storage,
+                kx.storage,
+                vx.storage,
+                n_heads,
+                d_head,
+                seq,
+                seq,
+                wl;
+                window=_block_window(bt),
+            )
 
-        _merge_heads!(merged, attn, n_heads, d_head)
-        if haskey(bt, :wattn_gate)
-            matmul!(cpu, gate_attn, normed, bt.wattn_gate, wl)
-            _sigmoid_mul!(cpu, merged.storage, merged.storage, gate_attn.storage)
-        end
-        if haskey(bt, :wattn_head_gate)
-            matmul!(cpu, gate_head, normed, bt.wattn_head_gate, wl)
-            _head_gate_mul!(cpu, merged.storage, gate_head.storage, d_head)
-        end
-        matmul!(cpu, sub, merged, bt.wo, wl)
-        h.storage .+= sub.storage               # residual (interpreter add)
+            _merge_heads!(merged, attn, n_heads, d_head)
+            if haskey(bt, :wattn_gate)
+                matmul!(cpu, gate_attn, normed, bt.wattn_gate, wl)
+                _sigmoid_mul!(cpu, merged.storage, merged.storage, gate_attn.storage)
+            end
+            if haskey(bt, :wattn_head_gate)
+                matmul!(cpu, gate_head, normed, bt.wattn_head_gate, wl)
+                _head_gate_mul!(cpu, merged.storage, gate_head.storage, d_head)
+            end
+            matmul!(cpu, sub, merged, bt.wo, wl)
+            h.storage .+= sub.storage               # residual (interpreter add)
         end
 
         # --- ffn sublayer (pre-norm) -----------------------------------------
@@ -362,7 +361,11 @@ function _logits_transpose(x)
     @sync for c in 1:nc
         lo = div((c - 1) * n, nc) + 1
         hi = div(c * n, nc)
-        Threads.@spawn permutedims!(view(out, $lo:$hi, :), view(x, :, $lo:$hi), (2, 1))
+        Threads.@spawn permutedims!(
+            view(out, ($lo):($hi), :),
+            view(x, :, ($lo):($hi)),
+            (2, 1),
+        )
     end
     return out
 end
@@ -405,7 +408,11 @@ function _geglu!(backend, act, gate, up)
         @sync for c in 1:nc
             lo = div((c - 1) * n, nc) + 1
             hi = div(c * n, nc)
-            Threads.@spawn _cpu_geglu!(view(d, $lo:$hi), view(g, $lo:$hi), view(u, $lo:$hi))
+            Threads.@spawn _cpu_geglu!(
+                view(d, ($lo):($hi)),
+                view(g, ($lo):($hi)),
+                view(u, ($lo):($hi)),
+            )
         end
     else
         _cpu_geglu!(d, g, u)
@@ -508,8 +515,12 @@ function _hybrid_linear_block!(
     dk, dv = mx.key_head_dim, mx.value_head_dim
     ksz = mx.conv_kernel_dim
 
-    if seq == 1 && gdn_fused && gdn_scratch !== nothing && conv_state !== nothing &&
-       rec_state !== nothing && _gdn_fused_decode(cpu)
+    if seq == 1 &&
+       gdn_fused &&
+       gdn_scratch !== nothing &&
+       conv_state !== nothing &&
+       rec_state !== nothing &&
+       _gdn_fused_decode(cpu)
         # single-token decode: same ops, preallocated buffers, fused GDN kernels
         @decode_sub :gdn_norm cpu rmsnorm!(cpu, normed, h, bt.attn_rms, wl; eps)
         s = gdn_scratch
@@ -517,8 +528,14 @@ function _hybrid_linear_block!(
         z = Activation(; shape=(1, value_dim), storage=s.z)
         a = Activation(; shape=(1, nv), storage=s.a)
         b = Activation(; shape=(1, nv), storage=s.b)
-        @decode_sub :gdn_proj cpu _dec_matmul_group!(cpu, (mixed, z, a, b), nothing, normed,
-            (bt.wgdn_qkv, bt.wgdn_z, bt.wgdn_a, bt.wgdn_b), wl)
+        @decode_sub :gdn_proj cpu _dec_matmul_group!(
+            cpu,
+            (mixed, z, a, b),
+            nothing,
+            normed,
+            (bt.wgdn_qkv, bt.wgdn_z, bt.wgdn_a, bt.wgdn_b),
+            wl,
+        )
         # conv+SiLU+state, gates, q/k L2norm, delta rule, gated norm: device kernels
         _gdn_decode_core!(cpu, s, bt, spec, eps, conv_state, rec_state)
         @decode_sub :gdn_outproj cpu begin
@@ -530,7 +547,19 @@ function _hybrid_linear_block!(
 
     if seq == 1 && cpu_scratch !== nothing && _cpu_gdn_fast_ok(bt, conv_state, rec_state, h)
         # CPU single-token decode: preallocated F32 mixer (cpu_decode.jl)
-        return _gdn_decode_cpu!(cpu, h, normed, sub, bt, spec, wl, eps, conv_state, rec_state, cpu_scratch)
+        return _gdn_decode_cpu!(
+            cpu,
+            h,
+            normed,
+            sub,
+            bt,
+            spec,
+            wl,
+            eps,
+            conv_state,
+            rec_state,
+            cpu_scratch,
+        )
     end
 
     @decode_sub :gdn_norm cpu rmsnorm!(cpu, normed, h, bt.attn_rms, wl; eps)
@@ -550,7 +579,12 @@ function _hybrid_linear_block!(
         conv_state = zeros_like((conv_dim, ksz - 1))
     end
     @decode_sub :gdn_conv cpu _causal_conv1d_silu!(
-        cpu, conv_out, mixed.storage, bt.wgdn_conv.storage, conv_state)
+        cpu,
+        conv_out,
+        mixed.storage,
+        bt.wgdn_conv.storage,
+        conv_state,
+    )
 
     q = zeros_like((seq, nk, dk))
     k = zeros_like((seq, nk, dk))
@@ -558,8 +592,11 @@ function _hybrid_linear_block!(
     @decode_sub :gdn_split cpu begin
         # contiguous column views of a device array keep their own reference
         # to its memory; drop them so the block arena can free conv_out
-        cols = (view(conv_out, :, 1:key_dim), view(conv_out, :, (key_dim+1):(2*key_dim)),
-            view(conv_out, :, (2*key_dim+1):conv_dim))
+        cols = (
+            view(conv_out, :, 1:key_dim),
+            view(conv_out, :, (key_dim+1):(2*key_dim)),
+            view(conv_out, :, (2*key_dim+1):conv_dim),
+        )
         _split_heads!(q, cols[1], nk, dk)
         _split_heads!(k, cols[2], nk, dk)
         _split_heads!(v, cols[3], nv, dv)
@@ -571,7 +608,14 @@ function _hybrid_linear_block!(
     A_log = bt.wgdn_A_log.storage
     dt_bias = bt.wgdn_dt_bias.storage
     @decode_sub :gdn_gates cpu _gdn_gate_params!(
-        cpu, g, beta, a.storage, b.storage, A_log, dt_bias)
+        cpu,
+        g,
+        beta,
+        a.storage,
+        b.storage,
+        A_log,
+        dt_bias,
+    )
 
     core = zeros_like((seq, nv, dv))
     if rec_state === nothing
@@ -580,12 +624,26 @@ function _hybrid_linear_block!(
     # CPU: the whole call (q/k repeat + L2 norm + delta rule) is :gdn_recur;
     # :gdn_qk stays 0 here. The CUDA backend times its own split inside.
     @decode_sub :gdn_recur cpu _gated_delta_rule!(
-        cpu, core, q, k, v, g, beta, rec_state;
+        cpu,
+        core,
+        q,
+        k,
+        v,
+        g,
+        beta,
+        rec_state;
         v_head_tiled=mx.v_head_tiled,
     )
 
     merged = zeros_like((seq, value_dim))
-    @decode_sub :gdn_gnorm cpu if !_gdn_gnorm_merge!(cpu, merged, core, z.storage, bt.wgdn_norm, eps)
+    @decode_sub :gdn_gnorm cpu if !_gdn_gnorm_merge!(
+        cpu,
+        merged,
+        core,
+        z.storage,
+        bt.wgdn_norm,
+        eps,
+    )
         z_h = zeros_like((seq, nv, dv))
         _split_heads!(z_h, z.storage, nv, dv)
         nrm = zeros_like((seq, dv))
@@ -618,8 +676,19 @@ end
 
 # `xq_in` / `xq_ff` are the decode scratch's Q8_K buffers for the residual and
 # FFN-hidden inputs. Prefill passes nothing and keeps the per-weight matmuls.
-function _ffn_block!(cpu, down, gate, up, act, normed2, bt, wl, zeros_like;
-    xq_in=nothing, xq_ff=nothing)
+function _ffn_block!(
+    cpu,
+    down,
+    gate,
+    up,
+    act,
+    normed2,
+    bt,
+    wl,
+    zeros_like;
+    xq_in=nothing,
+    xq_ff=nothing,
+)
     if haskey(bt, :wrouter)
         return _moe_ffn!(cpu, down, normed2, bt, wl, zeros_like)
     end
@@ -632,7 +701,14 @@ function _ffn_block!(cpu, down, gate, up, act, normed2, bt, wl, zeros_like;
         else
             swiglu!(cpu, act, gate, up, wl)
         end
-        @decode_sub :ffn_down cpu _dec_matmul_group!(cpu, (down,), xq_ff, act, (bt.wdown,), wl)
+        @decode_sub :ffn_down cpu _dec_matmul_group!(
+            cpu,
+            (down,),
+            xq_ff,
+            act,
+            (bt.wdown,),
+            wl,
+        )
     end
     return down
 end
@@ -640,10 +716,12 @@ end
 function _moe_ffn!(cpu, down, normed2, bt, wl, zeros_like)
     x = normed2.storage
     y = down.storage
-    n_used = haskey(bt, :n_expert_used) ? Int(bt.n_expert_used) : size(bt.wrouter.storage, 1)
+    n_used =
+        haskey(bt, :n_expert_used) ? Int(bt.n_expert_used) : size(bt.wrouter.storage, 1)
     shared = haskey(bt, :wshared_gate)
     sd = shared ? Activation(; shape=size(x), storage=zeros_like(size(x))) : nothing
-    shared_ffn = shared ? _shared_expert_thunk(cpu, sd, normed2, bt, wl, zeros_like) : nothing
+    shared_ffn =
+        shared ? _shared_expert_thunk(cpu, sd, normed2, bt, wl, zeros_like) : nothing
     _moe_topk_swiglu!(
         cpu,
         y,
@@ -677,7 +755,14 @@ function _shared_expert_thunk(cpu, sd, normed2, bt, wl, zeros_like)
         sg = Activation(; shape=(seq, ff), storage=zeros_like((seq, ff)))
         su = Activation(; shape=(seq, ff), storage=zeros_like((seq, ff)))
         sa = Activation(; shape=(seq, ff), storage=zeros_like((seq, ff)))
-        _dec_matmul_group!(cpu, (sg, su), nothing, normed2, (bt.wshared_gate, bt.wshared_up), wl)
+        _dec_matmul_group!(
+            cpu,
+            (sg, su),
+            nothing,
+            normed2,
+            (bt.wshared_gate, bt.wshared_up),
+            wl,
+        )
         swiglu!(cpu, sa, sg, su, wl)
         matmul!(cpu, sd, sa, bt.wshared_down, wl)
         nothing
@@ -691,8 +776,9 @@ _offload_host_array(s) = s
 # `overlap`, when given, is work that touches neither `y` nor the experts; it
 # runs exactly once before this returns.
 function _moe_topk_swiglu!(backend, y, x, router, gate, up, down, n_used; overlap=nothing)
-    gate isa CachedExpertBank &&
-        error("_moe_topk_swiglu!: CachedExpertBank needs a device backend, got $(typeof(backend))")
+    gate isa CachedExpertBank && error(
+        "_moe_topk_swiglu!: CachedExpertBank needs a device backend, got $(typeof(backend))",
+    )
     overlap === nothing || overlap()
     if gate isa GgufQuantSlice || gate isa GpuQuantSlice
         return _cpu_moe_topk_swiglu_gguf!(y, x, router, gate, up, down, n_used)
@@ -762,8 +848,19 @@ function _attention_heads!(
 )
     sc, probs = scores.storage, scores_out.storage
     if backend isa CPUBackend && _attention_rows_threaded(L, K * d_head)
-        return _attention_heads_rows!(attn, q, k, v, n_heads, d_head, L, K, window,
-            eltype(sc), eltype(probs))
+        return _attention_heads_rows!(
+            attn,
+            q,
+            k,
+            v,
+            n_heads,
+            d_head,
+            L,
+            K,
+            window,
+            eltype(sc),
+            eltype(probs),
+        )
     end
     on_cpu = backend_name(backend) === :cpu
     on_cpu && fill!(attn, zero(eltype(attn)))
@@ -868,7 +965,7 @@ _attention_prefill_device!(backend, attn, q, k, v, n_heads, d_head, group, L, K)
 # sqrt(d_head) is a Float64. When sqrt(d_head) is a power of two, multiplying
 # by its inverse is the same exact scaling, without the slow divide.
 @inline _attention_keys(t::Int, L::Int, K::Int, masked::Bool, window::Int) =
-    masked ? ((window > 0 ? max(1, K - L + t - window + 1) : 1):(K - L + t)) : (1:K)
+    masked ? ((window>0 ? max(1, K-L+t-window+1) : 1):(K-L+t)) : (1:K)
 
 struct _ScoreDiv
     s::Float64
@@ -898,12 +995,33 @@ _attention_scores_cpu!(sc, q, k, hh, d_head, L, K; masked::Bool=false, window::I
     _attention_scores_cpu!(sc, q, k, hh, d_head, L, K, masked, window)
 
 function _attention_scores_cpu!(sc, q, k, hh, d_head, L, K, masked::Bool, window::Int)
-    _attention_scores_rows!(sc, q, k, hh, d_head, L, K, masked, window,
-        _attention_score_scale(d_head))
+    _attention_scores_rows!(
+        sc,
+        q,
+        k,
+        hh,
+        d_head,
+        L,
+        K,
+        masked,
+        window,
+        _attention_score_scale(d_head),
+    )
     return sc
 end
 
-function _attention_scores_rows!(sc, q, k, hh, d_head, L, K, masked, window, scale::F) where {F}
+function _attention_scores_rows!(
+    sc,
+    q,
+    k,
+    hh,
+    d_head,
+    L,
+    K,
+    masked,
+    window,
+    scale::F,
+) where {F}
     if !_attention_rows_threaded(L, K * d_head)
         for t in 1:L, u in _attention_keys(t, L, K, masked, window), j in 1:d_head
             sc[t, u] = _score_add(sc[t, u], q[t, hh, j] * k[u, hh, j], scale)
@@ -931,8 +1049,17 @@ function _attention_scores_rows!(sc, q, k, hh, d_head, L, K, masked, window, sca
     return sc
 end
 
-_attention_values_cpu!(attn, probs, v, hh, d_head, L, K; masked::Bool=false, window::Int=0) =
-    _attention_values_cpu!(attn, probs, v, hh, d_head, L, K, masked, window)
+_attention_values_cpu!(
+    attn,
+    probs,
+    v,
+    hh,
+    d_head,
+    L,
+    K;
+    masked::Bool=false,
+    window::Int=0,
+) = _attention_values_cpu!(attn, probs, v, hh, d_head, L, K, masked, window)
 
 function _attention_values_cpu!(attn, probs, v, hh, d_head, L, K, masked::Bool, window::Int)
     if !_attention_rows_threaded(L, K * d_head)
@@ -975,8 +1102,19 @@ end
 # hold -Inf there, which adds nothing to its max and exact zeros to its sum),
 # and outputs accumulate from zero over the kept keys as in
 # `_attention_values_cpu!`.
-function _attention_heads_rows!(attn, q, k, v, n_heads::Int, d_head::Int, L::Int, K::Int,
-    window::Int, ::Type{S}, ::Type{P}) where {S,P}
+function _attention_heads_rows!(
+    attn,
+    q,
+    k,
+    v,
+    n_heads::Int,
+    d_head::Int,
+    L::Int,
+    K::Int,
+    window::Int,
+    ::Type{S},
+    ::Type{P},
+) where {S, P}
     scale = _attention_score_scale(d_head)
     vt = Array{eltype(v)}(undef, d_head, K, n_heads)
     _attention_rows!(n_heads) do heads
@@ -1001,7 +1139,10 @@ function _attention_heads_rows!(attn, q, k, v, n_heads::Int, d_head::Int, L::Int
                 end
                 row_max = maximum(view(s, keys))
                 isfinite(row_max) || throw(
-                    gesso_error(ERR_NUMERICAL_INSTABILITY, "softmax!: no finite unmasked maximum"),
+                    gesso_error(
+                        ERR_NUMERICAL_INSTABILITY,
+                        "softmax!: no finite unmasked maximum",
+                    ),
                 )
                 total = 0.0
                 @inbounds for u in keys
@@ -1039,7 +1180,7 @@ function _attention_rows!(f, L::Int)
     # error (the softmax's no-finite-maximum check) is rethrown as itself.
     try
         @sync for c in 1:nc
-            Threads.@spawn f($c:$nc:$L)
+            Threads.@spawn f(($c):($nc):($L))
         end
     catch e
         _cpu_rethrow_task_error(e)
@@ -1225,9 +1366,7 @@ end
 
 _fallback_zeros_factory(::CPUBackend) = (dims::Tuple{Vararg{Int}}) -> zeros(Float32, dims)
 function _fallback_zeros_factory(backend)
-    error(
-        "$(backend_name(backend)): to_device left no device array to seed activations",
-    )
+    error("$(backend_name(backend)): to_device left no device array to seed activations")
 end
 
 # the interpreter never copies: a non-CPU backend REQUIRES device storage
@@ -1255,8 +1394,7 @@ end
 # interchangeable with the explicitly requested backend.
 _storage_root(s) = _backend_storage_root(s)
 
-_is_host_float_storage(s) =
-    _storage_root(s) isa Array && eltype(s) in (Float32, Float64)
+_is_host_float_storage(s) = _storage_root(s) isa Array && eltype(s) in (Float32, Float64)
 
 function _check_device_storage(where::Symbol, backend, t)
     throw(
@@ -1358,7 +1496,13 @@ end
 
 # Decode appends one K row and one V row per attention layer. Both are in
 # one seam so a device backend can write them with a single launch.
-function _kv_append_storage!(kc::AbstractArray, vc::AbstractArray, kh::AbstractArray, vh::AbstractArray, row::Int)
+function _kv_append_storage!(
+    kc::AbstractArray,
+    vc::AbstractArray,
+    kh::AbstractArray,
+    vh::AbstractArray,
+    row::Int,
+)
     @views kc[row, :, :] .= kh[1, :, :]
     @views vc[row, :, :] .= vh[1, :, :]
     return nothing
@@ -1467,7 +1611,7 @@ function reference_generate(
     info=nothing,
     eps::Real=1e-6,
     theta=nothing,
-    state::Union{Nothing,GenerateState}=nothing,
+    state::Union{Nothing, GenerateState}=nothing,
     on_token=nothing,
     on_hidden=nothing,
     on_rows=nothing,
@@ -1481,14 +1625,26 @@ function reference_generate(
     checkpoint_at::Integer=0,
 )
     isempty(prompt) && error("reference_generate: prompt is empty")
-    (sampler === nothing || draft === nothing) || throw(ArgumentError(
-        "reference_generate: a sampler and a speculative draft are exclusive; speculation verifies greedily"))
-    (on_hidden === nothing || draft === nothing) || throw(ArgumentError(
-        "reference_generate: on_hidden and a speculative draft are exclusive; the window skips per-token hidden states"))
-    (isempty(taps) == (on_taps === nothing)) || throw(ArgumentError(
-        "reference_generate: on_taps and taps come together: pass both or neither"))
-    all(b -> 0 <= b <= length(model.blocks), taps) || throw(ArgumentError(
-        "reference_generate: taps must be block counts in 0:$(length(model.blocks))"))
+    (sampler === nothing || draft === nothing) || throw(
+        ArgumentError(
+            "reference_generate: a sampler and a speculative draft are exclusive; speculation verifies greedily",
+        ),
+    )
+    (on_hidden === nothing || draft === nothing) || throw(
+        ArgumentError(
+            "reference_generate: on_hidden and a speculative draft are exclusive; the window skips per-token hidden states",
+        ),
+    )
+    (isempty(taps) == (on_taps === nothing)) || throw(
+        ArgumentError(
+            "reference_generate: on_taps and taps come together: pass both or neither",
+        ),
+    )
+    all(b -> 0 <= b <= length(model.blocks), taps) || throw(
+        ArgumentError(
+            "reference_generate: taps must be block counts in 0:$(length(model.blocks))",
+        ),
+    )
     theta=_resolved_rope_theta(tensors, theta)
     _infer_device_storage!(:reference_generate, backend, tensors)
     cpu = backend
@@ -1510,10 +1666,20 @@ function reference_generate(
     kv_fmt = _kv_format(_kv_default_format(backend_name(cpu), d_head))
     st = state === nothing ? GenerateState(P + cap) : state
     key = (objectid(tensors.embedding.storage), backend_name(cpu), kv_fmt)
-    st.key === nothing || st.key == key || throw(gesso_error(ERR_INVALID_PLAN,
-        "reference_generate: state was built for another model, backend or KV format"))
-    P + cap <= st.ctx || throw(gesso_error(ERR_INVALID_PLAN,
-        "reference_generate: prompt $P + max_new_tokens $cap exceed the state's ctx $(st.ctx)"))
+    st.key === nothing ||
+        st.key == key ||
+        throw(
+            gesso_error(
+                ERR_INVALID_PLAN,
+                "reference_generate: state was built for another model, backend or KV format",
+            ),
+        )
+    P + cap <= st.ctx || throw(
+        gesso_error(
+            ERR_INVALID_PLAN,
+            "reference_generate: prompt $P + max_new_tokens $cap exceed the state's ctx $(st.ctx)",
+        ),
+    )
     fresh = st.arena === nothing
     fresh && state !== nothing && _bind_state!(st, tensors, kv_fmt)
     fresh && (st.arena = _ZerosArena(_zeros_like_factory(cpu, tensors)))
@@ -1543,14 +1709,15 @@ function reference_generate(
         if fresh
             st.key = key
             attn = count(bt -> kv_rows(bt) > 0, tensors.blocks)
-            _device_make_room!(cpu, 2 * attn * cld(st.ctx, 4) * 4 * n_kv_heads * _kv_head_bytes(d_head, kv_fmt))
+            _device_make_room!(
+                cpu,
+                2 * attn * cld(st.ctx, 4) * 4 * n_kv_heads * _kv_head_bytes(d_head, kv_fmt),
+            )
             st.kc = [
-                Activation(; shape=(kv_rows(bt), n_kv_heads, d_head), storage=kv_cache(bt))
-                for bt in tensors.blocks
+                Activation(; shape=(kv_rows(bt), n_kv_heads, d_head), storage=kv_cache(bt)) for bt in tensors.blocks
             ]
             st.vc = [
-                Activation(; shape=(kv_rows(bt), n_kv_heads, d_head), storage=kv_cache(bt))
-                for bt in tensors.blocks
+                Activation(; shape=(kv_rows(bt), n_kv_heads, d_head), storage=kv_cache(bt)) for bt in tensors.blocks
             ]
             # the newest hidden row: the head reads it and each decode step
             # overwrites it in place (Activation fields are immutable, §CIX;
@@ -1560,16 +1727,29 @@ function reference_generate(
             st.h = Activation(; shape=(1, dim), storage=zeros_like((1, dim)))
             st.gdn_conv, st.gdn_rec = _gdn_states(tensors, zeros_like)
             st.gdn_scratch = _gdn_decode_scratch(zeros_like, tensors)
-            mx = haskey(tensors, :spec) && tensors.spec !== nothing ? tensors.spec.mixer : nothing
-            st.cpu_scratch = on_cpu ? _cpu_decode_scratch(
-                mx, dim; qdim=n_heads * d_head, ff=_dense_ffn_hidden(model),
-                kdim=n_kv_heads * d_head, n_heads, n_kv_heads, d_head, vocab, ctx=st.ctx,
-                row=_decode_row_type(mx, tensors),
-            ) : nothing
+            mx =
+                haskey(tensors, :spec) && tensors.spec !== nothing ? tensors.spec.mixer :
+                nothing
+            st.cpu_scratch =
+                on_cpu ?
+                _cpu_decode_scratch(
+                    mx,
+                    dim;
+                    qdim=n_heads * d_head,
+                    ff=_dense_ffn_hidden(model),
+                    kdim=n_kv_heads * d_head,
+                    n_heads,
+                    n_kv_heads,
+                    d_head,
+                    vocab,
+                    ctx=st.ctx,
+                    row=_decode_row_type(mx, tensors),
+                ) : nothing
             st.pending === nothing || _restore_pending!(st)
         end
         kc, vc, h = st.kc, st.vc, st.h
-        gdn_conv, gdn_rec, gdn_scratch, cpu_scratch = st.gdn_conv, st.gdn_rec, st.gdn_scratch, st.cpu_scratch
+        gdn_conv, gdn_rec, gdn_scratch, cpu_scratch =
+            st.gdn_conv, st.gdn_rec, st.gdn_scratch, st.cpu_scratch
         kdim = n_kv_heads * d_head
         qdim = n_heads * d_head
         hidden_ffn = model.blocks[1].ffn.hidden
@@ -1583,15 +1763,21 @@ function reference_generate(
         ckpt_on && _ckpt_fit!(st, max(ckpt_slots, 1))
         # the system-prompt boundary, a pinned checkpoint: a later session that
         # shares the system prompt resumes there even when the stride has moved on
-        ckpt_at = ckpt_on && ckpt_slots > 0 && n0 < checkpoint_at < P ? Int(checkpoint_at) : 0
+        ckpt_at =
+            ckpt_on && ckpt_slots > 0 && n0 < checkpoint_at < P ? Int(checkpoint_at) : 0
 
         # BREADTH-0 Pass D — see reference_prefill. `nothing` = unscaled model.
         inv_freq = tensors_rope_inv_freq(tensors, d_head; theta)
         t_prefill = time_ns()
         chunk = _prefill_chunk(P)
         win_ok = _prefill_window_ok(tensors, gdn_conv, gdn_rec, h, cpu_scratch)
-        on_taps === nothing || win_ok || throw(ArgumentError(
-            "reference_generate: taps need the window prefill path (CPU hybrid)"))
+        on_taps === nothing ||
+            win_ok ||
+            throw(
+                ArgumentError(
+                    "reference_generate: taps need the window prefill path (CPU hybrid)",
+                ),
+            )
         s1 = n0
         while s1 < P
             s0 = s1 + 1
@@ -1606,11 +1792,33 @@ function reference_generate(
                 # CPU hybrid prefill is the verify window's T-row forward: one
                 # weight pass per block and the fused Float32 GDN slab, so the
                 # prompt state is built by the arithmetic decode uses.
-                win = _decode_window!(model, tensors, kc, vc, collect(prompt[s0:s1]), s0, cpu, wd,
-                    gdn_conv, gdn_rec, cpu_scratch; vocab, n_heads, n_kv_heads, d_head, group, eps,
-                    theta, inv_freq, rotary_dim, head=false, taps)
+                win = _decode_window!(
+                    model,
+                    tensors,
+                    kc,
+                    vc,
+                    collect(prompt[s0:s1]),
+                    s0,
+                    cpu,
+                    wd,
+                    gdn_conv,
+                    gdn_rec,
+                    cpu_scratch;
+                    vocab,
+                    n_heads,
+                    n_kv_heads,
+                    d_head,
+                    group,
+                    eps,
+                    theta,
+                    inv_freq,
+                    rotary_dim,
+                    head=false,
+                    taps,
+                )
                 _commit_window!(win, n, gdn_conv, gdn_rec, h)
-                on_rows === nothing || on_rows(s0, _final_normed_rows(tensors, win.hwin, cpu, wd; eps))
+                on_rows === nothing ||
+                    on_rows(s0, _final_normed_rows(tensors, win.hwin, cpu, wd; eps))
                 _window_taps!(on_taps, win, s0, n)
                 at_boundary = ckpt_at > 0 && s1 == ckpt_at
                 if s1 < P && (at_boundary || (ckpt_every > 0 && s1 % ckpt_every == 0))
@@ -1629,9 +1837,16 @@ function reference_generate(
             k = Activation(; shape=(n, kdim), storage=tmp((n, kdim)))
             v = Activation(; shape=(n, kdim), storage=tmp((n, kdim)))
             qh = Activation(; shape=(n, n_heads, d_head), storage=tmp((n, n_heads, d_head)))
-            kh = Activation(; shape=(n, n_kv_heads, d_head), storage=tmp((n, n_kv_heads, d_head)))
-            vh = Activation(; shape=(n, n_kv_heads, d_head), storage=tmp((n, n_kv_heads, d_head)))
-            attn = Activation(; shape=(n, n_heads, d_head), storage=tmp((n, n_heads, d_head)))
+            kh = Activation(;
+                shape=(n, n_kv_heads, d_head),
+                storage=tmp((n, n_kv_heads, d_head)),
+            )
+            vh = Activation(;
+                shape=(n, n_kv_heads, d_head),
+                storage=tmp((n, n_kv_heads, d_head)),
+            )
+            attn =
+                Activation(; shape=(n, n_heads, d_head), storage=tmp((n, n_heads, d_head)))
             merged = Activation(; shape=(n, qdim), storage=tmp((n, qdim)))
             sub = Activation(; shape=(n, dim), storage=tmp((n, dim)))
             normed2 = Activation(; shape=(n, dim), storage=tmp((n, dim)))
@@ -1695,9 +1910,18 @@ function reference_generate(
                         # a later pass attends the cached rows before it as well. A
                         # cache in another format is read back on the first pass too,
                         # so prefill attends the same keys decode will.
-                        ks, vs = s0 == 1 && kv_fmt === :f32 ? (kh, vh) : (
-                            Activation(; shape=(K, n_kv_heads, d_head), storage=@view kc[bi].storage[1:K, :, :]),
-                            Activation(; shape=(K, n_kv_heads, d_head), storage=@view vc[bi].storage[1:K, :, :]))
+                        ks, vs =
+                            s0 == 1 && kv_fmt === :f32 ? (kh, vh) :
+                            (
+                                Activation(;
+                                    shape=(K, n_kv_heads, d_head),
+                                    storage=@view kc[bi].storage[1:K, :, :]
+                                ),
+                                Activation(;
+                                    shape=(K, n_kv_heads, d_head),
+                                    storage=@view vc[bi].storage[1:K, :, :]
+                                ),
+                            )
                         kv_rot = _kv_rotated(kc[bi].storage)
                         kv_rot && _kv_rotate!(qh.storage, true)
                         # a window that masks keys takes the reference path,
@@ -1717,8 +1941,10 @@ function reference_generate(
                             K,
                         )
                             if scores === nothing
-                                scores = TemporaryWorkspace(; shape=(n, K), storage=tmp((n, K)))
-                                scores_out = TemporaryWorkspace(; shape=(n, K), storage=tmp((n, K)))
+                                scores =
+                                    TemporaryWorkspace(; shape=(n, K), storage=tmp((n, K)))
+                                scores_out =
+                                    TemporaryWorkspace(; shape=(n, K), storage=tmp((n, K)))
                             end
                             # repeat KV heads for the contraction only (identity when MHA)
                             kx = _repeat_heads(ks, group)
@@ -1738,14 +1964,22 @@ function reference_generate(
                                 wp;
                                 window,
                             )
-                            kx === ks || (_release_storage!(kx.storage); _release_storage!(vx.storage))
+                            kx === ks || (
+                                _release_storage!(kx.storage);
+                                _release_storage!(vx.storage)
+                            )
                         end
                         kv_rot && _kv_rotate!(attn.storage, false)
 
                         _merge_heads!(merged, attn, n_heads, d_head)
                         if haskey(bt, :wattn_gate)
                             matmul!(cpu, gate_attn, normed, bt.wattn_gate, wp)
-                            _sigmoid_mul!(cpu, merged.storage, merged.storage, gate_attn.storage)
+                            _sigmoid_mul!(
+                                cpu,
+                                merged.storage,
+                                merged.storage,
+                                gate_attn.storage,
+                            )
                         end
                         if haskey(bt, :wattn_head_gate)
                             matmul!(cpu, gate_head, normed, bt.wattn_head_gate, wp)
@@ -1762,7 +1996,8 @@ function reference_generate(
             end
             # every pass, not only the last: a stride checkpoint copies h at its boundary
             h.storage .= @view hp.storage[n:n, :]
-            on_rows === nothing || on_rows(s0, _final_normed_rows(tensors, hp.storage, cpu, wd; eps))
+            on_rows === nothing ||
+                on_rows(s0, _final_normed_rows(tensors, hp.storage, cpu, wd; eps))
             at_boundary = ckpt_at > 0 && s1 == ckpt_at
             if s1 < P && (at_boundary || (ckpt_every > 0 && s1 % ckpt_every == 0))
                 _generate_checkpoint!(st, s1, ckpt_slots; pinned=at_boundary)
@@ -1771,7 +2006,7 @@ function reference_generate(
             _prefill_pass_end(ptok)
         end
         _prefill_end!(cpu)
-        append!(st.ids, @view prompt[(n0 + 1):P])
+        append!(st.ids, @view prompt[(n0+1):P])
         ckpt_on && _generate_snapshot!(st, P, max(ckpt_slots, 1))
 
         ids = collect(prompt)
@@ -1779,28 +2014,42 @@ function reference_generate(
         spec_windows = spec_drafted = spec_accepted = 0
         timing = get(ENV, "GESSO_TIMING", "") == "1"
         if timing
-            println("gesso_timing prefill_ms=$(round((time_ns() - t_prefill) / 1e6; digits=1))")
+            println(
+                "gesso_timing prefill_ms=$(round((time_ns() - t_prefill) / 1e6; digits=1))",
+            )
             flush(stdout)
         end
         while steps < cap
             tok_t0 = _profile_token_begin()
             # the row the head below reads belongs to ids[P + steps], the last input
-            on_hidden === nothing || on_hidden(P + steps, _final_normed_host(tensors, h, cpu, wd; eps))
+            on_hidden === nothing ||
+                on_hidden(P + steps, _final_normed_host(tensors, h, cpu, wd; eps))
             # greedy argmax at the current last position (row P + steps); the
             # argmax may run over device storage — only the scalar id crosses
             # back to the host
             t_head = time_ns()
             logits_row = @decode_stage :lm_head cpu _last_logits(
-                model, tensors, h, cpu, wd, vocab, 1; eps,
+                model,
+                tensors,
+                h,
+                cpu,
+                wd,
+                vocab,
+                1;
+                eps,
                 buf=cpu_scratch,
             )
-            next = @decode_stage :sample cpu (sampler === nothing ?
-                _greedy_id(logits_row) : _sample_id(sampler, logits_row))      # 0-based id
+            next = @decode_stage :sample cpu (
+                sampler === nothing ? _greedy_id(logits_row) :
+                _sample_id(sampler, logits_row)
+            )      # 0-based id
             head_ms = (time_ns() - t_head) / 1e6
             push!(ids, next)
             steps += 1
             if timing
-                println("gesso_timing token=$(steps) id=$(next) head_ms=$(round(head_ms; digits=1))")
+                println(
+                    "gesso_timing token=$(steps) id=$(next) head_ms=$(round(head_ms; digits=1))",
+                )
                 flush(stdout)
             end
             stop = steps >= cap || next in eos_ids || next in stop_ids
@@ -1816,14 +2065,44 @@ function reference_generate(
                 # correction is left for the next top-of-loop argmax, as in the
                 # baseline. An empty draft falls through to the plain step.
                 Spec = getproperty(parentmodule(@__MODULE__), :Speculation)
-                d = Spec.propose(draft, Spec.DraftContext(ids, nothing, vocab);
-                    max_tokens=min(max_draft, cap - steps))
+                d = Spec.propose(
+                    draft,
+                    Spec.DraftContext(ids, nothing, vocab);
+                    max_tokens=min(max_draft, cap - steps),
+                )
                 if !isempty(d.ids)
                     steps, accepted, stopped = _verify_window_round!(
-                        model, tensors, kc, vc, cpu, wd, h, gdn_conv, gdn_rec, cpu_scratch,
-                        ids, st.ids, d.ids, P + steps, steps, cap, on_token, stop_ids, eos_ids;
-                        on_rows, on_taps, taps,
-                        vocab, n_heads, n_kv_heads, d_head, group, eps, theta, inv_freq, rotary_dim,
+                        model,
+                        tensors,
+                        kc,
+                        vc,
+                        cpu,
+                        wd,
+                        h,
+                        gdn_conv,
+                        gdn_rec,
+                        cpu_scratch,
+                        ids,
+                        st.ids,
+                        d.ids,
+                        P + steps,
+                        steps,
+                        cap,
+                        on_token,
+                        stop_ids,
+                        eos_ids;
+                        on_rows,
+                        on_taps,
+                        taps,
+                        vocab,
+                        n_heads,
+                        n_kv_heads,
+                        d_head,
+                        group,
+                        eps,
+                        theta,
+                        inv_freq,
+                        rotary_dim,
                     )
                     Spec.observe!(draft, d, accepted)
                     spec_windows += 1
@@ -1836,9 +2115,32 @@ function reference_generate(
             end
             t_dec = time_ns()
             # with taps the step is a one-row window: _decode_step! keeps no per-block rows
-            tap_win = on_taps === nothing ? nothing : _decode_window!(model, tensors, kc, vc, [next],
-                P + steps, cpu, wd, gdn_conv, gdn_rec, cpu_scratch; vocab, n_heads, n_kv_heads,
-                d_head, group, eps, theta, inv_freq, rotary_dim, head=false, taps)
+            tap_win =
+                on_taps === nothing ? nothing :
+                _decode_window!(
+                    model,
+                    tensors,
+                    kc,
+                    vc,
+                    [next],
+                    P + steps,
+                    cpu,
+                    wd,
+                    gdn_conv,
+                    gdn_rec,
+                    cpu_scratch;
+                    vocab,
+                    n_heads,
+                    n_kv_heads,
+                    d_head,
+                    group,
+                    eps,
+                    theta,
+                    inv_freq,
+                    rotary_dim,
+                    head=false,
+                    taps,
+                )
             tap_win === nothing || _commit_window!(tap_win, 1, gdn_conv, gdn_rec, h)
             tap_win === nothing && _decode_step!(
                 model,
@@ -1866,7 +2168,8 @@ function reference_generate(
                 hrow=1,
             )
             push!(st.ids, next)
-            on_rows === nothing || on_rows(P + steps, _final_normed_rows(tensors, h.storage, cpu, wd; eps))
+            on_rows === nothing ||
+                on_rows(P + steps, _final_normed_rows(tensors, h.storage, cpu, wd; eps))
             _window_taps!(on_taps, tap_win, P + steps, 1)
             _profile_token_end(tok_t0, true)
             if timing
@@ -1878,9 +2181,18 @@ function reference_generate(
         end
 
         if info isa Ref{Any}
-            info[] = draft === nothing ? (kv_len=P + steps, steps=steps, reused=n0) :
-                (kv_len=P + steps, steps=steps, reused=n0,
-                    speculation=(windows=spec_windows, drafted=spec_drafted, accepted=spec_accepted))
+            info[] =
+                draft === nothing ? (kv_len=P + steps, steps=steps, reused=n0) :
+                (
+                    kv_len=P + steps,
+                    steps=steps,
+                    reused=n0,
+                    speculation=(
+                        windows=spec_windows,
+                        drafted=spec_drafted,
+                        accepted=spec_accepted,
+                    ),
+                )
         end
         ok = true
         return ids
@@ -1901,7 +2213,17 @@ _head_scratch(backend, dim::Int, vocab::Int) = nothing
 
 # tied head over hidden row `row`: returns the (vocab,) logits row. Applies
 # the final RMSNorm first when `tensors` carries one (§LXXVI).
-function _last_logits(model, tensors, h, cpu, wl, vocab, row::Int; eps::Real=1e-6, buf=nothing)
+function _last_logits(
+    model,
+    tensors,
+    h,
+    cpu,
+    wl,
+    vocab,
+    row::Int;
+    eps::Real=1e-6,
+    buf=nothing,
+)
     dim = size(h.storage, 2)
     T = typeof(h.storage)
     # CPU decode passes its scratch: the row, the normed row and the logits
@@ -1919,8 +2241,10 @@ function _last_logits(model, tensors, h, cpu, wl, vocab, row::Int; eps::Real=1e-
         normed = Activation(;
             shape=(1, dim),
             storage=buf === nothing ?
-                fill!(similar(h.storage, eltype(T), (1, dim)), zero(eltype(h.storage))) :
-                fill!(buf.final_normed, zero(eltype(h.storage))),
+                    fill!(
+                similar(h.storage, eltype(T), (1, dim)),
+                zero(eltype(h.storage)),
+            ) : fill!(buf.final_normed, zero(eltype(h.storage))),
         )
         rmsnorm!(cpu, normed, lastrow, final_rms, wl; eps)
         lastrow = normed
@@ -1928,10 +2252,16 @@ function _last_logits(model, tensors, h, cpu, wl, vocab, row::Int; eps::Real=1e-
     out = Activation(;
         shape=(1, vocab),
         storage=buf === nothing ?
-            fill!(similar(h.storage, eltype(T), (1, vocab)), zero(eltype(h.storage))) :
-            fill!(buf.logits, zero(eltype(h.storage))),
+                fill!(similar(h.storage, eltype(T), (1, vocab)), zero(eltype(h.storage))) : fill!(buf.logits, zero(eltype(h.storage))),
     )
-    _dec_matmul_group!(cpu, (out,), _decode_xq(buf, Val(:xq_dim)), lastrow, (tensors.lm_head,), wl)
+    _dec_matmul_group!(
+        cpu,
+        (out,),
+        _decode_xq(buf, Val(:xq_dim)),
+        lastrow,
+        (tensors.lm_head,),
+        wl,
+    )
     return vec(out.storage)
 end
 
@@ -1960,11 +2290,17 @@ end
 function _final_normed_host(tensors, h, cpu, wl; eps::Real=1e-6)
     dim = size(h.storage, 2)
     T = eltype(h.storage)
-    row = Activation(; shape=(1, dim), storage=fill!(similar(h.storage, T, (1, dim)), zero(T)))
+    row = Activation(;
+        shape=(1, dim),
+        storage=fill!(similar(h.storage, T, (1, dim)), zero(T)),
+    )
     row.storage .= h.storage[1:1, :]
     final_rms = haskey(tensors, :final_rms) ? tensors.final_rms : nothing
     if final_rms !== nothing
-        normed = Activation(; shape=(1, dim), storage=fill!(similar(h.storage, T, (1, dim)), zero(T)))
+        normed = Activation(;
+            shape=(1, dim),
+            storage=fill!(similar(h.storage, T, (1, dim)), zero(T)),
+        )
         rmsnorm!(cpu, normed, row, final_rms, wl; eps)
         row = normed
     end
@@ -1975,16 +2311,49 @@ end
 # stream, the normed inputs, the projection outputs and the attention heads. CPU
 # decode reads them from the preallocated scratch; the other backends allocate
 # them per call, as before.
-function _decode_row_buffers(cpu_scratch, zeros_like, dim::Int, kdim::Int, qdim::Int,
-    n_heads::Int, n_kv_heads::Int, d_head::Int, hidden_ffn::Int)
-    hp = Activation(; shape=(1, dim), storage=_decode_buf(cpu_scratch, Val(:hp), zeros_like, (1, dim)))
-    normed = Activation(; shape=(1, dim), storage=_decode_buf(cpu_scratch, Val(:normed), zeros_like, (1, dim)))
-    q = Activation(; shape=(1, qdim), storage=_decode_buf(cpu_scratch, Val(:q), zeros_like, (1, qdim)))
-    gate_attn = Activation(; shape=(1, qdim), storage=_decode_buf(cpu_scratch, Val(:gate_attn), zeros_like, (1, qdim)))
-    gate_head = Activation(; shape=(1, n_heads), storage=_decode_buf(cpu_scratch, Val(:gate_head), zeros_like, (1, n_heads)))
-    k = Activation(; shape=(1, kdim), storage=_decode_buf(cpu_scratch, Val(:k), zeros_like, (1, kdim)))
-    v = Activation(; shape=(1, kdim), storage=_decode_buf(cpu_scratch, Val(:v), zeros_like, (1, kdim)))
-    qh = Activation(; shape=(1, n_heads, d_head), storage=_decode_buf(cpu_scratch, Val(:qh), zeros_like, (1, n_heads, d_head)))
+function _decode_row_buffers(
+    cpu_scratch,
+    zeros_like,
+    dim::Int,
+    kdim::Int,
+    qdim::Int,
+    n_heads::Int,
+    n_kv_heads::Int,
+    d_head::Int,
+    hidden_ffn::Int,
+)
+    hp = Activation(;
+        shape=(1, dim),
+        storage=_decode_buf(cpu_scratch, Val(:hp), zeros_like, (1, dim)),
+    )
+    normed = Activation(;
+        shape=(1, dim),
+        storage=_decode_buf(cpu_scratch, Val(:normed), zeros_like, (1, dim)),
+    )
+    q = Activation(;
+        shape=(1, qdim),
+        storage=_decode_buf(cpu_scratch, Val(:q), zeros_like, (1, qdim)),
+    )
+    gate_attn = Activation(;
+        shape=(1, qdim),
+        storage=_decode_buf(cpu_scratch, Val(:gate_attn), zeros_like, (1, qdim)),
+    )
+    gate_head = Activation(;
+        shape=(1, n_heads),
+        storage=_decode_buf(cpu_scratch, Val(:gate_head), zeros_like, (1, n_heads)),
+    )
+    k = Activation(;
+        shape=(1, kdim),
+        storage=_decode_buf(cpu_scratch, Val(:k), zeros_like, (1, kdim)),
+    )
+    v = Activation(;
+        shape=(1, kdim),
+        storage=_decode_buf(cpu_scratch, Val(:v), zeros_like, (1, kdim)),
+    )
+    qh = Activation(;
+        shape=(1, n_heads, d_head),
+        storage=_decode_buf(cpu_scratch, Val(:qh), zeros_like, (1, n_heads, d_head)),
+    )
     kh = Activation(;
         shape=(1, n_kv_heads, d_head),
         storage=_decode_buf(cpu_scratch, Val(:kh), zeros_like, (1, n_kv_heads, d_head)),
@@ -1993,27 +2362,91 @@ function _decode_row_buffers(cpu_scratch, zeros_like, dim::Int, kdim::Int, qdim:
         shape=(1, n_kv_heads, d_head),
         storage=_decode_buf(cpu_scratch, Val(:vh), zeros_like, (1, n_kv_heads, d_head)),
     )
-    attn = Activation(; shape=(1, n_heads, d_head), storage=_decode_buf(cpu_scratch, Val(:attn), zeros_like, (1, n_heads, d_head)))
-    merged = Activation(; shape=(1, qdim), storage=_decode_buf(cpu_scratch, Val(:merged_attn), zeros_like, (1, qdim)))
-    sub = Activation(; shape=(1, dim), storage=_decode_buf(cpu_scratch, Val(:sub), zeros_like, (1, dim)))
-    normed2 = Activation(; shape=(1, dim), storage=_decode_buf(cpu_scratch, Val(:normed2), zeros_like, (1, dim)))
-    gate = Activation(; shape=(1, hidden_ffn), storage=_decode_buf(cpu_scratch, Val(:gate), zeros_like, (1, hidden_ffn)))
-    up = Activation(; shape=(1, hidden_ffn), storage=_decode_buf(cpu_scratch, Val(:up), zeros_like, (1, hidden_ffn)))
-    act = Activation(; shape=(1, hidden_ffn), storage=_decode_buf(cpu_scratch, Val(:act), zeros_like, (1, hidden_ffn)))
-    down = Activation(; shape=(1, dim), storage=_decode_buf(cpu_scratch, Val(:down), zeros_like, (1, dim)))
+    attn = Activation(;
+        shape=(1, n_heads, d_head),
+        storage=_decode_buf(cpu_scratch, Val(:attn), zeros_like, (1, n_heads, d_head)),
+    )
+    merged = Activation(;
+        shape=(1, qdim),
+        storage=_decode_buf(cpu_scratch, Val(:merged_attn), zeros_like, (1, qdim)),
+    )
+    sub = Activation(;
+        shape=(1, dim),
+        storage=_decode_buf(cpu_scratch, Val(:sub), zeros_like, (1, dim)),
+    )
+    normed2 = Activation(;
+        shape=(1, dim),
+        storage=_decode_buf(cpu_scratch, Val(:normed2), zeros_like, (1, dim)),
+    )
+    gate = Activation(;
+        shape=(1, hidden_ffn),
+        storage=_decode_buf(cpu_scratch, Val(:gate), zeros_like, (1, hidden_ffn)),
+    )
+    up = Activation(;
+        shape=(1, hidden_ffn),
+        storage=_decode_buf(cpu_scratch, Val(:up), zeros_like, (1, hidden_ffn)),
+    )
+    act = Activation(;
+        shape=(1, hidden_ffn),
+        storage=_decode_buf(cpu_scratch, Val(:act), zeros_like, (1, hidden_ffn)),
+    )
+    down = Activation(;
+        shape=(1, dim),
+        storage=_decode_buf(cpu_scratch, Val(:down), zeros_like, (1, dim)),
+    )
     xq_dim = _decode_xq(cpu_scratch, Val(:xq_dim))
     xq_qdim = _decode_xq(cpu_scratch, Val(:xq_qdim))
     xq_ff = _decode_xq(cpu_scratch, Val(:xq_ff))
-    return (; hp, normed, q, gate_attn, gate_head, k, v, qh, kh, vh, attn, merged, sub,
-        normed2, gate, up, act, down, xq_dim, xq_qdim, xq_ff)
+    return (;
+        hp,
+        normed,
+        q,
+        gate_attn,
+        gate_head,
+        k,
+        v,
+        qh,
+        kh,
+        vh,
+        attn,
+        merged,
+        sub,
+        normed2,
+        gate,
+        up,
+        act,
+        down,
+        xq_dim,
+        xq_qdim,
+        xq_ff,
+    )
 end
 
 # Attention half of one decode block for layer `bi`: norm, QKV projections, the
 # per-row core (RoPE, KV append, attention), and the output projection into
 # `bufs.sub`. The residual add is in `_decode_ffn_block!`. The single-token step
 # and the verify window both run the core per row, so its arithmetic exists once.
-function _decode_attn_block!(bt, bi::Int, kc, vc, bufs, cpu, wl, tensors, zeros_like, cpu_scratch,
-    pos0::Int; n_heads, n_kv_heads, d_head, group, eps, theta, inv_freq, rotary_dim=0)
+function _decode_attn_block!(
+    bt,
+    bi::Int,
+    kc,
+    vc,
+    bufs,
+    cpu,
+    wl,
+    tensors,
+    zeros_like,
+    cpu_scratch,
+    pos0::Int;
+    n_heads,
+    n_kv_heads,
+    d_head,
+    group,
+    eps,
+    theta,
+    inv_freq,
+    rotary_dim=0,
+)
     (; hp, normed, q, gate_attn, k, v, sub, xq_dim, xq_qdim) = bufs
     @decode_stage :norm cpu rmsnorm!(cpu, normed, hp, bt.attn_rms, wl; eps)
     @decode_stage :attn_mixer cpu begin
@@ -2021,17 +2454,49 @@ function _decode_attn_block!(bt, bi::Int, kc, vc, bufs, cpu, wl, tensors, zeros_
             # q, k, v and the attention gate read the same normed row:
             # one quantization, one threaded pass over all their rows.
             if haskey(bt, :wattn_gate)
-                _dec_matmul_group!(cpu, (q, k, v, gate_attn), xq_dim, normed,
-                    (bt.wq, bt.wk, bt.wv, bt.wattn_gate), wl)
+                _dec_matmul_group!(
+                    cpu,
+                    (q, k, v, gate_attn),
+                    xq_dim,
+                    normed,
+                    (bt.wq, bt.wk, bt.wv, bt.wattn_gate),
+                    wl,
+                )
             else
-                _dec_matmul_group!(cpu, (q, k, v), xq_dim, normed, (bt.wq, bt.wk, bt.wv), wl)
+                _dec_matmul_group!(
+                    cpu,
+                    (q, k, v),
+                    xq_dim,
+                    normed,
+                    (bt.wq, bt.wk, bt.wv),
+                    wl,
+                )
             end
             # the per-head gate is a small F32 projection of the same row
             haskey(bt, :wattn_head_gate) &&
                 matmul!(cpu, bufs.gate_head, normed, bt.wattn_head_gate, wl)
         end
-        _decode_attn_core!(bt, bi, kc, vc, bufs, cpu, wl, tensors, zeros_like, cpu_scratch, pos0;
-            n_heads, n_kv_heads, d_head, group, eps, theta, inv_freq, rotary_dim)
+        _decode_attn_core!(
+            bt,
+            bi,
+            kc,
+            vc,
+            bufs,
+            cpu,
+            wl,
+            tensors,
+            zeros_like,
+            cpu_scratch,
+            pos0;
+            n_heads,
+            n_kv_heads,
+            d_head,
+            group,
+            eps,
+            theta,
+            inv_freq,
+            rotary_dim,
+        )
         @decode_sub :attn_outproj cpu begin
             _attn_merge_gate!(bt, bufs, cpu, n_heads, d_head)
             _dec_matmul_group!(cpu, (sub,), xq_qdim, bufs.merged, (bt.wo,), wl)
@@ -2043,8 +2508,27 @@ end
 # The per-row attention core: head split and norm, RoPE at the row's position,
 # the KV append at 1-based cache row `pos0`, and attention over rows 1:pos0.
 # Reads the projected q, k, v in `bufs` and leaves the heads in `bufs.attn`.
-function _decode_attn_core!(bt, bi::Int, kc, vc, bufs, cpu, wl, tensors, zeros_like, cpu_scratch, pos0::Int;
-    n_heads, n_kv_heads, d_head, group, eps, theta, inv_freq, rotary_dim=0)
+function _decode_attn_core!(
+    bt,
+    bi::Int,
+    kc,
+    vc,
+    bufs,
+    cpu,
+    wl,
+    tensors,
+    zeros_like,
+    cpu_scratch,
+    pos0::Int;
+    n_heads,
+    n_kv_heads,
+    d_head,
+    group,
+    eps,
+    theta,
+    inv_freq,
+    rotary_dim=0,
+)
     (; q, k, v, qh, kh, vh, attn) = bufs
     K = pos0                                    # cache rows now: P + steps
     @decode_sub :attn_headnorm_rope cpu begin
@@ -2157,9 +2641,28 @@ end
 function _decode_ffn_block!(bt, bufs, cpu, wl, zeros_like; eps)
     (; hp, sub, normed2, down, gate, up, act, xq_dim, xq_ff) = bufs
     # both mixers leave their output in `sub`: residual add, then norm
-    @decode_stage :norm cpu _add_rmsnorm!(cpu, normed2, hp, sub.storage, bt.ffn_rms, wl; eps)
-    _ffn_block!(cpu, down, gate, up, act, normed2, bt, wl, zeros_like;
-        xq_in=xq_dim, xq_ff=xq_ff)
+    @decode_stage :norm cpu _add_rmsnorm!(
+        cpu,
+        normed2,
+        hp,
+        sub.storage,
+        bt.ffn_rms,
+        wl;
+        eps,
+    )
+    _ffn_block!(
+        cpu,
+        down,
+        gate,
+        up,
+        act,
+        normed2,
+        bt,
+        wl,
+        zeros_like;
+        xq_in=xq_dim,
+        xq_ff=xq_ff,
+    )
     _add_storage!(hp.storage, down.storage)  # residual
     return hp
 end
@@ -2198,7 +2701,17 @@ function _decode_step!(
     qdim = n_heads * d_head
     zeros_like = _decode_zeros_like(cpu, tensors)
     hidden_ffn = model.blocks[1].ffn.hidden
-    bufs = _decode_row_buffers(cpu_scratch, zeros_like, dim, kdim, qdim, n_heads, n_kv_heads, d_head, hidden_ffn)
+    bufs = _decode_row_buffers(
+        cpu_scratch,
+        zeros_like,
+        dim,
+        kdim,
+        qdim,
+        n_heads,
+        n_kv_heads,
+        d_head,
+        hidden_ffn,
+    )
     hp = bufs.hp
     @decode_stage :embed cpu embedding_lookup!(cpu, hp, tensors.embedding, [tok], wl)
     _T_GDN_NS[] = 0
@@ -2228,8 +2741,27 @@ function _decode_step!(
             _T_GDN_NS[] += time_ns() - t0
         else
             t0 = time_ns()
-            _decode_attn_block!(bt, bi, kc, vc, bufs, cpu, wl, tensors, zeros_like, cpu_scratch, pos0;
-                n_heads, n_kv_heads, d_head, group, eps, theta, inv_freq, rotary_dim)
+            _decode_attn_block!(
+                bt,
+                bi,
+                kc,
+                vc,
+                bufs,
+                cpu,
+                wl,
+                tensors,
+                zeros_like,
+                cpu_scratch,
+                pos0;
+                n_heads,
+                n_kv_heads,
+                d_head,
+                group,
+                eps,
+                theta,
+                inv_freq,
+                rotary_dim,
+            )
             _T_ATTN_NS[] += time_ns() - t0
         end
         t1 = time_ns()
@@ -2274,9 +2806,17 @@ include("gpt2_tokenizer.jl")
 # The generic path is what new families use; `load_llama` still works.
 include("architecture_spec.jl")      # Pass A/F: canonical description + capabilities
 include("context_budget.jl")       # KV bytes per token, ceilings, compaction policy (CPU only)
-export kv_bytes_per_token, memory_ceiling_tokens, CostModel, prefill_seconds,
-    decode_seconds, ContextBudget, latency_ceiling_tokens, CompactionPolicy,
-    CompactionTracker, reset!, decide_compaction
+export kv_bytes_per_token,
+    memory_ceiling_tokens,
+    CostModel,
+    prefill_seconds,
+    decode_seconds,
+    ContextBudget,
+    latency_ceiling_tokens,
+    CompactionPolicy,
+    CompactionTracker,
+    reset!,
+    decide_compaction
 include("semantic_params.jl")        # Pass B/E: canonical parameter identity
 include("arch_adapters.jl")          # Pass A/B: the family boundary
 include("materialize_architecture.jl") # Pass B/E: the generic binder

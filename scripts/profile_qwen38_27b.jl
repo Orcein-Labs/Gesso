@@ -20,9 +20,11 @@
 using Gesso
 
 const GGUF = get(ENV, "GESSO_QWEN38_27B_GGUF", "")
-isfile(GGUF) || error("profile_qwen38_27b: set GESSO_QWEN38_27B_GGUF to the Qwen3.8-27B GGUF file")
+isfile(GGUF) ||
+    error("profile_qwen38_27b: set GESSO_QWEN38_27B_GGUF to the Qwen3.8-27B GGUF file")
 const GGML_DIR = get(ENV, "GESSO_GGML_DIR", "")
-isdir(GGML_DIR) || error("profile_qwen38_27b: set GESSO_GGML_DIR to the llama.cpp build/bin directory")
+isdir(GGML_DIR) ||
+    error("profile_qwen38_27b: set GESSO_GGML_DIR to the llama.cpp build/bin directory")
 const N = parse(Int, get(ENV, "GESSO_PROFILE_TOKENS", "8"))
 N >= 1 || error("profile_qwen38_27b: GESSO_PROFILE_TOKENS must be >= 1")
 const PROMPT = [9419]
@@ -35,7 +37,12 @@ t_load = @elapsed begin
 end
 
 gen(n) = Gesso.reference_generate(
-    model, tensors, PROMPT; max_new_tokens=n, eps=spec.rms_norm_eps, backend=backend,
+    model,
+    tensors,
+    PROMPT;
+    max_new_tokens=n,
+    eps=spec.rms_norm_eps,
+    backend=backend,
 )
 
 INF.profile_disable!()
@@ -53,10 +60,13 @@ ids_warm = gen(N + 1)
 b = INF.profile_snapshot()
 INF.profile_disable!()
 
-ids_warm == ids_cold || error("profile_qwen38_27b: ids differ between the cold and warm profiled runs")
+ids_warm == ids_cold ||
+    error("profile_qwen38_27b: ids differ between the cold and warm profiled runs")
 
 d = INF.profile_delta(b, a)
-d.tokens == N || error("profile_qwen38_27b: measured $(d.tokens) decode tokens, expected $N (EOS reached?)")
+d.tokens == N || error(
+    "profile_qwen38_27b: measured $(d.tokens) decode tokens, expected $N (EOS reached?)",
+)
 
 println(
     "RECEIPT profile_qwen38_27b backend=cpu threads=$(Threads.nthreads()) ",
