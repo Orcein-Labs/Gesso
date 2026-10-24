@@ -18,10 +18,10 @@ function _group_random_qm(rng, ty::Int32, nrows::Int, ne0::Int)
     rb = _GI._qrow_bytes(ty, ne0)
     data = rand(rng, UInt8, nrows * rb)
     bsz = _GI._iq_block_bytes(ty)
-    for blk in 0:(nrows * div(rb, bsz) - 1)
+    for blk in 0:(nrows*div(rb, bsz)-1)
         bits = reinterpret(UInt16, Float16(0.005f0 + 0.05f0 * rand(rng, Float32)))
-        data[blk * bsz + 1] = UInt8(bits & 0xff)
-        data[blk * bsz + 2] = UInt8(bits >> 8)
+        data[blk*bsz+1] = UInt8(bits & 0xff)
+        data[blk*bsz+2] = UInt8(bits >> 8)
     end
     return _GI.QuantMatrix(data, 0, ty, ne0, nrows, rb, C_NULL, Int64(_GI.QK_K))
 end
@@ -33,8 +33,11 @@ _bits(a::AbstractArray{Float32}) = reinterpret(UInt32, vec(a))
     ne0 = 1024
     for ty in (_GI.GGML_TYPE_IQ4_XS, _GI.GGML_TYPE_Q4_K)
         # uneven row counts, including a weight shorter than one chunk
-        ws = (_group_random_qm(rng, ty, 37, ne0), _group_random_qm(rng, ty, 5, ne0),
-            _group_random_qm(rng, ty, 21, ne0))
+        ws = (
+            _group_random_qm(rng, ty, 37, ne0),
+            _group_random_qm(rng, ty, 5, ne0),
+            _group_random_qm(rng, ty, 21, ne0),
+        )
         x = randn(rng, Float32, 1, ne0)
         xq = _GI.Q8KVec(div(ne0, _GI.QK_K))
         _GI.quantize_q8_K!(xq, vec(x))
@@ -56,12 +59,24 @@ _bits(a::AbstractArray{Float32}) = reinterpret(UInt32, vec(a))
     @testset "decode helper: group when every weight is Q8_K kind, matmul! otherwise" begin
         ne0 = 512
         x = Gesso.Activation(; shape=(1, ne0), storage=randn(rng, Float32, 1, ne0))
-        ws = (_group_random_qm(rng, _GI.GGML_TYPE_IQ4_XS, 19, ne0),
-            _group_random_qm(rng, _GI.GGML_TYPE_IQ4_XS, 8, ne0))
+        ws = (
+            _group_random_qm(rng, _GI.GGML_TYPE_IQ4_XS, 19, ne0),
+            _group_random_qm(rng, _GI.GGML_TYPE_IQ4_XS, 8, ne0),
+        )
         pw = map(w -> Gesso.ProjectionWeight((w.nrows, ne0), w), ws)
         xq = _GI.Q8KVec(div(ne0, _GI.QK_K))
-        outs = map(w -> Gesso.Activation(; shape=(1, w.nrows), storage=zeros(Float32, 1, w.nrows)), ws)
-        _GI._dec_matmul_group!(_GI.CPUBackend(), outs, xq, x, pw, Gesso.Semantics.DecodeWorkload())
+        outs = map(
+            w -> Gesso.Activation(; shape=(1, w.nrows), storage=zeros(Float32, 1, w.nrows)),
+            ws,
+        )
+        _GI._dec_matmul_group!(
+            _GI.CPUBackend(),
+            outs,
+            xq,
+            x,
+            pw,
+            Gesso.Semantics.DecodeWorkload(),
+        )
         for (o, w) in zip(outs, ws)
             ref = zeros(Float32, 1, w.nrows)
             _GI._quant_matmul!(ref, x.storage, w)
@@ -72,12 +87,21 @@ _bits(a::AbstractArray{Float32}) = reinterpret(UInt32, vec(a))
         w80 = _group_random_qm(rng, _GI.GGML_TYPE_Q8_0, 6, ne0)
         pw80 = (Gesso.ProjectionWeight((6, ne0), w80),)
         out80 = (Gesso.Activation(; shape=(1, 6), storage=zeros(Float32, 1, 6)),)
-        _GI._dec_matmul_group!(_GI.CPUBackend(), out80, xq, x, pw80, Gesso.Semantics.DecodeWorkload())
+        _GI._dec_matmul_group!(
+            _GI.CPUBackend(),
+            out80,
+            xq,
+            x,
+            pw80,
+            Gesso.Semantics.DecodeWorkload(),
+        )
         ref80 = zeros(Float32, 1, 6)
         _GI._quant_matmul!(ref80, x.storage, w80)
         @test _bits(out80[1].storage) == _bits(ref80)
         @test_throws ErrorException _GI._quant_matmul_group!(
-            (zeros(Float32, 1, 6),), xq, (w80,),
+            (zeros(Float32, 1, 6),),
+            xq,
+            (w80,),
         )
     end
 end

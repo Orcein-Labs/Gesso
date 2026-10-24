@@ -29,8 +29,19 @@ function sched_row(name::String, ne0::Int, ne1::Int)
     t_stat = time_samples(() -> static_gemv!(y, xq, nextw(), FMT, ne0, ne1, nt))
     sp = summarize(nbytes ./ t_prod ./ 1.0e9)
     ss = summarize(nbytes ./ t_stat ./ 1.0e9)
-    println(rpad(name, 18), " threads=", nt, "  prod GB/s med ", round(sp.med; digits=2), " sd ", round(sp.sd; digits=2),
-        "  | static GB/s med ", round(ss.med; digits=2), " sd ", round(ss.sd; digits=2))
+    println(
+        rpad(name, 18),
+        " threads=",
+        nt,
+        "  prod GB/s med ",
+        round(sp.med; digits=2),
+        " sd ",
+        round(sp.sd; digits=2),
+        "  | static GB/s med ",
+        round(ss.med; digits=2),
+        " sd ",
+        round(ss.sd; digits=2),
+    )
     return nothing
 end
 

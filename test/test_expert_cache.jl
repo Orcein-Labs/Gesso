@@ -16,13 +16,23 @@ end
 const _EC_Inf = Gesso.Inference
 
 # F32-packed expert bank in GGUF (ne0 innermost) layout, as in test_cuda_moe.
-function _ec_f32_bank(A3::AbstractArray{Float32,3}, ne0::Int, ne1::Int)
+function _ec_f32_bank(A3::AbstractArray{Float32, 3}, ne0::Int, ne1::Int)
     parts = UInt8[]
     for e in 1:size(A3, 1)
         W = A3[e, :, :]
         append!(parts, reinterpret(UInt8, vec(permutedims(W, (2, 1)))))
     end
-    return _EC_Inf.GgufQuantSlice(parts, 0, Int32(0), size(A3, 1), ne0, ne1, ne0 * ne1 * 4, C_NULL, Int64(1))
+    return _EC_Inf.GgufQuantSlice(
+        parts,
+        0,
+        Int32(0),
+        size(A3, 1),
+        ne0,
+        ne1,
+        ne0 * ne1 * 4,
+        C_NULL,
+        Int64(1),
+    )
 end
 
 @testset "expert residency: quota, fill order, profile, trace (host)" begin
@@ -84,7 +94,14 @@ end
     router = zeros(Float32, n_exp, h)
     y = zeros(Float32, 1, h)
     @test_throws ErrorException _EC_Inf._moe_topk_swiglu!(
-        Gesso.CPUBackend(), y, x, router, wrapped, wrapped, wrapped, 2,
+        Gesso.CPUBackend(),
+        y,
+        x,
+        router,
+        wrapped,
+        wrapped,
+        wrapped,
+        2,
     )
 end
 
@@ -112,9 +129,7 @@ else
     x[2, :] .= 0.5f0
 
     y_cpu = zeros(Float32, seq, h)
-    Gesso.Inference._cpu_moe_topk_swiglu!(
-        y_cpu, x, router, A_g, A_u, A_d, n_used,
-    )
+    Gesso.Inference._cpu_moe_topk_swiglu!(y_cpu, x, router, A_g, A_u, A_d, n_used)
 
     # uncached reference: plain host GgufQuantSlice banks, the existing quant path.
     # Host experts are the default for GgufQuantSlice banks since bb1b15b; the
@@ -122,7 +137,14 @@ else
     y_ref = CUDA.zeros(Float32, seq, h)
     withenv("GESSO_MOE_HOST_EXPERTS" => "0") do
         Gesso.Inference._moe_topk_swiglu!(
-            cuda, y_ref, CuArray{Float32}(x), CuArray{Float32}(router), gate, up, down, n_used,
+            cuda,
+            y_ref,
+            CuArray{Float32}(x),
+            CuArray{Float32}(router),
+            gate,
+            up,
+            down,
+            n_used,
         )
     end
     y_ref_h = Array(y_ref)
@@ -141,8 +163,10 @@ else
                     end
                 end
             end
-            conv = IdDict{Any,Any}()
-            withenv("GESSO_EXPERT_PROFILE" => (isempty(profile_path) ? nothing : profile_path)) do
+            conv = IdDict{Any, Any}()
+            withenv(
+                "GESSO_EXPERT_PROFILE" => (isempty(profile_path) ? nothing : profile_path),
+            ) do
                 ext._place_expert_caches!(conv, [(1, gate, up, down)]; budget=budget_bytes)
             end
             return conv
@@ -152,8 +176,14 @@ else
     function run_cached(conv)
         y = CUDA.zeros(Float32, seq, h)
         Gesso.Inference._moe_topk_swiglu!(
-            cuda, y, CuArray{Float32}(x), CuArray{Float32}(router),
-            conv[gate], conv[up], conv[down], n_used,
+            cuda,
+            y,
+            CuArray{Float32}(x),
+            CuArray{Float32}(router),
+            conv[gate],
+            conv[up],
+            conv[down],
+            n_used,
         )
         return Array(y), conv[gate].layer
     end
@@ -196,7 +226,8 @@ else
 
     @testset "device expert cache: budget arithmetic is free minus reserve" begin
         MiB = Int64(1024 * 1024)
-        @test ext._expert_budget_from_free(Int64(3) * 1024 * MiB, 1024) == Int64(2) * 1024 * MiB
+        @test ext._expert_budget_from_free(Int64(3) * 1024 * MiB, 1024) ==
+              Int64(2) * 1024 * MiB
         @test ext._expert_budget_from_free(Int64(7300) * MiB, 1024) == Int64(6276) * MiB
         @test ext._expert_budget_from_free(Int64(500) * MiB, 1024) == 0
         @test ext._expert_budget_from_free(Int64(500) * MiB, 0) == Int64(500) * MiB
@@ -221,7 +252,10 @@ else
             @test_throws ErrorException ext._expert_cache_budget_bytes()
         end
         # with no override the budget is free memory minus the reserve, never negative
-        withenv("GESSO_GPU_EXPERT_CACHE_MIB" => nothing, "GESSO_GPU_RESERVE_MIB" => "1048576") do
+        withenv(
+            "GESSO_GPU_EXPERT_CACHE_MIB" => nothing,
+            "GESSO_GPU_RESERVE_MIB" => "1048576",
+        ) do
             @test ext._expert_cache_budget_bytes() == 0
         end
     end

@@ -54,15 +54,15 @@ function _mq_random_rows(rng, ggml_type::Int32, nrows::Int, nb::Int)
     _MQ._q80_act_type(ggml_type) && (nb *= 8)
     bsz = _MQ._iq_block_bytes(ggml_type)
     w = rand(rng, UInt8, nrows * nb * bsz)
-    for blk in 0:(nrows * nb - 1)
+    for blk in 0:(nrows*nb-1)
         if ggml_type == _MQ.GGML_TYPE_IQ1_M
             _MQ._iq1m_write_scale!(w, blk * bsz, 0.005f0 + 0.05f0 * rand(rng, Float32))
             continue
         end
         for off in _mq_scale_offsets(ggml_type)
             bits = reinterpret(UInt16, Float16(0.005f0 + 0.05f0 * rand(rng, Float32)))
-            w[blk * bsz + off + 1] = UInt8(bits & 0xff)
-            w[blk * bsz + off + 2] = UInt8(bits >> 8)
+            w[blk*bsz+off+1] = UInt8(bits & 0xff)
+            w[blk*bsz+off+2] = UInt8(bits >> 8)
         end
     end
     return w
@@ -76,20 +76,23 @@ _mq_acts(rng, ne0::Int, n::Int, ggml_type::Int32=_MQ.GGML_TYPE_Q4_K) =
 # and Q4_0 tiles that start a d-table tile are also checked through the table.
 _mq_uses_table(ggml_type::Int32, t0::Int, ntile::Int) =
     (ggml_type == _MQ.GGML_TYPE_Q6_K || _MQ._q80_act_type(ggml_type)) &&
-    (t0 - 1) % _MQ._MULTI_TILE == 0 && ntile <= _MQ._MULTI_TILE
+    (t0 - 1) % _MQ._MULTI_TILE == 0 &&
+    ntile <= _MQ._MULTI_TILE
 
 function _mq_check_tiles(ggml_type::Int32, w, nrows::Int, rb::Int, xqs, t0::Int, ntile::Int)
     nmis = 0
     out = zeros(Float32, length(xqs))
     dt = _mq_uses_table(ggml_type, t0, ntile) ? _MQ._multi_d_table(xqs) : nothing
-    modes = dt === nothing ? ((true, nothing), (false, nothing)) : ((true, nothing), (false, nothing), (true, dt))
+    modes =
+        dt === nothing ? ((true, nothing), (false, nothing)) :
+        ((true, nothing), (false, nothing), (true, dt))
     for (simd, d) in modes, j in 1:nrows
         woff = (j - 1) * rb
         fill!(out, NaN32)
         _MQ._dot_q8k_multi!(out, ggml_type, w, woff, xqs, t0, ntile, simd, d)
         for c in 1:ntile
-            ref = _MQ._dot_q8k(ggml_type, w, woff, xqs[t0 + c - 1], simd)
-            nmis += !(out[t0 + c - 1] === ref)
+            ref = _MQ._dot_q8k(ggml_type, w, woff, xqs[t0+c-1], simd)
+            nmis += !(out[t0+c-1] === ref)
         end
     end
     return nmis
@@ -129,13 +132,13 @@ end
     )
     w = UInt8[]
     for (r, row) in enumerate(rows)
-        for blk in 0:(nb - 1)
+        for blk in 0:(nb-1)
             o = blk * bsz
             for k in 1:16
-                row[o + 192 + k] = isodd(k + r) ? 0x80 : 0x7f
+                row[o+192+k] = isodd(k + r) ? 0x80 : 0x7f
             end
-            row[o + 209] = 0x00
-            row[o + 210] = 0x3c            # d = 1.0 in f16
+            row[o+209] = 0x00
+            row[o+210] = 0x3c            # d = 1.0 in f16
         end
         append!(w, row)
     end
@@ -147,7 +150,7 @@ end
             x.qs[i] = c <= 2 ? (c == 1 ? Int8(-128) : Int8(127)) : rand(rng, pick)
         end
         for i in eachindex(x.bsums)
-            x.bsums[i] = sum(Int16, @view x.qs[(16(i - 1) + 1):(16i)])
+            x.bsums[i] = sum(Int16, @view x.qs[(16(i-1)+1):(16i)])
         end
         x.d .= 1.0f0
         x
@@ -187,9 +190,9 @@ end
         dt = _MQ._multi_d_table(xqs)
         T = _MQ._MULTI_TILE
         @test length(dt) == T * length(xqs[1].d) * cld(9, T)
-        for t in 1:9, ib in 0:(length(xqs[1].d) - 1)
+        for t in 1:9, ib in 0:(length(xqs[1].d)-1)
             i, c = divrem(t - 1, T)
-            @test dt[T * (length(xqs[1].d) * i + ib) + c + 1] === xqs[t].d[ib + 1]
+            @test dt[T*(length(xqs[1].d)*i+ib)+c+1] === xqs[t].d[ib+1]
         end
         # every aligned tile of 9 columns, the last one short
         for t0 in 1:T:9
@@ -198,16 +201,43 @@ end
         end
         out = zeros(Float32, 9)
         @test_throws ErrorException _MQ._dot_q8k_multi!(out, ty, w, 0, xqs, 2, 4, true, dt)
-        @test_throws ErrorException _MQ._dot_q8k_multi!(out, ty, w, 0, xqs, 1, T + 1, true, dt)
-        @test_throws ErrorException _MQ._dot_q8k_multi!(out, ty, w, 0, xqs, 1, 4, true, dt[1:4])
+        @test_throws ErrorException _MQ._dot_q8k_multi!(
+            out,
+            ty,
+            w,
+            0,
+            xqs,
+            1,
+            T + 1,
+            true,
+            dt,
+        )
+        @test_throws ErrorException _MQ._dot_q8k_multi!(
+            out,
+            ty,
+            w,
+            0,
+            xqs,
+            1,
+            4,
+            true,
+            dt[1:4],
+        )
     end
 end
 @testset "multi-column dot: the tile kernels do not allocate" begin
     rng = Xoshiro(7)
     nb = 4
     ne0 = 256 * nb
-    for ty in (_MQ.GGML_TYPE_IQ2_XXS, _MQ.GGML_TYPE_IQ3_S, _MQ.GGML_TYPE_Q2_K, _MQ.GGML_TYPE_Q4_K,
-        _MQ.GGML_TYPE_Q6_K, _MQ.GGML_TYPE_Q8_0, _MQ.GGML_TYPE_Q4_0)
+    for ty in (
+        _MQ.GGML_TYPE_IQ2_XXS,
+        _MQ.GGML_TYPE_IQ3_S,
+        _MQ.GGML_TYPE_Q2_K,
+        _MQ.GGML_TYPE_Q4_K,
+        _MQ.GGML_TYPE_Q6_K,
+        _MQ.GGML_TYPE_Q8_0,
+        _MQ.GGML_TYPE_Q4_0,
+    )
         rb = _MQ._qrow_bytes(ty, ne0)
         w = _mq_random_rows(rng, ty, 1, nb)
         xqs = _mq_acts(rng, ne0, 4, ty)
@@ -246,7 +276,9 @@ end
             _MQ._PREFILL_MULTI[] = saved
         end
         @testset "$name" begin
-            @test all(reinterpret.(UInt32, dst_multi) .== reinterpret.(UInt32, dst_per_token))
+            @test all(
+                reinterpret.(UInt32, dst_multi) .== reinterpret.(UInt32, dst_per_token),
+            )
         end
     end
 end
@@ -258,7 +290,9 @@ end
 @testset "real tensors: multi-column vs single-column (Saluki GGUF)" begin
     path = get(ENV, "GESSO_SALUKI_GGUF", "")
     if !isfile(path)
-        _skip("set GESSO_SALUKI_GGUF to the Saluki 27B GGUF — real multi-column rows skipped")
+        _skip(
+            "set GESSO_SALUKI_GGUF to the Saluki 27B GGUF — real multi-column rows skipped",
+        )
     else
         hdr = _MQ.gguf_header(path)
         rng = Xoshiro(31)
@@ -277,7 +311,16 @@ end
             nmis = 0
             out = zeros(Float32, 8)
             for simd in (true, false), j in rows, ntile in (1, 4, 8)
-                _MQ._dot_q8k_multi!(out, ty, hdr.data, base + (j - 1) * rb, xqs, 1, ntile, simd)
+                _MQ._dot_q8k_multi!(
+                    out,
+                    ty,
+                    hdr.data,
+                    base + (j - 1) * rb,
+                    xqs,
+                    1,
+                    ntile,
+                    simd,
+                )
                 for c in 1:ntile
                     ref = _MQ._dot_q8k(ty, hdr.data, base + (j - 1) * rb, xqs[c], simd)
                     nmis += !(out[c] === ref)
@@ -301,7 +344,9 @@ end
             for (nrows, nb) in shapes
                 ne0 = 256 * nb
                 rb = _MQ._qrow_bytes(ty, ne0)
-                w = ty == _MQ.GGML_TYPE_F32 ? collect(reinterpret(UInt8, randn(rng, Float32, nrows * ne0))) :
+                w =
+                    ty == _MQ.GGML_TYPE_F32 ?
+                    collect(reinterpret(UInt8, randn(rng, Float32, nrows * ne0))) :
                     _mq_random_rows(rng, ty, nrows, nb)
                 q = _MQ.QuantMatrix(w, 0, ty, ne0, nrows, rb, C_NULL, Int64(256))
                 x = randn(rng, Float32, 1, ne0)
@@ -309,7 +354,7 @@ end
                 _MQ._quant_matmul!(dst, x, q)
                 ref = zeros(Float32, nrows)
                 xf = Float32.(x[1, :])
-                bytes = view(w, 1:(nrows * rb))
+                bytes = view(w, 1:(nrows*rb))
                 if _MQ._quant_q8k_native(ty)
                     _MQ._qgemv_q8k_f32!(ref, xf, bytes, ty, ne0, nrows; threaded=true)
                 else

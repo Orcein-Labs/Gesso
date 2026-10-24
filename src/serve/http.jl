@@ -8,23 +8,26 @@ const MAX_BODY_BYTES = 32 * 1024 * 1024
 struct HTTPError <: Exception
     status::Int
     message::String
-    code::Union{Nothing,String}
-    param::Union{Nothing,String}
+    code::Union{Nothing, String}
+    param::Union{Nothing, String}
 end
 
-HTTPError(status::Int, message::AbstractString; code=nothing, param=nothing) =
-    HTTPError(status, String(message), code === nothing ? nothing : String(code),
-        param === nothing ? nothing : String(param))
+HTTPError(status::Int, message::AbstractString; code=nothing, param=nothing) = HTTPError(
+    status,
+    String(message),
+    code === nothing ? nothing : String(code),
+    param === nothing ? nothing : String(param),
+)
 
 struct HTTPRequest
     method::String
     target::String
     version::String
-    headers::Dict{String,String}
+    headers::Dict{String, String}
     body::Vector{UInt8}
 end
 
-const _REASONS = Dict{Int,String}(
+const _REASONS = Dict{Int, String}(
     200 => "OK",
     400 => "Bad Request",
     404 => "Not Found",
@@ -72,14 +75,14 @@ function read_request(io::IO)
     method, target, version = String.(parts)
     startswith(version, "HTTP/1.") || throw(HTTPError(400, "unsupported HTTP version"))
 
-    headers = Dict{String,String}()
+    headers = Dict{String, String}()
     while true
         h = _read_line(io, budget)
         h === nothing && throw(HTTPError(400, "connection closed inside headers"))
         isempty(h) && break
         colon = findfirst(':', h)
         colon === nothing && throw(HTTPError(400, "malformed header line"))
-        headers[lowercase(strip(h[1:(colon - 1)]))] = strip(h[(colon + 1):end])
+        headers[lowercase(strip(h[1:(colon-1)]))] = strip(h[(colon+1):end])
     end
 
     # Clients such as curl hold a large body until the server agrees.
@@ -91,7 +94,7 @@ function read_request(io::IO)
     return HTTPRequest(method, target, version, headers, body)
 end
 
-function _read_body(io::IO, headers::Dict{String,String}, budget::Ref{Int})
+function _read_body(io::IO, headers::Dict{String, String}, budget::Ref{Int})
     if occursin("chunked", lowercase(get(headers, "transfer-encoding", "")))
         return _read_chunked(io, budget)
     end
@@ -126,7 +129,8 @@ function _read_chunked(io::IO, budget::Ref{Int})
             rethrow()
         end
         trailer = _read_line(io, Ref(MAX_HEADER_BYTES))
-        (trailer === nothing || !isempty(trailer)) && throw(HTTPError(400, "chunk not followed by CRLF"))
+        (trailer === nothing || !isempty(trailer)) &&
+            throw(HTTPError(400, "chunk not followed by CRLF"))
     end
     # Trailers are ignored; the request ends at the first empty line.
     while true
@@ -137,7 +141,7 @@ function _read_chunked(io::IO, budget::Ref{Int})
     return body
 end
 
-function _write_head(io::IO, status::Int, headers::Vector{Pair{String,String}})
+function _write_head(io::IO, status::Int, headers::Vector{Pair{String, String}})
     write(io, "HTTP/1.1 ", string(status), " ", get(_REASONS, status, "Unknown"), "\r\n")
     for (k, v) in headers
         write(io, k, ": ", v, "\r\n")
@@ -151,21 +155,36 @@ _connection_header(keepalive::Bool) = keepalive ? "keep-alive" : "close"
 
 function write_json(io::IO, status::Int, obj; keepalive::Bool=true)
     body = Vector{UInt8}(codeunits(JSON.json(obj)))
-    _write_head(io, status, [
-        "Content-Type" => "application/json",
-        "Content-Length" => string(length(body)),
-        "Connection" => _connection_header(keepalive),
-    ])
+    _write_head(
+        io,
+        status,
+        [
+            "Content-Type" => "application/json",
+            "Content-Length" => string(length(body)),
+            "Connection" => _connection_header(keepalive),
+        ],
+    )
     write(io, body)
     flush(io)
     return nothing
 end
 
-function write_error(io::IO, status::Int, message::AbstractString; keepalive::Bool=true,
-        code::Union{Nothing,AbstractString}=nothing, param::Union{Nothing,AbstractString}=nothing)
-    kind = status == 404 ? "not_found_error" : status >= 500 ? "server_error" : "invalid_request_error"
-    err = Dict{String,Any}("message" => message, "type" => kind,
-        "code" => code === nothing ? status : code)
+function write_error(
+    io::IO,
+    status::Int,
+    message::AbstractString;
+    keepalive::Bool=true,
+    code::Union{Nothing, AbstractString}=nothing,
+    param::Union{Nothing, AbstractString}=nothing,
+)
+    kind =
+        status == 404 ? "not_found_error" :
+        status >= 500 ? "server_error" : "invalid_request_error"
+    err = Dict{String, Any}(
+        "message" => message,
+        "type" => kind,
+        "code" => code === nothing ? status : code,
+    )
     param === nothing || (err["param"] = param)
     write_json(io, status, Dict("error" => err); keepalive=keepalive)
 end
@@ -174,12 +193,16 @@ end
 # reused after the stream ends. A bare SSE body with no length would force the
 # client to read until close.
 function start_event_stream(io::IO; keepalive::Bool)
-    _write_head(io, 200, [
-        "Content-Type" => "text/event-stream",
-        "Cache-Control" => "no-cache",
-        "Transfer-Encoding" => "chunked",
-        "Connection" => _connection_header(keepalive),
-    ])
+    _write_head(
+        io,
+        200,
+        [
+            "Content-Type" => "text/event-stream",
+            "Cache-Control" => "no-cache",
+            "Transfer-Encoding" => "chunked",
+            "Connection" => _connection_header(keepalive),
+        ],
+    )
     return nothing
 end
 

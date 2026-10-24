@@ -14,7 +14,8 @@ using Random: MersenneTwister, randn
 
 const _LLAMA_GGUF = get(ENV, "GESSO_LLAMA_GGUF", "")
 
-const _LM = (hidden=32, layers=2, heads=4, kv_heads=2, inter=64, vocab=32, eps=1e-5, theta=10000.0)
+const _LM =
+    (hidden=32, layers=2, heads=4, kv_heads=2, inter=64, vocab=32, eps=1e-5, theta=10000.0)
 
 # --- minimal writers ----------------------------------------------------------
 
@@ -50,13 +51,18 @@ _gguf_str(io, s::AbstractString) = (write(io, UInt64(sizeof(s))); write(io, s))
 function _gguf_kv(io, key::String, value)
     _gguf_str(io, key)
     if value isa AbstractString
-        write(io, UInt32(8)); _gguf_str(io, value)
+        write(io, UInt32(8))
+        _gguf_str(io, value)
     elseif value isa Float32
-        write(io, UInt32(6)); write(io, value)
+        write(io, UInt32(6))
+        write(io, value)
     elseif value isa Integer
-        write(io, UInt32(4)); write(io, UInt32(value))
+        write(io, UInt32(4))
+        write(io, UInt32(value))
     elseif value isa AbstractVector{<:AbstractString}
-        write(io, UInt32(9)); write(io, UInt32(8)); write(io, UInt64(length(value)))
+        write(io, UInt32(9))
+        write(io, UInt32(8))
+        write(io, UInt64(length(value)))
         foreach(s -> _gguf_str(io, s), value)
     else
         error("test writer: unsupported value $(typeof(value))")
@@ -65,7 +71,11 @@ end
 
 # `tensors`: name => (Float32 array in HF (out, in) shape). Each is written
 # with ggml dims reversed, so the bytes are the row-major HF weights.
-function _write_gguf_f32(path, kv::Vector{Pair{String, Any}}, tensors::Vector{Pair{String, Array{Float32}}})
+function _write_gguf_f32(
+    path,
+    kv::Vector{Pair{String, Any}},
+    tensors::Vector{Pair{String, Array{Float32}}},
+)
     align = 32
     io = IOBuffer()
     write(io, UInt8['G', 'G', 'U', 'F'])
@@ -106,7 +116,7 @@ function _llamacpp_qk_permute(W::Matrix{Float32}, n_head::Int)
     rows = size(W, 1)
     hd = rows ÷ n_head
     idx = Int[]
-    for h in 0:(n_head - 1), j in 0:(hd - 1)
+    for h in 0:(n_head-1), j in 0:(hd-1)
         b, a = j ÷ 2, j % 2
         push!(idx, h * hd + a * (hd ÷ 2) + b + 1)
     end
@@ -120,18 +130,27 @@ function _micro_llama_weights(rng)
     kdim = nkv * div(d, nh)
     w = Dict{String, Array{Float32}}(
         "model.embed_tokens.weight" => randn(rng, Float32, V, d) .* 0.5f0,
-        "model.norm.weight" => 1f0 .+ 0.1f0 .* randn(rng, Float32, d),
+        "model.norm.weight" => 1.0f0 .+ 0.1f0 .* randn(rng, Float32, d),
     )
-    for i in 0:(_LM.layers - 1)
-        w["model.layers.$i.self_attn.q_proj.weight"] = randn(rng, Float32, d, d) ./ sqrt(Float32(d))
-        w["model.layers.$i.self_attn.k_proj.weight"] = randn(rng, Float32, kdim, d) ./ sqrt(Float32(d))
-        w["model.layers.$i.self_attn.v_proj.weight"] = randn(rng, Float32, kdim, d) ./ sqrt(Float32(d))
-        w["model.layers.$i.self_attn.o_proj.weight"] = randn(rng, Float32, d, d) ./ sqrt(Float32(d))
-        w["model.layers.$i.mlp.gate_proj.weight"] = randn(rng, Float32, inter, d) ./ sqrt(Float32(d))
-        w["model.layers.$i.mlp.up_proj.weight"] = randn(rng, Float32, inter, d) ./ sqrt(Float32(d))
-        w["model.layers.$i.mlp.down_proj.weight"] = randn(rng, Float32, d, inter) ./ sqrt(Float32(inter))
-        w["model.layers.$i.input_layernorm.weight"] = 1f0 .+ 0.1f0 .* randn(rng, Float32, d)
-        w["model.layers.$i.post_attention_layernorm.weight"] = 1f0 .+ 0.1f0 .* randn(rng, Float32, d)
+    for i in 0:(_LM.layers-1)
+        w["model.layers.$i.self_attn.q_proj.weight"] =
+            randn(rng, Float32, d, d) ./ sqrt(Float32(d))
+        w["model.layers.$i.self_attn.k_proj.weight"] =
+            randn(rng, Float32, kdim, d) ./ sqrt(Float32(d))
+        w["model.layers.$i.self_attn.v_proj.weight"] =
+            randn(rng, Float32, kdim, d) ./ sqrt(Float32(d))
+        w["model.layers.$i.self_attn.o_proj.weight"] =
+            randn(rng, Float32, d, d) ./ sqrt(Float32(d))
+        w["model.layers.$i.mlp.gate_proj.weight"] =
+            randn(rng, Float32, inter, d) ./ sqrt(Float32(d))
+        w["model.layers.$i.mlp.up_proj.weight"] =
+            randn(rng, Float32, inter, d) ./ sqrt(Float32(d))
+        w["model.layers.$i.mlp.down_proj.weight"] =
+            randn(rng, Float32, d, inter) ./ sqrt(Float32(inter))
+        w["model.layers.$i.input_layernorm.weight"] =
+            1.0f0 .+ 0.1f0 .* randn(rng, Float32, d)
+        w["model.layers.$i.post_attention_layernorm.weight"] =
+            1.0f0 .+ 0.1f0 .* randn(rng, Float32, d)
     end
     return w
 end
@@ -174,34 +193,34 @@ function _write_micro_gguf(path, w)
         "model.norm.weight" => "output_norm.weight",
     )
     kv = Pair{String, Any}[
-        "general.architecture" => "llama",
-        "general.alignment" => UInt32(32),
-        "llama.block_count" => _LM.layers,
-        "llama.embedding_length" => _LM.hidden,
-        "llama.feed_forward_length" => _LM.inter,
-        "llama.attention.head_count" => _LM.heads,
-        "llama.attention.head_count_kv" => _LM.kv_heads,
-        "llama.attention.layer_norm_rms_epsilon" => Float32(_LM.eps),
-        "llama.rope.freq_base" => Float32(_LM.theta),
-        "tokenizer.ggml.tokens" => ["t$i" for i in 0:(_LM.vocab - 1)],
+        "general.architecture"=>"llama",
+        "general.alignment"=>UInt32(32),
+        "llama.block_count"=>_LM.layers,
+        "llama.embedding_length"=>_LM.hidden,
+        "llama.feed_forward_length"=>_LM.inter,
+        "llama.attention.head_count"=>_LM.heads,
+        "llama.attention.head_count_kv"=>_LM.kv_heads,
+        "llama.attention.layer_norm_rms_epsilon"=>Float32(_LM.eps),
+        "llama.rope.freq_base"=>Float32(_LM.theta),
+        "tokenizer.ggml.tokens"=>["t$i" for i in 0:(_LM.vocab-1)],
     ]
     tensors = Pair{String, Array{Float32}}[]
     push!(tensors, "token_embd.weight" => w["model.embed_tokens.weight"])
     push!(tensors, "output_norm.weight" => w["model.norm.weight"])
-    for i in 0:(_LM.layers - 1)
+    for i in 0:(_LM.layers-1)
         p = "model.layers.$i."
-        q = _llamacpp_qk_permute(w[p * "self_attn.q_proj.weight"], _LM.heads)
-        k = _llamacpp_qk_permute(w[p * "self_attn.k_proj.weight"], _LM.kv_heads)
+        q = _llamacpp_qk_permute(w[p*"self_attn.q_proj.weight"], _LM.heads)
+        k = _llamacpp_qk_permute(w[p*"self_attn.k_proj.weight"], _LM.kv_heads)
         b = "blk.$i."
-        push!(tensors, b * "attn_norm.weight" => w[p * "input_layernorm.weight"])
+        push!(tensors, b * "attn_norm.weight" => w[p*"input_layernorm.weight"])
         push!(tensors, b * "attn_q.weight" => q)
         push!(tensors, b * "attn_k.weight" => k)
-        push!(tensors, b * "attn_v.weight" => w[p * "self_attn.v_proj.weight"])
-        push!(tensors, b * "attn_output.weight" => w[p * "self_attn.o_proj.weight"])
-        push!(tensors, b * "ffn_norm.weight" => w[p * "post_attention_layernorm.weight"])
-        push!(tensors, b * "ffn_gate.weight" => w[p * "mlp.gate_proj.weight"])
-        push!(tensors, b * "ffn_up.weight" => w[p * "mlp.up_proj.weight"])
-        push!(tensors, b * "ffn_down.weight" => w[p * "mlp.down_proj.weight"])
+        push!(tensors, b * "attn_v.weight" => w[p*"self_attn.v_proj.weight"])
+        push!(tensors, b * "attn_output.weight" => w[p*"self_attn.o_proj.weight"])
+        push!(tensors, b * "ffn_norm.weight" => w[p*"post_attention_layernorm.weight"])
+        push!(tensors, b * "ffn_gate.weight" => w[p*"mlp.gate_proj.weight"])
+        push!(tensors, b * "ffn_up.weight" => w[p*"mlp.up_proj.weight"])
+        push!(tensors, b * "ffn_down.weight" => w[p*"mlp.down_proj.weight"])
     end
     _write_gguf_f32(path, kv, tensors)
     return path
@@ -244,8 +263,20 @@ end
               _llamacpp_qk_permute(w["model.layers.0.self_attn.q_proj.weight"], _LM.heads)
 
         toks = [0, 5, 9, 17, 3]
-        ref = Gesso.reference_prefill(hf_model, hf_tensors, toks; eps=hf_cfg.rms_norm_eps, theta=hf_cfg.rope_theta)
-        got = Gesso.reference_prefill(g_model, g_tensors, toks; eps=g_spec.rms_norm_eps, theta=g_spec.rope.theta)
+        ref = Gesso.reference_prefill(
+            hf_model,
+            hf_tensors,
+            toks;
+            eps=hf_cfg.rms_norm_eps,
+            theta=hf_cfg.rope_theta,
+        )
+        got = Gesso.reference_prefill(
+            g_model,
+            g_tensors,
+            toks;
+            eps=g_spec.rms_norm_eps,
+            theta=g_spec.rope.theta,
+        )
         dmax = maximum(abs.(got .- ref))
         @info "gguf llama vs HF" max_abs_delta=dmax
         @test size(got) == size(ref)
@@ -253,8 +284,17 @@ end
 
         # Red control: the same GGUF weights read with HF's half-split rope
         # must disagree. Without this the parity above proves nothing.
-        flipped = merge(g_tensors, (rope=Gesso.RoPEPolicy(; theta=g_spec.rope.theta, interleaved=false),))
-        bad = Gesso.reference_prefill(g_model, flipped, toks; eps=g_spec.rms_norm_eps, theta=g_spec.rope.theta)
+        flipped = merge(
+            g_tensors,
+            (rope=Gesso.RoPEPolicy(; theta=g_spec.rope.theta, interleaved=false),),
+        )
+        bad = Gesso.reference_prefill(
+            g_model,
+            flipped,
+            toks;
+            eps=g_spec.rms_norm_eps,
+            theta=g_spec.rope.theta,
+        )
         dbad = maximum(abs.(bad .- ref))
         @info "gguf llama red control (interleaved=false)" max_abs_delta=dbad
         @test dbad > 1e-2
@@ -268,7 +308,13 @@ end
     else
         model, tensors, spec = Gesso.load_gguf(_LLAMA_GGUF)
         @test spec.family === :llama
-        logits = Gesso.reference_prefill(model, tensors, [0, 1, 2]; eps=spec.rms_norm_eps, theta=spec.rope.theta)
+        logits = Gesso.reference_prefill(
+            model,
+            tensors,
+            [0, 1, 2];
+            eps=spec.rms_norm_eps,
+            theta=spec.rope.theta,
+        )
         @test all(isfinite, logits)
     end
 end

@@ -30,7 +30,11 @@ const TARGET_S = 0.25
 const WS_BYTES = 256 * 2^20
 const SPIN_NS = 2_000_000
 const FMT = I.GGML_TYPE_IQ4_XS
-const SHAPES = (("expert 2048x512", 2048, 512), ("expert 512x2048", 512, 2048), ("dense 5120x13824", 5120, 13824))
+const SHAPES = (
+    ("expert 2048x512", 2048, 512),
+    ("expert 512x2048", 512, 2048),
+    ("dense 5120x13824", 5120, 13824),
+)
 
 # ------------------------------------------------------------------ timing
 
@@ -51,7 +55,7 @@ end
 function summarize(v::Vector{Float64})
     s = sort(v)
     n = length(s)
-    med = isodd(n) ? s[(n + 1) ÷ 2] : (s[n ÷ 2] + s[n ÷ 2 + 1]) / 2
+    med = isodd(n) ? s[(n+1)÷2] : (s[n÷2] + s[n÷2+1]) / 2
     m = sum(v) / n
     sd = n > 1 ? sqrt(sum((v .- m) .^ 2) / (n - 1)) : 0.0
     return (; med, mean=m, sd, min=s[1], max=s[end])
@@ -62,10 +66,10 @@ function bench_weights(ty::Int32, ne0::Int, ne1::Int)
     nb = div(ne0, I._q8k_block_values(ty))
     doff = I._q8k_d_offset(ty)
     w = rand(UInt8, ne1 * nb * bsz)
-    for blk in 0:(ne1 * nb - 1)
+    for blk in 0:(ne1*nb-1)
         bits = reinterpret(UInt16, Float16(0.01f0 + 0.02f0 * rand(Float32)))
-        w[blk * bsz + doff + 1] = UInt8(bits & 0xff)
-        w[blk * bsz + doff + 2] = UInt8(bits >> 8)
+        w[blk*bsz+doff+1] = UInt8(bits & 0xff)
+        w[blk*bsz+doff+2] = UInt8(bits >> 8)
     end
     return w
 end
@@ -83,22 +87,34 @@ end
 
 function pin_self!(cpu::Integer)::Bool
     mask = zeros(UInt64, 16)
-    mask[(cpu ÷ 64) + 1] = UInt64(1) << (cpu % 64)
-    ret = ccall(:pthread_setaffinity_np, Cint, (Culong, Csize_t, Ptr{UInt64}),
-        ccall(:pthread_self, Culong, ()), 128, mask)
+    mask[(cpu÷64)+1] = UInt64(1) << (cpu % 64)
+    ret = ccall(
+        :pthread_setaffinity_np,
+        Cint,
+        (Culong, Csize_t, Ptr{UInt64}),
+        ccall(:pthread_self, Culong, ()),
+        128,
+        mask,
+    )
     return ret == 0
 end
 
 function affinity_cpus()::Vector{Int}
     mask = zeros(UInt64, 16)
-    ccall(:pthread_getaffinity_np, Cint, (Culong, Csize_t, Ptr{UInt64}),
-        ccall(:pthread_self, Culong, ()), 128, mask)
-    return [c for c in 0:1023 if ((mask[(c ÷ 64) + 1] >> (c % 64)) & 1) == 1]
+    ccall(
+        :pthread_getaffinity_np,
+        Cint,
+        (Culong, Csize_t, Ptr{UInt64}),
+        ccall(:pthread_self, Culong, ()),
+        128,
+        mask,
+    )
+    return [c for c in 0:1023 if ((mask[(c÷64)+1] >> (c % 64)) & 1) == 1]
 end
 
 # Pins every Julia thread to CPU threadid-1. Returns (threadid, allowed-cpu list).
 function pin_julia_threads!()
-    res = Vector{Tuple{Int,Vector{Int}}}(undef, nthreads())
+    res = Vector{Tuple{Int, Vector{Int}}}(undef, nthreads())
     @threads :static for i in 1:nthreads()
         tid = threadid()
         pin_self!(tid - 1)
@@ -166,8 +182,19 @@ end
 
 function start_pool!(nw::Int; dynamic::Bool=false, pin::Bool=false)
     nch = dynamic ? nw * 4 : nw
-    p = ExpPool(nw, dynamic, nch, Atomic{Int}(0), Atomic{Int}(0), Atomic{Int}(0),
-        Atomic{Int}(0), Atomic{Int}(0), nothing, zeros(Int, nw), nothing)
+    p = ExpPool(
+        nw,
+        dynamic,
+        nch,
+        Atomic{Int}(0),
+        Atomic{Int}(0),
+        Atomic{Int}(0),
+        Atomic{Int}(0),
+        Atomic{Int}(0),
+        nothing,
+        zeros(Int, nw),
+        nothing,
+    )
     # Compile the worker-side code on the main thread before any worker runs it.
     precompile(pool_worker!, (ExpPool, Int))
     precompile(run_job!, (ExpPool, Int))
@@ -189,7 +216,9 @@ function start_pool!(nw::Int; dynamic::Bool=false, pin::Bool=false)
     t0 = time_ns()
     while p.started[] < nw - 1
         if time_ns() - t0 > 10_000_000_000
-            error("pool: workers did not start within 10 s (started=$(p.started[]) of $(nw - 1)); threads=$(p.tids)")
+            error(
+                "pool: workers did not start within 10 s (started=$(p.started[]) of $(nw - 1)); threads=$(p.tids)",
+            )
         end
         GC.safepoint()
     end
@@ -226,7 +255,8 @@ function gemv_job(p::ExpPool, y, xq, W, ty, ne0, ne1)
         return c -> begin
             j0 = (c - 1) * 16 + 1
             j1 = min(c * 16, ne1)
-            j0 <= j1 && I._qgemv_q8k_rows!(y, xq, W, ty, ne0, j0, j1, 1.0f0, 0.0f0, true)
+            j0 <= j1 &&
+                I._qgemv_q8k_rows!(y, xq, W, ty, ne0, j0, j1, 1.0f0, 0.0f0, true)
             nothing
         end
     end
@@ -242,9 +272,20 @@ end
 # ------------------------------------------------------------------ experiments
 
 function fmt_row(io, label, s, extra="")
-    println(rpad(label, 46), " median ", lpad(round(s.med; digits=3), 9), "  mean ", lpad(round(s.mean; digits=3), 9),
-        "  sd ", lpad(round(s.sd; digits=3), 7), "  min ", lpad(round(s.min; digits=3), 8),
-        "  max ", lpad(round(s.max; digits=3), 8), extra)
+    println(
+        rpad(label, 46),
+        " median ",
+        lpad(round(s.med; digits=3), 9),
+        "  mean ",
+        lpad(round(s.mean; digits=3), 9),
+        "  sd ",
+        lpad(round(s.sd; digits=3), 7),
+        "  min ",
+        lpad(round(s.min; digits=3), 8),
+        "  max ",
+        lpad(round(s.max; digits=3), 8),
+        extra,
+    )
 end
 
 function rotated_weights(ne0::Int, ne1::Int)
@@ -260,7 +301,12 @@ function fj_gemv_row(name::String, ne0::Int, ne1::Int)
     y = zeros(Float32, ne1)
     t = time_samples(() -> I._qgemv_q8k_threaded!(y, xq, nextw(), FMT, ne0, ne1))
     s = summarize(nbytes ./ t ./ 1.0e9)
-    fmt_row(stdout, "IQ4_XS $name @threads GB/s", s, "  call_us_med " * string(round(summarize(t).med * 1.0e6; digits=1)))
+    fmt_row(
+        stdout,
+        "IQ4_XS $name @threads GB/s",
+        s,
+        "  call_us_med " * string(round(summarize(t).med * 1.0e6; digits=1)),
+    )
     return nothing
 end
 
@@ -270,11 +316,24 @@ function fj_quant_row(name::String, ne0::Int, ne1::Int)
     xq = I._q8k_quantize_act(FMT, x)
     y = zeros(Float32, ne1)
     tq = summarize(time_samples(() -> I._q8k_quantize_act(FMT, x)))
-    tm = summarize(time_samples(() -> I._qgemv_q8k_threaded!(y, xq, nextw(), FMT, ne0, ne1)))
-    tf = summarize(time_samples(() -> I._qgemv_q8k_f32!(y, x, nextw(), FMT, ne0, ne1; threaded=true)))
-    println("quant share  ", rpad(name, 18), " quantize_us ", round(tq.med * 1.0e6; digits=2),
-        "  gemv_us ", round(tm.med * 1.0e6; digits=2), "  full_call_us ", round(tf.med * 1.0e6; digits=2),
-        "  share_of_full ", round(100 * tq.med / tf.med; digits=2), " %")
+    tm =
+        summarize(time_samples(() -> I._qgemv_q8k_threaded!(y, xq, nextw(), FMT, ne0, ne1)))
+    tf = summarize(
+        time_samples(() -> I._qgemv_q8k_f32!(y, x, nextw(), FMT, ne0, ne1; threaded=true)),
+    )
+    println(
+        "quant share  ",
+        rpad(name, 18),
+        " quantize_us ",
+        round(tq.med * 1.0e6; digits=2),
+        "  gemv_us ",
+        round(tm.med * 1.0e6; digits=2),
+        "  full_call_us ",
+        round(tf.med * 1.0e6; digits=2),
+        "  share_of_full ",
+        round(100 * tq.med / tf.med; digits=2),
+        " %",
+    )
     return nothing
 end
 
@@ -284,20 +343,36 @@ function fj_shared_x(ne0::Int, ne1::Int)
     x = rand(Float32, ne0) .- 0.5f0
     y = zeros(Float32, ne1)
     xq = I._q8k_quantize_act(FMT, x)
-    t_each = summarize(time_samples(() -> begin
-        I._qgemv_q8k_f32!(y, x, nextw(), FMT, ne0, ne1; threaded=true)
-        I._qgemv_q8k_f32!(y, x, nextw(), FMT, ne0, ne1; threaded=true)
-        I._qgemv_q8k_f32!(y, x, nextw(), FMT, ne0, ne1; threaded=true)
-    end))
-    t_once = summarize(time_samples(() -> begin
-        q = I._q8k_quantize_act(FMT, x)
-        I._qgemv_q8k_threaded!(y, q, nextw(), FMT, ne0, ne1)
-        I._qgemv_q8k_threaded!(y, q, nextw(), FMT, ne0, ne1)
-        I._qgemv_q8k_threaded!(y, q, nextw(), FMT, ne0, ne1)
-    end))
-    println("3 matrices, one x, dense ", ne1, "x", ne0, ": quantize each time ", round(t_each.med * 1.0e3; digits=3),
-        " ms; quantize once ", round(t_once.med * 1.0e3; digits=3), " ms; gain ",
-        round(100 * (t_each.med - t_once.med) / t_each.med; digits=2), " %")
+    t_each = summarize(
+        time_samples(
+            () -> begin
+                I._qgemv_q8k_f32!(y, x, nextw(), FMT, ne0, ne1; threaded=true)
+                I._qgemv_q8k_f32!(y, x, nextw(), FMT, ne0, ne1; threaded=true)
+                I._qgemv_q8k_f32!(y, x, nextw(), FMT, ne0, ne1; threaded=true)
+            end,
+        ),
+    )
+    t_once = summarize(
+        time_samples(() -> begin
+            q = I._q8k_quantize_act(FMT, x)
+            I._qgemv_q8k_threaded!(y, q, nextw(), FMT, ne0, ne1)
+            I._qgemv_q8k_threaded!(y, q, nextw(), FMT, ne0, ne1)
+            I._qgemv_q8k_threaded!(y, q, nextw(), FMT, ne0, ne1)
+        end),
+    )
+    println(
+        "3 matrices, one x, dense ",
+        ne1,
+        "x",
+        ne0,
+        ": quantize each time ",
+        round(t_each.med * 1.0e3; digits=3),
+        " ms; quantize once ",
+        round(t_once.med * 1.0e3; digits=3),
+        " ms; gain ",
+        round(100 * (t_each.med - t_once.med) / t_each.med; digits=2),
+        " %",
+    )
     return nothing
 end
 
@@ -314,8 +389,15 @@ function pool_gemv_row(p::ExpPool, name::String, ne0::Int, ne1::Int)
     ok = y == yref
     t = time_samples(() -> pool_run!(p, gemv_job(p, y, xq, nextw(), FMT, ne0, ne1)))
     s = summarize(nbytes ./ t ./ 1.0e9)
-    fmt_row(stdout, "IQ4_XS $name pool dyn=$(p.dynamic) GB/s", s,
-        "  call_us_med " * string(round(summarize(t).med * 1.0e6; digits=1)) * "  bitexact " * string(ok))
+    fmt_row(
+        stdout,
+        "IQ4_XS $name pool dyn=$(p.dynamic) GB/s",
+        s,
+        "  call_us_med " *
+        string(round(summarize(t).med * 1.0e6; digits=1)) *
+        "  bitexact " *
+        string(ok),
+    )
     return nothing
 end
 
@@ -325,7 +407,10 @@ function run_forkjoin()
     if PIN
         res = pin_julia_threads!()
         bad = [r for r in res if length(r[2]) != 1 || r[2][1] != r[1] - 1]
-        println("pinning: ", isempty(bad) ? "all $(nt) threads pinned to threadid-1" : "MISMATCH $(bad)")
+        println(
+            "pinning: ",
+            isempty(bad) ? "all $(nt) threads pinned to threadid-1" : "MISMATCH $(bad)",
+        )
     end
 
     # Fork-join micro-costs (per call, microseconds).
@@ -335,12 +420,22 @@ function run_forkjoin()
             sink[c] += 1
         end
     end)
-    println("fork-join @threads (empty body, $(nt) iters) us: ", round.(summarize(t).med .* 1.0e6; digits=2), " sd ", round(summarize(t).sd * 1.0e6; digits=2))
+    println(
+        "fork-join @threads (empty body, $(nt) iters) us: ",
+        round.(summarize(t).med .* 1.0e6; digits=2),
+        " sd ",
+        round(summarize(t).sd * 1.0e6; digits=2),
+    )
     t = time_samples(() -> begin
         ts = [@spawn(sink[c] += 1) for c in 1:nt]
         foreach(wait, ts)
     end)
-    println("fork-join @spawn+wait (empty body, $(nt) tasks) us: ", round(summarize(t).med * 1.0e6; digits=2), " sd ", round(summarize(t).sd * 1.0e6; digits=2))
+    println(
+        "fork-join @spawn+wait (empty body, $(nt) tasks) us: ",
+        round(summarize(t).med * 1.0e6; digits=2),
+        " sd ",
+        round(summarize(t).sd * 1.0e6; digits=2),
+    )
 
     # Gesso GEMV through @threads (the production path).
     for (name, ne0, ne1) in SHAPES
@@ -369,18 +464,39 @@ function run_forkjoin()
         return sum(out)
     end
     t = summarize(time_samples(f))
-    println("host read ceiling ", nt, " tasks GB/s median ", round((8 * n) / t.med / 1.0e9; digits=2),
-        " min ", round((8 * n) / t.max / 1.0e9; digits=2), " max ", round((8 * n) / t.min / 1.0e9; digits=2))
+    println(
+        "host read ceiling ",
+        nt,
+        " tasks GB/s median ",
+        round((8 * n) / t.med / 1.0e9; digits=2),
+        " min ",
+        round((8 * n) / t.max / 1.0e9; digits=2),
+        " max ",
+        round((8 * n) / t.min / 1.0e9; digits=2),
+    )
     return nothing
 end
 
 function pool_config(nw::Int, dyn::Bool)
     p = start_pool!(nw; dynamic=dyn, pin=PIN)
-    println("pool dynamic=", dyn, " thread ids of participants: ", p.tids, "  (main=", threadid(), ")")
+    println(
+        "pool dynamic=",
+        dyn,
+        " thread ids of participants: ",
+        p.tids,
+        "  (main=",
+        threadid(),
+        ")",
+    )
     PIN && println("  main cpus: ", affinity_cpus())
     println("  workers all distinct: ", length(unique(p.tids)) == nw)
     t = summarize(time_samples(() -> pool_run!(p, c -> nothing)))
-    println("  pool empty fork-join us median ", round(t.med * 1.0e6; digits=2), " sd ", round(t.sd * 1.0e6; digits=2))
+    println(
+        "  pool empty fork-join us median ",
+        round(t.med * 1.0e6; digits=2),
+        " sd ",
+        round(t.sd * 1.0e6; digits=2),
+    )
     for (name, ne0, ne1) in SHAPES
         pool_gemv_row(p, name, ne0, ne1)
     end

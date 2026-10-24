@@ -25,7 +25,9 @@ if !CUDA_LOADED || !CUDA.functional()
 elseif !isfile(joinpath(get(ENV, "GESSO_GGML_DIR", ""), "libggml-base.so"))
     # Every set here needs ggml's to_float: the host reference directly, and the
     # placement fallback through the F32 dequant in to_device.
-    _skip("set GESSO_GGML_DIR to a directory with libggml-base.so — CUDA dense quant GEMV tests skipped")
+    _skip(
+        "set GESSO_GGML_DIR to a directory with libggml-base.so — CUDA dense quant GEMV tests skipped",
+    )
 else
     _dq_ext = Base.get_extension(Gesso, :GessoCUDAExt)
     cuda = Gesso.CUDABackend()
@@ -63,7 +65,7 @@ else
             base = (r - 1) * rb + (j - 1) * bbytes
             for off in scale_offs
                 v = Float16((rand(rng) * 0.04 + 0.002) * (rand(rng) < 0.5 ? -1 : 1))
-                data[base + off + 1:base + off + 2] .= reinterpret(UInt8, [v])
+                data[(base+off+1):(base+off+2)] .= reinterpret(UInt8, [v])
             end
         end
         return Inf_.QuantMatrix(data, 0, _DQ_TYPE[kind], k, nrows, rb, C_NULL, Int64(bvals))
@@ -93,11 +95,11 @@ else
         nb = div(k, 32)
         amax = zeros(Float64, n, nb)
         for t in 1:n, b in 1:nb
-            amax[t, b] = maximum(abs, view(X64, t, (32 * (b - 1) + 1):(32 * b)))
+            amax[t, b] = maximum(abs, view(X64, t, (32*(b-1)+1):(32*b)))
         end
         Sb = zeros(Float64, nrows, nb)
         for b in 1:nb
-            Sb[:, b] = sum(abs, view(W, :, (32 * (b - 1) + 1):(32 * b)); dims=2)
+            Sb[:, b] = sum(abs, view(W, :, (32*(b-1)+1):(32*b)); dims=2)
         end
         bound = (amax ./ 254.0) * transpose(Sb)
         A = abs.(X64) * transpose(abs.(W))
@@ -105,7 +107,8 @@ else
         err = abs.(Float64.(dev) .- ref)
         ratio = maximum(err ./ tol)
         rel = maximum(err) / maximum(abs, ref)
-        @info "dense quant GEMV" label maxerr = maximum(err) max_ref = maximum(abs, ref) rel_to_max_ref = rel worst_err_over_tol = ratio
+        @info "dense quant GEMV" label maxerr = maximum(err) max_ref = maximum(abs, ref) rel_to_max_ref =
+            rel worst_err_over_tol = ratio
         @test all(err .<= tol)
         return nothing
     end
@@ -115,8 +118,18 @@ else
         for kind in (:q5_k, :q6_k, :iq4_xs, :q4_k, :q8_0)
             qm = _random_quant_matrix(rng, kind, 37, 512)
             X = randn(rng, Float32, 3, 512)
-            _check_against_host(qm, X, _device_matmul(qm, X, Gesso.DecodeWorkload()); label="$kind decode n=3")
-            _check_against_host(qm, X, _device_matmul(qm, X, Gesso.PrefillWorkload()); label="$kind prefill n=3")
+            _check_against_host(
+                qm,
+                X,
+                _device_matmul(qm, X, Gesso.DecodeWorkload());
+                label="$kind decode n=3",
+            )
+            _check_against_host(
+                qm,
+                X,
+                _device_matmul(qm, X, Gesso.PrefillWorkload());
+                label="$kind prefill n=3",
+            )
         end
     end
 
@@ -125,7 +138,12 @@ else
         for kind in (:q5_k, :q6_k, :iq4_xs, :q4_k, :q8_0)
             qm = _random_quant_matrix(rng, kind, 130, 2048)
             X = randn(rng, Float32, 1, 2048)
-            _check_against_host(qm, X, _device_matmul(qm, X, Gesso.DecodeWorkload()); label="$kind n=1 k=2048")
+            _check_against_host(
+                qm,
+                X,
+                _device_matmul(qm, X, Gesso.DecodeWorkload());
+                label="$kind n=1 k=2048",
+            )
         end
     end
 
@@ -137,16 +155,20 @@ else
         for kind in (:q5_k, :q6_k, :iq4_xs, :q4_k, :q8_0), mib in ("32", "0")
             qm = _random_quant_matrix(rng, kind, 37, 512)
             X = randn(rng, Float32, 40, 512)
-            dev = withenv("GESSO_DQ_GEMM_MIN" => "32", "GESSO_DQ_GEMM_SCRATCH_MIB" => mib) do
-                _device_matmul(qm, X, Gesso.PrefillWorkload())
-            end
+            dev =
+                withenv("GESSO_DQ_GEMM_MIN" => "32", "GESSO_DQ_GEMM_SCRATCH_MIB" => mib) do
+                    _device_matmul(qm, X, Gesso.PrefillWorkload())
+                end
             _check_against_host(qm, X, dev; label="$kind GEMM n=40 scratch=$mib")
         end
         # Q8_0 rows need not fill whole 256-value groups; the dequant warp
         # stops at the row's last block.
         qm = _random_quant_matrix(rng, :q8_0, 37, 96)
         X = randn(rng, Float32, 40, 96)
-        dev = withenv(() -> _device_matmul(qm, X, Gesso.PrefillWorkload()), "GESSO_DQ_GEMM_MIN" => "32")
+        dev = withenv(
+            () -> _device_matmul(qm, X, Gesso.PrefillWorkload()),
+            "GESSO_DQ_GEMM_MIN" => "32",
+        )
         _check_against_host(qm, X, dev; label="q8_0 GEMM n=40 k=96")
     end
 
@@ -185,7 +207,12 @@ else
         for kind in (:iq2_xs, :iq3_xxs, :iq4_xs)
             qm = _random_quant_matrix(rng, kind, 37, 512)
             X = randn(rng, Float32, 1, 512)
-            _check_against_host(qm, X, _device_expert_matmul(qm, X); label="$kind expert n=1")
+            _check_against_host(
+                qm,
+                X,
+                _device_expert_matmul(qm, X);
+                label="$kind expert n=1",
+            )
         end
     end
 
@@ -196,14 +223,27 @@ else
             return
         end
         hdr = Inf_.gguf_header(path)
-        for (name, want) in (("blk.0.attn_qkv.weight", Inf_.GGML_TYPE_Q5_K), ("blk.0.ssm_out.weight", Inf_.GGML_TYPE_Q6_K))
+        for (name, want) in (
+            ("blk.0.attn_qkv.weight", Inf_.GGML_TYPE_Q5_K),
+            ("blk.0.ssm_out.weight", Inf_.GGML_TYPE_Q6_K),
+        )
             info = only(filter(i -> i.name == name, hdr.tensors))
             qm = Inf_._quant_matrix(hdr, info)
             @test qm.ggml_type == want
             X = randn(MersenneTwister(11), Float32, 2, qm.ne0)
-            _check_against_host(qm, X, _device_matmul(qm, X, Gesso.DecodeWorkload()); label=name)
+            _check_against_host(
+                qm,
+                X,
+                _device_matmul(qm, X, Gesso.DecodeWorkload());
+                label=name,
+            )
             X = randn(MersenneTwister(12), Float32, 64, qm.ne0)
-            _check_against_host(qm, X, _device_matmul(qm, X, Gesso.PrefillWorkload()); label="$name GEMM n=64")
+            _check_against_host(
+                qm,
+                X,
+                _device_matmul(qm, X, Gesso.PrefillWorkload());
+                label="$name GEMM n=64",
+            )
         end
     end
 end

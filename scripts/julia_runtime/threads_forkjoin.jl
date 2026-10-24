@@ -72,9 +72,12 @@ for (name, f) in (
     med, p90, mu = bench(f, out, REPS)
     println(
         rpad(name, 18),
-        " median_us=", round(med; digits=2),
-        " p90_us=", round(p90; digits=2),
-        " mean_us=", round(mu; digits=2),
+        " median_us=",
+        round(med; digits=2),
+        " p90_us=",
+        round(p90; digits=2),
+        " mean_us=",
+        round(mu; digits=2),
     )
 end
 sink[] = sum(out)

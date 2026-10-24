@@ -42,18 +42,28 @@ function callback_first_id_matches(seen, expected_full, prompt_len)
     return first(seen) == expected_full[prompt_len+1]
 end
 function reuse_gate(prompt, before, after, full, info)
-    valid_info = info isa NamedTuple && haskey(info, :reused) &&
-                 info.reused isa Int && 0 <= info.reused <= length(prompt)
-    expected_reused = before === nothing ? 0 :
-                      length(before) <= length(prompt) &&
-                      view(prompt, 1:length(before)) == before ? length(before) : nothing
+    valid_info =
+        info isa NamedTuple &&
+        haskey(info, :reused) &&
+        info.reused isa Int &&
+        0 <= info.reused <= length(prompt)
+    expected_reused =
+        before === nothing ? 0 :
+        length(before) <= length(prompt) && view(prompt, 1:length(before)) == before ?
+        length(before) : nothing
     reused = valid_info ? info.reused : nothing
     reuse_ok = valid_info && (expected_reused === nothing || reused == expected_reused)
     # The last returned token is sampled but not consumed by the interpreter.
-    cache_ok = after === nothing ? nothing :
-               full !== nothing && length(full) > length(prompt) && after == full[1:(end-1)]
-    return (; reused, expected_reused, reuse_ok, cache_ok,
-        passed=reuse_ok && cache_ok !== false)
+    cache_ok =
+        after === nothing ? nothing :
+        full !== nothing && length(full) > length(prompt) && after == full[1:(end-1)]
+    return (;
+        reused,
+        expected_reused,
+        reuse_ok,
+        cache_ok,
+        passed=reuse_ok && cache_ok !== false,
+    )
 end
 function selfcheck(io)
     ok = id_gate([7, 8], [7, 8], nothing, nothing).passed
@@ -67,8 +77,18 @@ function selfcheck(io)
     wrong_cache = reuse_gate([1, 2], [1], [1], [1, 2, 7], (; reused=1)).passed
     implicit_ok = reuse_gate([1, 2], nothing, nothing, [1, 2, 7], (; reused=0)).passed
     invalid_reuse = reuse_gate([1, 2], [1], [1, 2], [1, 2, 7], (; reused=3)).passed
-    pass = ok && !bad && !unstable && callback_ok && !callback_bad && !callback_wrong_count &&
-           reuse_ok && !missed_reuse && !wrong_cache && implicit_ok && !invalid_reuse
+    pass =
+        ok &&
+        !bad &&
+        !unstable &&
+        callback_ok &&
+        !callback_bad &&
+        !callback_wrong_count &&
+        reuse_ok &&
+        !missed_reuse &&
+        !wrong_cache &&
+        implicit_ok &&
+        !invalid_reuse
     emit(
         io,
         (;
@@ -210,7 +230,8 @@ function request!(
         prompt_ok &&
         length(generated) == expected_count &&
         cbok !== false &&
-        gate.passed && reuse.passed
+        gate.passed &&
+        reuse.passed
     emit(
         io,
         (;

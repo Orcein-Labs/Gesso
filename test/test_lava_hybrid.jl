@@ -77,7 +77,15 @@ else
         g_ref = -exp.(A_log)' .* sp
         g = _lh_dev(zeros(seq, nv))
         beta = _lh_dev(zeros(seq, nv))
-        _lh_inf._gdn_gate_params!(_lh_lava, g, beta, _lh_dev(a), _lh_dev(b), _lh_dev(A_log), _lh_dev(dt))
+        _lh_inf._gdn_gate_params!(
+            _lh_lava,
+            g,
+            beta,
+            _lh_dev(a),
+            _lh_dev(b),
+            _lh_dev(A_log),
+            _lh_dev(dt),
+        )
         _lh_check("gate g", g, g_ref)
         _lh_check("gate beta", beta, beta_ref)
     end
@@ -98,15 +106,40 @@ else
                 qs, ks, vs = q[chunk, :, :], kk[chunk, :, :], v[chunk, :, :]
                 gs, bs = g[chunk, :], beta[chunk, :]
                 out_ref = zeros(Float64, length(chunk), nv, dv)
-                Gesso._cpu_gated_delta_rule!(out_ref, qs, ks, vs, gs, bs, st_ref;
-                    l2norm=l2, v_head_tiled=tiled)
+                Gesso._cpu_gated_delta_rule!(
+                    out_ref,
+                    qs,
+                    ks,
+                    vs,
+                    gs,
+                    bs,
+                    st_ref;
+                    l2norm=l2,
+                    v_head_tiled=tiled,
+                )
                 out = _lh_dev(zeros(length(chunk), nv, dv))
-                _lh_inf._gated_delta_rule!(_lh_lava, out, _lh_dev(qs), _lh_dev(ks), _lh_dev(vs),
-                    _lh_dev(gs), _lh_dev(bs), st_dev; l2norm=l2, v_head_tiled=tiled)
-                _lh_check("gdn tiled=$tiled l2=$l2 chunk=$(first(chunk)):$(last(chunk)) out",
-                    out, out_ref)
-                _lh_check("gdn tiled=$tiled l2=$l2 chunk=$(first(chunk)):$(last(chunk)) state",
-                    st_dev, st_ref)
+                _lh_inf._gated_delta_rule!(
+                    _lh_lava,
+                    out,
+                    _lh_dev(qs),
+                    _lh_dev(ks),
+                    _lh_dev(vs),
+                    _lh_dev(gs),
+                    _lh_dev(bs),
+                    st_dev;
+                    l2norm=l2,
+                    v_head_tiled=tiled,
+                )
+                _lh_check(
+                    "gdn tiled=$tiled l2=$l2 chunk=$(first(chunk)):$(last(chunk)) out",
+                    out,
+                    out_ref,
+                )
+                _lh_check(
+                    "gdn tiled=$tiled l2=$l2 chunk=$(first(chunk)):$(last(chunk)) state",
+                    st_dev,
+                    st_ref,
+                )
             end
         end
     end
@@ -114,12 +147,23 @@ else
     @testset "Lava hybrid seams refuse host storage" begin
         q = zeros(Float32, 2, 1, 4)
         host_state = zeros(Float32, 1, 4, 4)
-        @test_throws Gesso.GessoError _lh_inf._gated_delta_rule!(_lh_lava,
-            _lh_dev(zeros(2, 1, 4)), _lh_dev(q), _lh_dev(q), _lh_dev(q),
-            _lh_dev(zeros(2, 1)), _lh_dev(zeros(2, 1)), host_state)
-        @test_throws Gesso.GessoError _lh_inf._causal_conv1d_silu!(_lh_lava,
-            zeros(Float32, 2, 4), zeros(Float32, 2, 4), zeros(Float32, 4, 1, 4),
-            zeros(Float32, 4, 3))
+        @test_throws Gesso.GessoError _lh_inf._gated_delta_rule!(
+            _lh_lava,
+            _lh_dev(zeros(2, 1, 4)),
+            _lh_dev(q),
+            _lh_dev(q),
+            _lh_dev(q),
+            _lh_dev(zeros(2, 1)),
+            _lh_dev(zeros(2, 1)),
+            host_state,
+        )
+        @test_throws Gesso.GessoError _lh_inf._causal_conv1d_silu!(
+            _lh_lava,
+            zeros(Float32, 2, 4),
+            zeros(Float32, 2, 4),
+            zeros(Float32, 4, 1, 4),
+            zeros(Float32, 4, 3),
+        )
     end
 
     @testset "Lava rope! partial rotary and inv_freq match CPU" begin
@@ -144,22 +188,43 @@ else
         for (seq, wl_, rd, interleaved, scaled) in cases
             q0 = randn(rng, Float64, seq, 2, d)
             k0 = randn(rng, Float64, seq, 2, d)
-            pos = seq == 1 ? [7] : collect(0:(seq - 1))
-            inv = scaled ? Gesso.rope_inv_freq(Gesso.RoPEPolicy(; rotary_dim=rd, theta=10000.0), d) : nothing
+            pos = seq == 1 ? [7] : collect(0:(seq-1))
+            inv =
+                scaled ?
+                Gesso.rope_inv_freq(Gesso.RoPEPolicy(; rotary_dim=rd, theta=10000.0), d) :
+                nothing
             scaled && @test inv !== nothing
             cq, ck = _lh_act(copy(q0)), _lh_act(copy(k0))
-            Gesso.rope!(cpu_b, cq, ck, pos, wl_;
-                theta=10000.0, inv_freq=inv, interleaved, rotary_dim=rd)
+            Gesso.rope!(
+                cpu_b,
+                cq,
+                ck,
+                pos,
+                wl_;
+                theta=10000.0,
+                inv_freq=inv,
+                interleaved,
+                rotary_dim=rd,
+            )
             q = _lh_act(_lh_dev(q0))
             k = _lh_act(_lh_dev(k0))
-            Gesso.rope!(_lh_lava, q, k, pos, wl_;
-                theta=10000.0, inv_freq=inv, interleaved, rotary_dim=rd)
+            Gesso.rope!(
+                _lh_lava,
+                q,
+                k,
+                pos,
+                wl_;
+                theta=10000.0,
+                inv_freq=inv,
+                interleaved,
+                rotary_dim=rd,
+            )
             tag = "rope seq=$seq rd=$rd interleaved=$interleaved scaled=$scaled"
             _lh_check("$tag q", q.storage, cq.storage)
             _lh_check("$tag k", k.storage, ck.storage)
             if rd < d
-                @test Array(q.storage)[:, :, (rd + 1):d] == Float32.(q0[:, :, (rd + 1):d])
-                @test Array(k.storage)[:, :, (rd + 1):d] == Float32.(k0[:, :, (rd + 1):d])
+                @test Array(q.storage)[:, :, (rd+1):d] == Float32.(q0[:, :, (rd+1):d])
+                @test Array(k.storage)[:, :, (rd+1):d] == Float32.(k0[:, :, (rd+1):d])
             end
         end
     end
@@ -175,12 +240,19 @@ else
         for t in 1:seq, hh in 1:nv
             r = sqrt(sum(abs2, core[t, hh, :]) / dv + eps)
             for j in 1:dv
-                zj = z[t, (hh - 1) * dv + j]
-                ref[t, (hh - 1) * dv + j] = core[t, hh, j] / r * w[j] * (zj / (1 + exp(-zj)))
+                zj = z[t, (hh-1)*dv+j]
+                ref[t, (hh-1)*dv+j] = core[t, hh, j] / r * w[j] * (zj / (1 + exp(-zj)))
             end
         end
         merged = _lh_dev(zeros(seq, nv * dv))
-        @test _lh_inf._gdn_gnorm_merge!(_lh_lava, merged, _lh_dev(core), _lh_dev(z), (; storage=_lh_dev(w)), eps)
+        @test _lh_inf._gdn_gnorm_merge!(
+            _lh_lava,
+            merged,
+            _lh_dev(core),
+            _lh_dev(z),
+            (; storage=_lh_dev(w)),
+            eps,
+        )
         _lh_check("gnorm merge", merged, ref)
     end
 
@@ -208,14 +280,26 @@ else
             ksz, eps = 4, 1.0e-6
             key_dim = nk * dk
             conv_dim = 2 * key_dim + nv * dv
-            spec = (; mixer=(; num_key_heads=nk, num_value_heads=nv, key_head_dim=dk,
-                value_head_dim=dv, conv_kernel_dim=ksz, v_head_tiled=tiled))
+            spec = (;
+                mixer=(;
+                    num_key_heads=nk,
+                    num_value_heads=nv,
+                    key_head_dim=dk,
+                    value_head_dim=dv,
+                    conv_kernel_dim=ksz,
+                    v_head_tiled=tiled,
+                )
+            )
             w = 0.5 .* randn(rng, Float64, conv_dim, 1, ksz)
             A_log = 0.3 .* randn(rng, Float64, nv)
             dt = randn(rng, Float64, nv)
             nw = randn(rng, Float64, dv)
-            bt = (; wgdn_conv=(; storage=_lh_dev(w)), wgdn_A_log=(; storage=_lh_dev(A_log)),
-                wgdn_dt_bias=(; storage=_lh_dev(dt)), wgdn_norm=(; storage=_lh_dev(nw)))
+            bt = (;
+                wgdn_conv=(; storage=_lh_dev(w)),
+                wgdn_A_log=(; storage=_lh_dev(A_log)),
+                wgdn_dt_bias=(; storage=_lh_dev(dt)),
+                wgdn_norm=(; storage=_lh_dev(nw)),
+            )
             cst_ref = randn(rng, Float64, conv_dim, ksz - 1)
             rst_ref = 0.1 .* randn(rng, Float64, nv, dk, dv)
             cst, rst = _lh_dev(cst_ref), _lh_dev(rst_ref)
@@ -227,24 +311,51 @@ else
                 conv_ref = zeros(Float64, 1, conv_dim)
                 Gesso._cpu_causal_conv1d_silu!(conv_ref, mixed, w, cst_ref)
                 q = reshape(permutedims(reshape(conv_ref[1, 1:key_dim], dk, nk)), 1, nk, dk)
-                kk = reshape(permutedims(reshape(conv_ref[1, (key_dim + 1):(2 * key_dim)], dk, nk)), 1, nk, dk)
-                v = reshape(permutedims(reshape(conv_ref[1, (2 * key_dim + 1):end], dv, nv)), 1, nv, dv)
+                kk = reshape(
+                    permutedims(reshape(conv_ref[1, (key_dim+1):(2*key_dim)], dk, nk)),
+                    1,
+                    nk,
+                    dk,
+                )
+                v = reshape(
+                    permutedims(reshape(conv_ref[1, (2*key_dim+1):end], dv, nv)),
+                    1,
+                    nv,
+                    dv,
+                )
                 beta = 1 ./ (1 .+ exp.(-b))
                 g = -exp.(A_log)' .* log1p.(exp.(a .+ dt'))
                 core = zeros(Float64, 1, nv, dv)
-                Gesso._cpu_gated_delta_rule!(core, q, kk, v, g, beta, rst_ref; l2norm=true, v_head_tiled=tiled)
+                Gesso._cpu_gated_delta_rule!(
+                    core,
+                    q,
+                    kk,
+                    v,
+                    g,
+                    beta,
+                    rst_ref;
+                    l2norm=true,
+                    v_head_tiled=tiled,
+                )
                 core_ref = reshape(permutedims(core[1, :, :]), 1, nv * dv)
                 merged_ref = zeros(Float64, 1, nv * dv)
                 for hh in 1:nv
                     r = sqrt(sum(abs2, core[1, hh, :]) / dv + eps)
                     for j in 1:dv
-                        zj = z[1, (hh - 1) * dv + j]
-                        merged_ref[1, (hh - 1) * dv + j] = core[1, hh, j] / r * nw[j] * (zj / (1 + exp(-zj)))
+                        zj = z[1, (hh-1)*dv+j]
+                        merged_ref[1, (hh-1)*dv+j] =
+                            core[1, hh, j] / r * nw[j] * (zj / (1 + exp(-zj)))
                     end
                 end
-                s = (; mixed=_lh_dev(mixed), conv=_lh_dev(zeros(1, conv_dim)), z=_lh_dev(z),
-                    a=_lh_dev(a), b=_lh_dev(b), core=_lh_dev(zeros(1, nv * dv)),
-                    merged=_lh_dev(zeros(1, nv * dv)))
+                s = (;
+                    mixed=_lh_dev(mixed),
+                    conv=_lh_dev(zeros(1, conv_dim)),
+                    z=_lh_dev(z),
+                    a=_lh_dev(a),
+                    b=_lh_dev(b),
+                    core=_lh_dev(zeros(1, nv * dv)),
+                    merged=_lh_dev(zeros(1, nv * dv)),
+                )
                 _lh_inf._gdn_decode_core!(_lh_lava, s, bt, spec, eps, cst, rst)
                 tag = "fused nv=$nv tiled=$tiled step=$step"
                 _lh_check("$tag conv", s.conv, conv_ref)

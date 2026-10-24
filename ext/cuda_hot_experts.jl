@@ -88,8 +88,8 @@ mutable struct _HotLayer
     layer::Int
     nslots::Int
     stride::Int
-    pool::Union{Nothing,_CuVec{UInt8}}
-    views::Union{Nothing,NTuple{3,_CuVec{UInt8}}}
+    pool::Union{Nothing, _CuVec{UInt8}}
+    views::Union{Nothing, NTuple{3, _CuVec{UInt8}}}
     base::CuPtr{UInt8}
     slot_of::Vector{Int32}     # expert -> slot, 0 when not resident
     expert_in::Vector{Int32}   # slot -> expert, 0 empty, -1 copy in flight
@@ -99,7 +99,7 @@ mutable struct _HotLayer
     t::Int
     # [offsets; columns; weight bits], pinned so one async copy carries it
     meta_h::Vector{Int32}
-    meta_d::Union{Nothing,_CuVec{Int32}}
+    meta_d::Union{Nothing, _CuVec{Int32}}
     pend_slot::Vector{Int}
     pend_exp::Vector{Int}
     copying::Bool
@@ -114,9 +114,9 @@ mutable struct _HotLayer
     retry_t::Int               # decode skips the pool allocation until t reaches it
 end
 
-const _HOT = IdDict{Any,_HotLayer}()
+const _HOT = IdDict{Any, _HotLayer}()
 const _HOT_CFG = Ref(_HotConfig(0.99f0, 2, typemax(Int), 1.0f0))
-const _HOT_COPY_STREAM = Ref{Union{Nothing,CuStream}}(nothing)
+const _HOT_COPY_STREAM = Ref{Union{Nothing, CuStream}}(nothing)
 const _HOT_MISS_E = Int[]
 const _HOT_MISS_W = Float32[]
 
@@ -139,12 +139,18 @@ end
 
 # GSQ-RCO files mix these per projection inside one layer; the activations are
 # q8_1 for every type, so gate, up and down need not share one.
-const _HOT_TYPES = (Gesso.Inference.GGML_TYPE_IQ2_XS, Gesso.Inference.GGML_TYPE_IQ3_XXS,
-    Gesso.Inference.GGML_TYPE_IQ4_XS, Gesso.Inference.GGML_TYPE_Q2_K,
-    Gesso.Inference.GGML_TYPE_Q3_K, Gesso.Inference.GGML_TYPE_Q4_K)
+const _HOT_TYPES = (
+    Gesso.Inference.GGML_TYPE_IQ2_XS,
+    Gesso.Inference.GGML_TYPE_IQ3_XXS,
+    Gesso.Inference.GGML_TYPE_IQ4_XS,
+    Gesso.Inference.GGML_TYPE_Q2_K,
+    Gesso.Inference.GGML_TYPE_Q3_K,
+    Gesso.Inference.GGML_TYPE_Q4_K,
+)
 
 function _hot_supported(g, u, d)
-    all(s -> s.ggml_type in _HOT_TYPES && s.bytes_per_expert % 4 == 0, (g, u, d)) || return false
+    all(s -> s.ggml_type in _HOT_TYPES && s.bytes_per_expert % 4 == 0, (g, u, d)) ||
+        return false
     return g.n_exp == u.n_exp == d.n_exp && g.ne0 == u.ne0 && g.ne1 == u.ne1
 end
 
@@ -211,8 +217,8 @@ const _HOT_PIN_NOTED = Ref(false)
 
 # Entering a hot layer's MoE, and leaving it. Between the two the layer itself
 # is next; afterwards it is the furthest away.
-_hot_enter!(hot::_HotLayer, seq::Int) = (_HOT_NEXT[] = hot.layer; _HOT_SEQ[] = seq; nothing)
-_hot_leave!(hot::_HotLayer) = (_HOT_NEXT[] = hot.layer + 1; nothing)
+_hot_enter!(hot::_HotLayer, seq::Int) = (_HOT_NEXT[]=hot.layer; _HOT_SEQ[]=seq; nothing)
+_hot_leave!(hot::_HotLayer) = (_HOT_NEXT[]=hot.layer + 1; nothing)
 
 function CUDA.CUDACore.purge!(::_HotPurge)
     _HOT_BUSY[] && return
@@ -267,14 +273,39 @@ function _hot_register!(blocks)
         push!(slots, nslots)
         nslots > 0 || continue
         n_exp = g.n_exp
-        _HOT[g] = _HotLayer(li, nslots, stride, nothing, nothing, CuPtr{UInt8}(0),
-            zeros(Int32, n_exp), zeros(Int32, nslots), collect(nslots:-1:1),
-            zeros(Float32, n_exp), zeros(Int, n_exp), 0,
-            Int32[], nothing, Int[], Int[], false, pin && _hot_pin_slabs!((g, u, d)),
+        _HOT[g] = _HotLayer(
+            li,
+            nslots,
+            stride,
+            nothing,
+            nothing,
+            CuPtr{UInt8}(0),
+            zeros(Int32, n_exp),
+            zeros(Int32, nslots),
+            collect(nslots:-1:1),
+            zeros(Float32, n_exp),
+            zeros(Int, n_exp),
+            0,
+            Int32[],
+            nothing,
+            Int[],
+            Int[],
+            false,
+            pin && _hot_pin_slabs!((g, u, d)),
             CuEvent(CUDA.EVENT_DISABLE_TIMING),
-            CuEvent(CUDA.EVENT_DISABLE_TIMING), Int[], UInt8[], 0, 0, 0, 0)
+            CuEvent(CUDA.EVENT_DISABLE_TIMING),
+            Int[],
+            UInt8[],
+            0,
+            0,
+            0,
+            0,
+        )
     end
-    @debug "hot experts registered" layers=length(_HOT) slots=slots per_layer_mib=div(per_layer, Int64(1024 * 1024))
+    @debug "hot experts registered" layers=length(_HOT) slots=slots per_layer_mib=div(
+        per_layer,
+        Int64(1024 * 1024),
+    )
     return
 end
 
@@ -330,7 +361,8 @@ function _hot_alloc!(hot::_HotLayer, g, u, n_used::Int)
         # handing it back to the driver frees the same bytes with no GC.
         CUDA.synchronize()
         dev = CUDA.device()
-        CUDA.CUDACore.stream_ordered(dev) && CUDA.CUDACore.trim(CUDA.CUDACore.pool_create(dev))
+        CUDA.CUDACore.stream_ordered(dev) &&
+            CUDA.CUDACore.trim(CUDA.CUDACore.pool_create(dev))
         # what the trim could not hand back is fragmented; the allocation would
         # fail only after the GC, and decode retries every _HOT_RETRY_TOKENS
         CUDA.free_memory() < bytes &&
@@ -349,9 +381,11 @@ function _hot_alloc!(hot::_HotLayer, g, u, n_used::Int)
         n = length(pool)
         o2 = g.bytes_per_expert
         o3 = o2 + u.bytes_per_expert
-        hot.views = (pool,
+        hot.views = (
+            pool,
             unsafe_wrap(CuArray, base + o2, n - o2),
-            unsafe_wrap(CuArray, base + o3, n - o3))
+            unsafe_wrap(CuArray, base + o3, n - o3),
+        )
         hot.pool = pool
         hot.base = base
         delete!(_HOT_FALLBACK, hot.layer)
@@ -495,8 +529,13 @@ function _hot_issue!(hot::_HotLayer, g, u, d)
             end
         end
         for j in eachindex(hot.pend_slot)
-            unsafe_copyto!(hot.base + (hot.pend_slot[j] - 1) * st, stg + (j - 1) * st, st;
-                async=true, stream=cs)
+            unsafe_copyto!(
+                hot.base + (hot.pend_slot[j] - 1) * st,
+                stg + (j - 1) * st,
+                st;
+                async=true,
+                stream=cs,
+            )
         end
     end
     CUDA.record(hot.ready, cs)
@@ -511,14 +550,15 @@ function _hot_combine_kernel!(y, D, meta, ymiss, h::Int, nh::Int, wbase::Int)
     i <= h || return
     acc = 0.0f0
     @inbounds for k in 1:nh
-        acc += D[i, k] * reinterpret(Float32, meta[wbase + k])
+        acc += D[i, k] * reinterpret(Float32, meta[wbase+k])
     end
     @inbounds y[i] = acc + ymiss[i]
     return
 end
 
 function _hot_miss_bufs(n_used::Int)
-    length(_HOT_MISS_E) == n_used || (resize!(_HOT_MISS_E, n_used); resize!(_HOT_MISS_W, n_used))
+    length(_HOT_MISS_E) == n_used ||
+        (resize!(_HOT_MISS_E, n_used); resize!(_HOT_MISS_W, n_used))
     return _HOT_MISS_E, _HOT_MISS_W
 end
 
@@ -551,8 +591,8 @@ function _moe_hot_token!(backend, hot::_HotLayer, y, xd, b, gate, up, down, n_us
         if sl > 0
             nh += 1
             meta[nh] = Int32((sl - 1) * hot.stride)
-            meta[n_used + nh] = Int32(nh)
-            meta[2n_used + nh] = reinterpret(Int32, b.wbuf[k])
+            meta[n_used+nh] = Int32(nh)
+            meta[2n_used+nh] = reinterpret(Int32, b.wbuf[k])
         else
             nm += 1
             me[nm] = e
@@ -572,16 +612,59 @@ function _moe_hot_token!(backend, hot::_HotLayer, y, xd, b, gate, up, down, n_us
             unsafe_copyto!(pointer(md), pointer(meta), 3n_used; async=true, stream=s)
             gv, uv, dv = hot.views
             xt = reshape(xd, h, 1)
-            _cuda_launch_qgemv!(Gbat, xt, gv, gate.ggml_type, md, n_used, nh, gate.ne0, gate.ne1, 1.0f0, 0.0f0)
-            _cuda_launch_qgemv!(Ubat, xt, uv, up.ggml_type, md, n_used, nh, up.ne0, up.ne1, 1.0f0, 0.0f0;
-                quantize=false)
+            _cuda_launch_qgemv!(
+                Gbat,
+                xt,
+                gv,
+                gate.ggml_type,
+                md,
+                n_used,
+                nh,
+                gate.ne0,
+                gate.ne1,
+                1.0f0,
+                0.0f0,
+            )
+            _cuda_launch_qgemv!(
+                Ubat,
+                xt,
+                uv,
+                up.ggml_type,
+                md,
+                n_used,
+                nh,
+                up.ne0,
+                up.ne1,
+                1.0f0,
+                0.0f0;
+                quantize=false,
+            )
             _silu_mul!(backend, Hbat, Ubat, Gbat)
-            _cuda_launch_qgemv!(Dbat, Hbat, dv, down.ggml_type, md, n_used, nh, down.ne0, down.ne1, 1.0f0, 0.0f0)
+            _cuda_launch_qgemv!(
+                Dbat,
+                Hbat,
+                dv,
+                down.ggml_type,
+                md,
+                n_used,
+                nh,
+                down.ne0,
+                down.ne1,
+                1.0f0,
+                0.0f0,
+            )
         end
     end
     if nm > 0
         Gesso.Inference.@decode_stage :moe_host nothing Gesso.Inference._moe_host_experts_auto!(
-            b.yrow, b.xrow, me, mw, nm, gate, up, down,
+            b.yrow,
+            b.xrow,
+            me,
+            mw,
+            nm,
+            gate,
+            up,
+            down,
         )
     else
         fill!(b.yrow, 0.0f0)
@@ -596,7 +679,14 @@ function _moe_hot_token!(backend, hot::_HotLayer, y, xd, b, gate, up, down, n_us
             ymiss = _dev_scratch(:hot_ymiss, h)
             unsafe_copyto!(pointer(ymiss), pointer(b.y), h; async=true, stream=s)
             @fastcuda threads = 256 blocks = cld(h, 256) _hot_combine_kernel!(
-                y, _dev_scratch(:moe_dbat, h, n_used), hot.meta_d, ymiss, h, nh, 2n_used)
+                y,
+                _dev_scratch(:moe_dbat, h, n_used),
+                hot.meta_d,
+                ymiss,
+                h,
+                nh,
+                2n_used,
+            )
         end
     end
     CUDA.record(hot.used, s)
@@ -653,9 +743,10 @@ _hot_prefill_config() = _HotPrefillConfig(
     max(0, _hot_env_int("GESSO_GPU_HOT_PREFILL_STREAM", 32)),
 )
 
-const _HOT_PF_CFG = Ref(_HotPrefillConfig(true, 4096, 16, 1024, 1 / 6.5e9, 70e-6, 45e-6, 768 * 1024, 32))
+const _HOT_PF_CFG =
+    Ref(_HotPrefillConfig(true, 4096, 16, 1024, 1 / 6.5e9, 70e-6, 45e-6, 768 * 1024, 32))
 
-const _HOT_STREAM = Ref{Union{Nothing,_HotLayer}}(nothing)
+const _HOT_STREAM = Ref{Union{Nothing, _HotLayer}}(nothing)
 
 # The shared ring dressed as `hot`, empty. Allocated before _HOT_BUSY, so a
 # short device may purge pools for it; nothing when it still does not fit.
@@ -663,9 +754,34 @@ function _hot_stream_layer(hot::_HotLayer, g, u, n_exp::Int, cfg::_HotPrefillCon
     (hot.direct && cfg.stream > 0) || return nothing
     sl = _HOT_STREAM[]
     if sl === nothing
-        sl = _HotLayer(0, 0, 0, nothing, nothing, CuPtr{UInt8}(0), Int32[], Int32[], Int[],
-            Float32[], Int[], 0, Int32[], nothing, Int[], Int[], false, true,
-            CuEvent(CUDA.EVENT_DISABLE_TIMING), CuEvent(CUDA.EVENT_DISABLE_TIMING), Int[], UInt8[], 0, 0, 0, 0)
+        sl = _HotLayer(
+            0,
+            0,
+            0,
+            nothing,
+            nothing,
+            CuPtr{UInt8}(0),
+            Int32[],
+            Int32[],
+            Int[],
+            Float32[],
+            Int[],
+            0,
+            Int32[],
+            nothing,
+            Int[],
+            Int[],
+            false,
+            true,
+            CuEvent(CUDA.EVENT_DISABLE_TIMING),
+            CuEvent(CUDA.EVENT_DISABLE_TIMING),
+            Int[],
+            UInt8[],
+            0,
+            0,
+            0,
+            0,
+        )
         _HOT_STREAM[] = sl
     end
     need = cfg.stream * hot.stride
@@ -683,7 +799,11 @@ function _hot_stream_layer(hot::_HotLayer, g, u, n_exp::Int, cfg::_HotPrefillCon
     n = length(pool)
     o2 = g.bytes_per_expert
     o3 = o2 + u.bytes_per_expert
-    sl.views = (pool, unsafe_wrap(CuArray, base + o2, n - o2), unsafe_wrap(CuArray, base + o3, n - o3))
+    sl.views = (
+        pool,
+        unsafe_wrap(CuArray, base + o2, n - o2),
+        unsafe_wrap(CuArray, base + o3, n - o3),
+    )
     sl.base = base
     sl.layer = hot.layer
     sl.stride = hot.stride
@@ -732,16 +852,24 @@ end
 function _hot_device_avail()
     CC = CUDA.CUDACore
     cached = coalesce(CC.cached_memory(), 0)
-    return Int64(CUDA.free_memory()) + max(Int64(0), Int64(cached) - Int64(CC.used_memory()))
+    return Int64(CUDA.free_memory()) +
+           max(Int64(0), Int64(cached) - Int64(CC.used_memory()))
 end
 
 # Device memory a prefill pass can claim: purge! hands back the pools and the
 # prefill buffers regrow to the pass.
 function _prefill_device_avail()
-    pools = sum(hot -> hot.pool === nothing ? Int64(0) : Int64(length(hot.pool)), values(_HOT); init=Int64(0))
+    pools = sum(
+        hot -> hot.pool === nothing ? Int64(0) : Int64(length(hot.pool)),
+        values(_HOT);
+        init=Int64(0),
+    )
     P = _HOT_PREFILL
-    bufs = sum(f -> (b = getfield(P, f); b === nothing ? Int64(0) : Int64(sizeof(b))),
-        (:meta_d, :xt, :g, :u, :a, :d); init=Int64(0))
+    bufs = sum(
+        f -> (b=getfield(P, f); b === nothing ? Int64(0) : Int64(sizeof(b))),
+        (:meta_d, :xt, :g, :u, :a, :d);
+        init=Int64(0),
+    )
     return _hot_device_avail() + pools + bufs
 end
 
@@ -757,14 +885,22 @@ const _PREFILL_PASS_MARGIN = Int64(160) << 20
 const _PREFILL_PASS_STEP = 128
 
 _prefill_pass_bytes(n::Int, K::Int, qdim::Int, group::Int) =
-    Int64(_HOT_PF_CFG[].headroom) * n + 4 * Int64(n) * _attn_prefill_tile(n, K) +
-    (Int64(_dq_gemm_scratch_mib()) << 20) + 2 * Int64(n) * qdim
+    Int64(_HOT_PF_CFG[].headroom) * n +
+    4 * Int64(n) * _attn_prefill_tile(n, K) +
+    (Int64(_dq_gemm_scratch_mib()) << 20) +
+    2 * Int64(n) * qdim
 
 # P4096 in passes of 1024 ran out of memory next to hot+pin pools; a fixed
 # smaller chunk costs short prompts throughput they could have had. The pass
 # steps down by _PREFILL_PASS_STEP rows until its estimate fits.
-function Gesso.Inference._prefill_pass_rows(::CUDABackend, left::Int, done::Int, chunk::Int,
-    qdim::Int, group::Int)
+function Gesso.Inference._prefill_pass_rows(
+    ::CUDABackend,
+    left::Int,
+    done::Int,
+    chunk::Int,
+    qdim::Int,
+    group::Int,
+)
     n = min(chunk, left)
     reserve = max(_PREFILL_PASS_MARGIN, _hot_reserve_bytes())
     budget = _prefill_device_avail() - reserve
@@ -775,7 +911,8 @@ function Gesso.Inference._prefill_pass_rows(::CUDABackend, left::Int, done::Int,
     return n
 end
 
-Gesso.Inference._device_make_room!(::CUDABackend, bytes::Int) = _hot_make_room!(Int64(bytes))
+Gesso.Inference._device_make_room!(::CUDABackend, bytes::Int) =
+    _hot_make_room!(Int64(bytes))
 
 # CUDA purges pools only when an allocation fails, and stops once it fits,
 # which leaves the card full. Release them before a large allocation instead,
@@ -788,7 +925,8 @@ function _hot_make_room!(bytes::Int64)
     if Int64(CUDA.free_memory()) < bytes + reserve
         CUDA.synchronize()
         dev = CUDA.device()
-        CUDA.CUDACore.stream_ordered(dev) && CUDA.CUDACore.trim(CUDA.CUDACore.pool_create(dev))
+        CUDA.CUDACore.stream_ordered(dev) &&
+            CUDA.CUDACore.trim(CUDA.CUDACore.pool_create(dev))
     end
     return
 end
@@ -799,12 +937,12 @@ Gesso.Inference._prefill_end!(::CUDABackend) = _hot_prefill_release!()
 # order, expert by expert, token order within an expert; D's column g is pair g.
 mutable struct _HotPrefill
     meta_h::Vector{Int32}    # pinned: per launch [offsets; columns; tokens], then the combine table
-    meta_d::Union{Nothing,_CuVec{Int32}}
-    xt::Union{Nothing,_CuVec{Float32}}
-    g::Union{Nothing,_CuVec{Float32}}
-    u::Union{Nothing,_CuVec{Float32}}
-    a::Union{Nothing,_CuVec{Float32}}
-    d::Union{Nothing,_CuVec{Float32}}
+    meta_d::Union{Nothing, _CuVec{Int32}}
+    xt::Union{Nothing, _CuVec{Float32}}
+    g::Union{Nothing, _CuVec{Float32}}
+    u::Union{Nothing, _CuVec{Float32}}
+    a::Union{Nothing, _CuVec{Float32}}
+    d::Union{Nothing, _CuVec{Float32}}
     ev::Vector{CuEvent}
     ngpu::Int
     gpoff::Int
@@ -822,8 +960,30 @@ mutable struct _HotPrefill
     cpu::Vector{Bool}
 end
 
-const _HOT_PREFILL = _HotPrefill(Int32[], nothing, nothing, nothing, nothing, nothing, nothing,
-    CuEvent[], 0, 0, 0, Int[], Int[], Int[], Int[], Int[], Int[], Int[], Int[], Int[], Int[], Bool[])
+const _HOT_PREFILL = _HotPrefill(
+    Int32[],
+    nothing,
+    nothing,
+    nothing,
+    nothing,
+    nothing,
+    nothing,
+    CuEvent[],
+    0,
+    0,
+    0,
+    Int[],
+    Int[],
+    Int[],
+    Int[],
+    Int[],
+    Int[],
+    Int[],
+    Int[],
+    Int[],
+    Int[],
+    Bool[],
+)
 
 function _hotp_dev(buf, ::Type{T}, n::Int) where {T}
     buf !== nothing && length(buf) >= n && return buf
@@ -839,8 +999,20 @@ function _hotp_event(P::_HotPrefill, i::Int)
 end
 
 # Pairs a:b (global numbering), in launches of at most `seg` pairs.
-function _hotp_compute!(backend, hot::_HotLayer, P::_HotPrefill, xt, gate, up, down,
-    a::Int, b::Int, seg::Int, h::Int, ff::Int)
+function _hotp_compute!(
+    backend,
+    hot::_HotLayer,
+    P::_HotPrefill,
+    xt,
+    gate,
+    up,
+    down,
+    a::Int,
+    b::Int,
+    seg::Int,
+    h::Int,
+    ff::Int,
+)
     gv, uv, dv = hot.views
     while a <= b
         n = min(seg, b - a + 1)
@@ -849,12 +1021,49 @@ function _hotp_compute!(backend, hot::_HotLayer, P::_HotPrefill, xt, gate, up, d
         U = unsafe_wrap(CuArray, pointer(P.u), (ff, n))
         A = unsafe_wrap(CuArray, pointer(P.a), (ff, n))
         D = unsafe_wrap(CuArray, pointer(P.d, (a - 1) * h + 1), (h, n))
-        _cuda_launch_qgemv!(G, xt, gv, gate.ggml_type, md, n, n, gate.ne0, gate.ne1, 1.0f0, 0.0f0;
-            xcoloff=2n)
-        _cuda_launch_qgemv!(U, xt, uv, up.ggml_type, md, n, n, up.ne0, up.ne1, 1.0f0, 0.0f0;
-            quantize=false, xcoloff=2n)
+        _cuda_launch_qgemv!(
+            G,
+            xt,
+            gv,
+            gate.ggml_type,
+            md,
+            n,
+            n,
+            gate.ne0,
+            gate.ne1,
+            1.0f0,
+            0.0f0;
+            xcoloff=2n,
+        )
+        _cuda_launch_qgemv!(
+            U,
+            xt,
+            uv,
+            up.ggml_type,
+            md,
+            n,
+            n,
+            up.ne0,
+            up.ne1,
+            1.0f0,
+            0.0f0;
+            quantize=false,
+            xcoloff=2n,
+        )
         _silu_mul!(backend, A, U, G)
-        _cuda_launch_qgemv!(D, A, dv, down.ggml_type, md, n, n, down.ne0, down.ne1, 1.0f0, 0.0f0)
+        _cuda_launch_qgemv!(
+            D,
+            A,
+            dv,
+            down.ggml_type,
+            md,
+            n,
+            n,
+            down.ne0,
+            down.ne1,
+            1.0f0,
+            0.0f0,
+        )
         a += n
     end
     return
@@ -864,8 +1073,21 @@ end
 # nothing issued, when the layer must take the CPU path. On true, Y holds the
 # CPU experts' partial sums and _hot_prefill_add! adds the GPU's once Y is on
 # the device.
-function _moe_hot_prefill!(backend, hot::_HotLayer, xd, b, X, Y, gate, up, down,
-    seq::Int, n_exp::Int, n_used::Int, s)
+function _moe_hot_prefill!(
+    backend,
+    hot::_HotLayer,
+    xd,
+    b,
+    X,
+    Y,
+    gate,
+    up,
+    down,
+    seq::Int,
+    n_exp::Int,
+    n_used::Int,
+    s,
+)
     cfg = _HOT_PF_CFG[]
     (cfg.on && seq <= cfg.max_seq) || return false
     h = size(X, 2)
@@ -913,7 +1135,21 @@ function _moe_hot_prefill!(backend, hot::_HotLayer, xd, b, X, Y, gate, up, down,
     _HOT_BUSY[] = true
     try
         Gesso.Inference.@decode_stage :moe_qgemv nothing _hot_prefill_issue!(
-            backend, lay, P, cfg, xd, b, gate, up, down, seq, n_exp, n_used, npairs, s)
+            backend,
+            lay,
+            P,
+            cfg,
+            xd,
+            b,
+            gate,
+            up,
+            down,
+            seq,
+            n_exp,
+            n_used,
+            npairs,
+            s,
+        )
     finally
         _HOT_BUSY[] = false
     end
@@ -922,13 +1158,36 @@ function _moe_hot_prefill!(backend, hot::_HotLayer, xd, b, X, Y, gate, up, down,
         cpu[e] = P.rnd[e] < 0
     end
     Gesso.Inference.@decode_stage :moe_host nothing Gesso.Inference._moe_host_prefill!(
-        Y, X, b.E, b.W, b.live, n_exp, gate, up, down; cpu=cpu,
+        Y,
+        X,
+        b.E,
+        b.W,
+        b.live,
+        n_exp,
+        gate,
+        up,
+        down;
+        cpu=cpu,
     )
     return true
 end
 
-function _hot_prefill_issue!(backend, hot::_HotLayer, P::_HotPrefill, cfg::_HotPrefillConfig,
-    xd, b, gate, up, down, seq::Int, n_exp::Int, n_used::Int, npairs::Int, s)
+function _hot_prefill_issue!(
+    backend,
+    hot::_HotLayer,
+    P::_HotPrefill,
+    cfg::_HotPrefillConfig,
+    xd,
+    b,
+    gate,
+    up,
+    down,
+    seq::Int,
+    n_exp::Int,
+    n_used::Int,
+    npairs::Int,
+    s,
+)
     h = size(xd, 2)
     ff = gate.ne1
     cnt = P.cnt
@@ -949,7 +1208,7 @@ function _hot_prefill_issue!(backend, hot::_HotLayer, P::_HotPrefill, cfg::_HotP
         @inbounds for j in eachindex(cand)
             rest -= cfg.cpu_expert_s + cfg.cpu_pair_s * cnt[cand[j]]
             v = max(j * beta, rest)
-            v < best && (best = v; nup = j)
+            v < best && (best=v; nup=j)
         end
     end
     # uploads in ascending pair count
@@ -992,18 +1251,18 @@ function _hot_prefill_issue!(backend, hot::_HotLayer, P::_HotPrefill, cfg::_HotP
     @inbounds for j in 1:nup
         e = cand[j]
         rnd[e] = cld(j, C)
-        slot[e] = ring[(j - 1) % N + 1]
+        slot[e] = ring[(j-1)%N+1]
         push!(order, e)
     end
     rstart = resize!(P.rstart, R + 2)
     g = 1
     rstart[1] = 1
     @inbounds for (idx, e) in enumerate(order)
-        idx > nres && (idx - nres - 1) % C == 0 && (rstart[rnd[e] + 1] = g)
+        idx > nres && (idx - nres - 1) % C == 0 && (rstart[rnd[e]+1] = g)
         pfirst[e] = g
         g += cnt[e]
     end
-    rstart[R + 2] = g
+    rstart[R+2] = g
     ngpu = g - 1
 
     meta = P.meta_h
@@ -1012,33 +1271,52 @@ function _hot_prefill_issue!(backend, hot::_HotLayer, P::_HotPrefill, cfg::_HotP
     @inbounds for t in 1:seq, k in 1:n_used
         i = (t - 1) * n_used + k
         e = b.E[k, t]
-        meta[woff + i] = reinterpret(Int32, b.W[k, t])
+        meta[woff+i] = reinterpret(Int32, b.W[k, t])
         if b.live[t] && rnd[e] >= 0
             gi = pfirst[e] + fillc[e]
             fillc[e] += 1
-            meta[gpoff + i] = Int32(gi)
+            meta[gpoff+i] = Int32(gi)
             # the launch holding pair gi starts at pair a and has n pairs
             r = rnd[e]
-            a0 = rstart[r + 1]
+            a0 = rstart[r+1]
             a = a0 + ((gi - a0) ÷ cfg.seg) * cfg.seg
-            n = min(cfg.seg, rstart[r + 2] - a)
+            n = min(cfg.seg, rstart[r+2] - a)
             m0 = 3(a - 1)
             l = gi - a + 1
-            meta[m0 + l] = Int32((slot[e] - 1) * hot.stride)
-            meta[m0 + n + l] = Int32(l)
-            meta[m0 + 2n + l] = Int32(t)
+            meta[m0+l] = Int32((slot[e] - 1) * hot.stride)
+            meta[m0+n+l] = Int32(l)
+            meta[m0+2n+l] = Int32(t)
         else
-            meta[gpoff + i] = 0
+            meta[gpoff+i] = 0
         end
     end
     P.ngpu = ngpu
     P.gpoff = gpoff
     P.woff = woff
-    unsafe_copyto!(pointer(P.meta_d), pointer(meta), woff + seq * n_used; async=true, stream=s)
+    unsafe_copyto!(
+        pointer(P.meta_d),
+        pointer(meta),
+        woff + seq * n_used;
+        async=true,
+        stream=s,
+    )
     xt = unsafe_wrap(CuArray, pointer(P.xt), (h, seq))
     _transpose_into!(xt, xd)
 
-    _hotp_compute!(backend, hot, P, xt, gate, up, down, rstart[1], rstart[2] - 1, cfg.seg, h, ff)
+    _hotp_compute!(
+        backend,
+        hot,
+        P,
+        xt,
+        gate,
+        up,
+        down,
+        rstart[1],
+        rstart[2] - 1,
+        cfg.seg,
+        h,
+        ff,
+    )
     CUDA.record(_hotp_event(P, 1), s)
     if R > 0
         cs = _hot_copy_stream()
@@ -1069,8 +1347,20 @@ function _hot_prefill_issue!(backend, hot::_HotLayer, P::_HotPrefill, cfg::_HotP
             end
             CUDA.record(_hotp_event(P, 2r + 2), cs)
             CUDA.wait(_hotp_event(P, 2r + 2), s)
-            _hotp_compute!(backend, hot, P, xt, gate, up, down, rstart[r + 1], rstart[r + 2] - 1,
-                cfg.seg, h, ff)
+            _hotp_compute!(
+                backend,
+                hot,
+                P,
+                xt,
+                gate,
+                up,
+                down,
+                rstart[r+1],
+                rstart[r+2] - 1,
+                cfg.seg,
+                h,
+                ff,
+            )
             CUDA.record(_hotp_event(P, 2r + 1), s)
         end
     end
@@ -1102,8 +1392,8 @@ function _hot_prefill_add_kernel!(y, D, meta, gpoff::Int, woff::Int, n_used::Int
     base = (t - 1) * n_used
     acc = 0.0f0
     @inbounds for k in 1:n_used
-        g = Int(meta[gpoff + base + k])
-        g > 0 && (acc += reinterpret(Float32, meta[woff + base + k]) * D[i, g])
+        g = Int(meta[gpoff+base+k])
+        g > 0 && (acc += reinterpret(Float32, meta[woff+base+k]) * D[i, g])
     end
     @inbounds y[t, i] += acc
     return
@@ -1114,7 +1404,14 @@ function _hot_prefill_add!(y, seq::Int, h::Int, n_used::Int)
     P.ngpu > 0 || return y
     D = unsafe_wrap(CuArray, pointer(P.d), (h, P.ngpu))
     @fastcuda threads = 256 blocks = (cld(h, 256), seq) _hot_prefill_add_kernel!(
-        y, D, P.meta_d, P.gpoff, P.woff, n_used, h)
+        y,
+        D,
+        P.meta_d,
+        P.gpoff,
+        P.woff,
+        n_used,
+        h,
+    )
     return y
 end
 
@@ -1122,7 +1419,16 @@ function _hot_verify!(y, b, gate, up, down, n_used::Int)
     _cuda_stream_wait()
     got = Array(y)
     ref = similar(b.yrow)
-    Gesso.Inference._moe_host_experts_auto!(ref, b.xrow, b.experts, b.wbuf, n_used, gate, up, down)
+    Gesso.Inference._moe_host_experts_auto!(
+        ref,
+        b.xrow,
+        b.experts,
+        b.wbuf,
+        n_used,
+        gate,
+        up,
+        down,
+    )
     num = 0.0
     den = 0.0
     @inbounds for i in eachindex(ref)

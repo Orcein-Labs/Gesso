@@ -215,7 +215,15 @@ end
     down_s = _pack_expert_slice(randn(rng, Float32, n_exp, h, ff), ff, h)
     run_once() = begin
         y = zeros(Float32, seq, h)
-        Gesso.Inference._cpu_moe_topk_swiglu_gguf!(y, x, router, gate_s, up_s, down_s, n_used)
+        Gesso.Inference._cpu_moe_topk_swiglu_gguf!(
+            y,
+            x,
+            router,
+            gate_s,
+            up_s,
+            down_s,
+            n_used,
+        )
         y
     end
     y_ref = run_once()
@@ -240,7 +248,13 @@ end
     @test length(tensors.blocks) == 40
     @test tensors.blocks[1].wexp_gate.storage isa Gesso.GgufQuantSlice
     @test eltype(tensors.embedding.storage) === Float32
-    ids = Gesso.reference_generate(model, tensors, [9419]; max_new_tokens=1, eps=spec.rms_norm_eps)
+    ids = Gesso.reference_generate(
+        model,
+        tensors,
+        [9419];
+        max_new_tokens=1,
+        eps=spec.rms_norm_eps,
+    )
     @test length(ids) == 2
     @test ids[1] == 9419
     @test ids[2] == 11

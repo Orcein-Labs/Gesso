@@ -26,8 +26,12 @@ function _kv_format(default::Symbol=:f32)
     haskey(ENV, "GESSO_KV_FORMAT") || return default
     raw = lowercase(strip(ENV["GESSO_KV_FORMAT"]))
     f = Symbol(raw)
-    f in KV_FORMATS || throw(gesso_error(ERR_INVALID_PLAN,
-        "GESSO_KV_FORMAT=$raw: expected one of $(join(KV_FORMATS, ", "))"))
+    f in KV_FORMATS || throw(
+        gesso_error(
+            ERR_INVALID_PLAN,
+            "GESSO_KV_FORMAT=$raw: expected one of $(join(KV_FORMATS, ", "))",
+        ),
+    )
     return f
 end
 
@@ -39,22 +43,23 @@ end
 _kv_default_format(backend::Symbol, d_head::Int) =
     backend === :cuda && d_head % _KV_BLOCK == 0 ? :q8 : :f32
 
-struct QuantKV{F,C<:AbstractArray,S<:AbstractArray} <: AbstractArray{Float32,3}
+struct QuantKV{F, C <: AbstractArray, S <: AbstractArray} <: AbstractArray{Float32, 3}
     codes::C   # q8: (rows, n_kv, d) Int8; q4h: (rows, n_kv, d ÷ 2) UInt8, two codes a byte
     scales::S  # (rows, n_kv, d ÷ 32) Float16
     d::Int
 end
-QuantKV{F}(codes::C, scales::S, d::Int) where {F,C,S} = QuantKV{F,C,S}(codes, scales, d)
+QuantKV{F}(codes::C, scales::S, d::Int) where {F, C, S} = QuantKV{F, C, S}(codes, scales, d)
 
 Base.size(x::QuantKV) = (size(x.codes, 1), size(x.codes, 2), x.d)
 Base.IndexStyle(::Type{<:QuantKV}) = IndexCartesian()
 
 # Lloyd-Max reconstruction levels for a unit Gaussian at 16 levels (the
 # positive half; codes 8-15 are the negatives of 0-7)
-const _Q4_LEVELS = (0.1284f0, 0.3881f0, 0.6568f0, 0.9424f0, 1.2562f0, 1.6181f0, 2.0690f0, 2.7326f0)
+const _Q4_LEVELS =
+    (0.1284f0, 0.3881f0, 0.6568f0, 0.9424f0, 1.2562f0, 1.6181f0, 2.0690f0, 2.7326f0)
 
 @inline function _q4_level(c::UInt8)
-    a = _Q4_LEVELS[(c & 0x07) + 1]
+    a = _Q4_LEVELS[(c&0x07)+1]
     return c >= 0x08 ? -a : a
 end
 
@@ -70,13 +75,13 @@ end
 end
 
 Base.@propagate_inbounds function Base.getindex(x::QuantKV{:q8}, u::Int, h::Int, j::Int)
-    return Float32(x.codes[u, h, j]) * Float32(x.scales[u, h, ((j - 1) >> 5) + 1])
+    return Float32(x.codes[u, h, j]) * Float32(x.scales[u, h, ((j-1)>>5)+1])
 end
 
 Base.@propagate_inbounds function Base.getindex(x::QuantKV{:q4h}, u::Int, h::Int, j::Int)
-    b = x.codes[u, h, ((j - 1) >> 1) + 1]
+    b = x.codes[u, h, ((j-1)>>1)+1]
     c = isodd(j) ? b & 0x0f : b >> 4
-    return _q4_level(c) * Float32(x.scales[u, h, ((j - 1) >> 5) + 1])
+    return _q4_level(c) * Float32(x.scales[u, h, ((j-1)>>5)+1])
 end
 
 _kv_rotated(::Any) = false
@@ -89,21 +94,30 @@ function _kv_alloc(fmt::Symbol, like::AbstractArray, rows::Int, n_kv::Int, d::In
     zeros_of(T, dims) = fill!(similar(like, T, dims), zero(T))
     fmt === :f32 && return zeros_of(eltype(like), (rows, n_kv, d))
     fmt === :f16 && return zeros_of(Float16, (rows, n_kv, d))
-    d % _KV_BLOCK == 0 || throw(gesso_error(ERR_INVALID_PLAN,
-        "GESSO_KV_FORMAT=$fmt needs d_head divisible by $_KV_BLOCK, got $d"))
+    d % _KV_BLOCK == 0 || throw(
+        gesso_error(
+            ERR_INVALID_PLAN,
+            "GESSO_KV_FORMAT=$fmt needs d_head divisible by $_KV_BLOCK, got $d",
+        ),
+    )
     scales = zeros_of(Float16, (rows, n_kv, d ÷ _KV_BLOCK))
     fmt === :q8 && return QuantKV{:q8}(zeros_of(Int8, (rows, n_kv, d)), scales, d)
-    ispow2(d) || throw(gesso_error(ERR_INVALID_PLAN,
-        "GESSO_KV_FORMAT=q4h needs a power-of-two d_head for the Hadamard rotation, got $d"))
+    ispow2(d) || throw(
+        gesso_error(
+            ERR_INVALID_PLAN,
+            "GESSO_KV_FORMAT=q4h needs a power-of-two d_head for the Hadamard rotation, got $d",
+        ),
+    )
     return QuantKV{:q4h}(zeros_of(UInt8, (rows, n_kv, d ÷ 2)), scales, d)
 end
 
-_release_storage!(x::QuantKV) = (_release_storage!(x.codes); _release_storage!(x.scales); nothing)
+_release_storage!(x::QuantKV) =
+    (_release_storage!(x.codes); _release_storage!(x.scales); nothing)
 
 # Cache rows row0 .. row0 + n - 1 take the n rows of src, (n, n_kv, d).
 function _kv_write_rows!(dst::AbstractArray, src::AbstractArray, row0::Int)
     n = size(src, 1)
-    @views dst[row0:(row0 + n - 1), :, :] .= src
+    @views dst[row0:(row0+n-1), :, :] .= src
     return nothing
 end
 
@@ -120,14 +134,15 @@ function _kv_write_rows!(dst::QuantKV, src::AbstractArray, row0::Int)
 end
 
 function _kv_quantize_row!(dst::QuantKV{:q8}, buf::Vector{Float32}, u::Int, h::Int)
-    for b in 1:(dst.d ÷ _KV_BLOCK)
-        js = ((b - 1) * _KV_BLOCK + 1):(b * _KV_BLOCK)
+    for b in 1:(dst.d÷_KV_BLOCK)
+        js = ((b-1)*_KV_BLOCK+1):(b*_KV_BLOCK)
         amax = maximum(abs, view(buf, js))
         s = Float16(amax / 127)
         inv = s == 0 ? 0.0f0 : 1.0f0 / Float32(s)
         dst.scales[u, h, b] = s
         for j in js
-            dst.codes[u, h, j] = unsafe_trunc(Int8, clamp(round(buf[j] * inv), -127.0f0, 127.0f0))
+            dst.codes[u, h, j] =
+                unsafe_trunc(Int8, clamp(round(buf[j] * inv), -127.0f0, 127.0f0))
         end
     end
     return nothing
@@ -135,14 +150,15 @@ end
 
 function _kv_quantize_row!(dst::QuantKV{:q4h}, buf::Vector{Float32}, u::Int, h::Int)
     _kv_rotate_row!(buf, true)
-    for b in 1:(dst.d ÷ _KV_BLOCK)
-        js = ((b - 1) * _KV_BLOCK + 1):(b * _KV_BLOCK)
+    for b in 1:(dst.d÷_KV_BLOCK)
+        js = ((b-1)*_KV_BLOCK+1):(b*_KV_BLOCK)
         rms = sqrt(sum(abs2, view(buf, js)) / _KV_BLOCK)
         s = Float16(rms)
         inv = s == 0 ? 0.0f0 : 1.0f0 / Float32(s)
         dst.scales[u, h, b] = s
         for j in first(js):2:last(js)
-            dst.codes[u, h, (j + 1) >> 1] = _q4_code(buf[j] * inv) | (_q4_code(buf[j + 1] * inv) << 4)
+            dst.codes[u, h, (j+1)>>1] =
+                _q4_code(buf[j] * inv) | (_q4_code(buf[j+1] * inv) << 4)
         end
     end
     return nothing
@@ -158,9 +174,9 @@ function _kv_rotate_row!(x::AbstractVector{Float32}, forward::Bool)
     end
     w = 1
     while w < d
-        for i in 0:(2w):(d - 1), j in 1:w
-            a, b = x[i + j], x[i + j + w]
-            x[i + j], x[i + j + w] = a + b, a - b
+        for i in 0:(2w):(d-1), j in 1:w
+            a, b = x[i+j], x[i+j+w]
+            x[i+j], x[i+j+w] = a + b, a - b
         end
         w <<= 1
     end
@@ -189,7 +205,13 @@ function _kv_rotate!(x::AbstractArray, forward::Bool)
 end
 
 # Decode's one-row append for a quantized cache.
-function _kv_append_storage!(kc::QuantKV, vc::QuantKV, kh::AbstractArray, vh::AbstractArray, row::Int)
+function _kv_append_storage!(
+    kc::QuantKV,
+    vc::QuantKV,
+    kh::AbstractArray,
+    vh::AbstractArray,
+    row::Int,
+)
     _kv_write_rows!(kc, kh, row)
     _kv_write_rows!(vc, vh, row)
     return nothing

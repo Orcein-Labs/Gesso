@@ -70,9 +70,7 @@ if CUDA_LOADED
 end
 
 if !CUDA_LOADED || !CUDA.functional()
-    _skip(
-        "no NVIDIA device — CUDA MoE offload tests skipped (§LXXVII skip law)",
-    )
+    _skip("no NVIDIA device — CUDA MoE offload tests skipped (§LXXVII skip law)")
 else
     cuda = Gesso.CUDABackend()
     cpu = Gesso.CPUBackend()
@@ -102,8 +100,13 @@ else
         mk() = _pack_f32_slice(ones(Float32, 2, 224, 224), 224, 224)
         emb = Gesso.EmbeddingTable(; shape=(4, 2), storage=ones(Float32, 4, 2))
         ew(s) = Gesso.ExpertWeight(; shape=size(s), storage=s)
-        bt = (; mixer=:full_attention, n_expert_used=2,
-            wexp_gate=ew(mk()), wexp_up=ew(mk()), wexp_down=ew(mk()))
+        bt = (;
+            mixer=:full_attention,
+            n_expert_used=2,
+            wexp_gate=ew(mk()),
+            wexp_up=ew(mk()),
+            wexp_down=ew(mk()),
+        )
         ts = (; embedding=emb, blocks=[bt], lm_head=emb)
         slabs(g) = map(k -> g.blocks[1][k].storage, (:wexp_gate, :wexp_up, :wexp_down))
         g1 = withenv("GESSO_GPU_BUDGET_MIB" => "1") do
@@ -125,15 +128,24 @@ else
         ts_of(ty) = begin
             sl = (mk(), mk(), mk())
             foreach(s -> s.ggml_type = ty, sl)
-            bt = (; mixer=:full_attention, n_expert_used=2,
-                wexp_gate=ew(sl[1]), wexp_up=ew(sl[2]), wexp_down=ew(sl[3]))
+            bt = (;
+                mixer=:full_attention,
+                n_expert_used=2,
+                wexp_gate=ew(sl[1]),
+                wexp_up=ew(sl[2]),
+                wexp_down=ew(sl[3]),
+            )
             (; embedding=emb, blocks=[bt], lm_head=emb)
         end
         slabs(g) = map(k -> g.blocks[1][k].storage, (:wexp_gate, :wexp_up, :wexp_down))
-        @test all(x -> x isa Gesso.GgufQuantSlice,
-            slabs(Gesso.to_device(cuda, ts_of(Inf_.GGML_TYPE_Q6_K))))
-        @test all(x -> x isa Gesso.GpuQuantSlice,
-            slabs(Gesso.to_device(cuda, ts_of(Inf_.GGML_TYPE_Q2_K))))
+        @test all(
+            x -> x isa Gesso.GgufQuantSlice,
+            slabs(Gesso.to_device(cuda, ts_of(Inf_.GGML_TYPE_Q6_K))),
+        )
+        @test all(
+            x -> x isa Gesso.GpuQuantSlice,
+            slabs(Gesso.to_device(cuda, ts_of(Inf_.GGML_TYPE_Q2_K))),
+        )
     end
 
     @testset "cuda to_device wraps overflow as HostOffload, small-first" begin
@@ -165,19 +177,30 @@ else
     @testset "cuda check allows HostOffload and GgufQuantSlice; raw Array fails" begin
         ho = Gesso.HostOffload(ones(Float32, 2, 2))
         @test Inf_._check_device_storage(
-            :probe, cuda, Gesso.Activation(; shape=(2, 2), storage=ho),
+            :probe,
+            cuda,
+            Gesso.Activation(; shape=(2, 2), storage=ho),
         ) === nothing
         slice = _pack_f32_slice(ones(Float32, 2, 2, 2), 2, 2)
         @test Inf_._check_device_storage(
-            :probe, cuda, Gesso.ExpertWeight(; shape=size(slice), storage=slice),
+            :probe,
+            cuda,
+            Gesso.ExpertWeight(; shape=size(slice), storage=slice),
         ) === nothing
-        gq = Gesso.Inference.gpu_quant_slice(slice, Vector{UInt8}(Gesso.Inference.packed_quant_bytes(slice)))
+        gq = Gesso.Inference.gpu_quant_slice(
+            slice,
+            Vector{UInt8}(Gesso.Inference.packed_quant_bytes(slice)),
+        )
         @test Inf_._check_device_storage(
-            :probe, cuda, Gesso.ExpertWeight(; shape=size(gq), storage=gq),
+            :probe,
+            cuda,
+            Gesso.ExpertWeight(; shape=size(gq), storage=gq),
         ) === nothing
         err = try
             Inf_._check_device_storage(
-                :probe, cuda, Gesso.Activation(; shape=(2, 2), storage=ones(Float32, 2, 2)),
+                :probe,
+                cuda,
+                Gesso.Activation(; shape=(2, 2), storage=ones(Float32, 2, 2)),
             )
             nothing
         catch e
@@ -277,11 +300,7 @@ else
         Inf_._qgemv_expert!(y_gpu2, CuArray{Float32}(x), packed, 2)
         @test approx_eq(Array(y_gpu2), y_cpu; atol=1e-5)
 
-        gguf = get(
-            ENV,
-            "GESSO_ORNITH35_GGUF",
-            "",
-        )
+        gguf = get(ENV, "GESSO_ORNITH35_GGUF", "")
         if isfile(gguf)
             hdr = Gesso.gguf_header(gguf)
             einfo = only(t for t in hdr.tensors if t.name == "blk.0.ffn_gate_exps.weight")
@@ -293,16 +312,24 @@ else
             # held to the derived activation bound of test_cuda_quant_dense.jl
             # against an F64 reference, not to the host's F32 result.
             bytes = Vector{UInt8}(Inf_._quant_expert_bytes(live, 1))
-            W = Float64.(permutedims(reshape(
-                Inf_._dequant_f32(bytes, 0, live.ggml_type, live.ne0 * live.ne1),
-                live.ne0, live.ne1)))
+            W = Float64.(
+                permutedims(
+                    reshape(
+                        Inf_._dequant_f32(bytes, 0, live.ggml_type, live.ne0 * live.ne1),
+                        live.ne0,
+                        live.ne1,
+                    ),
+                ),
+            )
             x64 = Float64.(xl)
             ref = W * x64
             nb = div(live.ne0, 32)
             bound = zeros(Float64, live.ne1)
             for b in 1:nb
-                cols = (32 * (b - 1) + 1):(32 * b)
-                bound .+= maximum(abs, view(x64, cols)) / 254.0 .* vec(sum(abs, view(W, :, cols); dims=2))
+                cols = (32*(b-1)+1):(32*b)
+                bound .+=
+                    maximum(abs, view(x64, cols)) / 254.0 .*
+                    vec(sum(abs, view(W, :, cols); dims=2))
             end
             tol = bound .+ 5.0e-5 .* (abs.(W) * abs.(x64)) .+ 1.0e-9
             @test all(abs.(Float64.(Array(yg)) .- ref) .<= tol)
@@ -326,14 +353,24 @@ else
             nsb = div(ne0, 256)
             bpe = ne1 * nsb * bsz
             data = rand(rng, UInt8, n_exp * bpe)
-            for e in 0:(n_exp - 1), r in 0:(ne1 - 1), s in 0:(nsb - 1)
+            for e in 0:(n_exp-1), r in 0:(ne1-1), s in 0:(nsb-1)
                 base = e * bpe + (r * nsb + s) * bsz
                 for p in dpos
                     v = Float16((rand(rng) < 0.5 ? -1 : 1) * (0.01 + 0.05 * rand(rng)))
-                    data[(base + p + 1):(base + p + 2)] .= reinterpret(UInt8, [v])
+                    data[(base+p+1):(base+p+2)] .= reinterpret(UInt8, [v])
                 end
             end
-            return Gesso.GgufQuantSlice(data, 0, ggml_type, n_exp, ne0, ne1, bpe, C_NULL, Int64(1))
+            return Gesso.GgufQuantSlice(
+                data,
+                0,
+                ggml_type,
+                n_exp,
+                ne0,
+                ne1,
+                bpe,
+                C_NULL,
+                Int64(1),
+            )
         end
 
         # `host` is the slice the reference is decoded from; `dev` is the slice
@@ -341,14 +378,23 @@ else
         function kq_expert_check(host, dev, e::Int, x::Vector{Float32})
             ne0, ne1 = host.ne0, host.ne1
             bytes = Vector{UInt8}(Inf_._quant_expert_bytes(host, e))
-            W = Float64.(permutedims(reshape(
-                Inf_._dequant_f32(bytes, 0, host.ggml_type, ne0 * ne1), ne0, ne1)))
+            W = Float64.(
+                permutedims(
+                    reshape(
+                        Inf_._dequant_f32(bytes, 0, host.ggml_type, ne0 * ne1),
+                        ne0,
+                        ne1,
+                    ),
+                ),
+            )
             x64 = Float64.(x)
             ref = W * x64
             bound = zeros(Float64, ne1)
             for b in 1:div(ne0, 32)
-                cols = (32 * (b - 1) + 1):(32 * b)
-                bound .+= maximum(abs, view(x64, cols)) / 254.0 .* vec(sum(abs, view(W, :, cols); dims=2))
+                cols = (32*(b-1)+1):(32*b)
+                bound .+=
+                    maximum(abs, view(x64, cols)) / 254.0 .*
+                    vec(sum(abs, view(W, :, cols); dims=2))
             end
             yg = CUDA.zeros(Float32, ne1)
             Inf_._qgemv_expert!(yg, CuArray{Float32}(x), dev, e)
@@ -366,7 +412,8 @@ else
         ne0, ne1, n_exp = 512, 6, 3
         for (ggml_type, bsz, dpos, label) in kq_types
             slice = kq_synth_slice(ggml_type, bsz, dpos, ne0, ne1, n_exp)
-            packed = Inf_.gpu_quant_slice(slice, CuArray{UInt8}(Inf_.packed_quant_bytes(slice)))
+            packed =
+                Inf_.gpu_quant_slice(slice, CuArray{UInt8}(Inf_.packed_quant_bytes(slice)))
             worst = 0.0
             for e in 1:n_exp
                 x = randn(rng, Float32, ne0)
@@ -391,13 +438,37 @@ else
             x = CuArray(randn(rng, Float32, ne0, 3))
             meta = CuArray(Int32[(experts .- 1) .* bpe; 1:n; tokens])
             y = CUDA.fill(NaN32, ne1, n)
-            ext._cuda_launch_qgemv!(y, x, q, ggml_type, meta, n, n, ne0, ne1, 1.0f0, 0.0f0; xcoloff=2n)
+            ext._cuda_launch_qgemv!(
+                y,
+                x,
+                q,
+                ggml_type,
+                meta,
+                n,
+                n,
+                ne0,
+                ne1,
+                1.0f0,
+                0.0f0;
+                xcoloff=2n,
+            )
             ref = similar(Array(y))
             for i in 1:n
                 yi = CUDA.fill(NaN32, ne1, 1)
-                mi = CuArray(Int32[(experts[i] - 1) * bpe, 1])
-                ext._cuda_launch_qgemv!(yi, x[:, tokens[i]:tokens[i]], q, ggml_type, mi, 1, 1, ne0, ne1,
-                    1.0f0, 0.0f0)
+                mi = CuArray(Int32[(experts[i]-1)*bpe, 1])
+                ext._cuda_launch_qgemv!(
+                    yi,
+                    x[:, tokens[i]:tokens[i]],
+                    q,
+                    ggml_type,
+                    mi,
+                    1,
+                    1,
+                    ne0,
+                    ne1,
+                    1.0f0,
+                    0.0f0,
+                )
                 ref[:, i] .= vec(Array(yi))
             end
             @test Array(y) == ref
@@ -405,17 +476,30 @@ else
 
         live_gguf = get(ENV, "GESSO_GSQ_GGUF", "")
         if isempty(live_gguf) || !isfile(live_gguf)
-            _skip("GESSO_GSQ_GGUF not set to a GGUF file — live Q2_K/Q3_K expert qgemv skipped")
+            _skip(
+                "GESSO_GSQ_GGUF not set to a GGUF file — live Q2_K/Q3_K expert qgemv skipped",
+            )
         else
             hdr = Gesso.gguf_header(live_gguf)
-            for (ggml_type, label) in ((Inf_.GGML_TYPE_Q2_K, "Q2_K"), (Inf_.GGML_TYPE_Q3_K, "Q3_K"))
-                infos = [t for t in hdr.tensors if length(t.dims) == 3 && t.ggml_type == ggml_type]
+            for (ggml_type, label) in
+                ((Inf_.GGML_TYPE_Q2_K, "Q2_K"), (Inf_.GGML_TYPE_Q3_K, "Q3_K"))
+                infos = [
+                    t for
+                    t in hdr.tensors if length(t.dims) == 3 && t.ggml_type == ggml_type
+                ]
                 if isempty(infos)
-                    _skip("GSQ GGUF has no 3D $label expert tensor — live $label check skipped")
+                    _skip(
+                        "GSQ GGUF has no 3D $label expert tensor — live $label check skipped",
+                    )
                     continue
                 end
                 live = Inf_._expert_slice(hdr, first(infos))
-                ok, rel = kq_expert_check(live, live, 1, randn(deterministic_rng(79), Float32, live.ne0))
+                ok, rel = kq_expert_check(
+                    live,
+                    live,
+                    1,
+                    randn(deterministic_rng(79), Float32, live.ne0),
+                )
                 @test ok
                 @info "cuda K-quant live qgemv" type = label max_rel_err = rel
             end
@@ -427,13 +511,23 @@ else
         # can be Q2_K, Q3_K and Q4_K at once; the hot pool must still take it.
         ext = Base.get_extension(Gesso, :GessoCUDAExt)
         I_ = Gesso.Inference
-        sl(t, ne0, ne1) = Gesso.GgufQuantSlice(UInt8[], 0, t, 4, ne0, ne1, 1024, C_NULL, Int64(1))
-        @test ext._hot_supported(sl(I_.GGML_TYPE_Q2_K, 256, 64), sl(I_.GGML_TYPE_Q3_K, 256, 64),
-            sl(I_.GGML_TYPE_Q4_K, 64, 256))
-        @test ext._hot_supported(sl(I_.GGML_TYPE_IQ2_XS, 256, 64), sl(I_.GGML_TYPE_Q2_K, 256, 64),
-            sl(I_.GGML_TYPE_IQ4_XS, 64, 256))
-        @test !ext._hot_supported(sl(I_.GGML_TYPE_Q8_0, 256, 64), sl(I_.GGML_TYPE_Q2_K, 256, 64),
-            sl(I_.GGML_TYPE_Q2_K, 64, 256))
+        sl(t, ne0, ne1) =
+            Gesso.GgufQuantSlice(UInt8[], 0, t, 4, ne0, ne1, 1024, C_NULL, Int64(1))
+        @test ext._hot_supported(
+            sl(I_.GGML_TYPE_Q2_K, 256, 64),
+            sl(I_.GGML_TYPE_Q3_K, 256, 64),
+            sl(I_.GGML_TYPE_Q4_K, 64, 256),
+        )
+        @test ext._hot_supported(
+            sl(I_.GGML_TYPE_IQ2_XS, 256, 64),
+            sl(I_.GGML_TYPE_Q2_K, 256, 64),
+            sl(I_.GGML_TYPE_IQ4_XS, 64, 256),
+        )
+        @test !ext._hot_supported(
+            sl(I_.GGML_TYPE_Q8_0, 256, 64),
+            sl(I_.GGML_TYPE_Q2_K, 256, 64),
+            sl(I_.GGML_TYPE_Q2_K, 64, 256),
+        )
     end
 
     @testset "cuda qgemv activation-column table gathers each pair's token" begin
@@ -448,7 +542,9 @@ else
             einfo = only(t for t in hdr.tensors if t.name == "blk.0.ffn_gate_exps.weight")
             live = Gesso.Inference._expert_slice(hdr, einfo)
             nb = live.bytes_per_expert
-            q = CuArray{UInt8}(vcat((Vector{UInt8}(Inf_._quant_expert_bytes(live, e)) for e in 1:3)...))
+            q = CuArray{UInt8}(
+                vcat((Vector{UInt8}(Inf_._quant_expert_bytes(live, e)) for e in 1:3)...),
+            )
             ne0, ne1 = live.ne0, live.ne1
             seq = 4
             x = CuArray(randn(rng, Float32, ne0, seq))
@@ -457,20 +553,56 @@ else
             n = length(experts)
             meta = CuArray(Int32[(experts .- 1) .* nb; 1:n; tokens])
             y = CUDA.fill(NaN32, ne1, n)
-            ext._cuda_launch_qgemv!(y, x, q, live.ggml_type, meta, n, n, ne0, ne1, 1.0f0, 0.0f0; xcoloff=2n)
+            ext._cuda_launch_qgemv!(
+                y,
+                x,
+                q,
+                live.ggml_type,
+                meta,
+                n,
+                n,
+                ne0,
+                ne1,
+                1.0f0,
+                0.0f0;
+                xcoloff=2n,
+            )
             ref = similar(Array(y))
             for i in 1:n
                 yi = CUDA.fill(NaN32, ne1, 1)
-                mi = CuArray(Int32[(experts[i] - 1) * nb, 1])
-                ext._cuda_launch_qgemv!(yi, x[:, tokens[i]:tokens[i]], q, live.ggml_type, mi, 1, 1, ne0, ne1,
-                    1.0f0, 0.0f0)
+                mi = CuArray(Int32[(experts[i]-1)*nb, 1])
+                ext._cuda_launch_qgemv!(
+                    yi,
+                    x[:, tokens[i]:tokens[i]],
+                    q,
+                    live.ggml_type,
+                    mi,
+                    1,
+                    1,
+                    ne0,
+                    ne1,
+                    1.0f0,
+                    0.0f0,
+                )
                 ref[:, i] .= vec(Array(yi))
             end
             @test Array(y) == ref
             # red control: without the table, pair i reads column i
             y0 = CUDA.fill(NaN32, ne1, n)
             x5 = CuArray(hcat(Array(x), randn(rng, Float32, ne0)))
-            ext._cuda_launch_qgemv!(y0, x5, q, live.ggml_type, meta, n, n, ne0, ne1, 1.0f0, 0.0f0)
+            ext._cuda_launch_qgemv!(
+                y0,
+                x5,
+                q,
+                live.ggml_type,
+                meta,
+                n,
+                n,
+                ne0,
+                ne1,
+                1.0f0,
+                0.0f0,
+            )
             @test Array(y0)[:, 4] == ref[:, 4]
             @test Array(y0)[:, 1] != ref[:, 1]
         else
@@ -546,8 +678,15 @@ else
                 ran = Ref(0)
                 withenv("GESSO_MOE_OVERLAP" => ov) do
                     Inf_._moe_topk_swiglu!(
-                        cuda, y_gpu, xd, CuArray{Float32}(router), gs, us, ds, n_used;
-                        overlap=() -> (ran[] += 1; side .= 2 .* xd; nothing),
+                        cuda,
+                        y_gpu,
+                        xd,
+                        CuArray{Float32}(router),
+                        gs,
+                        us,
+                        ds,
+                        n_used;
+                        overlap=() -> (ran[] += 1; side.=2 .* xd; nothing),
                     )
                 end
                 @test approx_eq(Array(y_gpu), y_cpu; atol=1e-3)
@@ -585,8 +724,18 @@ else
         ext = Base.get_extension(Gesso, :GessoCUDAExt)
         rng = deterministic_rng(41)
         h, ff, n_exp, n_used = 16, 8, 256, 8
-        gpu_slice(A3, ne0, ne1) = (s = _pack_f32_slice(A3, ne0, ne1);
-            Gesso.GpuQuantSlice(CuArray(s.data), s.ggml_type, s.n_exp, ne0, ne1, s.bytes_per_expert, s.blck_size))
+        gpu_slice(A3, ne0, ne1) = (
+            s=_pack_f32_slice(A3, ne0, ne1);
+            Gesso.GpuQuantSlice(
+                CuArray(s.data),
+                s.ggml_type,
+                s.n_exp,
+                ne0,
+                ne1,
+                s.bytes_per_expert,
+                s.blck_size,
+            )
+        )
         gate3 = randn(rng, Float32, n_exp, ff, h)
         up3 = randn(rng, Float32, n_exp, ff, h)
         down3 = randn(rng, Float32, n_exp, h, ff)
@@ -611,8 +760,17 @@ else
             end
             y_dev = CUDA.fill(NaN32, 1, h)
             ran = Ref(0)
-            Inf_._moe_topk_swiglu!(cuda, y_dev, xd, rd, gs, us, ds, n_used;
-                overlap=() -> (ran[] += 1; nothing))
+            Inf_._moe_topk_swiglu!(
+                cuda,
+                y_dev,
+                xd,
+                rd,
+                gs,
+                us,
+                ds,
+                n_used;
+                overlap=() -> (ran[] += 1; nothing),
+            )
             @test Array(y_dev) == Array(y_host)
             @test ran[] == 1
 
@@ -623,7 +781,7 @@ else
             ext._moe_route_row!(order, experts, wbuf, vec(logits), n_exp, n_used)
             meta = Array(ext._moe_route_meta(n_used).g)
             @test meta[1:n_used] .÷ gs.bytes_per_expert .+ 1 == experts
-            @test meta[(n_used + 1):end] == 1:n_used
+            @test meta[(n_used+1):end] == 1:n_used
             @test Array(ext._dev_scratch(:moe_ws, n_used)) == wbuf
             trial > 3 && @test experts == sort(tied)[1:n_used]
         end
@@ -641,8 +799,22 @@ else
             function resident(name)
                 info = only(t for t in hdr.tensors if t.name == name)
                 sl = Gesso.Inference._expert_slice(hdr, info)
-                data = CuArray{UInt8}(vcat((Vector{UInt8}(Inf_._quant_expert_bytes(sl, e)) for e in 1:n_exp)...))
-                return Gesso.GpuQuantSlice(data, sl.ggml_type, n_exp, sl.ne0, sl.ne1, sl.bytes_per_expert, sl.blck_size)
+                data = CuArray{UInt8}(
+                    vcat(
+                        (
+                            Vector{UInt8}(Inf_._quant_expert_bytes(sl, e)) for e in 1:n_exp
+                        )...,
+                    ),
+                )
+                return Gesso.GpuQuantSlice(
+                    data,
+                    sl.ggml_type,
+                    n_exp,
+                    sl.ne0,
+                    sl.ne1,
+                    sl.bytes_per_expert,
+                    sl.blck_size,
+                )
             end
             gs = resident("blk.0.ffn_gate_exps.weight")
             us = resident("blk.0.ffn_up_exps.weight")
@@ -697,7 +869,12 @@ else
             vocab_size=vocab,
             intermediate_size=ff,
             head_dim=hd,
-            moe=Gesso.MoeSpec(; n_experts=n_exp, n_expert_used=k, expert_ff=ff, shared_ff=ff),
+            moe=Gesso.MoeSpec(;
+                n_experts=n_exp,
+                n_expert_used=k,
+                expert_ff=ff,
+                shared_ff=ff,
+            ),
         )
         model = Gesso.spec_to_model(spec)
         rng = deterministic_rng(3)
@@ -744,7 +921,11 @@ else
             spec=spec,
         )
         ids_cpu = Gesso.reference_generate(
-            model, tensors, [1]; max_new_tokens=3, eps=spec.rms_norm_eps,
+            model,
+            tensors,
+            [1];
+            max_new_tokens=3,
+            eps=spec.rms_norm_eps,
         )
         # Exact id equality with the CPU path assumes no hot-expert pool, which
         # is on by default now.
@@ -752,7 +933,12 @@ else
             Gesso.to_device(cuda, tensors)
         end
         ids_gpu = Gesso.reference_generate(
-            model, gpu, [1]; max_new_tokens=3, eps=spec.rms_norm_eps, backend=cuda,
+            model,
+            gpu,
+            [1];
+            max_new_tokens=3,
+            eps=spec.rms_norm_eps,
+            backend=cuda,
         )
         @test ids_gpu == ids_cpu
 
@@ -762,7 +948,12 @@ else
         @test gpu_off.embedding.storage isa Gesso.HostOffload
         @test gpu_off.blocks[1].wexp_gate.storage isa Gesso.HostOffload
         ids_off = Gesso.reference_generate(
-            model, gpu_off, [1]; max_new_tokens=3, eps=spec.rms_norm_eps, backend=cuda,
+            model,
+            gpu_off,
+            [1];
+            max_new_tokens=3,
+            eps=spec.rms_norm_eps,
+            backend=cuda,
         )
         @test ids_off == ids_cpu
     end

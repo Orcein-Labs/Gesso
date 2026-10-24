@@ -70,11 +70,17 @@ struct KVTierBlock
 end
 
 function _kv_tier_block(block_rows::Int, n_heads::Int, d_head::Int, group::Int)
-    return KVTierBlock(zeros(Float32, n_heads, d_head), zeros(Float32, block_rows, group),
-        zeros(Float32, block_rows, group), zeros(Float32, group, d_head),
-        zeros(Float32, group), zeros(Float32, group),
-        zeros(Int16, n_heads, d_head), zeros(Float32, n_heads, d_head ÷ _KV_BLOCK),
-        zeros(Int32, block_rows, group))
+    return KVTierBlock(
+        zeros(Float32, n_heads, d_head),
+        zeros(Float32, block_rows, group),
+        zeros(Float32, block_rows, group),
+        zeros(Float32, group, d_head),
+        zeros(Float32, group),
+        zeros(Float32, group),
+        zeros(Int16, n_heads, d_head),
+        zeros(Float32, n_heads, d_head ÷ _KV_BLOCK),
+        zeros(Int32, block_rows, group),
+    )
 end
 
 # Preallocated partials and block scratch for a decode loop. Build it once for
@@ -89,26 +95,54 @@ struct KVTierWorkspace
     block_rows::Int
 end
 
-function KVTierWorkspace(max_rows::Int, n_heads::Int, d_head::Int, group::Int;
-    block_rows::Int=_KV_TIER_BLOCK_ROWS)
-    max_rows >= 1 || throw(gesso_error(ERR_INVALID_PLAN,
-        "kv tier workspace: max_rows must be >= 1, got $max_rows"))
-    group >= 1 && n_heads % group == 0 || throw(gesso_error(ERR_INVALID_PLAN,
-        "kv tier workspace: n_heads=$n_heads is not a multiple of group=$group"))
+function KVTierWorkspace(
+    max_rows::Int,
+    n_heads::Int,
+    d_head::Int,
+    group::Int;
+    block_rows::Int=_KV_TIER_BLOCK_ROWS,
+)
+    max_rows >= 1 || throw(
+        gesso_error(
+            ERR_INVALID_PLAN,
+            "kv tier workspace: max_rows must be >= 1, got $max_rows",
+        ),
+    )
+    group >= 1 && n_heads % group == 0 || throw(
+        gesso_error(
+            ERR_INVALID_PLAN,
+            "kv tier workspace: n_heads=$n_heads is not a multiple of group=$group",
+        ),
+    )
     n_blocks = cld(max_rows, block_rows)
     parts = [_kv_partial(n_heads, d_head) for _ in 1:n_blocks]
     blocks = [_kv_tier_block(block_rows, n_heads, d_head, group) for _ in 1:n_blocks]
     return KVTierWorkspace(parts, blocks, max_rows, n_heads, d_head, group, block_rows)
 end
 
-function _check_workspace(ws::KVTierWorkspace, K::Int, n_heads::Int, d_head::Int,
-    group::Int, block_rows::Int)
-    ok = K <= ws.max_rows && ws.n_heads == n_heads && ws.d_head == d_head &&
-         ws.group == group && ws.block_rows == block_rows
-    ok || throw(gesso_error(ERR_INVALID_PLAN, "attention split: workspace (max_rows=$(ws.max_rows), " *
-        "n_heads=$(ws.n_heads), d_head=$(ws.d_head), group=$(ws.group), " *
-        "block_rows=$(ws.block_rows)) does not fit K=$K, n_heads=$n_heads, " *
-        "d_head=$d_head, group=$group, block_rows=$block_rows"))
+function _check_workspace(
+    ws::KVTierWorkspace,
+    K::Int,
+    n_heads::Int,
+    d_head::Int,
+    group::Int,
+    block_rows::Int,
+)
+    ok =
+        K <= ws.max_rows &&
+        ws.n_heads == n_heads &&
+        ws.d_head == d_head &&
+        ws.group == group &&
+        ws.block_rows == block_rows
+    ok || throw(
+        gesso_error(
+            ERR_INVALID_PLAN,
+            "attention split: workspace (max_rows=$(ws.max_rows), " *
+            "n_heads=$(ws.n_heads), d_head=$(ws.d_head), group=$(ws.group), " *
+            "block_rows=$(ws.block_rows)) does not fit K=$K, n_heads=$n_heads, " *
+            "d_head=$d_head, group=$group, block_rows=$block_rows",
+        ),
+    )
     return ws
 end
 
@@ -125,13 +159,14 @@ end
 # is multiplied by the score, so large-score rows lose the most.
 function _quantize_query!(blk::KVTierBlock, d_head::Int)
     qs = blk.qs
-    @inbounds for b in 1:(d_head ÷ _KV_BLOCK), hh in axes(qs, 1)
-        js = ((b - 1) * _KV_BLOCK + 1):(b * _KV_BLOCK)
+    @inbounds for b in 1:(d_head÷_KV_BLOCK), hh in axes(qs, 1)
+        js = ((b-1)*_KV_BLOCK+1):(b*_KV_BLOCK)
         sc = maximum(abs, view(qs, hh, js)) / 32767.0f0
         inv = sc == 0 ? 0.0f0 : 1.0f0 / sc
         blk.qsc[hh, b] = sc
         for j in js
-            blk.qi[hh, j] = unsafe_trunc(Int16, clamp(round(qs[hh, j] * inv), -32767.0f0, 32767.0f0))
+            blk.qi[hh, j] =
+                unsafe_trunc(Int16, clamp(round(qs[hh, j] * inv), -32767.0f0, 32767.0f0))
         end
     end
     return blk
@@ -139,8 +174,15 @@ end
 
 # Integer scores for a q8 cache: the per-block sums of code products are exact in
 # Int32, and both scales multiply the block sum once.
-function _score_block_int!(blk::KVTierBlock, kc::QuantKV{:q8}, hk::Int, r0::Int,
-    nr::Int, d_head::Int, group::Int)
+function _score_block_int!(
+    blk::KVTierBlock,
+    kc::QuantKV{:q8},
+    hk::Int,
+    r0::Int,
+    nr::Int,
+    d_head::Int,
+    group::Int,
+)
     s = blk.s
     ti = blk.ti
     qi = blk.qi
@@ -150,20 +192,20 @@ function _score_block_int!(blk::KVTierBlock, kc::QuantKV{:q8}, hk::Int, r0::Int,
     @inbounds for g in 1:group, i in 1:nr
         s[i, g] = 0.0f0
     end
-    @inbounds for b in 1:(d_head ÷ _KV_BLOCK)
+    @inbounds for b in 1:(d_head÷_KV_BLOCK)
         for g in 1:group, i in 1:nr
             ti[i, g] = 0
         end
-        for j in ((b - 1) * _KV_BLOCK + 1):(b * _KV_BLOCK), g in 1:group
-            qv = qi[hh0 + g, j]
+        for j in ((b-1)*_KV_BLOCK+1):(b*_KV_BLOCK), g in 1:group
+            qv = qi[hh0+g, j]
             @simd for i in 1:nr
-                ti[i, g] += Int32(qv) * Int32(codes[r0 + i, hk, j])
+                ti[i, g] += Int32(qv) * Int32(codes[r0+i, hk, j])
             end
         end
         for g in 1:group
-            qsc = blk.qsc[hh0 + g, b]
+            qsc = blk.qsc[hh0+g, b]
             @simd for i in 1:nr
-                s[i, g] += Float32(ti[i, g]) * qsc * Float32(scales[r0 + i, hk, b])
+                s[i, g] += Float32(ti[i, g]) * qsc * Float32(scales[r0+i, hk, b])
             end
         end
     end
@@ -171,8 +213,15 @@ function _score_block_int!(blk::KVTierBlock, kc::QuantKV{:q8}, hk::Int, r0::Int,
 end
 
 # Scores of one KV head's query group over rows r0+1:r0+nr.
-function _score_block!(blk::KVTierBlock, kc::AbstractArray, hk::Int, r0::Int,
-    nr::Int, d_head::Int, group::Int)
+function _score_block!(
+    blk::KVTierBlock,
+    kc::AbstractArray,
+    hk::Int,
+    r0::Int,
+    nr::Int,
+    d_head::Int,
+    group::Int,
+)
     s = blk.s
     qs = blk.qs
     hh0 = (hk - 1) * group
@@ -180,9 +229,9 @@ function _score_block!(blk::KVTierBlock, kc::AbstractArray, hk::Int, r0::Int,
         s[i, g] = 0.0f0
     end
     @inbounds for j in 1:d_head, g in 1:group
-        qv = qs[hh0 + g, j]
+        qv = qs[hh0+g, j]
         @simd for i in 1:nr
-            s[i, g] += qv * Float32(kc[r0 + i, hk, j])
+            s[i, g] += qv * Float32(kc[r0+i, hk, j])
         end
     end
     return s
@@ -191,8 +240,15 @@ end
 # Per 32-value block the codes are summed against q in Float32, and the row's
 # scale multiplies that sum once, so the scale is read once per row per block
 # and never per element.
-function _score_block!(blk::KVTierBlock, kc::QuantKV{:q8}, hk::Int, r0::Int,
-    nr::Int, d_head::Int, group::Int)
+function _score_block!(
+    blk::KVTierBlock,
+    kc::QuantKV{:q8},
+    hk::Int,
+    r0::Int,
+    nr::Int,
+    d_head::Int,
+    group::Int,
+)
     s = blk.s
     t = blk.t
     qs = blk.qs
@@ -202,18 +258,18 @@ function _score_block!(blk::KVTierBlock, kc::QuantKV{:q8}, hk::Int, r0::Int,
     @inbounds for g in 1:group, i in 1:nr
         s[i, g] = 0.0f0
     end
-    @inbounds for b in 1:(d_head ÷ _KV_BLOCK)
+    @inbounds for b in 1:(d_head÷_KV_BLOCK)
         for g in 1:group, i in 1:nr
             t[i, g] = 0.0f0
         end
-        for j in ((b - 1) * _KV_BLOCK + 1):(b * _KV_BLOCK), g in 1:group
-            qv = qs[hh0 + g, j]
+        for j in ((b-1)*_KV_BLOCK+1):(b*_KV_BLOCK), g in 1:group
+            qv = qs[hh0+g, j]
             @simd for i in 1:nr
-                t[i, g] += qv * Float32(codes[r0 + i, hk, j])
+                t[i, g] += qv * Float32(codes[r0+i, hk, j])
             end
         end
         for g in 1:group, i in 1:nr
-            s[i, g] += t[i, g] * Float32(scales[r0 + i, hk, b])
+            s[i, g] += t[i, g] * Float32(scales[r0+i, hk, b])
         end
     end
     return s
@@ -228,8 +284,12 @@ function _softmax_block!(blk::KVTierBlock, nr::Int, group::Int)
         for i in 2:nr
             mx = max(mx, s[i, g])
         end
-        isfinite(mx) || throw(gesso_error(ERR_NUMERICAL_INSTABILITY,
-            "attention partial: no finite score in this row block"))
+        isfinite(mx) || throw(
+            gesso_error(
+                ERR_NUMERICAL_INSTABILITY,
+                "attention partial: no finite score in this row block",
+            ),
+        )
         l = 0.0f0
         for i in 1:nr
             w = exp(s[i, g] - mx)
@@ -242,8 +302,15 @@ function _softmax_block!(blk::KVTierBlock, nr::Int, group::Int)
     return blk
 end
 
-function _value_block!(blk::KVTierBlock, vc::AbstractArray, hk::Int, r0::Int,
-    nr::Int, d_head::Int, group::Int)
+function _value_block!(
+    blk::KVTierBlock,
+    vc::AbstractArray,
+    hk::Int,
+    r0::Int,
+    nr::Int,
+    d_head::Int,
+    group::Int,
+)
     s = blk.s
     acc = blk.acc
     @inbounds for j in 1:d_head, g in 1:group
@@ -252,7 +319,7 @@ function _value_block!(blk::KVTierBlock, vc::AbstractArray, hk::Int, r0::Int,
     @inbounds for j in 1:d_head, g in 1:group
         a = 0.0f0
         @simd for i in 1:nr
-            a += s[i, g] * Float32(vc[r0 + i, hk, j])
+            a += s[i, g] * Float32(vc[r0+i, hk, j])
         end
         acc[g, j] = a
     end
@@ -261,8 +328,15 @@ end
 
 # For each 32-value block the weights are multiplied by that block's scale of
 # each row once, into t, so the code loop is a plain dot product down the rows.
-function _value_block!(blk::KVTierBlock, vc::QuantKV{:q8}, hk::Int, r0::Int,
-    nr::Int, d_head::Int, group::Int)
+function _value_block!(
+    blk::KVTierBlock,
+    vc::QuantKV{:q8},
+    hk::Int,
+    r0::Int,
+    nr::Int,
+    d_head::Int,
+    group::Int,
+)
     s = blk.s
     t = blk.t
     acc = blk.acc
@@ -271,14 +345,14 @@ function _value_block!(blk::KVTierBlock, vc::QuantKV{:q8}, hk::Int, r0::Int,
     @inbounds for j in 1:d_head, g in 1:group
         acc[g, j] = 0.0f0
     end
-    @inbounds for b in 1:(d_head ÷ _KV_BLOCK)
+    @inbounds for b in 1:(d_head÷_KV_BLOCK)
         for g in 1:group, i in 1:nr
-            t[i, g] = s[i, g] * Float32(scales[r0 + i, hk, b])
+            t[i, g] = s[i, g] * Float32(scales[r0+i, hk, b])
         end
-        for j in ((b - 1) * _KV_BLOCK + 1):(b * _KV_BLOCK), g in 1:group
+        for j in ((b-1)*_KV_BLOCK+1):(b*_KV_BLOCK), g in 1:group
             a = 0.0f0
             @simd for i in 1:nr
-                a += t[i, g] * Float32(codes[r0 + i, hk, j])
+                a += t[i, g] * Float32(codes[r0+i, hk, j])
             end
             acc[g, j] += a
         end
@@ -288,18 +362,35 @@ end
 
 # Partial over rows `rows` of K and V caches shaped (rows, n_kv, d). Passing a
 # block scratch avoids allocation; otherwise one is made for this range.
-function _attention_partial_cpu!(part::KVPartial, q, kc, vc, rows::UnitRange{Int},
-    n_heads::Int, d_head::Int, group::Int; blk::Union{KVTierBlock,Nothing}=nothing,
-    int_scores::Bool=_KV_TIER_INT_SCORES)
+function _attention_partial_cpu!(
+    part::KVPartial,
+    q,
+    kc,
+    vc,
+    rows::UnitRange{Int},
+    n_heads::Int,
+    d_head::Int,
+    group::Int;
+    blk::Union{KVTierBlock, Nothing}=nothing,
+    int_scores::Bool=_KV_TIER_INT_SCORES,
+)
     isempty(rows) && return _partial_reset!(part)
     n_kv = size(kc, 2)
-    n_heads == n_kv * group || throw(gesso_error(ERR_INVALID_PLAN,
-        "attention partial: n_heads=$n_heads is not n_kv=$n_kv times group=$group"))
+    n_heads == n_kv * group || throw(
+        gesso_error(
+            ERR_INVALID_PLAN,
+            "attention partial: n_heads=$n_heads is not n_kv=$n_kv times group=$group",
+        ),
+    )
     nr = length(rows)
     r0 = first(rows) - 1
     scratch = blk === nothing ? _kv_tier_block(nr, n_heads, d_head, group) : blk
-    size(scratch.s, 1) >= nr || throw(gesso_error(ERR_INVALID_PLAN,
-        "attention partial: block scratch holds $(size(scratch.s, 1)) rows, need $nr"))
+    size(scratch.s, 1) >= nr || throw(
+        gesso_error(
+            ERR_INVALID_PLAN,
+            "attention partial: block scratch holds $(size(scratch.s, 1)) rows, need $nr",
+        ),
+    )
     _scale_query!(scratch.qs, q, d_head)
     use_int = int_scores && kc isa QuantKV{:q8}
     use_int && _quantize_query!(scratch, d_head)
@@ -350,8 +441,8 @@ function _partial_download! end
 
 function _partial_finish!(attn, part::KVPartial)
     for hh in eachindex(part.m)
-        part.l[hh] > 0 || throw(gesso_error(ERR_INVALID_PLAN,
-            "attention finish: no rows were attended"))
+        part.l[hh] > 0 ||
+            throw(gesso_error(ERR_INVALID_PLAN, "attention finish: no rows were attended"))
         for j in axes(part.acc, 2)
             attn[1, hh, j] = Float32(part.acc[hh, j] / part.l[hh])
         end
@@ -361,14 +452,35 @@ end
 
 # Block partials are computed in parallel into slots indexed by block, never by
 # threadid, so the scratch each block uses does not depend on the scheduler.
-function _partials_threaded!(parts::Vector{KVPartial}, blocks::Vector{KVTierBlock},
-    n_blocks::Int, q, kc, vc, K::Int, block_rows::Int, n_heads::Int, d_head::Int, group::Int,
-    int_scores::Bool)
+function _partials_threaded!(
+    parts::Vector{KVPartial},
+    blocks::Vector{KVTierBlock},
+    n_blocks::Int,
+    q,
+    kc,
+    vc,
+    K::Int,
+    block_rows::Int,
+    n_heads::Int,
+    d_head::Int,
+    group::Int,
+    int_scores::Bool,
+)
     Threads.@threads for b in 1:n_blocks
         r0 = (b - 1) * block_rows + 1
         r1 = min(K, b * block_rows)
-        _attention_partial_cpu!(parts[b], q, kc, vc, r0:r1, n_heads, d_head, group;
-            blk=blocks[b], int_scores)
+        _attention_partial_cpu!(
+            parts[b],
+            q,
+            kc,
+            vc,
+            r0:r1,
+            n_heads,
+            d_head,
+            group;
+            blk=blocks[b],
+            int_scores,
+        )
     end
     return parts
 end
@@ -377,15 +489,38 @@ end
 # parallel and merged in ascending block order. The output does not depend on
 # the thread count: each block's partial is fixed, and the merge order is fixed.
 # Pass a KVTierWorkspace to reuse its buffers across calls.
-function _attention_split_cpu!(attn, q, kc, vc, K::Int, n_heads::Int, d_head::Int,
-    group::Int; block_rows::Int=_KV_TIER_BLOCK_ROWS, ws::Union{KVTierWorkspace,Nothing}=nothing,
-    int_scores::Bool=_KV_TIER_INT_SCORES)
-    K >= 1 || throw(gesso_error(ERR_INVALID_PLAN, "attention split: K must be >= 1, got $K"))
+function _attention_split_cpu!(
+    attn,
+    q,
+    kc,
+    vc,
+    K::Int,
+    n_heads::Int,
+    d_head::Int,
+    group::Int;
+    block_rows::Int=_KV_TIER_BLOCK_ROWS,
+    ws::Union{KVTierWorkspace, Nothing}=nothing,
+    int_scores::Bool=_KV_TIER_INT_SCORES,
+)
+    K >= 1 ||
+        throw(gesso_error(ERR_INVALID_PLAN, "attention split: K must be >= 1, got $K"))
     ws === nothing && (ws = KVTierWorkspace(K, n_heads, d_head, group; block_rows))
     _check_workspace(ws, K, n_heads, d_head, group, block_rows)
     n_blocks = cld(K, block_rows)
-    _partials_threaded!(ws.parts, ws.blocks, n_blocks, q, kc, vc, K, block_rows,
-        n_heads, d_head, group, int_scores)
+    _partials_threaded!(
+        ws.parts,
+        ws.blocks,
+        n_blocks,
+        q,
+        kc,
+        vc,
+        K,
+        block_rows,
+        n_heads,
+        d_head,
+        group,
+        int_scores,
+    )
     total = ws.parts[1]
     for b in 2:n_blocks
         _partial_merge!(total, ws.parts[b])

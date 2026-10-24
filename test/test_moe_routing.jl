@@ -182,7 +182,13 @@ end
     logits = Gesso.reference_prefill(model, tensors, [1, 2]; eps=spec.rms_norm_eps)
     @test size(logits) == (vocab, 2)
     @test all(isfinite, logits)
-    ids = Gesso.reference_generate(model, tensors, [1]; max_new_tokens=3, eps=spec.rms_norm_eps)
+    ids = Gesso.reference_generate(
+        model,
+        tensors,
+        [1];
+        max_new_tokens=3,
+        eps=spec.rms_norm_eps,
+    )
     @test length(ids) == 4
     @test ids[1] == 1
     @test all(0 .<= ids .< vocab)
@@ -217,7 +223,15 @@ end
     for nc in (1, 4, 37)
         y2 = zeros(Float32, ne1)
         Inf_._qgemv_bytes_threaded!(
-            y2, x, qf, Inf_.GGML_TYPE_F32, ne0, ne1, 1.0f0, 0.0f0; nchunks=nc,
+            y2,
+            x,
+            qf,
+            Inf_.GGML_TYPE_F32,
+            ne0,
+            ne1,
+            1.0f0,
+            0.0f0;
+            nchunks=nc,
         )
         @test reinterpret(UInt32, y2) == reinterpret(UInt32, y1)
     end

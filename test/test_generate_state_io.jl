@@ -26,8 +26,14 @@ function _with_gdn_block(ts, idx::Int; seed=41)
     value_dim = nv * dv
     conv_dim = 2 * nk * dk + value_dim
     f(dims...) = 0.1 .* randn(rng, dims...)
-    mx = (; num_key_heads=nk, num_value_heads=nv, key_head_dim=dk, value_head_dim=dv,
-        conv_kernel_dim=ksz, v_head_tiled=false)
+    mx = (;
+        num_key_heads=nk,
+        num_value_heads=nv,
+        key_head_dim=dk,
+        value_head_dim=dv,
+        conv_kernel_dim=ksz,
+        v_head_tiled=false,
+    )
     gdn = (;
         mixer=:linear_attention,
         wgdn_qkv=Gesso.ProjectionWeight(; shape=(conv_dim, dim), storage=f(conv_dim, dim)),
@@ -35,12 +41,16 @@ function _with_gdn_block(ts, idx::Int; seed=41)
         wgdn_a=Gesso.ProjectionWeight(; shape=(nv, dim), storage=f(nv, dim)),
         wgdn_b=Gesso.ProjectionWeight(; shape=(nv, dim), storage=f(nv, dim)),
         wgdn_o=Gesso.ProjectionWeight(; shape=(dim, value_dim), storage=f(dim, value_dim)),
-        wgdn_conv=Gesso.FrozenParameter(; shape=(conv_dim, 1, ksz), storage=f(conv_dim, 1, ksz)),
+        wgdn_conv=Gesso.FrozenParameter(;
+            shape=(conv_dim, 1, ksz),
+            storage=f(conv_dim, 1, ksz),
+        ),
         wgdn_A_log=Gesso.FrozenParameter(; shape=(nv,), storage=f(nv)),
         wgdn_dt_bias=Gesso.FrozenParameter(; shape=(nv,), storage=f(nv)),
         wgdn_norm=Gesso.FrozenParameter(; shape=(dv,), storage=ones(Float64, dv) .+ f(dv)),
     )
-    blocks = ntuple(i -> i == idx ? merge(ts.blocks[i], gdn) : ts.blocks[i], length(ts.blocks))
+    blocks =
+        ntuple(i -> i == idx ? merge(ts.blocks[i], gdn) : ts.blocks[i], length(ts.blocks))
     return merge(ts, (; blocks, spec=(; head_dim=d_head, mixer=mx)))
 end
 
@@ -54,7 +64,10 @@ function _wide_toy_tensors(; seed=53, dim=64, n_heads=2, hidden=64, vocab=32, sc
     model = Gesso.Model(;
         vocab_size=vocab,
         embedding=Gesso.Embedding(; dim),
-        blocks=ntuple(_ -> Gesso.Block(Gesso.Attention(; n_heads), Gesso.SwiGLU(; hidden)), 2),
+        blocks=ntuple(
+            _ -> Gesso.Block(Gesso.Attention(; n_heads), Gesso.SwiGLU(; hidden)),
+            2,
+        ),
     )
     embedding = Gesso.EmbeddingTable(; shape=(vocab, dim), storage=f(vocab, dim))
     blocks = map(model.blocks) do _
@@ -66,8 +79,14 @@ function _wide_toy_tensors(; seed=53, dim=64, n_heads=2, hidden=64, vocab=32, sc
             wgate=Gesso.ProjectionWeight(; shape=(hidden, dim), storage=f(hidden, dim)),
             wup=Gesso.ProjectionWeight(; shape=(hidden, dim), storage=f(hidden, dim)),
             wdown=Gesso.ProjectionWeight(; shape=(dim, hidden), storage=f(dim, hidden)),
-            attn_rms=Gesso.FrozenParameter(; shape=(dim,), storage=ones(Float64, dim) .+ f(dim)),
-            ffn_rms=Gesso.FrozenParameter(; shape=(dim,), storage=ones(Float64, dim) .+ f(dim)),
+            attn_rms=Gesso.FrozenParameter(;
+                shape=(dim,),
+                storage=ones(Float64, dim) .+ f(dim),
+            ),
+            ffn_rms=Gesso.FrozenParameter(;
+                shape=(dim,),
+                storage=ones(Float64, dim) .+ f(dim),
+            ),
         )
     end
     return (; model, embedding, blocks, lm_head=embedding)
@@ -86,11 +105,32 @@ function _park_and_resume(ts, turn2::Function)
             B = load_state(path, ts.model, ts)
             prompt2 = turn2(g1)
             infoA, infoB = Ref{Any}(nothing), Ref{Any}(nothing)
-            gA = reference_generate(ts.model, ts, prompt2; max_new_tokens=4, state=A, info=infoA)
-            gB = reference_generate(ts.model, ts, prompt2; max_new_tokens=4, state=B, info=infoB)
+            gA = reference_generate(
+                ts.model,
+                ts,
+                prompt2;
+                max_new_tokens=4,
+                state=A,
+                info=infoA,
+            )
+            gB = reference_generate(
+                ts.model,
+                ts,
+                prompt2;
+                max_new_tokens=4,
+                state=B,
+                info=infoB,
+            )
             cold = reference_generate(ts.model, ts, prompt2; max_new_tokens=4)
-            return (; g1, gA, gB, cold, reusedA=infoA[].reused, reusedB=infoB[].reused,
-                bytes=filesize(path))
+            return (;
+                g1,
+                gA,
+                gB,
+                cold,
+                reusedA=infoA[].reused,
+                reusedB=infoB[].reused,
+                bytes=filesize(path),
+            )
         finally
             close(A)
             B === nothing || close(B)
@@ -132,8 +172,10 @@ end
 
         other_wq = copy(ts.blocks[1].wq.storage)
         other_wq[1, 1] += 1.0
-        other_block = merge(ts.blocks[1],
-            (; wq=Gesso.ProjectionWeight(; shape=size(other_wq), storage=other_wq)))
+        other_block = merge(
+            ts.blocks[1],
+            (; wq=Gesso.ProjectionWeight(; shape=size(other_wq), storage=other_wq)),
+        )
         other = merge(ts, (; blocks=(other_block, ts.blocks[2:end]...)))
         @test _refused(() -> load_state(path, ts.model, other))
 
@@ -144,7 +186,7 @@ end
         @test _refused(() -> load_state(flipped_path, ts.model, ts))
 
         cut_path = joinpath(dir, "cut.gst")
-        write(cut_path, bytes[1:(length(bytes) ÷ 2)])
+        write(cut_path, bytes[1:(length(bytes)÷2)])
         @test _refused(() -> load_state(cut_path, ts.model, ts))
 
         @test _refused() do
@@ -219,7 +261,7 @@ end
     @test fp((; s=Set([:a, :b, :c]))) != fp((; s=Set([:a, :b, :d])))
 
     d1 = Dict(:x => 1, :y => 2, :z => 3)
-    d2 = sizehint!(Dict{Symbol,Int}(), 500)
+    d2 = sizehint!(Dict{Symbol, Int}(), 500)
     d2[:z] = 3
     d2[:x] = 1
     d2[:y] = 2

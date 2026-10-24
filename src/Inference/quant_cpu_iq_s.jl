@@ -53,7 +53,7 @@ function _iq1m_write_scale!(w::AbstractVector{UInt8}, boff::Int, d::Float32)
     for k in 0:3
         nib = UInt8((bits >> (4 * k)) & 0x0f)
         i = boff + 48 + 2 * k + 1
-        w[i + 1] = (w[i + 1] & 0x0f) | (nib << 4)
+        w[i+1] = (w[i+1] & 0x0f) | (nib << 4)
     end
     return w
 end
@@ -64,9 +64,9 @@ end
 function _dot_iq2s_q8k_ref(w::AbstractVector{UInt8}, woff::Int, x::Q8KVec)::Float32
     nb = length(x.d)
     sumf = 0.0f0
-    @inbounds for ib in 0:(nb - 1)
+    @inbounds for ib in 0:(nb-1)
         b = woff + ib * 82
-        d = _ld_f16(w, b) * x.d[ib + 1]
+        d = _ld_f16(w, b) * x.d[ib+1]
         bsum = Int32(0)
         for ib32 in 0:7
             sc = _ld_u8(w, b + 74 + ib32)
@@ -78,12 +78,12 @@ function _dot_iq2s_q8k_ref(w::AbstractVector{UInt8}, woff::Int, x::Q8KVec)::Floa
             sumi2 = Int32(0)
             for l in 0:3
                 gi = Int(_ld_u8(w, b + 2 + 4 * ib32 + l)) | ((qh << (8 - 2 * l)) & 0x300)
-                grid = IQ2S_GRID[gi + 1]
+                grid = IQ2S_GRID[gi+1]
                 sb = _ld_u8(w, b + 34 + 4 * ib32 + l)
                 for j in 0:7
                     g = Int32((grid >> (8 * j)) & 0xff)
-                    sg = (sb & KMASK_IQ2XS[j + 1]) != 0x00 ? Int32(-1) : Int32(1)
-                    v = g * Int32(x.qs[ao + 8 * l + j + 1]) * sg
+                    sg = (sb & KMASK_IQ2XS[j+1]) != 0x00 ? Int32(-1) : Int32(1)
+                    v = g * Int32(x.qs[ao+8*l+j+1]) * sg
                     if l < 2
                         sumi1 += v
                     else
@@ -104,9 +104,9 @@ end
 function _dot_iq3s_q8k_ref(w::AbstractVector{UInt8}, woff::Int, x::Q8KVec)::Float32
     nb = length(x.d)
     sumf = 0.0f0
-    @inbounds for ib in 0:(nb - 1)
+    @inbounds for ib in 0:(nb-1)
         b = woff + ib * 110
-        d = _ld_f16(w, b) * x.d[ib + 1]
+        d = _ld_f16(w, b) * x.d[ib+1]
         bsum = Int32(0)
         for m in 0:3
             scb = _ld_u8(w, b + 106 + m)
@@ -118,15 +118,17 @@ function _dot_iq3s_q8k_ref(w::AbstractVector{UInt8}, woff::Int, x::Q8KVec)::Floa
                 sumi = Int32(0)
                 for l in 0:3
                     i1 = Int(_ld_u8(w, b + 2 + 8 * k + 2 * l)) | ((qh << (8 - 2 * l)) & 256)
-                    i2 = Int(_ld_u8(w, b + 2 + 8 * k + 2 * l + 1)) | ((qh << (7 - 2 * l)) & 256)
-                    g1 = IQ3S_GRID[i1 + 1]
-                    g2 = IQ3S_GRID[i2 + 1]
+                    i2 =
+                        Int(_ld_u8(w, b + 2 + 8 * k + 2 * l + 1)) |
+                        ((qh << (7 - 2 * l)) & 256)
+                    g1 = IQ3S_GRID[i1+1]
+                    g2 = IQ3S_GRID[i2+1]
                     sb = _ld_u8(w, b + 74 + 4 * k + l)
                     for j in 0:3
-                        s1 = (sb & KMASK_IQ2XS[j + 1]) != 0x00 ? Int32(-1) : Int32(1)
-                        s2 = (sb & KMASK_IQ2XS[j + 5]) != 0x00 ? Int32(-1) : Int32(1)
-                        sumi += Int32((g1 >> (8 * j)) & 0xff) * Int32(x.qs[ao + 8 * l + j + 1]) * s1
-                        sumi += Int32((g2 >> (8 * j)) & 0xff) * Int32(x.qs[ao + 8 * l + j + 5]) * s2
+                        s1 = (sb & KMASK_IQ2XS[j+1]) != 0x00 ? Int32(-1) : Int32(1)
+                        s2 = (sb & KMASK_IQ2XS[j+5]) != 0x00 ? Int32(-1) : Int32(1)
+                        sumi += Int32((g1 >> (8 * j)) & 0xff) * Int32(x.qs[ao+8*l+j+1]) * s1
+                        sumi += Int32((g2 >> (8 * j)) & 0xff) * Int32(x.qs[ao+8*l+j+5]) * s2
                     end
                 end
                 bsum += sumi * ls
@@ -142,13 +144,13 @@ end
 function _dot_iq1m_q8k_ref(w::AbstractVector{UInt8}, woff::Int, x::Q8KVec)::Float32
     nb = length(x.d)
     sumf = 0.0f0
-    @inbounds for ib in 0:(nb - 1)
+    @inbounds for ib in 0:(nb-1)
         b = woff + ib * 56
         s0 = _ld_u16(w, b + 48)
         s1 = _ld_u16(w, b + 50)
         s2 = _ld_u16(w, b + 52)
         s3 = _ld_u16(w, b + 54)
-        dy = Float32(reinterpret(Float16, _iq1m_scale_bits(s0, s1, s2, s3))) * x.d[ib + 1]
+        dy = Float32(reinterpret(Float16, _iq1m_scale_bits(s0, s1, s2, s3))) * x.d[ib+1]
         sumi1 = Int32(0)
         sumi2 = Int32(0)
         for s in 0:7
@@ -164,14 +166,14 @@ function _dot_iq1m_q8k_ref(w::AbstractVector{UInt8}, woff::Int, x::Q8KVec)::Floa
             for l in 0:3
                 qhv = l < 2 ? qh0 : qh1
                 idx = Int(_ld_u8(w, b + 4 * s + l)) | ((qhv << (8 - 4 * (l & 1))) & 0x700)
-                grid = IQ1S_GRID[idx + 1]
+                grid = IQ1S_GRID[idx+1]
                 dbit = iseven(l) ? 0x08 : 0x80
                 delta = (qhv & dbit) != 0 ? Int32(-1) : Int32(1)
                 lsum1 = Int32(0)
                 lsum2 = Int32(0)
                 ao = ib * QK_K + 32 * s + 8 * l
                 for j in 0:7
-                    q = Int32(x.qs[ao + j + 1])
+                    q = Int32(x.qs[ao+j+1])
                     gv = Int32(reinterpret(Int8, UInt8((grid >> (8 * j)) & 0xff)))
                     lsum1 += q * gv
                     lsum2 += q
@@ -197,9 +199,9 @@ end
 function _dot_iq2xxs_q8k_ref(w::AbstractVector{UInt8}, woff::Int, x::Q8KVec)::Float32
     nb = length(x.d)
     sumf = 0.0f0
-    @inbounds for ib in 0:(nb - 1)
+    @inbounds for ib in 0:(nb-1)
         b = woff + ib * 66
-        d = _ld_f16(w, b) * x.d[ib + 1]
+        d = _ld_f16(w, b) * x.d[ib+1]
         bsum = Int32(0)
         for ib32 in 0:7
             q = b + 2 + 8 * ib32
@@ -208,12 +210,12 @@ function _dot_iq2xxs_q8k_ref(w::AbstractVector{UInt8}, woff::Int, x::Q8KVec)::Fl
             ao = ib * QK_K + 32 * ib32
             sumi = Int32(0)
             for l in 0:3
-                grid = IQ2XXS_GRID[Int(_ld_u8(w, q + l)) + 1]
-                signs = KSIGNS_IQ2XS[Int((aux >> (7 * l)) & 0x7f) + 1]
+                grid = IQ2XXS_GRID[Int(_ld_u8(w, q+l))+1]
+                signs = KSIGNS_IQ2XS[Int((aux>>(7*l))&0x7f)+1]
                 for j in 0:7
                     g = Int32((grid >> (8 * j)) & 0xff)
-                    sg = (signs & KMASK_IQ2XS[j + 1]) != 0x00 ? Int32(-1) : Int32(1)
-                    sumi += g * Int32(x.qs[ao + 8 * l + j + 1]) * sg
+                    sg = (signs & KMASK_IQ2XS[j+1]) != 0x00 ? Int32(-1) : Int32(1)
+                    sumi += g * Int32(x.qs[ao+8*l+j+1]) * sg
                 end
             end
             bsum += sumi * ls
@@ -229,9 +231,9 @@ end
 function _dot_iq1s_q8k_ref(w::AbstractVector{UInt8}, woff::Int, x::Q8KVec)::Float32
     nb = length(x.d)
     sumf = 0.0f0
-    @inbounds for ib in 0:(nb - 1)
+    @inbounds for ib in 0:(nb-1)
         b = woff + ib * 50
-        d = _ld_f16(w, b) * x.d[ib + 1]
+        d = _ld_f16(w, b) * x.d[ib+1]
         sumi = Int32(0)
         sumi1 = Int32(0)
         bo = 16 * ib
@@ -243,14 +245,14 @@ function _dot_iq1s_q8k_ref(w::AbstractVector{UInt8}, woff::Int, x::Q8KVec)::Floa
             ao = ib * QK_K + 32 * s
             for l in 0:3
                 idx = Int(_ld_u8(w, b + 2 + 4 * s + l)) | (((qh >> (3 * l)) & 7) << 8)
-                grid = IQ1S_GRID[idx + 1]
+                grid = IQ1S_GRID[idx+1]
                 for j in 0:7
                     gv = Int32(reinterpret(Int8, UInt8((grid >> (8 * j)) & 0xff)))
-                    lsum += gv * Int32(x.qs[ao + 8 * l + j + 1])
+                    lsum += gv * Int32(x.qs[ao+8*l+j+1])
                 end
             end
             sumi += ls * lsum
-            sumi1 += ls * delta * (Int32(x.bsums[bo + 2 * s + 1]) + Int32(x.bsums[bo + 2 * s + 2]))
+            sumi1 += ls * delta * (Int32(x.bsums[bo+2*s+1]) + Int32(x.bsums[bo+2*s+2]))
         end
         sumf += d * (Float32(sumi) + 0.125f0 * Float32(sumi1))
     end
@@ -289,15 +291,25 @@ attributes #0 = { alwaysinline }
 """
 
 @inline function _iq1m_sub_acc(
-    acc::NTuple{16,VecElement{Int32}},
-    g::NTuple{4,VecElement{UInt64}},
+    acc::NTuple{16, VecElement{Int32}},
+    g::NTuple{4, VecElement{UInt64}},
     q8::Ptr{Int8},
-    w::NTuple{16,VecElement{Int32}},
-)::NTuple{16,VecElement{Int32}}
-    Base.llvmcall((_IQ1M_IR, "entry"), NTuple{16,VecElement{Int32}},
-        Tuple{NTuple{16,VecElement{Int32}}, NTuple{4,VecElement{UInt64}}, Ptr{Int8},
-            NTuple{16,VecElement{Int32}}},
-        acc, g, q8, w)
+    w::NTuple{16, VecElement{Int32}},
+)::NTuple{16, VecElement{Int32}}
+    Base.llvmcall(
+        (_IQ1M_IR, "entry"),
+        NTuple{16, VecElement{Int32}},
+        Tuple{
+            NTuple{16, VecElement{Int32}},
+            NTuple{4, VecElement{UInt64}},
+            Ptr{Int8},
+            NTuple{16, VecElement{Int32}},
+        },
+        acc,
+        g,
+        q8,
+        w,
+    )
 end
 
 # ---------------------------------------------------------------- AVX2 kernels
@@ -305,7 +317,11 @@ end
 # Same loop structure and float operations as the scalar references. Only the
 # integer sub-block sums come from the vector primitives (quant_cpu_simd.jl).
 
-@noinline function _dot_iq2s_q8k_avx2(w::AbstractVector{UInt8}, woff::Int, x::Q8KVec)::Float32
+@noinline function _dot_iq2s_q8k_avx2(
+    w::AbstractVector{UInt8},
+    woff::Int,
+    x::Q8KVec,
+)::Float32
     nb = length(x.d)
     _q8k_check_row(w, woff, 82 * nb)
     sumf = 0.0f0
@@ -315,9 +331,9 @@ end
         pq = pointer(x.qs)
         pg = pointer(IQ2S_GRID)
         ps = pointer(_IQ_SIGN8_FULL_TAB)
-        @inbounds for ib in 0:(nb - 1)
+        @inbounds for ib in 0:(nb-1)
             b = pw + 82 * ib
-            d = _iq_f16_at(b) * x.d[ib + 1]
+            d = _iq_f16_at(b) * x.d[ib+1]
             acc = _IQ_ACC_ZERO
             for ib32 in 0:7
                 sc = unsafe_load(b + 74 + ib32)
@@ -350,7 +366,11 @@ end
     return 0.125f0 * sumf
 end
 
-@noinline function _dot_iq3s_q8k_avx2(w::AbstractVector{UInt8}, woff::Int, x::Q8KVec)::Float32
+@noinline function _dot_iq3s_q8k_avx2(
+    w::AbstractVector{UInt8},
+    woff::Int,
+    x::Q8KVec,
+)::Float32
     nb = length(x.d)
     _q8k_check_row(w, woff, 110 * nb)
     sumf = 0.0f0
@@ -360,9 +380,9 @@ end
         pq = pointer(x.qs)
         pg = pointer(IQ3S_GRID)
         ps = pointer(_IQ_SIGN8_FULL_TAB)
-        @inbounds for ib in 0:(nb - 1)
+        @inbounds for ib in 0:(nb-1)
             b = pw + 110 * ib
-            d = _iq_f16_at(b) * x.d[ib + 1]
+            d = _iq_f16_at(b) * x.d[ib+1]
             acc = _IQ_ACC_ZERO
             for m in 0:3
                 scb = Int(unsafe_load(b + 106 + m))
@@ -373,14 +393,51 @@ end
                     qb = b + 2 + 8 * k
                     sb = b + 74 + 4 * k
                     g = (
-                        VecElement(unsafe_load(pg, (Int(unsafe_load(qb)) | ((qh << 8) & 256)) + 1)),
-                        VecElement(unsafe_load(pg, (Int(unsafe_load(qb + 1)) | ((qh << 7) & 256)) + 1)),
-                        VecElement(unsafe_load(pg, (Int(unsafe_load(qb + 2)) | ((qh << 6) & 256)) + 1)),
-                        VecElement(unsafe_load(pg, (Int(unsafe_load(qb + 3)) | ((qh << 5) & 256)) + 1)),
-                        VecElement(unsafe_load(pg, (Int(unsafe_load(qb + 4)) | ((qh << 4) & 256)) + 1)),
-                        VecElement(unsafe_load(pg, (Int(unsafe_load(qb + 5)) | ((qh << 3) & 256)) + 1)),
-                        VecElement(unsafe_load(pg, (Int(unsafe_load(qb + 6)) | ((qh << 2) & 256)) + 1)),
-                        VecElement(unsafe_load(pg, (Int(unsafe_load(qb + 7)) | ((qh << 1) & 256)) + 1)),
+                        VecElement(
+                            unsafe_load(pg, (Int(unsafe_load(qb)) | ((qh << 8) & 256)) + 1),
+                        ),
+                        VecElement(
+                            unsafe_load(
+                                pg,
+                                (Int(unsafe_load(qb + 1)) | ((qh << 7) & 256)) + 1,
+                            ),
+                        ),
+                        VecElement(
+                            unsafe_load(
+                                pg,
+                                (Int(unsafe_load(qb + 2)) | ((qh << 6) & 256)) + 1,
+                            ),
+                        ),
+                        VecElement(
+                            unsafe_load(
+                                pg,
+                                (Int(unsafe_load(qb + 3)) | ((qh << 5) & 256)) + 1,
+                            ),
+                        ),
+                        VecElement(
+                            unsafe_load(
+                                pg,
+                                (Int(unsafe_load(qb + 4)) | ((qh << 4) & 256)) + 1,
+                            ),
+                        ),
+                        VecElement(
+                            unsafe_load(
+                                pg,
+                                (Int(unsafe_load(qb + 5)) | ((qh << 3) & 256)) + 1,
+                            ),
+                        ),
+                        VecElement(
+                            unsafe_load(
+                                pg,
+                                (Int(unsafe_load(qb + 6)) | ((qh << 2) & 256)) + 1,
+                            ),
+                        ),
+                        VecElement(
+                            unsafe_load(
+                                pg,
+                                (Int(unsafe_load(qb + 7)) | ((qh << 1) & 256)) + 1,
+                            ),
+                        ),
                     )
                     s = (
                         VecElement(unsafe_load(ps, Int(unsafe_load(sb)) + 1)),
@@ -397,7 +454,11 @@ end
     return sumf
 end
 
-@noinline function _dot_iq1m_q8k_avx2(w::AbstractVector{UInt8}, woff::Int, x::Q8KVec)::Float32
+@noinline function _dot_iq1m_q8k_avx2(
+    w::AbstractVector{UInt8},
+    woff::Int,
+    x::Q8KVec,
+)::Float32
     nb = length(x.d)
     _q8k_check_row(w, woff, 56 * nb)
     sumf = 0.0f0
@@ -406,13 +467,13 @@ end
         pw = pointer(w, woff + 1)
         pq = pointer(x.qs)
         pg = pointer(IQ1S_GRID)
-        @inbounds for ib in 0:(nb - 1)
+        @inbounds for ib in 0:(nb-1)
             b = pw + 56 * ib
             s0 = ltoh(unsafe_load(Ptr{UInt16}(b + 48)))
             s1 = ltoh(unsafe_load(Ptr{UInt16}(b + 50)))
             s2 = ltoh(unsafe_load(Ptr{UInt16}(b + 52)))
             s3 = ltoh(unsafe_load(Ptr{UInt16}(b + 54)))
-            dy = Float32(reinterpret(Float16, _iq1m_scale_bits(s0, s1, s2, s3))) * x.d[ib + 1]
+            dy = Float32(reinterpret(Float16, _iq1m_scale_bits(s0, s1, s2, s3))) * x.d[ib+1]
             acc = _IQ1M_ACC_ZERO
             for s in 0:7
                 scw = Int(ltoh(unsafe_load(Ptr{UInt16}(b + 48 + 2 * (s >> 1)))))
@@ -436,10 +497,22 @@ end
                 e2 = (qh1 & 0x08) != 0 ? -ls2 : ls2
                 e3 = (qh1 & 0x80) != 0 ? -ls2 : ls2
                 wt = (
-                    VecElement(ls1), VecElement(ls1), VecElement(ls1), VecElement(ls1),
-                    VecElement(ls2), VecElement(ls2), VecElement(ls2), VecElement(ls2),
-                    VecElement(e0), VecElement(e0), VecElement(e1), VecElement(e1),
-                    VecElement(e2), VecElement(e2), VecElement(e3), VecElement(e3),
+                    VecElement(ls1),
+                    VecElement(ls1),
+                    VecElement(ls1),
+                    VecElement(ls1),
+                    VecElement(ls2),
+                    VecElement(ls2),
+                    VecElement(ls2),
+                    VecElement(ls2),
+                    VecElement(e0),
+                    VecElement(e0),
+                    VecElement(e1),
+                    VecElement(e1),
+                    VecElement(e2),
+                    VecElement(e2),
+                    VecElement(e3),
+                    VecElement(e3),
                 )
                 acc = _iq1m_sub_acc(acc, g, pq + (ib * QK_K + 32 * s), wt)
             end
@@ -447,7 +520,7 @@ end
             sumi2 = Int32(0)
             for l in 1:8
                 sumi1 += acc[l].value
-                sumi2 += acc[l + 8].value
+                sumi2 += acc[l+8].value
             end
             sumf += dy * (Float32(sumi1) + 0.125f0 * Float32(sumi2))
         end
@@ -455,7 +528,11 @@ end
     return sumf
 end
 
-@noinline function _dot_iq2xxs_q8k_avx2(w::AbstractVector{UInt8}, woff::Int, x::Q8KVec)::Float32
+@noinline function _dot_iq2xxs_q8k_avx2(
+    w::AbstractVector{UInt8},
+    woff::Int,
+    x::Q8KVec,
+)::Float32
     nb = length(x.d)
     _q8k_check_row(w, woff, 66 * nb)
     sumf = 0.0f0
@@ -465,9 +542,9 @@ end
         pq = pointer(x.qs)
         pg = pointer(IQ2XXS_GRID)
         ps = pointer(_IQ_SIGN8_TAB)
-        @inbounds for ib in 0:(nb - 1)
+        @inbounds for ib in 0:(nb-1)
             b = pw + 66 * ib
-            d = _iq_f16_at(b) * x.d[ib + 1]
+            d = _iq_f16_at(b) * x.d[ib+1]
             acc = _IQ_ACC_ZERO
             for ib32 in 0:7
                 # low 32 bits: four grid bytes; high 32 bits: four 7-bit sign
@@ -494,7 +571,11 @@ end
     return 0.125f0 * sumf
 end
 
-@noinline function _dot_iq1s_q8k_avx2(w::AbstractVector{UInt8}, woff::Int, x::Q8KVec)::Float32
+@noinline function _dot_iq1s_q8k_avx2(
+    w::AbstractVector{UInt8},
+    woff::Int,
+    x::Q8KVec,
+)::Float32
     nb = length(x.d)
     _q8k_check_row(w, woff, 50 * nb)
     sumf = 0.0f0
@@ -503,9 +584,9 @@ end
         pw = pointer(w, woff + 1)
         pq = pointer(x.qs)
         pg = pointer(IQ1S_GRID)
-        @inbounds for ib in 0:(nb - 1)
+        @inbounds for ib in 0:(nb-1)
             b = pw + 50 * ib
-            d = _iq_f16_at(b) * x.d[ib + 1]
+            d = _iq_f16_at(b) * x.d[ib+1]
             acc = _IQ1M_ACC_ZERO
             for s in 0:7
                 qh = Int(ltoh(unsafe_load(Ptr{UInt16}(b + 34 + 2 * s))))
@@ -524,10 +605,22 @@ end
                 )
                 # lanes 1-8 weight the grid dots by ls, lanes 9-16 the quant sums by ls * delta
                 wt = (
-                    VecElement(ls), VecElement(ls), VecElement(ls), VecElement(ls),
-                    VecElement(ls), VecElement(ls), VecElement(ls), VecElement(ls),
-                    VecElement(ld), VecElement(ld), VecElement(ld), VecElement(ld),
-                    VecElement(ld), VecElement(ld), VecElement(ld), VecElement(ld),
+                    VecElement(ls),
+                    VecElement(ls),
+                    VecElement(ls),
+                    VecElement(ls),
+                    VecElement(ls),
+                    VecElement(ls),
+                    VecElement(ls),
+                    VecElement(ls),
+                    VecElement(ld),
+                    VecElement(ld),
+                    VecElement(ld),
+                    VecElement(ld),
+                    VecElement(ld),
+                    VecElement(ld),
+                    VecElement(ld),
+                    VecElement(ld),
                 )
                 acc = _iq1m_sub_acc(acc, g, pq + (ib * QK_K + 32 * s), wt)
             end
@@ -535,7 +628,7 @@ end
             sumi1 = Int32(0)
             for l in 1:8
                 sumi += acc[l].value
-                sumi1 += acc[l + 8].value
+                sumi1 += acc[l+8].value
             end
             sumf += d * (Float32(sumi) + 0.125f0 * Float32(sumi1))
         end
@@ -547,12 +640,17 @@ end
 
 # Ports of dequantize_row_iq2_s / _iq3_s / _iq1_m: one row of ne0 values
 # starting at byte woff of w, the reference for the integer kernels above.
-function _iqs_dequant_row!(out::AbstractVector{Float32}, w::AbstractVector{UInt8}, woff::Int,
-        ggml_type::Int32, ne0::Int)
+function _iqs_dequant_row!(
+    out::AbstractVector{Float32},
+    w::AbstractVector{UInt8},
+    woff::Int,
+    ggml_type::Int32,
+    ne0::Int,
+)
     length(out) == ne0 || error("iq_s dequant: out length $(length(out)) ≠ ne0 $ne0")
     ne0 % QK_K == 0 || error("iq_s dequant: ne0 $ne0 is not a multiple of $QK_K")
     nb = div(ne0, QK_K)
-    @inbounds for ib in 0:(nb - 1)
+    @inbounds for ib in 0:(nb-1)
         y = ib * QK_K
         if ggml_type == GGML_TYPE_IQ2_XXS
             b = woff + ib * 66
@@ -562,12 +660,12 @@ function _iqs_dequant_row!(out::AbstractVector{Float32}, w::AbstractVector{UInt8
                 aux = _ld_u32(w, q + 4)
                 db = d * (0.5f0 + Float32(aux >> 28)) * 0.25f0
                 for l in 0:3
-                    grid = IQ2XXS_GRID[Int(_ld_u8(w, q + l)) + 1]
-                    signs = KSIGNS_IQ2XS[Int((aux >> (7 * l)) & 0x7f) + 1]
+                    grid = IQ2XXS_GRID[Int(_ld_u8(w, q+l))+1]
+                    signs = KSIGNS_IQ2XS[Int((aux>>(7*l))&0x7f)+1]
                     for j in 0:7
                         g = Float32((grid >> (8 * j)) & 0xff)
-                        sgn = (signs & KMASK_IQ2XS[j + 1]) != 0x00 ? -1.0f0 : 1.0f0
-                        out[y + 32 * ib32 + 8 * l + j + 1] = db * g * sgn
+                        sgn = (signs & KMASK_IQ2XS[j+1]) != 0x00 ? -1.0f0 : 1.0f0
+                        out[y+32*ib32+8*l+j+1] = db * g * sgn
                     end
                 end
             end
@@ -580,10 +678,10 @@ function _iqs_dequant_row!(out::AbstractVector{Float32}, w::AbstractVector{UInt8
                 delta = (qh & 0x8000) != 0 ? -0.125f0 : 0.125f0
                 for l in 0:3
                     idx = Int(_ld_u8(w, b + 2 + 4 * s + l)) | (((qh >> (3 * l)) & 7) << 8)
-                    grid = IQ1S_GRID[idx + 1]
+                    grid = IQ1S_GRID[idx+1]
                     for j in 0:7
                         gv = Float32(reinterpret(Int8, UInt8((grid >> (8 * j)) & 0xff)))
-                        out[y + 32 * s + 8 * l + j + 1] = dl * (gv + delta)
+                        out[y+32*s+8*l+j+1] = dl * (gv + delta)
                     end
                 end
             end
@@ -597,13 +695,14 @@ function _iqs_dequant_row!(out::AbstractVector{Float32}, w::AbstractVector{UInt8
                 qh = Int(_ld_u8(w, b + 66 + ib32))
                 for l in 0:3
                     dl = l < 2 ? db1 : db2
-                    gi = Int(_ld_u8(w, b + 2 + 4 * ib32 + l)) | ((qh << (8 - 2 * l)) & 0x300)
-                    grid = IQ2S_GRID[gi + 1]
+                    gi =
+                        Int(_ld_u8(w, b + 2 + 4 * ib32 + l)) | ((qh << (8 - 2 * l)) & 0x300)
+                    grid = IQ2S_GRID[gi+1]
                     sb = _ld_u8(w, b + 34 + 4 * ib32 + l)
                     for j in 0:7
                         g = Float32((grid >> (8 * j)) & 0xff)
-                        sgn = (sb & KMASK_IQ2XS[j + 1]) != 0x00 ? -1.0f0 : 1.0f0
-                        out[y + 32 * ib32 + 8 * l + j + 1] = dl * g * sgn
+                        sgn = (sb & KMASK_IQ2XS[j+1]) != 0x00 ? -1.0f0 : 1.0f0
+                        out[y+32*ib32+8*l+j+1] = dl * g * sgn
                     end
                 end
             end
@@ -617,24 +716,37 @@ function _iqs_dequant_row!(out::AbstractVector{Float32}, w::AbstractVector{UInt8
                     db = d * Float32(1 + 2 * ((scb >> (4 * half)) & 0x0f))
                     qh = Int(_ld_u8(w, b + 66 + k))
                     for l in 0:3
-                        i1 = Int(_ld_u8(w, b + 2 + 8 * k + 2 * l)) | ((qh << (8 - 2 * l)) & 256)
-                        i2 = Int(_ld_u8(w, b + 2 + 8 * k + 2 * l + 1)) | ((qh << (7 - 2 * l)) & 256)
-                        g1 = IQ3S_GRID[i1 + 1]
-                        g2 = IQ3S_GRID[i2 + 1]
+                        i1 =
+                            Int(_ld_u8(w, b + 2 + 8 * k + 2 * l)) |
+                            ((qh << (8 - 2 * l)) & 256)
+                        i2 =
+                            Int(_ld_u8(w, b + 2 + 8 * k + 2 * l + 1)) |
+                            ((qh << (7 - 2 * l)) & 256)
+                        g1 = IQ3S_GRID[i1+1]
+                        g2 = IQ3S_GRID[i2+1]
                         sb = _ld_u8(w, b + 74 + 4 * k + l)
                         for j in 0:3
-                            s1 = (sb & KMASK_IQ2XS[j + 1]) != 0x00 ? -1.0f0 : 1.0f0
-                            s2 = (sb & KMASK_IQ2XS[j + 5]) != 0x00 ? -1.0f0 : 1.0f0
-                            out[y + 32 * k + 8 * l + j + 1] = db * Float32((g1 >> (8 * j)) & 0xff) * s1
-                            out[y + 32 * k + 8 * l + j + 5] = db * Float32((g2 >> (8 * j)) & 0xff) * s2
+                            s1 = (sb & KMASK_IQ2XS[j+1]) != 0x00 ? -1.0f0 : 1.0f0
+                            s2 = (sb & KMASK_IQ2XS[j+5]) != 0x00 ? -1.0f0 : 1.0f0
+                            out[y+32*k+8*l+j+1] = db * Float32((g1 >> (8 * j)) & 0xff) * s1
+                            out[y+32*k+8*l+j+5] = db * Float32((g2 >> (8 * j)) & 0xff) * s2
                         end
                     end
                 end
             end
         elseif ggml_type == GGML_TYPE_IQ1_M
             b = woff + ib * 56
-            dsc = Float32(reinterpret(Float16, _iq1m_scale_bits(
-                _ld_u16(w, b + 48), _ld_u16(w, b + 50), _ld_u16(w, b + 52), _ld_u16(w, b + 54))))
+            dsc = Float32(
+                reinterpret(
+                    Float16,
+                    _iq1m_scale_bits(
+                        _ld_u16(w, b + 48),
+                        _ld_u16(w, b + 50),
+                        _ld_u16(w, b + 52),
+                        _ld_u16(w, b + 54),
+                    ),
+                ),
+            )
             for s in 0:7
                 scw = Int(_ld_u16(w, b + 48 + 2 * (s >> 1)))
                 dl1 = dsc * Float32(2 * ((scw >> (6 * (s & 1))) & 0x7) + 1)
@@ -643,13 +755,14 @@ function _iqs_dequant_row!(out::AbstractVector{Float32}, w::AbstractVector{UInt8
                 qh1 = Int(_ld_u8(w, b + 33 + 2 * s))
                 for l in 0:3
                     qhv = l < 2 ? qh0 : qh1
-                    idx = Int(_ld_u8(w, b + 4 * s + l)) | ((qhv << (8 - 4 * (l & 1))) & 0x700)
-                    grid = IQ1S_GRID[idx + 1]
+                    idx =
+                        Int(_ld_u8(w, b + 4 * s + l)) | ((qhv << (8 - 4 * (l & 1))) & 0x700)
+                    grid = IQ1S_GRID[idx+1]
                     delta = (qhv & (iseven(l) ? 0x08 : 0x80)) != 0 ? -0.125f0 : 0.125f0
                     dl = l < 2 ? dl1 : dl2
                     for j in 0:7
                         gv = Float32(reinterpret(Int8, UInt8((grid >> (8 * j)) & 0xff)))
-                        out[y + 32 * s + 8 * l + j + 1] = dl * (gv + delta)
+                        out[y+32*s+8*l+j+1] = dl * (gv + delta)
                     end
                 end
             end
@@ -663,10 +776,19 @@ end
 # ------------------------------------------------------------- dispatch helpers
 
 _q8k_iq_s_type(t::Int32) =
-    t == GGML_TYPE_IQ2_XXS || t == GGML_TYPE_IQ2_S || t == GGML_TYPE_IQ3_S ||
-    t == GGML_TYPE_IQ1_S || t == GGML_TYPE_IQ1_M
+    t == GGML_TYPE_IQ2_XXS ||
+    t == GGML_TYPE_IQ2_S ||
+    t == GGML_TYPE_IQ3_S ||
+    t == GGML_TYPE_IQ1_S ||
+    t == GGML_TYPE_IQ1_M
 
-@inline function _dot_iq_s_q8k(ggml_type::Int32, w::AbstractVector{UInt8}, woff::Int, x::Q8KVec, simd::Bool)::Float32
+@inline function _dot_iq_s_q8k(
+    ggml_type::Int32,
+    w::AbstractVector{UInt8},
+    woff::Int,
+    x::Q8KVec,
+    simd::Bool,
+)::Float32
     if ggml_type == GGML_TYPE_IQ2_XXS
         return simd ? _dot_iq2xxs_q8k_avx2(w, woff, x) : _dot_iq2xxs_q8k_ref(w, woff, x)
     elseif ggml_type == GGML_TYPE_IQ1_S

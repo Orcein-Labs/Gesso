@@ -94,7 +94,7 @@ mutable struct CPUPool
 end
 
 mutable struct _CPUPoolSlot
-    @atomic pool::Union{Nothing,CPUPool}
+    @atomic pool::Union{Nothing, CPUPool}
 end
 
 const _CPU_POOL_SLOT = _CPUPoolSlot(nothing)
@@ -106,9 +106,9 @@ const _CPU_POOL_ATEXIT = Ref(false)
 # Distinct (package, core) pairs in a Linux sysfs topology tree. Offline CPUs
 # with no topology directory are skipped. Returns nothing when the tree is
 # missing or unreadable, so the caller can fall back.
-function _cpu_pool_sysfs_cores(base::AbstractString)::Union{Nothing,Int}
+function _cpu_pool_sysfs_cores(base::AbstractString)::Union{Nothing, Int}
     isdir(base) || return nothing
-    cores = Set{Tuple{Int,Int}}()
+    cores = Set{Tuple{Int, Int}}()
     try
         for name in readdir(base)
             occursin(r"^cpu[0-9]+$", name) || continue
@@ -120,7 +120,7 @@ function _cpu_pool_sysfs_cores(base::AbstractString)::Union{Nothing,Int}
             push!(cores, (pkg, core))
         end
     catch e
-        e isa Union{SystemError,Base.IOError} || rethrow()
+        e isa Union{SystemError, Base.IOError} || rethrow()
         return nothing
     end
     return isempty(cores) ? nothing : length(cores)
@@ -138,7 +138,7 @@ end
 _cpu_pool_available_threads()::Int =
     max(1, min(Base.Threads.nthreads(), Base.Threads.threadpoolsize(:default)))
 
-function _cpu_pool_env_int(name::AbstractString; minimum::Int=1)::Union{Nothing,Int}
+function _cpu_pool_env_int(name::AbstractString; minimum::Int=1)::Union{Nothing, Int}
     raw = get(ENV, name, nothing)
     raw === nothing && return nothing
     v = tryparse(Int, strip(raw))
@@ -157,7 +157,7 @@ end
 function _cpu_pool_participants(;
     cores::Integer=_cpu_pool_physical_cores(),
     threads::Integer=_cpu_pool_available_threads(),
-    override::Union{Nothing,Integer}=_cpu_pool_env_int(CPU_POOL_THREADS_ENV),
+    override::Union{Nothing, Integer}=_cpu_pool_env_int(CPU_POOL_THREADS_ENV),
 )::Int
     threads = max(1, Int(threads))
     if override !== nothing
@@ -222,7 +222,10 @@ end
 # Internal hook for tests and the benchmark: replace the global pool with one of
 # `participants` threads (caller included). Stops the old workers first. Must not
 # be called while a pool_run! is in flight.
-function _cpu_pool_configure!(participants::Integer; spin_us::Integer=CPU_POOL_DEFAULT_SPIN_US)
+function _cpu_pool_configure!(
+    participants::Integer;
+    spin_us::Integer=CPU_POOL_DEFAULT_SPIN_US,
+)
     n = clamp(Int(participants), 1, _cpu_pool_available_threads())
     return lock(_CPU_POOL_LOCK) do
         old = _CPU_POOL_SLOT.pool
@@ -393,7 +396,8 @@ function pool_run!(f::F, nchunks::Integer) where {F}
     n = Int(nchunks)
     n >= 0 || throw(ArgumentError("pool_run!: nchunks must be nonnegative, got $n"))
     n == 0 && return nothing
-    n < typemax(UInt32) || throw(ArgumentError("pool_run!: nchunks $n exceeds the chunk-count limit"))
+    n < typemax(UInt32) ||
+        throw(ArgumentError("pool_run!: nchunks $n exceeds the chunk-count limit"))
     p = _cpu_pool()
     if n == 1 || p.participants == 1 || atomic_cas!(p.busy, 0, 1) != 0
         for c in 1:n

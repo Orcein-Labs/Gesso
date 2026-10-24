@@ -69,10 +69,11 @@ fit the GPU budget. Distinct from a raw `Array` so a forgotten transfer
 still fails the CUDA storage check (§LXX). Experts in `GgufQuantSlice`
 are already this kind of offload and stay unwrapped.
 """
-struct HostOffload{T,N}
-    data::Array{T,N}
+struct HostOffload{T, N}
+    data::Array{T, N}
 end
-HostOffload(data::AbstractArray{T,N}) where {T,N} = HostOffload{T,N}(convert(Array{T,N}, data))
+HostOffload(data::AbstractArray{T, N}) where {T, N} =
+    HostOffload{T, N}(convert(Array{T, N}, data))
 Base.size(s::HostOffload) = size(s.data)
 Base.size(s::HostOffload, d::Int) = size(s.data, d)
 Base.ndims(s::HostOffload) = ndims(s.data)
@@ -149,15 +150,22 @@ function _check_ggml_traits(ggml_type::Integer, blck::Integer, tsize::Integer)
         (blck, tsize) == known
     end
     ok && return nothing
-    want = known === nothing ? "a block size in 1:1024 and type size in 1:65536" :
-           "block size $(known[1]) and type size $(known[2])"
-    throw(gesso_error(ERR_RUNTIME,
-        "gguf_import: libggml reports block size $blck and type size $tsize for ggml " *
-        "type $ggml_type, expected $want. The ggml_type_traits layout read here " *
-        "(blck_size@8, type_size@24, to_float@40) does not match the libggml in " *
-        "GESSO_GGML_DIR; use a llama.cpp build this layout matches (see DEBT.md).";
-        ggml_type=Int(ggml_type), blck_size=Int(blck), type_size=Int(tsize),
-        ggml_dir=get(ENV, "GESSO_GGML_DIR", "")))
+    want =
+        known === nothing ? "a block size in 1:1024 and type size in 1:65536" :
+        "block size $(known[1]) and type size $(known[2])"
+    throw(
+        gesso_error(
+            ERR_RUNTIME,
+            "gguf_import: libggml reports block size $blck and type size $tsize for ggml " *
+            "type $ggml_type, expected $want. The ggml_type_traits layout read here " *
+            "(blck_size@8, type_size@24, to_float@40) does not match the libggml in " *
+            "GESSO_GGML_DIR; use a llama.cpp build this layout matches (see DEBT.md).";
+            ggml_type=Int(ggml_type),
+            blck_size=Int(blck),
+            type_size=Int(tsize),
+            ggml_dir=get(ENV, "GESSO_GGML_DIR", ""),
+        ),
+    )
 end
 
 function _ggml_traits(ggml_type::Integer)
@@ -180,13 +188,11 @@ mutable struct _Cur
     data::Vector{UInt8}
     pos::Int
 end
-_u8(c::_Cur) = (v = c.data[c.pos]; c.pos += 1; v)
+_u8(c::_Cur) = (v=c.data[c.pos]; c.pos += 1; v)
 function _u32(c::_Cur)
     p = c.pos
     v =
-        UInt32(c.data[p]) |
-        UInt32(c.data[p+1]) << 8 |
-        UInt32(c.data[p+2]) << 16 |
+        UInt32(c.data[p]) | UInt32(c.data[p+1]) << 8 | UInt32(c.data[p+2]) << 16 |
         UInt32(c.data[p+3]) << 24
     c.pos = p + 4
     return v
@@ -344,7 +350,8 @@ function spec_from_gguf_kv(kv::AbstractDict; tensor_names=nothing)
     arch == "llama" && return _spec_from_gguf_llama(kv, tensor_names)
     arch == "spark2_5" && return _spec_from_gguf_spark(kv, tensor_names)
     p(key, default=nothing) = get(kv, "$arch.$key", default)
-    req(key) = (v = p(key); v === nothing ? error("spec_from_gguf_kv: missing $arch.$key") : v)
+    req(key) =
+        (v=p(key); v === nothing ? error("spec_from_gguf_kv: missing $arch.$key") : v)
     nextn = Int(p("nextn_predict_layers", 0))
     block_count = Int(req("block_count"))
     n_layers = block_count - nextn
@@ -384,9 +391,8 @@ function spec_from_gguf_kv(kv::AbstractDict; tensor_names=nothing)
     interval = Int(p("full_attention_interval", 4))
     # llama.cpp: is_recr[i] = ((i+1) % interval != 0) with 0-based i, so
     # 1-based layers interval, 2*interval, … are full attention.
-    layer_types = [
-        (i % interval == 0 ? :full_attention : :linear_attention) for i in 1:n_layers
-    ]
+    layer_types =
+        [(i % interval == 0 ? :full_attention : :linear_attention) for i in 1:n_layers]
     has_linear = any(!=(:full_attention), layer_types)
     mixer = nothing
     feats = Set{Symbol}([:qk_norm, :attn_output_gate, :mrope])
@@ -449,12 +455,15 @@ than dropped.
 """
 function _spec_from_gguf_llama(kv::AbstractDict, tensor_names)
     p(key, default=nothing) = get(kv, "llama.$key", default)
-    req(key) = (v = p(key); v === nothing ? error("spec_from_gguf_kv: missing llama.$key") : v)
+    req(key) =
+        (v=p(key); v === nothing ? error("spec_from_gguf_kv: missing llama.$key") : v)
     hidden = Int(req("embedding_length"))
     n_heads = Int(req("attention.head_count"))
     head_dim = Int(p("attention.key_length", 0))
     toks = get(kv, "tokenizer.ggml.tokens", nothing)
-    vocab = toks isa Integer ? Int(toks) : toks === nothing ? Int(p("vocab_size", 0)) : length(toks)
+    vocab =
+        toks isa Integer ? Int(toks) :
+        toks === nothing ? Int(p("vocab_size", 0)) : length(toks)
     vocab > 0 || error("spec_from_gguf_kv: no vocabulary size in GGUF metadata")
     scaling = String(p("rope.scaling.type", "none"))
     (kind, factor) = if scaling in ("none", "")
@@ -464,9 +473,11 @@ function _spec_from_gguf_llama(kv::AbstractDict, tensor_names)
     else
         throw(LoweringNotImplemented(:rope_scaling, :llama))
     end
-    tensor_names !== nothing && "rope_freqs.weight" in tensor_names && error(
-        "spec_from_gguf_kv: llama rope_freqs.weight present (llama3 scaling baked into per-dim factors); not supported",
-    )
+    tensor_names !== nothing &&
+        "rope_freqs.weight" in tensor_names &&
+        error(
+            "spec_from_gguf_kv: llama rope_freqs.weight present (llama3 scaling baked into per-dim factors); not supported",
+        )
     tied = tensor_names !== nothing && !("output.weight" in tensor_names)
     return ArchitectureSpec(;
         family=:llama,
@@ -560,8 +571,7 @@ function _dequant_f32(data::Vector{UInt8}, offset0::Int, ggml_type::Int32, n_ele
         return y
     end
     traits = _ggml_traits(ggml_type)
-    traits.to_float == C_NULL &&
-        error("gguf_import: no to_float for ggml type $ggml_type")
+    traits.to_float == C_NULL && error("gguf_import: no to_float for ggml type $ggml_type")
     ccall(
         traits.to_float,
         Cvoid,
@@ -634,7 +644,7 @@ function _gguf_dequant_expert_into!(
     off = s.offset0 + (e - 1) * s.bytes_per_expert
     y = view(raw, 1:n_elem)
     if s.ggml_type == Int32(0)
-        y .= reinterpret(Float32, view(s.data, (off + 1):(off + n_elem * 4)))
+        y .= reinterpret(Float32, view(s.data, (off+1):(off+n_elem*4)))
     else
         s.to_float == C_NULL &&
             error("gguf_dequant_expert: no to_float for ggml type $(s.ggml_type)")
@@ -707,12 +717,12 @@ gather stays behind `GESSO_GGUF_UNREORDER_V=1`.
 function _v_head_perm(nk::Int, r::Int, hd::Int)
     n = nk * r * hd
     p = Vector{Int}(undef, n)
-    for j in 0:(n - 1)
+    for j in 0:(n-1)
         v = div(j, nk * hd)
         k = rem(div(j, hd), nk)
         d = rem(j, hd)
         i = k * (r * hd) + v * hd + d
-        p[j + 1] = i + 1
+        p[j+1] = i + 1
     end
     return p
 end
@@ -741,7 +751,7 @@ function _gguf_unreorder_linear(A, name::AbstractString, spec::ArchitectureSpec)
     if endswith(name, ".attn_qkv.weight")
         size(A, 1) == qk + nv * dv || error("gguf_import: attn_qkv rows $(size(A,1))")
         p = _v_head_perm(nk, r, dv)
-        v = _gather_axis(A[(qk + 1):end, :], 1, p)
+        v = _gather_axis(A[(qk+1):end, :], 1, p)
         return vcat(A[1:qk, :], v)
     elseif endswith(name, ".attn_gate.weight")
         return _gather_axis(A, 1, _v_head_perm(nk, r, dv))
@@ -752,7 +762,7 @@ function _gguf_unreorder_linear(A, name::AbstractString, spec::ArchitectureSpec)
     elseif endswith(name, ".ssm_conv1d.weight")
         size(A, 1) == qk + nv * dv || error("gguf_import: conv1d channels $(size(A,1))")
         p = _v_head_perm(nk, r, dv)
-        v = _gather_axis(A[(qk + 1):end, :, :], 1, p)
+        v = _gather_axis(A[(qk+1):end, :, :], 1, p)
         return vcat(A[1:qk, :, :], v)
     elseif endswith(name, ".ssm_out.weight")
         return _gather_axis(A, 2, _v_head_perm(nk, r, dv))
@@ -800,7 +810,12 @@ function _quant_matrix(hdr, info::GgufTensorInfo)
     )
 end
 
-function _materialize_gguf_tensor(hdr, info::GgufTensorInfo, spec::ArchitectureSpec, ::Type{T}) where {T}
+function _materialize_gguf_tensor(
+    hdr,
+    info::GgufTensorInfo,
+    spec::ArchitectureSpec,
+    ::Type{T},
+) where {T}
     if _is_expert_tensor(info.name)
         return _expert_slice(hdr, info)
     end
@@ -876,11 +891,11 @@ function _gguf_mtp_record(hdr, spec::ArchitectureSpec)
     nextn = Int(get(hdr.kv, "$arch.nextn_predict_layers", 0))
     nextn == 0 && return nothing
     first_blk = spec.num_layers
-    prefixes = ["blk.$(first_blk + k)." for k in 0:(nextn - 1)]
-    names = sort!([t.name for t in hdr.tensors if any(p -> startswith(t.name, p), prefixes)])
-    isempty(names) && error(
-        "load_gguf: nextn_predict_layers=$nextn but no tensors under $(prefixes)",
-    )
+    prefixes = ["blk.$(first_blk + k)." for k in 0:(nextn-1)]
+    names =
+        sort!([t.name for t in hdr.tensors if any(p -> startswith(t.name, p), prefixes)])
+    isempty(names) &&
+        error("load_gguf: nextn_predict_layers=$nextn but no tensors under $(prefixes)")
     return (layer=first_blk, n_predict=nextn, tensor_names=names)
 end
 
@@ -902,8 +917,7 @@ function load_gguf(path::AbstractString; T::Type=Float32, verbose::Bool=false)
     by = Dict{String, Any}()
     nreq = length(required)
     for (i, name) in enumerate(required)
-        haskey(info_by, name) ||
-            error("load_gguf: missing required tensor: $name")
+        haskey(info_by, name) || error("load_gguf: missing required tensor: $name")
         verbose && i % 50 == 0 && @info "load_gguf" i nreq name
         by[name] = _materialize_gguf_tensor(hdr, info_by[name], spec, T)
     end
@@ -939,7 +953,8 @@ function _cpu_moe_topk_swiglu_gguf!(
     seq, h = size(x)
     n_exp = size(router, 1)
     ff = gate_s.ne1
-    0 < n_used <= n_exp || error("_cpu_moe_topk_swiglu_gguf!: n_used $n_used out of 1..$n_exp")
+    0 < n_used <= n_exp ||
+        error("_cpu_moe_topk_swiglu_gguf!: n_used $n_used out of 1..$n_exp")
     size(y) == (seq, h) ||
         error("_cpu_moe_topk_swiglu_gguf!: y shape $(size(y)) ≠ ($seq, $h)")
     size(router) == (n_exp, h) ||
@@ -959,9 +974,22 @@ function _cpu_moe_topk_swiglu_gguf!(
     # They make the same _dot_q8k calls and sum in k order, so the result is
     # bit-identical to the per-expert loop below. On the GSQ 35B the loop
     # below was about half of CPU decode, and Lava's host experts run here too.
-    if T === Float32 && gate_s isa GgufQuantSlice && up_s isa GgufQuantSlice &&
-       down_s isa GgufQuantSlice && _moe_host_batchable(gate_s, up_s, down_s, h, ff)
-        return _cpu_moe_topk_swiglu_batched!(y, x, router, gate_s, up_s, down_s, n_used, logits, order)
+    if T === Float32 &&
+       gate_s isa GgufQuantSlice &&
+       up_s isa GgufQuantSlice &&
+       down_s isa GgufQuantSlice &&
+       _moe_host_batchable(gate_s, up_s, down_s, h, ff)
+        return _cpu_moe_topk_swiglu_batched!(
+            y,
+            x,
+            router,
+            gate_s,
+            up_s,
+            down_s,
+            n_used,
+            logits,
+            order,
+        )
     end
     # One scratch set per chunk of expert slots, indexed by chunk and not by
     # threadid(): a chunk is one @threads iteration, so no two tasks share a set.
@@ -1049,7 +1077,17 @@ end
 
 # Routing is the per-expert loop's, op for op, so the selected experts and
 # their weights match it exactly.
-function _cpu_moe_topk_swiglu_batched!(y, x, router, gate_s, up_s, down_s, n_used, logits, order)
+function _cpu_moe_topk_swiglu_batched!(
+    y,
+    x,
+    router,
+    gate_s,
+    up_s,
+    down_s,
+    n_used,
+    logits,
+    order,
+)
     seq, h = size(x)
     n_exp = length(logits)
     experts = Matrix{Int}(undef, n_used, seq)
@@ -1088,8 +1126,16 @@ function _cpu_moe_topk_swiglu_batched!(y, x, router, gate_s, up_s, down_s, n_use
         @inbounds for i in 1:h
             xf[i] = x[1, i]
         end
-        _moe_host_experts_auto!(yrow, xf, view(experts, :, 1), view(wts, :, 1), n_used,
-            gate_s, up_s, down_s)
+        _moe_host_experts_auto!(
+            yrow,
+            xf,
+            view(experts, :, 1),
+            view(wts, :, 1),
+            n_used,
+            gate_s,
+            up_s,
+            down_s,
+        )
         @inbounds for i in 1:h
             y[1, i] = yrow[i]
         end

@@ -60,9 +60,23 @@ mutable struct LavaDecodeAudit
     swiglu_ns::UInt64
 end
 const _LAVA_DECODE_AUDIT = LavaDecodeAudit(
-    false, 0, 0, UInt64(0), UInt64(0),
-    0, 0, 0, 0, 0, 0,
-    UInt64(0), UInt64(0), UInt64(0), UInt64(0), UInt64(0), UInt64(0),
+    false,
+    0,
+    0,
+    UInt64(0),
+    UInt64(0),
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    UInt64(0),
+    UInt64(0),
+    UInt64(0),
+    UInt64(0),
+    UInt64(0),
+    UInt64(0),
 )
 
 function _lava_audit_reset!()
@@ -170,8 +184,16 @@ function Gesso.Inference._engine_boundary!(::LavaBackend)
 end
 
 function Gesso.Inference._engine_failure(err::Lava.LavaError)
-    code=err.operation in ("memory allocation","pool block allocation") ? Gesso.ERR_ALLOCATION : Gesso.ERR_RUNTIME
-    return gesso_error(code,"primary Lava operation failed";cause=sprint(showerror,err),cause_type=string(typeof(err)),interrupted=false,backend=:lava)
+    code=err.operation in ("memory allocation", "pool block allocation") ?
+         Gesso.ERR_ALLOCATION : Gesso.ERR_RUNTIME
+    return gesso_error(
+        code,
+        "primary Lava operation failed";
+        cause=sprint(showerror, err),
+        cause_type=string(typeof(err)),
+        interrupted=false,
+        backend=:lava,
+    )
 end
 
 # --- device guard (the interpreter does not copy) -----------------------------
@@ -188,32 +210,53 @@ function _lava_device_storage!(op::Symbol, t)
     # Quantized dense weights keep their bytes in device LavaArrays (lava_quant.jl);
     # both layouts type their fields that way, so the type alone is the check.
     s isa LavaDenseQuant && return s
-    throw(gesso_error(ERR_INVALID_PLAN,
-        "$op: LavaBackend requires its own device storage (Float32 or LavaDenseQuant); host Array, " *
-        "host views, other devices and unsupported arithmetic are rejected; call to_device explicitly";
-        op=op, storage_type=string(typeof(s))))
+    throw(
+        gesso_error(
+            ERR_INVALID_PLAN,
+            "$op: LavaBackend requires its own device storage (Float32 or LavaDenseQuant); host Array, " *
+            "host views, other devices and unsupported arithmetic are rejected; call to_device explicitly";
+            op=op,
+            storage_type=string(typeof(s)),
+        ),
+    )
 end
 # Expert banks stay host-resident GgufQuantSlice storage: the MoE route runs
 # them on the host (GESSO_MOE_HOST_EXPERTS=1), the same split as CUDA. Only
 # expert banks are exempt; a dense weight still on the host fails the guard.
 # A device expert bank is refused where it would be used (_moe_topk_swiglu!).
 function Gesso.Inference._check_device_storage(op::Symbol, backend::LavaBackend, t)
-    t isa Gesso.ExpertWeight && t.storage isa Gesso.Inference.GgufQuantSlice && return nothing
+    t isa Gesso.ExpertWeight &&
+        t.storage isa Gesso.Inference.GgufQuantSlice &&
+        return nothing
     return _lava_device_storage!(op, t)
 end
 
 # On the tested Vulkan compiler path, the floating `isfinite` predicate
 # reports NaN and Inf as finite. Classify their IEEE exponent bits instead;
 # all data stays on-device and only the UInt32 reduction result is read.
-_lava_nonfinite_flag(x::Float32) = UInt32((reinterpret(UInt32, x) & 0x7f800000) == 0x7f800000)
-_lava_nonfinite_flag(x::Float64) = UInt32((reinterpret(UInt64, x) & 0x7ff0000000000000) == 0x7ff0000000000000)
-function Gesso.Inference._all_finite(a::Lava.AnyLavaArray{T}) where {T <: Union{Float32,Float64}}
+_lava_nonfinite_flag(x::Float32) =
+    UInt32((reinterpret(UInt32, x) & 0x7f800000) == 0x7f800000)
+_lava_nonfinite_flag(x::Float64) =
+    UInt32((reinterpret(UInt64, x) & 0x7ff0000000000000) == 0x7ff0000000000000)
+function Gesso.Inference._all_finite(
+    a::Lava.AnyLavaArray{T},
+) where {T <: Union{Float32, Float64}}
     # Explicit ordinary device temporary avoids KA's tiny BAR allocation.
     a_audit = _LAVA_DECODE_AUDIT
     t0 = a_audit.enabled ? time_ns() : UInt64(0)
-    temp=Lava.LavaArray{UInt32}(undef,(max(2,2*cld(length(a),128)),))
-    ok = Lava.AK.mapreduce(_lava_nonfinite_flag,max,a,KA.get_backend(a);
-        init=UInt32(0),neutral=UInt32(0),temp,block_size=64,switch_below=0)==UInt32(0)
+    temp=Lava.LavaArray{UInt32}(undef, (max(2, 2*cld(length(a), 128)),))
+    ok =
+        Lava.AK.mapreduce(
+            _lava_nonfinite_flag,
+            max,
+            a,
+            KA.get_backend(a);
+            init=UInt32(0),
+            neutral=UInt32(0),
+            temp,
+            block_size=64,
+            switch_below=0,
+        )==UInt32(0)
     if a_audit.enabled
         a_audit.finite_ns += time_ns() - t0
         a_audit.finites += 1
@@ -221,16 +264,26 @@ function Gesso.Inference._all_finite(a::Lava.AnyLavaArray{T}) where {T <: Union{
     return ok
 end
 
-function _lava_dimreduce(f,op,a,dim,init)
-    shape=ntuple(i -> i==dim ? 1 : size(a,i),ndims(a))
-    prod(shape)>1 && return mapreduce(f,op,a;dims=dim)
+function _lava_dimreduce(f, op, a, dim, init)
+    shape=ntuple(i -> i==dim ? 1 : size(a, i), ndims(a))
+    prod(shape)>1 && return mapreduce(f, op, a; dims=dim)
     # Keep scalar reductions on the fixed tree too. Lava's native Float32
     # sum combines subgroup partials with atomic adds: their arrival order
     # can change a one-row attention denominator between identical calls.
-    result=Lava.LavaArray{typeof(init)}(undef,shape)
-    temp=Lava.LavaArray{typeof(init)}(undef,(max(2,2*cld(length(a),128)),))
-    value=Lava.AK.mapreduce(f,op,a,KA.get_backend(a);init,neutral=init,temp,block_size=64,switch_below=0)
-    copyto!(result,1,[value],1,1)
+    result=Lava.LavaArray{typeof(init)}(undef, shape)
+    temp=Lava.LavaArray{typeof(init)}(undef, (max(2, 2*cld(length(a), 128)),))
+    value=Lava.AK.mapreduce(
+        f,
+        op,
+        a,
+        KA.get_backend(a);
+        init,
+        neutral=init,
+        temp,
+        block_size=64,
+        switch_below=0,
+    )
+    copyto!(result, 1, [value], 1, 1)
     return result
 end
 
@@ -239,7 +292,7 @@ end
 function _lava_embedding_lookup!(dst, table, tokens)
     a = _LAVA_DECODE_AUDIT
     t0 = a.enabled ? time_ns() : UInt64(0)
-    Gesso._validate_embedding_inputs(dst,table,tokens)
+    Gesso._validate_embedding_inputs(dst, table, tokens)
     tab = table.storage
     # 0-based token ids (§LXXV) → 1-based rows on the HOST (cheap), then one
     # broadcast gather on device: rows land in dst in token order.
@@ -299,8 +352,14 @@ end
     end
 end
 
-@kernel cpu=false function _lava_rmsnorm_f32_rows_kernel!(dst, xs, scales,
-        eps64::Float64, d::Int, lead::Int)
+@kernel cpu=false function _lava_rmsnorm_f32_rows_kernel!(
+    dst,
+    xs,
+    scales,
+    eps64::Float64,
+    d::Int,
+    lead::Int,
+)
     g = @index(Group, Linear)
     lane = @index(Local, Linear)
     partials = @localmem Float64 (_LAVA_RMS_LANES,)
@@ -325,47 +384,94 @@ end
     end
 end
 
-function _lava_rmsnorm!(dst, x, scale; eps = 1e-6, check_finite = true)
+function _lava_rmsnorm!(dst, x, scale; eps=1e-6, check_finite=true)
     a = _LAVA_DECODE_AUDIT
     t0 = a.enabled ? time_ns() : UInt64(0)
-    isfinite(eps) && eps > 0 || throw(gesso_error(ERR_INVALID_PLAN,
-        "rmsnorm!: eps must be finite and positive"))
+    isfinite(eps) && eps > 0 ||
+        throw(gesso_error(ERR_INVALID_PLAN, "rmsnorm!: eps must be finite and positive"))
     xs = x.storage
     native_eps=eltype(xs)(eps)
-    isfinite(native_eps) && native_eps>0 || throw(gesso_error(ERR_INVALID_PLAN,
-        "rmsnorm!: eps must be representable, finite and positive in storage dtype"))
+    isfinite(native_eps) && native_eps>0 || throw(
+        gesso_error(
+            ERR_INVALID_PLAN,
+            "rmsnorm!: eps must be representable, finite and positive in storage dtype",
+        ),
+    )
     nd = ndims(xs)
-    nd > 0 || throw(gesso_error(ERR_INVALID_PLAN,
-        "rmsnorm!: input must have a nonempty feature dimension"; op = :rmsnorm!))
-    all(n -> n > 0, size(xs)) || throw(gesso_error(ERR_INVALID_PLAN,
-        "rmsnorm!: input dimensions must be positive"; op = :rmsnorm!))
-    size(dst.storage) == size(xs) || throw(gesso_error(ERR_INVALID_PLAN,
-        "rmsnorm!: destination and input shapes must match"; op = :rmsnorm!))
+    nd > 0 || throw(
+        gesso_error(
+            ERR_INVALID_PLAN,
+            "rmsnorm!: input must have a nonempty feature dimension";
+            op=:rmsnorm!,
+        ),
+    )
+    all(n -> n > 0, size(xs)) || throw(
+        gesso_error(
+            ERR_INVALID_PLAN,
+            "rmsnorm!: input dimensions must be positive";
+            op=:rmsnorm!,
+        ),
+    )
+    size(dst.storage) == size(xs) || throw(
+        gesso_error(
+            ERR_INVALID_PLAN,
+            "rmsnorm!: destination and input shapes must match";
+            op=:rmsnorm!,
+        ),
+    )
     d = size(xs, nd)                               # last dim is the feature dim
-    length(scale.storage) == d ||
-        throw(gesso_error(ERR_INVALID_PLAN, "rmsnorm!: scale length $(length(scale.storage)) ≠ feature dim $d"; op = :rmsnorm!))
+    length(scale.storage) == d || throw(
+        gesso_error(
+            ERR_INVALID_PLAN,
+            "rmsnorm!: scale length $(length(scale.storage)) ≠ feature dim $d";
+            op=:rmsnorm!,
+        ),
+    )
     if eltype(xs) === Float32 && nd in (2, 3)
         lead = div(length(xs), d)
         kern = _lava_rmsnorm_f32_rows_kernel!(KA.get_backend(xs))
         # IEEE total classification and the invalid-row NaN marker require
         # preservation here; unrelated Lava kernels keep their default modes.
         kern = Lava.with_float_controls(kern, (32, 64))
-        kern(dst.storage, xs, scale.storage, Float64(eps), Int(d), Int(lead);
-            ndrange=_LAVA_RMS_LANES * lead, workgroupsize=(_LAVA_RMS_LANES,))
+        kern(
+            dst.storage,
+            xs,
+            scale.storage,
+            Float64(eps),
+            Int(d),
+            Int(lead);
+            ndrange=_LAVA_RMS_LANES * lead,
+            workgroupsize=(_LAVA_RMS_LANES,),
+        )
         if check_finite
-            Gesso.Inference._all_finite(dst.storage) || throw(gesso_error(ERR_NUMERICAL_INSTABILITY,
-                "rmsnorm!: nonfinite normalization denominator"))
+            Gesso.Inference._all_finite(dst.storage) || throw(
+                gesso_error(
+                    ERR_NUMERICAL_INSTABILITY,
+                    "rmsnorm!: nonfinite normalization denominator",
+                ),
+            )
         end
         a.enabled && _lava_note_op!(:rmsnorm, time_ns() - t0)
         return dst
     end
     if ndims(xs) == 2 && size(xs, 1) == 1
         kern = _lava_rmsnorm_row_kernel!(KA.get_backend(xs))
-        kern(dst.storage, xs, scale.storage, Float64(eps), Int(d);
-            ndrange=_LAVA_RMS_LANES, workgroupsize=(_LAVA_RMS_LANES,))
+        kern(
+            dst.storage,
+            xs,
+            scale.storage,
+            Float64(eps),
+            Int(d);
+            ndrange=_LAVA_RMS_LANES,
+            workgroupsize=(_LAVA_RMS_LANES,),
+        )
         if check_finite
-            Gesso.Inference._all_finite(dst.storage) || throw(gesso_error(ERR_NUMERICAL_INSTABILITY,
-                "rmsnorm!: nonfinite normalization denominator"))
+            Gesso.Inference._all_finite(dst.storage) || throw(
+                gesso_error(
+                    ERR_NUMERICAL_INSTABILITY,
+                    "rmsnorm!: nonfinite normalization denominator",
+                ),
+            )
         end
         a.enabled && _lava_note_op!(:rmsnorm, time_ns() - t0)
         return dst
@@ -373,19 +479,37 @@ function _lava_rmsnorm!(dst, x, scale; eps = 1e-6, check_finite = true)
     if ndims(xs) == 3 && size(xs, 1) == 1
         nheads = size(xs, 2)
         kern = _lava_rmsnorm_head_kernel!(KA.get_backend(xs))
-        kern(dst.storage, xs, scale.storage, Float64(eps), Int(d);
-            ndrange=_LAVA_RMS_LANES * nheads, workgroupsize=(_LAVA_RMS_LANES,))
+        kern(
+            dst.storage,
+            xs,
+            scale.storage,
+            Float64(eps),
+            Int(d);
+            ndrange=_LAVA_RMS_LANES * nheads,
+            workgroupsize=(_LAVA_RMS_LANES,),
+        )
         if check_finite
-            Gesso.Inference._all_finite(dst.storage) || throw(gesso_error(ERR_NUMERICAL_INSTABILITY,
-                "rmsnorm!: nonfinite normalization denominator"))
+            Gesso.Inference._all_finite(dst.storage) || throw(
+                gesso_error(
+                    ERR_NUMERICAL_INSTABILITY,
+                    "rmsnorm!: nonfinite normalization denominator",
+                ),
+            )
         end
         a.enabled && _lava_note_op!(:rmsnorm, time_ns() - t0)
         return dst
     end
-    rms = sqrt.(_lava_dimreduce(abs2,+,xs,ndims(xs),zero(eltype(xs))) ./ eltype(xs)(d) .+ native_eps)
+    rms = sqrt.(
+        _lava_dimreduce(abs2, +, xs, ndims(xs), zero(eltype(xs))) ./ eltype(xs)(d) .+
+        native_eps,
+    )
     if check_finite
-        Gesso.Inference._all_finite(rms) || throw(gesso_error(ERR_NUMERICAL_INSTABILITY,
-            "rmsnorm!: nonfinite normalization denominator"))
+        Gesso.Inference._all_finite(rms) || throw(
+            gesso_error(
+                ERR_NUMERICAL_INSTABILITY,
+                "rmsnorm!: nonfinite normalization denominator",
+            ),
+        )
     end
     # scale indexes the LAST axis: trailing 1s so it broadcasts on device too
     stail = reshape(scale.storage, (ntuple(_ -> 1, ndims(xs) - 1)..., d))
@@ -410,7 +534,13 @@ end
 # `rd` is the rotary width: only the first rd features rotate, and the rest
 # pass through unchanged, as in `_cpu_rope_storage!`. rd == d is the full-head
 # case and reproduces the previous kernels exactly.
-@kernel cpu=false function _lava_rope_kernel!(x, positions, theta, interleaved::Bool, rd::Int)
+@kernel cpu=false function _lava_rope_kernel!(
+    x,
+    positions,
+    theta,
+    interleaved::Bool,
+    rd::Int,
+)
     idx = @index(Global, Cartesian)
     t = idx[1]
     h = idx[2]
@@ -418,7 +548,7 @@ end
     (t > seq || h > nheads) && return
     m = Float32(positions[t])
     half = rd ÷ 2
-    for i in 0:(half - 1)
+    for i in 0:(half-1)
         θv = m * (theta ^ (-2 * i / rd))
         c = cos(θv)
         s = sin(θv)
@@ -433,13 +563,19 @@ end
 
 # Decode seq=1: position is a kernel scalar so we do not allocate a 4-byte
 # device buffer 30 times per token (arm 5c: that upload ate the kernel win).
-@kernel cpu=false function _lava_rope_decode_kernel!(x, pos::Int32, theta, interleaved::Bool, rd::Int)
+@kernel cpu=false function _lava_rope_decode_kernel!(
+    x,
+    pos::Int32,
+    theta,
+    interleaved::Bool,
+    rd::Int,
+)
     h = @index(Global)
     _, nheads, _ = size(x)
     h > nheads && return
     m = Float32(pos)
     half = rd ÷ 2
-    for i in 0:(half - 1)
+    for i in 0:(half-1)
         θv = m * (theta ^ (-2 * i / rd))
         c = cos(θv)
         s = sin(θv)
@@ -455,17 +591,27 @@ end
 include("lava_rope_reference.jl")
 include("lava_softmax_reference.jl")
 
-function _lava_rope!(q, k, positions; theta = 10000.0, inv_freq = nothing, interleaved = true, rotary_dim = 0)
+function _lava_rope!(
+    q,
+    k,
+    positions;
+    theta=10000.0,
+    inv_freq=nothing,
+    interleaved=true,
+    rotary_dim=0,
+)
     a = _LAVA_DECODE_AUDIT
     t0 = a.enabled ? time_ns() : UInt64(0)
     size(q.storage, 3) == size(k.storage, 3) ||
-        throw(gesso_error(ERR_INVALID_PLAN, "rope!: q d_head ≠ k d_head"; op = :rope!))
-    Gesso._validate_rope_inputs(q,k,positions,theta,inv_freq,rotary_dim)
+        throw(gesso_error(ERR_INVALID_PLAN, "rope!: q d_head ≠ k d_head"; op=:rope!))
+    Gesso._validate_rope_inputs(q, k, positions, theta, inv_freq, rotary_dim)
     tθ = Float64(theta)
     d = size(q.storage, 3)
     rd = rotary_dim == 0 ? d : Int(rotary_dim)
-    if inv_freq !== nothing && eltype(inv_freq) === Float64 &&
-       eltype(q.storage) === Float32 && eltype(k.storage) === Float32
+    if inv_freq !== nothing &&
+       eltype(inv_freq) === Float64 &&
+       eltype(q.storage) === Float32 &&
+       eltype(k.storage) === Float32
         _lava_rope_reference!(q.storage, k.storage, positions, inv_freq, rd, interleaved)
         a.enabled && _lava_note_op!(:rope, time_ns() - t0)
         return q
@@ -485,7 +631,15 @@ function _lava_rope!(q, k, positions; theta = 10000.0, inv_freq = nothing, inter
         for x in (q.storage, k.storage)
             seq, nheads, _ = size(x)
             kern = _lava_rope_kernel!(KA.get_backend(x))
-            kern(x, pos, tθ, interleaved, rd; ndrange=(seq, nheads), workgroupsize=_LAVA_WG2)
+            kern(
+                x,
+                pos,
+                tθ,
+                interleaved,
+                rd;
+                ndrange=(seq, nheads),
+                workgroupsize=_LAVA_WG2,
+            )
         end
         a.enabled && _lava_note_op!(:rope, time_ns() - t0)
         return q
@@ -528,7 +682,14 @@ end
 # same F32 phase and F64 reduction as the general path, so both agree to
 # rounding. The table grows by doubling, so steady-state decode uploads
 # nothing and allocates nothing.
-@kernel cpu=false function _lava_rope_table_kernel!(x, cos_t, sin_t, row::Int32, interleaved::Bool, rd::Int)
+@kernel cpu=false function _lava_rope_table_kernel!(
+    x,
+    cos_t,
+    sin_t,
+    row::Int32,
+    interleaved::Bool,
+    rd::Int,
+)
     h = @index(Global)
     _, nheads, _ = size(x)
     h > nheads && return
@@ -555,17 +716,18 @@ function _lava_rope_table(freq::Vector{Float32}, rd::Int, row::Int)
         half = length(freq)
         cosm = Matrix{Float32}(undef, cap, half)
         sinm = Matrix{Float32}(undef, cap, half)
-        for p in 0:(cap - 1), i in 1:half
+        for p in 0:(cap-1), i in 1:half
             phase = Float32(p) * freq[i]
             r = Float32(rem(Float64(phase), 2π))
-            cosm[p + 1, i] = cos(r)
-            sinm[p + 1, i] = sin(r)
+            cosm[p+1, i] = cos(r)
+            sinm[p+1, i] = sin(r)
         end
         if ent !== nothing
             Lava.unsafe_free!(ent.cos)
             Lava.unsafe_free!(ent.sin)
         end
-        ent = (cap = cap, cos = Lava.LavaArray{Float32}(cosm), sin = Lava.LavaArray{Float32}(sinm))
+        ent =
+            (cap=cap, cos=Lava.LavaArray{Float32}(cosm), sin=Lava.LavaArray{Float32}(sinm))
         _LAVA_ROPE_TABLES[key] = ent
     end
     return ent.cos, ent.sin
@@ -615,7 +777,7 @@ function _lava_softmax_fused!(dst, scores)
     return dst
 end
 
-function _lava_softmax!(dst, scores; check_finite = true)
+function _lava_softmax!(dst, scores; check_finite=true)
     a = _LAVA_DECODE_AUDIT
     t0 = a.enabled ? time_ns() : UInt64(0)
     if !check_finite
@@ -629,12 +791,14 @@ function _lava_softmax!(dst, scores; check_finite = true)
     qi = reshape(Lava.LavaArray{Int64}(1:L), L, 1)
     kj = reshape(Lava.LavaArray{Int64}(1:K), 1, K)
     masked = ifelse.(kj .> (qi .+ offset), -Inf32, s)
-    rowmax = _lava_dimreduce(identity,max,masked,2,-Inf32)
-    Gesso.Inference._all_finite(rowmax) || throw(gesso_error(ERR_NUMERICAL_INSTABILITY,
-        "softmax!: no finite unmasked maximum"))
+    rowmax = _lava_dimreduce(identity, max, masked, 2, -Inf32)
+    Gesso.Inference._all_finite(rowmax) || throw(
+        gesso_error(ERR_NUMERICAL_INSTABILITY, "softmax!: no finite unmasked maximum"),
+    )
     e = exp.(masked .- rowmax)
-    den = eltype(e) === Float32 ? _lava_softmax_rowsum64(e) :
-          _lava_dimreduce(identity,+,e,2,0f0)
+    den =
+        eltype(e) === Float32 ? _lava_softmax_rowsum64(e) :
+        _lava_dimreduce(identity, +, e, 2, 0.0f0)
     dst.storage .= e ./ den
     a.enabled && _lava_note_op!(:softmax, time_ns() - t0)
     return dst
@@ -644,7 +808,7 @@ function _lava_swiglu!(dst, gate, up)
     a = _LAVA_DECODE_AUDIT
     t0 = a.enabled ? time_ns() : UInt64(0)
     g = gate.storage
-    dst.storage .= (g ./ (1f0 .+ exp.(-g))) .* up.storage
+    dst.storage .= (g ./ (1.0f0 .+ exp.(-g))) .* up.storage
     a.enabled && _lava_note_op!(:swiglu, time_ns() - t0)
     return dst
 end
@@ -699,7 +863,7 @@ function rmsnorm!(
     x::Activation,
     scale::FrozenParameter,
     workload::Gesso.PrefillWorkload;
-    eps::Real = 1e-6,
+    eps::Real=1e-6,
 )
     _lava_device_storage!(:rmsnorm!, dst)
     _lava_device_storage!(:rmsnorm!, x)
@@ -714,7 +878,7 @@ function rmsnorm!(
     x::Activation,
     scale::FrozenParameter,
     workload::Gesso.DecodeWorkload;
-    eps::Real = 1e-6,
+    eps::Real=1e-6,
 )
     _lava_device_storage!(:rmsnorm!, dst)
     _lava_device_storage!(:rmsnorm!, x)
@@ -729,10 +893,10 @@ function rope!(
     k::Activation,
     positions::AbstractVector{Int},
     workload::Gesso.PrefillWorkload;
-    theta::Real = 10000.0,
-    inv_freq = nothing,
-    interleaved::Bool = true,
-    rotary_dim::Integer = 0,
+    theta::Real=10000.0,
+    inv_freq=nothing,
+    interleaved::Bool=true,
+    rotary_dim::Integer=0,
 )
     # Imported default, linear and Llama3 frequency metadata travels with Q/K.
     # Validate and rotate on the requested Lava storage (§LXX: no silent
@@ -750,10 +914,10 @@ function rope!(
     k::Activation,
     positions::AbstractVector{Int},
     workload::Gesso.DecodeWorkload;
-    theta::Real = 10000.0,
-    inv_freq = nothing,
-    interleaved::Bool = true,
-    rotary_dim::Integer = 0,
+    theta::Real=10000.0,
+    inv_freq=nothing,
+    interleaved::Bool=true,
+    rotary_dim::Integer=0,
 )
     # Imported default, linear and Llama3 frequency metadata travels with Q/K.
     # Validate and rotate on the requested Lava storage (§LXX: no silent
@@ -890,7 +1054,7 @@ end
     (r > size(dst, 1) || h > size(dst, 2)) && return
     coloff = (h - 1) * d_head
     for f in 1:d_head
-        dst[r, h, f] = src[r, coloff + f]
+        dst[r, h, f] = src[r, coloff+f]
     end
 end
 
@@ -909,7 +1073,7 @@ end
     (r > size(dst, 1) || h > size(dst, 2)) && return
     coloff = (h - 1) * d_head
     for f in 1:d_head
-        dst[r, coloff + f] = src[r, h, f]
+        dst[r, coloff+f] = src[r, h, f]
     end
 end
 
@@ -928,7 +1092,7 @@ end
     (r > K || sh > size(src, 2)) && return
     Dh = size(dst, 3)
     for g in 1:group, f in 1:Dh
-        dst[r, (sh - 1) * group + g, f] = src[r, sh, f]
+        dst[r, (sh-1)*group+g, f] = src[r, sh, f]
     end
 end
 
@@ -956,7 +1120,16 @@ function _add_storage!(dst::Lava.LavaArray, src::Lava.LavaArray)
 end
 
 # Per-head attention without copied slices. Decode L=1 is (K, Dh) · q.
-@kernel cpu=false function _lava_attn_scores_kernel!(sc, q, k, hh, scale, L::Int, K::Int, Dh::Int)
+@kernel cpu=false function _lava_attn_scores_kernel!(
+    sc,
+    q,
+    k,
+    hh,
+    scale,
+    L::Int,
+    K::Int,
+    Dh::Int,
+)
     idx = @index(Global, Cartesian)
     t = idx[1]
     j = idx[2]
@@ -968,16 +1141,43 @@ end
     sc[t, j] = acc * scale
 end
 
-function _attention_scores_device!(::LavaBackend, sc, q::AbstractArray, k::AbstractArray, hh, d_head, K)
+function _attention_scores_device!(
+    ::LavaBackend,
+    sc,
+    q::AbstractArray,
+    k::AbstractArray,
+    hh,
+    d_head,
+    K,
+)
     L = size(q, 1)
     L == 0 && return sc
     scale = Float32(1 / sqrt(d_head))
     kern = _lava_attn_scores_kernel!(KA.get_backend(q))
-    kern(sc, q, k, Int(hh), scale, Int(L), Int(K), Int(d_head); ndrange=(L, K), workgroupsize=_LAVA_WG2)
+    kern(
+        sc,
+        q,
+        k,
+        Int(hh),
+        scale,
+        Int(L),
+        Int(K),
+        Int(d_head);
+        ndrange=(L, K),
+        workgroupsize=_LAVA_WG2,
+    )
     return sc
 end
 
-@kernel cpu=false function _lava_attn_values_kernel!(attn, probs, v, hh, L::Int, K::Int, Dh::Int)
+@kernel cpu=false function _lava_attn_values_kernel!(
+    attn,
+    probs,
+    v,
+    hh,
+    L::Int,
+    K::Int,
+    Dh::Int,
+)
     idx = @index(Global, Cartesian)
     t = idx[1]
     d = idx[2]
@@ -989,19 +1189,44 @@ end
     attn[t, hh, d] = acc
 end
 
-function _attention_values_device!(::LavaBackend, attn::AbstractArray, probs, v::AbstractArray, hh, K)
+function _attention_values_device!(
+    ::LavaBackend,
+    attn::AbstractArray,
+    probs,
+    v::AbstractArray,
+    hh,
+    K,
+)
     L = size(attn, 1)
     Dh = size(attn, 3)
     L == 0 && return attn
     kern = _lava_attn_values_kernel!(KA.get_backend(attn))
-    kern(attn, probs, v, Int(hh), Int(L), Int(K), Int(Dh); ndrange=(L, Dh), workgroupsize=_LAVA_WG2)
+    kern(
+        attn,
+        probs,
+        v,
+        Int(hh),
+        Int(L),
+        Int(K),
+        Int(Dh);
+        ndrange=(L, Dh),
+        workgroupsize=_LAVA_WG2,
+    )
     return attn
 end
 
 # Decode L=1: one scores kernel, one softmax, one values kernel per layer.
 # Each score row is a full key prefix (no causal offset — K already is the
 # filled cache). Prefill keeps the per-head loop in `_attention_heads!`.
-@kernel cpu=false function _lava_attn_scores_batched_kernel!(sc, q, k, scale, H::Int, K::Int, Dh::Int)
+@kernel cpu=false function _lava_attn_scores_batched_kernel!(
+    sc,
+    q,
+    k,
+    scale,
+    H::Int,
+    K::Int,
+    Dh::Int,
+)
     idx = @index(Global, Cartesian)
     h = idx[1]
     j = idx[2]
@@ -1035,7 +1260,14 @@ end
     end
 end
 
-@kernel cpu=false function _lava_attn_values_batched_kernel!(attn, probs, v, H::Int, K::Int, Dh::Int)
+@kernel cpu=false function _lava_attn_values_batched_kernel!(
+    attn,
+    probs,
+    v,
+    H::Int,
+    K::Int,
+    Dh::Int,
+)
     idx = @index(Global, Cartesian)
     h = idx[1]
     d = idx[2]
@@ -1068,11 +1300,30 @@ function _attention_heads!(
         scale = Float32(1 / sqrt(d_head))
         backend = KA.get_backend(q)
         kern_s = _lava_attn_scores_batched_kernel!(backend)
-        kern_s(sc, q, k, scale, n_heads, Int(K), Int(d_head); ndrange=(n_heads, K), workgroupsize=_LAVA_WG2)
+        kern_s(
+            sc,
+            q,
+            k,
+            scale,
+            n_heads,
+            Int(K),
+            Int(d_head);
+            ndrange=(n_heads, K),
+            workgroupsize=_LAVA_WG2,
+        )
         kern_m = _lava_softmax_heads_kernel!(backend)
         kern_m(probs, sc, n_heads, Int(K); ndrange=n_heads, workgroupsize=_LAVA_WG1)
         kern_v = _lava_attn_values_batched_kernel!(backend)
-        kern_v(attn, probs, v, n_heads, Int(K), Int(d_head); ndrange=(n_heads, d_head), workgroupsize=_LAVA_WG2)
+        kern_v(
+            attn,
+            probs,
+            v,
+            n_heads,
+            Int(K),
+            Int(d_head);
+            ndrange=(n_heads, d_head),
+            workgroupsize=_LAVA_WG2,
+        )
         if a.enabled
             _lava_note_op!(:softmax, time_ns() - t0)
         end
@@ -1104,11 +1355,15 @@ function _lava_to_device(tensors)
     # from F32 storage). Projection weights stay as GGUF bytes when they are
     # eligible and fit the dense budget (the CUDA rule, GESSO_GPU_BUDGET_MIB).
     budget = Ref(Gesso.Inference._gpu_budget_bytes())
-    _to_f32(s) = s isa Lava.LavaArray ? s :
-        s isa Gesso.Inference.QuantMatrix ? Lava.LavaArray{Float32}(Gesso.Inference._quant_host_f32(s)) :
+    _to_f32(s) =
+        s isa Lava.LavaArray ? s :
+        s isa Gesso.Inference.QuantMatrix ?
+        Lava.LavaArray{Float32}(Gesso.Inference._quant_host_f32(s)) :
         Lava.LavaArray{Float32}(s)
     _to_proj(s) = begin
-        if s isa Gesso.Inference.QuantMatrix && _lq_eligible(s) && _lq_device_bytes(s) <= budget[]
+        if s isa Gesso.Inference.QuantMatrix &&
+           _lq_eligible(s) &&
+           _lq_device_bytes(s) <= budget[]
             budget[] -= _lq_device_bytes(s)
             return _lq_upload(s)
         end
@@ -1116,24 +1371,30 @@ function _lava_to_device(tensors)
     end
     # tensors in the map carry (shape, storage); blocks are NAMED TUPLES of
     # tensors, so their fields convert field-wise
-    _conv_t(t; proj::Bool = false) = begin
+    _conv_t(t; proj::Bool=false) = begin
         hasproperty(t, :storage) || return t         # mixer tags and other metadata
         t.storage === nothing && return t            # unset storage stays unset
-        st = proj && t isa Gesso.ProjectionWeight ? _to_proj(t.storage) : _to_f32(t.storage)
-        typeof(t)(; shape = t.shape, storage = st)
+        st =
+            proj && t isa Gesso.ProjectionWeight ? _to_proj(t.storage) : _to_f32(t.storage)
+        typeof(t)(; shape=t.shape, storage=st)
     end
     # Routed expert banks stay on the host (the CUDA GESSO_MOE_HOST_EXPERTS
     # split): a GGUF slab is never dequantized to device F32 here. The host
     # MoE route in lava_hybrid.jl reads these banks in place.
     _host_expert_key(k) = k in (:wexp_gate, :wexp_up, :wexp_down)
-    _host_expert_t(t) = hasproperty(t, :storage) && t.storage isa Gesso.Inference.GgufQuantSlice
-    _conv_blk(b) = NamedTuple{keys(b)}(map(keys(b)) do k
-        t = getproperty(b, k)
-        _host_expert_key(k) && _host_expert_t(t) ? t : _conv_t(t; proj = true)
-    end)
+    _host_expert_t(t) =
+        hasproperty(t, :storage) && t.storage isa Gesso.Inference.GgufQuantSlice
+    _conv_blk(b) = NamedTuple{keys(b)}(
+        map(keys(b)) do k
+            t = getproperty(b, k)
+            _host_expert_key(k) && _host_expert_t(t) ? t : _conv_t(t; proj=true)
+        end,
+    )
     embedding = _conv_t(tensors.embedding)
     blocks = [_conv_blk(b) for b in tensors.blocks]
-    lm_head = tensors.lm_head === tensors.embedding ? embedding : _conv_t(tensors.lm_head; proj = true)
+    lm_head =
+        tensors.lm_head === tensors.embedding ? embedding :
+        _conv_t(tensors.lm_head; proj=true)
     fr = haskey(tensors, :final_rms) ? tensors.final_rms : nothing
     final_rms = fr === nothing ? nothing : _conv_t(fr)
     _lava_sync!()
@@ -1209,7 +1470,7 @@ function _lava_arena_relayout!(s::LavaArenaSlab)
     copy!(s.layout, s.requested)
     total = 0
     for key in s.layout
-        key[1] == 0 || (total += _lava_arena_round(prod(key[2:(key[1] + 1)])))
+        key[1] == 0 || (total += _lava_arena_round(prod(key[2:(key[1]+1)])))
     end
     s.slab = Lava.LavaArray{Float32}(undef, max(total, 1))
     off = 0
@@ -1218,9 +1479,9 @@ function _lava_arena_relayout!(s::LavaArenaSlab)
             push!(s.views, nothing)
             continue
         end
-        dims = key[2:(key[1] + 1)]
+        dims = key[2:(key[1]+1)]
         n = prod(dims)
-        push!(s.views, reshape(view(s.slab, (off + 1):(off + n)), dims))
+        push!(s.views, reshape(view(s.slab, (off+1):(off+n)), dims))
         off += _lava_arena_round(n)
     end
     return s
@@ -1239,8 +1500,8 @@ function (a::LavaDecodeArena)(dims::NTuple{N, Int}) where {N}
     return buf
 end
 
-const _LAVA_DECODE_ARENA = LavaArenaSlab(
-    nothing, Any[], NTuple{5, Int}[], NTuple{5, Int}[], Any[])
+const _LAVA_DECODE_ARENA =
+    LavaArenaSlab(nothing, Any[], NTuple{5, Int}[], NTuple{5, Int}[], Any[])
 
 # Mirrors the CUDA arena's step protocol (ext/cuda_ops.jl). Freeing the previous
 # step's views and slab is safe only because nothing taken from this factory

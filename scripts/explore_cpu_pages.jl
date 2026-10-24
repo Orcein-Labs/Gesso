@@ -25,8 +25,16 @@ const FMT = I.GGML_TYPE_IQ4_XS
 const SAMPLES = parse(Int, get(ENV, "EXP_SAMPLES", "9"))
 const TARGET_S = 0.25
 const WS_MIN = 512 * 2^20
-const GGUF = get(ENV, "EXP_GGUF", joinpath(homedir(), ".cache", "gesso",
-    "Qwen3.8-27B-TurboFCFusion-735-882-Here-Uncen-NEO-CODER-MAX-LOW-MTP-IQ4_XS.gguf"))
+const GGUF = get(
+    ENV,
+    "EXP_GGUF",
+    joinpath(
+        homedir(),
+        ".cache",
+        "gesso",
+        "Qwen3.8-27B-TurboFCFusion-735-882-Here-Uncen-NEO-CODER-MAX-LOW-MTP-IQ4_XS.gguf",
+    ),
+)
 
 function time_samples(f)
     f()
@@ -46,7 +54,7 @@ function stats(v::Vector{Float64})
     s = sort(v)
     n = length(s)
     m = sum(v) / n
-    med = isodd(n) ? s[(n + 1) ÷ 2] : (s[n ÷ 2] + s[n ÷ 2 + 1]) / 2
+    med = isodd(n) ? s[(n+1)÷2] : (s[n÷2] + s[n÷2+1]) / 2
     sd = sqrt(sum((v .- m) .^ 2) / (n - 1))
     return (; med, mean=m, sd, min=s[1], max=s[end])
 end
@@ -63,7 +71,7 @@ end
 function pick_tensors(hdr)
     cands = [t for t in hdr.tensors if t.ggml_type == FMT && length(t.dims) == 2]
     isempty(cands) && error("no IQ4_XS 2-D tensors in $GGUF")
-    counts = Dict{Int,Int}()
+    counts = Dict{Int, Int}()
     for t in cands
         counts[t.dims[1]] = get(counts, t.dims[1], 0) + 1
     end
@@ -94,31 +102,63 @@ function rotating_gemv_samples(views::Vector, ne0::Int, ne1s::Vector{Int})
     return time_samples(f)
 end
 
-function report(label::String, ts::Vector{Float64}, nbytes_total::Int, ne1s::Vector{Int}, ne0::Int)
+function report(
+    label::String,
+    ts::Vector{Float64},
+    nbytes_total::Int,
+    ne1s::Vector{Int},
+    ne0::Int,
+)
     # Bytes per call vary by matrix; rate is the per-call bytes over per-call time, median over samples.
     # Per-sample times are for one call, averaged over the rotation.
     mean_bytes = nbytes_total / length(ne1s)
     s = stats(mean_bytes ./ ts ./ 1.0e9)
-    println(rpad(label, 16), " GB/s median ", round(s.med; digits=2), "  mean ", round(s.mean; digits=2),
-        "  sd ", round(s.sd; digits=2), "  min ", round(s.min; digits=2), "  max ", round(s.max; digits=2),
-        "  call_ms_med ", round(stats(ts).med * 1.0e3; digits=3), "  anon_huge_kB ", anon_huge_kb())
+    println(
+        rpad(label, 16),
+        " GB/s median ",
+        round(s.med; digits=2),
+        "  mean ",
+        round(s.mean; digits=2),
+        "  sd ",
+        round(s.sd; digits=2),
+        "  min ",
+        round(s.min; digits=2),
+        "  max ",
+        round(s.max; digits=2),
+        "  call_ms_med ",
+        round(stats(ts).med * 1.0e3; digits=3),
+        "  anon_huge_kB ",
+        anon_huge_kb(),
+    )
     return s
 end
 
 function main()
     println("gguf = ", basename(GGUF))
-    println("threads = ", nthreads(), "   thp enabled = ", strip(read("/sys/kernel/mm/transparent_hugepage/enabled", String)))
+    println(
+        "threads = ",
+        nthreads(),
+        "   thp enabled = ",
+        strip(read("/sys/kernel/mm/transparent_hugepage/enabled", String)),
+    )
     println("anon_huge_kB at start = ", anon_huge_kb())
     hdr = I.gguf_header(GGUF)
     ne0, tensors = pick_tensors(hdr)
     ne1s = [t.dims[2] for t in tensors]
     sizes = [I._qrow_bytes(FMT, ne0) * n for n in ne1s]
     total = sum(sizes)
-    println("tensors = ", length(tensors), "  ne0 = ", ne0, "  working set MiB = ", round(total / 2^20; digits=1))
+    println(
+        "tensors = ",
+        length(tensors),
+        "  ne0 = ",
+        ne0,
+        "  working set MiB = ",
+        round(total / 2^20; digits=1),
+    )
     offs = [Int(hdr.data_start) + Int(t.offset) for t in tensors]
 
     # mmap: views into the file mapping, pre-touched so the timing excludes disk reads.
-    mm_views = [view(hdr.data, o + 1:o + s) for (o, s) in zip(offs, sizes)]
+    mm_views = [view(hdr.data, (o+1):(o+s)) for (o, s) in zip(offs, sizes)]
     for v in mm_views
         sum(view(v, 1:64:length(v)))  # touch one byte per 64 B line
     end
@@ -133,7 +173,14 @@ function main()
             p0 = pointer(buf)
             a = (UInt(p0) + 4095) & ~UInt(4095)
             b = (UInt(p0) + total) & ~UInt(4095)
-            ret = ccall(:madvise, Cint, (Ptr{Cvoid}, Csize_t, Cint), Ptr{Cvoid}(a), Csize_t(b - a), 14)
+            ret = ccall(
+                :madvise,
+                Cint,
+                (Ptr{Cvoid}, Csize_t, Cint),
+                Ptr{Cvoid}(a),
+                Csize_t(b - a),
+                14,
+            )
             println("  madvise(MADV_HUGEPAGE) on anon buffer returned ", ret)
         end
         off = 0
@@ -142,12 +189,12 @@ function main()
             off += s
         end
         # Verify byte identity with the mapping on the first matrix.
-        ok = view(buf, 1:sizes[1]) == view(hdr.data, offs[1] + 1:offs[1] + sizes[1])
+        ok = view(buf, 1:sizes[1]) == view(hdr.data, (offs[1]+1):(offs[1]+sizes[1]))
         println("  ", label, " bytes match mapping (first matrix): ", ok)
-        views = Vector{SubArray{UInt8,1,Vector{UInt8},Tuple{UnitRange{Int}},true}}()
+        views = Vector{SubArray{UInt8, 1, Vector{UInt8}, Tuple{UnitRange{Int}}, true}}()
         o2 = 0
         for s in sizes
-            push!(views, view(buf, o2 + 1:o2 + s))
+            push!(views, view(buf, (o2+1):(o2+s)))
             o2 += s
         end
         return views, buf

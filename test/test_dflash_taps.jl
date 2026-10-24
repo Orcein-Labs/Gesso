@@ -11,7 +11,7 @@ _df_toy(ts=toy2_tensors()) = _vw_f32(_hybrid_toy_tensors(ts))
 
 # (p, X) log; the callback copies, so the log keeps each delivery
 function _df_log()
-    calls = Tuple{Int,Matrix{Float32}}[]
+    calls = Tuple{Int, Matrix{Float32}}[]
     return calls, (p, X) -> push!(calls, (p, copy(X)))
 end
 
@@ -33,8 +33,15 @@ end
     dim = ts.model.embedding.dim
     plain = reference_generate(ts.model, ts, _DF_PROMPT; max_new_tokens=6, eos_ids=())
     calls, cb = _df_log()
-    ids = reference_generate(ts.model, ts, _DF_PROMPT; max_new_tokens=6, eos_ids=(),
-        taps=[0, 1, nb], on_taps=cb)
+    ids = reference_generate(
+        ts.model,
+        ts,
+        _DF_PROMPT;
+        max_new_tokens=6,
+        eos_ids=(),
+        taps=[0, 1, nb],
+        on_taps=cb,
+    )
     @test ids == plain
     @test all(size(X, 2) == 3dim for (_, X) in calls)
     rows = _df_tile(calls)
@@ -47,19 +54,36 @@ end
         dim = ts.model.embedding.dim
         tlog, tcb = _df_log()
         rlog, rcb = _df_log()
-        ids = reference_generate(ts.model, ts, _DF_PROMPT; max_new_tokens=6, eos_ids=(),
-            taps=[0, 1, nb], on_taps=tcb, on_rows=rcb)
+        ids = reference_generate(
+            ts.model,
+            ts,
+            _DF_PROMPT;
+            max_new_tokens=6,
+            eos_ids=(),
+            taps=[0, 1, nb],
+            on_taps=tcb,
+            on_rows=rcb,
+        )
         X = _df_tile(tlog)
         R = _df_tile(rlog)
         L = length(ids) - 1
         @test size(X, 1) == size(R, 1) == L
         # the last tap is the residual after every block: final-normed, it is on_rows' row
-        fin = Gesso.Inference._final_normed_rows(ts, X[:, (2dim + 1):(3dim)], Gesso.CPUBackend(),
-            Gesso.DecodeWorkload())
+        fin = Gesso.Inference._final_normed_rows(
+            ts,
+            X[:, (2dim+1):(3dim)],
+            Gesso.CPUBackend(),
+            Gesso.DecodeWorkload(),
+        )
         @test isapprox(fin, R; rtol=1e-5, atol=1e-6)
         # tap 0 is the embedding output of the consumed id
         for p in 1:L
-            @test isapprox(X[p, 1:dim], ts.embedding.storage[ids[p] + 1, :]; rtol=1e-5, atol=1e-6)
+            @test isapprox(
+                X[p, 1:dim],
+                ts.embedding.storage[ids[p]+1, :];
+                rtol=1e-5,
+                atol=1e-6,
+            )
         end
     end
 end
@@ -70,17 +94,35 @@ end
     plen = length(_DF_PROMPT)
     vocab = size(ts.embedding.storage, 1)
     pc, pcb = _df_log()
-    plain = reference_generate(ts.model, ts, _DF_PROMPT; max_new_tokens=12, eos_ids=(),
-        taps=[0, 1, nb], on_taps=pcb)
+    plain = reference_generate(
+        ts.model,
+        ts,
+        _DF_PROMPT;
+        max_new_tokens=12,
+        eos_ids=(),
+        taps=[0, 1, nb],
+        on_taps=pcb,
+    )
     prow = _df_tile(pc)
     for draft in (NamedTuple(), (; wrong=2), (; allwrong=true))
-        src = _vw_draft(plain[(plen + 1):end], plen, vocab; draft...)
+        src = _vw_draft(plain[(plen+1):end], plen, vocab; draft...)
         st = GenerateState(_DF_CTX)
         try
             wc, wcb = _df_log()
             info = Ref{Any}(nothing)
-            ids = reference_generate(ts.model, ts, _DF_PROMPT; max_new_tokens=12, eos_ids=(),
-                state=st, draft=src, max_draft=3, info, taps=[0, 1, nb], on_taps=wcb)
+            ids = reference_generate(
+                ts.model,
+                ts,
+                _DF_PROMPT;
+                max_new_tokens=12,
+                eos_ids=(),
+                state=st,
+                draft=src,
+                max_draft=3,
+                info,
+                taps=[0, 1, nb],
+                on_taps=wcb,
+            )
             @test ids == plain
             @test info[].speculation.windows >= 1
             wrow = _df_tile(wc)
@@ -96,13 +138,21 @@ end
     ts = _df_toy()
     nb = length(ts.model.blocks)
     cb = (p, X) -> nothing
-    _df_run(; kw...) = reference_generate(ts.model, ts, _DF_PROMPT; max_new_tokens=2, eos_ids=(), kw...)
+    _df_run(; kw...) =
+        reference_generate(ts.model, ts, _DF_PROMPT; max_new_tokens=2, eos_ids=(), kw...)
     @test_throws ArgumentError _df_run(taps=[0])
     @test_throws ArgumentError _df_run(on_taps=cb)
     @test_throws ArgumentError _df_run(taps=[nb + 1], on_taps=cb)
     @test_throws ArgumentError _df_run(taps=[-1], on_taps=cb)
     # a dense model never takes the window prefill, so it refuses taps
     dense = toy2_tensors()
-    @test_throws ArgumentError reference_generate(dense.model, dense, _DF_PROMPT; max_new_tokens=2,
-        eos_ids=(), taps=[0], on_taps=cb)
+    @test_throws ArgumentError reference_generate(
+        dense.model,
+        dense,
+        _DF_PROMPT;
+        max_new_tokens=2,
+        eos_ids=(),
+        taps=[0],
+        on_taps=cb,
+    )
 end

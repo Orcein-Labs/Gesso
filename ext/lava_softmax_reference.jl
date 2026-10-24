@@ -4,7 +4,7 @@
     lane=@index(Local, Linear)
     partial=@localmem Float32 (64,)
     value=Float32(0)
-    for j = lane:64:K
+    for j in lane:64:K
         value+=E[row, j]
     end
     partial[lane]=value
@@ -32,6 +32,6 @@ function _lava_softmax_rowsum64(E)
             (32,),
         ),
     )
-    kernel(den, E, Int(K); ndrange = 64L, workgroupsize = 64)
+    kernel(den, E, Int(K); ndrange=64L, workgroupsize=64)
     den
 end

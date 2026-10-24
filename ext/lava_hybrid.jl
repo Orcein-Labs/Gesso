@@ -51,7 +51,15 @@ _lh_host_weight(w) = w
 
 # Causal depthwise conv1d + SiLU, one thread per (t, channel). Reads only the
 # old conv_state and x, so the state update is a separate launch.
-@kernel cpu=false function _lava_conv_silu_kernel!(dst, x, weight, state, channels::Int, k::Int, n::Int)
+@kernel cpu=false function _lava_conv_silu_kernel!(
+    dst,
+    x,
+    weight,
+    state,
+    channels::Int,
+    k::Int,
+    n::Int,
+)
     i = @index(Global)
     i <= n || return
     t = (i - 1) ÷ channels + 1
@@ -59,7 +67,7 @@ _lh_host_weight(w) = w
     acc = 0.0f0
     for p in 1:k
         src = t - (k - p)
-        v = src <= 0 ? state[c, src + (k - 1)] : x[src, c]
+        v = src <= 0 ? state[c, src+(k-1)] : x[src, c]
         acc += weight[c, 1, p] * v
     end
     dst[t, c] = acc / (1.0f0 + exp(-acc))
@@ -67,26 +75,43 @@ end
 
 # Last k-1 inputs of the concatenated stream. `old` is a copy of the state
 # whenever the shift reads it, so no thread reads a slot another thread writes.
-@kernel cpu=false function _lava_conv_state_kernel!(state, old, x, seq::Int, channels::Int, k::Int, n::Int)
+@kernel cpu=false function _lava_conv_state_kernel!(
+    state,
+    old,
+    x,
+    seq::Int,
+    channels::Int,
+    k::Int,
+    n::Int,
+)
     i = @index(Global)
     i <= n || return
     c = (i - 1) % channels + 1
     p = (i - 1) ÷ channels + 1
     if seq >= k - 1
-        state[c, p] = x[seq - (k - 1) + p, c]
+        state[c, p] = x[seq-(k-1)+p, c]
     else
         keep = (k - 1) - seq
         if p <= keep
-            state[c, p] = old[c, p + seq]
+            state[c, p] = old[c, p+seq]
         else
-            state[c, p] = x[p - keep, c]
+            state[c, p] = x[p-keep, c]
         end
     end
 end
 
 # beta = sigmoid(b); g = -exp(A_log) * softplus(a + dt_bias). Softplus uses
 # the same x > 20 split as the CPU oracle.
-@kernel cpu=false function _lava_gdn_gates_kernel!(g, beta, a, b, A_log, dt_bias, nv::Int, n::Int)
+@kernel cpu=false function _lava_gdn_gates_kernel!(
+    g,
+    beta,
+    a,
+    b,
+    A_log,
+    dt_bias,
+    nv::Int,
+    n::Int,
+)
     i = @index(Global)
     i <= n || return
     hh = (i - 1) % nv + 1
@@ -101,8 +126,19 @@ end
 # v_head_tiled), L2-normalize q and k, and scale q by 1/sqrt(dk). One thread
 # per (t, value head); the head mapping and eps match `_cpu_gated_delta_rule!`.
 @kernel cpu=false function _lava_gdn_qk_kernel!(
-    qn, kn, q, k, nk::Int, group::Int, tiled::Bool, l2norm::Bool,
-    scale::Float32, eps::Float32, nv::Int, dk::Int, n::Int,
+    qn,
+    kn,
+    q,
+    k,
+    nk::Int,
+    group::Int,
+    tiled::Bool,
+    l2norm::Bool,
+    scale::Float32,
+    eps::Float32,
+    nv::Int,
+    dk::Int,
+    n::Int,
 )
     i = @index(Global)
     i <= n || return
@@ -127,7 +163,18 @@ end
 # state[hh, :, j] exclusively, so there are no cross-thread writes. Time is
 # sequential inside the thread, as the recurrence requires.
 @kernel cpu=false function _lava_gdn_recur_kernel!(
-    out, qn, kn, v, g, beta, state, nv::Int, dk::Int, dv::Int, seq::Int, n::Int,
+    out,
+    qn,
+    kn,
+    v,
+    g,
+    beta,
+    state,
+    nv::Int,
+    dk::Int,
+    dv::Int,
+    seq::Int,
+    n::Int,
 )
     i = @index(Global)
     i <= n || return
@@ -160,7 +207,15 @@ const _LH_RED_LANES = 64
 # Gated RMS norm, SiLU gate and head merge in one launch, one workgroup per
 # (token, value head). The engine's unfused fallback issues about five ops per
 # head, roughly 160 launches per GDN layer. Same arithmetic as the CUDA kernel.
-@kernel cpu=false function _lava_gdn_gnorm_kernel!(merged, core, z, norm_w, nv::Int, dv::Int, eps::Float32)
+@kernel cpu=false function _lava_gdn_gnorm_kernel!(
+    merged,
+    core,
+    z,
+    norm_w,
+    nv::Int,
+    dv::Int,
+    eps::Float32,
+)
     tl = @index(Local, Linear)
     gi = @index(Group, Linear)
     part = @localmem Float32 (_LH_RED_LANES,)
@@ -181,20 +236,34 @@ const _LH_RED_LANES = 64
     inv = 1.0f0 / sqrt(ss / Float32(dv) + eps)
     base = (hh - 1) * dv
     for j in tl:_LH_RED_LANES:dv
-        zv = z[t, base + j]
-        merged[t, base + j] = (core[t, hh, j] * inv) * norm_w[j] * (zv / (1.0f0 + exp(-zv)))
+        zv = z[t, base+j]
+        merged[t, base+j] = (core[t, hh, j] * inv) * norm_w[j] * (zv / (1.0f0 + exp(-zv)))
     end
 end
 
-function Gesso.Inference._gdn_gnorm_merge!(::LavaBackend, merged::Lava.LavaArray{Float32, 2},
-                                           core::Lava.LavaArray{Float32, 3},
-                                           z::Lava.LavaArray{Float32, 2}, scale, eps)
+function Gesso.Inference._gdn_gnorm_merge!(
+    ::LavaBackend,
+    merged::Lava.LavaArray{Float32, 2},
+    core::Lava.LavaArray{Float32, 3},
+    z::Lava.LavaArray{Float32, 2},
+    scale,
+    eps,
+)
     seq, nv, dv = size(core)
     seq == 0 && return true
     w = _lh_device(scale.storage, :gdn_gnorm_merge)
     kern = _lava_gdn_gnorm_kernel!(KA.get_backend(core))
-    kern(merged, core, z, w, Int(nv), Int(dv), Float32(eps);
-        ndrange=seq * nv * _LH_RED_LANES, workgroupsize=(_LH_RED_LANES,))
+    kern(
+        merged,
+        core,
+        z,
+        w,
+        Int(nv),
+        Int(dv),
+        Float32(eps);
+        ndrange=seq * nv * _LH_RED_LANES,
+        workgroupsize=(_LH_RED_LANES,),
+    )
     return true
 end
 
@@ -213,7 +282,17 @@ function Gesso.Inference._causal_conv1d_silu!(::LavaBackend, dst, x, weight, con
     seq == 0 && return dst
     n_out = seq * channels
     kout = _lava_conv_silu_kernel!(KA.get_backend(xs))
-    kout(d, xs, ws, st, Int(channels), Int(k), Int(n_out); ndrange=n_out, workgroupsize=_LH_WG)
+    kout(
+        d,
+        xs,
+        ws,
+        st,
+        Int(channels),
+        Int(k),
+        Int(n_out);
+        ndrange=n_out,
+        workgroupsize=_LH_WG,
+    )
     # The output kernel has read the old state, so the update runs after it on
     # the same queue. A copy is needed only when the shift reads the old state.
     n_st = (k - 1) * channels
@@ -225,7 +304,17 @@ function Gesso.Inference._causal_conv1d_silu!(::LavaBackend, dst, x, weight, con
         st
     end
     kst = _lava_conv_state_kernel!(KA.get_backend(xs))
-    kst(st, old, xs, Int(seq), Int(channels), Int(k), Int(n_st); ndrange=n_st, workgroupsize=_LH_WG)
+    kst(
+        st,
+        old,
+        xs,
+        Int(seq),
+        Int(channels),
+        Int(k),
+        Int(n_st);
+        ndrange=n_st,
+        workgroupsize=_LH_WG,
+    )
     return dst
 end
 
@@ -290,20 +379,27 @@ Gesso.Inference._gdn_fused_decode(::LavaBackend) = true
 
 # Thread c owns channel c alone, so its state column is read before it is
 # overwritten and no other thread touches it.
-@kernel cpu=false function _lava_gdn_conv_decode_kernel!(conv_out, state, mixed, weight, k::Int, channels::Int)
+@kernel cpu=false function _lava_gdn_conv_decode_kernel!(
+    conv_out,
+    state,
+    mixed,
+    weight,
+    k::Int,
+    channels::Int,
+)
     c = @index(Global)
     c <= channels || return
     acc = 0.0f0
-    for p in 1:(k - 1)
+    for p in 1:(k-1)
         acc += weight[c, 1, p] * state[c, p]
     end
     xv = mixed[1, c]
     acc += weight[c, 1, k] * xv
     conv_out[1, c] = acc / (1.0f0 + exp(-acc))
-    for p in 1:(k - 2)
-        state[c, p] = state[c, p + 1]
+    for p in 1:(k-2)
+        state[c, p] = state[c, p+1]
     end
-    state[c, k - 1] = xv
+    state[c, k-1] = xv
 end
 
 # Lava workgroups are 1-D and local memory is sized at compile time, so the
@@ -317,9 +413,22 @@ const _LH_DELTA_RED = 3 * _LH_DELTA_WG
 # adjacent in the [nv, dk, dv] state. The q and k norms scale the sums rather
 # than every element: the same math to rounding.
 @kernel cpu=false function _lava_gdn_delta_kernel!(
-    core, conv_out, a, b, A_log, dt_bias, state,
-    nv::Int, nk::Int, group::Int, tiled::Bool, dk::Int, dv::Int, Y::Int,
-    scale::Float32, eps::Float32,
+    core,
+    conv_out,
+    a,
+    b,
+    A_log,
+    dt_bias,
+    state,
+    nv::Int,
+    nk::Int,
+    group::Int,
+    tiled::Bool,
+    dk::Int,
+    dv::Int,
+    Y::Int,
+    scale::Float32,
+    eps::Float32,
 )
     tl = @index(Local, Linear)
     j = @index(Group, Linear)
@@ -342,16 +451,16 @@ const _LH_DELTA_RED = 3 * _LH_DELTA_WG
         sp = av > 20.0f0 ? av : log(1.0f0 + exp(av))
         decay = exp(-exp(A_log[hh]) * sp)
         for i in y:Y:dk
-            qv = conv_out[1, qoff + i]
-            kv = conv_out[1, koff + i]
+            qv = conv_out[1, qoff+i]
+            kv = conv_out[1, koff+i]
             sq += qv * qv
             sk += kv * kv
             sm += (state[hh, i, j] * decay) * kv
         end
     end
     red[tl] = sq
-    red[_LH_DELTA_WG + tl] = sk
-    red[2 * _LH_DELTA_WG + tl] = sm
+    red[_LH_DELTA_WG+tl] = sk
+    red[2*_LH_DELTA_WG+tl] = sm
     @synchronize
     acc = 0.0f0
     invq = 0.0f0
@@ -359,20 +468,20 @@ const _LH_DELTA_RED = 3 * _LH_DELTA_WG
         sq = 0.0f0
         sk = 0.0f0
         sm = 0.0f0
-        for t in 0:(Y - 1)
+        for t in 0:(Y-1)
             r = hh + t * nv
             sq += red[r]
-            sk += red[_LH_DELTA_WG + r]
-            sm += red[2 * _LH_DELTA_WG + r]
+            sk += red[_LH_DELTA_WG+r]
+            sm += red[2*_LH_DELTA_WG+r]
         end
         invq = scale / sqrt(sq + eps)
         invk = 1.0f0 / sqrt(sk + eps)
-        delta = (conv_out[1, 2 * key_dim + (hh - 1) * dv + j] - sm * invk) * beta
+        delta = (conv_out[1, 2*key_dim+(hh-1)*dv+j] - sm * invk) * beta
         kd = invk * delta
         for i in y:Y:dk
-            sn = state[hh, i, j] * decay + conv_out[1, koff + i] * kd
+            sn = state[hh, i, j] * decay + conv_out[1, koff+i] * kd
             state[hh, i, j] = sn
-            acc += sn * conv_out[1, qoff + i]
+            acc += sn * conv_out[1, qoff+i]
         end
     end
     # every lane must be done reading the first reduction before it is reused
@@ -381,23 +490,30 @@ const _LH_DELTA_RED = 3 * _LH_DELTA_WG
     @synchronize
     if active && y == 1
         tot = 0.0f0
-        for t in 0:(Y - 1)
-            tot += red[hh + t * nv]
+        for t in 0:(Y-1)
+            tot += red[hh+t*nv]
         end
-        core[1, (hh - 1) * dv + j] = tot * invq
+        core[1, (hh-1)*dv+j] = tot * invq
     end
 end
 
 # Decode form of _lava_gdn_gnorm_kernel!: one group per value head over the
 # head-major core the delta kernel writes.
-@kernel cpu=false function _lava_gdn_gnorm_decode_kernel!(merged, core, z, norm_w, dv::Int, eps::Float32)
+@kernel cpu=false function _lava_gdn_gnorm_decode_kernel!(
+    merged,
+    core,
+    z,
+    norm_w,
+    dv::Int,
+    eps::Float32,
+)
     tl = @index(Local, Linear)
     hh = @index(Group, Linear)
     part = @localmem Float32 (_LH_RED_LANES,)
     base = (hh - 1) * dv
     acc = 0.0f0
     for j in tl:_LH_RED_LANES:dv
-        c = core[1, base + j]
+        c = core[1, base+j]
         acc += c * c
     end
     part[tl] = acc
@@ -408,13 +524,19 @@ end
     end
     inv = 1.0f0 / sqrt(ss / Float32(dv) + eps)
     for j in tl:_LH_RED_LANES:dv
-        zv = z[1, base + j]
-        merged[1, base + j] = (core[1, base + j] * inv) * norm_w[j] * (zv / (1.0f0 + exp(-zv)))
+        zv = z[1, base+j]
+        merged[1, base+j] = (core[1, base+j] * inv) * norm_w[j] * (zv / (1.0f0 + exp(-zv)))
     end
 end
 
 function Gesso.Inference._gdn_decode_core!(
-    backend::LavaBackend, s, bt, spec, eps, conv_state, rec_state,
+    backend::LavaBackend,
+    s,
+    bt,
+    spec,
+    eps,
+    conv_state,
+    rec_state,
 )
     mx = spec.mixer
     nk, nv = mx.num_key_heads, mx.num_value_heads
@@ -423,7 +545,8 @@ function Gesso.Inference._gdn_decode_core!(
     key_dim = nk * dk
     conv_dim = 2 * key_dim + nv * dv
     nv % nk == 0 || error("gdn decode: n_v_heads $nv not divisible by n_k_heads $nk")
-    nv <= _LH_DELTA_WG || error("gdn decode: $nv value heads exceed the $_LH_DELTA_WG-lane group")
+    nv <= _LH_DELTA_WG ||
+        error("gdn decode: $nv value heads exceed the $_LH_DELTA_WG-lane group")
     size(rec_state) == (nv, dk, dv) ||
         error("gdn decode: state $(size(rec_state)) ≠ ($nv, $dk, $dv)")
     size(conv_state) == (conv_dim, ksz - 1) ||
@@ -439,17 +562,50 @@ function Gesso.Inference._gdn_decode_core!(
     Y = clamp(_LH_DELTA_WG ÷ nv, 1, dk)
     kb = KA.get_backend(s.conv)
     Gesso.Inference.@decode_sub :gdn_conv backend begin
-        _lava_gdn_conv_decode_kernel!(kb)(s.conv, cst, s.mixed, weight, Int(ksz), Int(conv_dim);
-            ndrange=conv_dim, workgroupsize=_LH_WG)
+        _lava_gdn_conv_decode_kernel!(kb)(
+            s.conv,
+            cst,
+            s.mixed,
+            weight,
+            Int(ksz),
+            Int(conv_dim);
+            ndrange=conv_dim,
+            workgroupsize=_LH_WG,
+        )
     end
     Gesso.Inference.@decode_sub :gdn_recur backend begin
-        _lava_gdn_delta_kernel!(kb)(s.core, s.conv, s.a, s.b, A_log, dt_bias, rst,
-            Int(nv), Int(nk), Int(div(nv, nk)), mx.v_head_tiled, Int(dk), Int(dv), Int(Y),
-            scale, eps32; ndrange=dv * _LH_DELTA_WG, workgroupsize=(_LH_DELTA_WG,))
+        _lava_gdn_delta_kernel!(kb)(
+            s.core,
+            s.conv,
+            s.a,
+            s.b,
+            A_log,
+            dt_bias,
+            rst,
+            Int(nv),
+            Int(nk),
+            Int(div(nv, nk)),
+            mx.v_head_tiled,
+            Int(dk),
+            Int(dv),
+            Int(Y),
+            scale,
+            eps32;
+            ndrange=dv * _LH_DELTA_WG,
+            workgroupsize=(_LH_DELTA_WG,),
+        )
     end
     Gesso.Inference.@decode_sub :gdn_gnorm backend begin
-        _lava_gdn_gnorm_decode_kernel!(kb)(s.merged, s.core, s.z, norm_w, Int(dv), eps32;
-            ndrange=nv * _LH_RED_LANES, workgroupsize=(_LH_RED_LANES,))
+        _lava_gdn_gnorm_decode_kernel!(kb)(
+            s.merged,
+            s.core,
+            s.z,
+            norm_w,
+            Int(dv),
+            eps32;
+            ndrange=nv * _LH_RED_LANES,
+            workgroupsize=(_LH_RED_LANES,),
+        )
     end
     return s
 end
@@ -517,7 +673,15 @@ function Gesso.Inference._moe_topk_swiglu!(
     rh = _lh_host_weight(router)
     yh = zeros(Float32, size(y))
     Gesso.Inference.@decode_stage :moe_host nothing Gesso.Inference._moe_topk_swiglu!(
-        Gesso.CPUBackend(), yh, xh, rh, gate, up, down, n_used)
+        Gesso.CPUBackend(),
+        yh,
+        xh,
+        rh,
+        gate,
+        up,
+        down,
+        n_used,
+    )
     Gesso.Inference.@decode_stage :moe_h2d backend copyto!(y, yh)
     return y
 end
@@ -533,7 +697,7 @@ Base.@noinline _lh_shared_gate_f64_add(a::Float64, b::Float64) = a+b
     row=@index(Global, Linear)
     if row<=n
         acc_bits=UInt32(0)
-        for i = 1:h
+        for i in 1:h
             term=LavaFloat32Bits.rounded32_wide(
                 _lh_shared_gate_f64_mul(
                     LavaFloat32Bits.widen32(x[row, i]),
@@ -559,7 +723,7 @@ end
     # Carry Float32 rounding through integer encodings so tiny values are not
     # flushed by native Float32 conversion/arithmetic instructions.
     s=LavaFloat32Bits.rounded32_wide(sig64[row])
-    for i = lane:64:h
+    for i in lane:64:h
         term=LavaFloat32Bits.rounded32_wide(
             _lh_shared_gate_f64_mul(s, LavaFloat32Bits.widen32(sd[row, i])),
         )
@@ -579,7 +743,12 @@ function Gesso.Inference._shared_gate_add!(::LavaBackend, y, x, sd, gvec)
     sdd = _lh_device(sd, :shared_gate_add)
     gd = _lh_device(gvec, :shared_gate_add)
     if !(eltype(yd) === eltype(xd) === eltype(sdd) === eltype(gd) === Float32)
-        throw(gesso_error(ERR_INVALID_PLAN, "shared_gate_add requires Float32 device storage"))
+        throw(
+            gesso_error(
+                ERR_INVALID_PLAN,
+                "shared_gate_add requires Float32 device storage",
+            ),
+        )
     end
     if !(ndims(xd) == 2 && size(yd) == size(xd) == size(sdd) && length(gd) == size(xd, 2))
         throw(gesso_error(ERR_INVALID_PLAN, "shared_gate_add storage dimensions disagree"))
@@ -597,23 +766,23 @@ function Gesso.Inference._shared_gate_add!(::LavaBackend, y, x, sd, gvec)
         gd,
         h,
         seq;
-        ndrange = seq,
-        workgroupsize = 64,
+        ndrange=seq,
+        workgroupsize=64,
     )
     _lh_shared_gate_contract(_lava_shared_gate_recip_kernel!, kb)(
         sig64,
         den64,
         seq;
-        ndrange = seq,
-        workgroupsize = 64,
+        ndrange=seq,
+        workgroupsize=64,
     )
     _lh_shared_gate_contract(_lava_shared_gate_apply_kernel!, kb)(
         yd,
         sdd,
         sig64,
         h;
-        ndrange = 64seq,
-        workgroupsize = 64,
+        ndrange=64seq,
+        workgroupsize=64,
     )
     return y
 end

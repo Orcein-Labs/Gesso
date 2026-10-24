@@ -13,7 +13,7 @@ mutable struct Server
     host::String
     port::Int
     gate::ReentrantLock
-    task::Union{Nothing,Task}
+    task::Union{Nothing, Task}
     read_timeout::Float64
     max_connections::Int
     open_connections::Threads.Atomic{Int}
@@ -35,15 +35,30 @@ When it runs out the connection is closed. `max_connections` caps how many
 connections are open at once; past it a new connection gets a 503 and is
 closed. Neither limit applies while a response is being written.
 """
-function serve(model::ChatModel; host::AbstractString="127.0.0.1", port::Integer=8080,
-        block::Bool=true, read_timeout::Real=30, max_connections::Integer=64)
+function serve(
+    model::ChatModel;
+    host::AbstractString="127.0.0.1",
+    port::Integer=8080,
+    block::Bool=true,
+    read_timeout::Real=30,
+    max_connections::Integer=64,
+)
     read_timeout > 0 || throw(ArgumentError("read_timeout must be positive"))
     max_connections > 0 || throw(ArgumentError("max_connections must be positive"))
     ip = parse(Sockets.IPv4, host)
     listener = Sockets.listen(ip, port)
     _, bound = Sockets.getsockname(listener)
-    srv = Server(model, listener, String(host), Int(bound), ReentrantLock(), nothing,
-        Float64(read_timeout), Int(max_connections), Threads.Atomic{Int}(0))
+    srv = Server(
+        model,
+        listener,
+        String(host),
+        Int(bound),
+        ReentrantLock(),
+        nothing,
+        Float64(read_timeout),
+        Int(max_connections),
+        Threads.Atomic{Int}(0),
+    )
     if block
         _accept_loop(srv)
     else
@@ -89,7 +104,9 @@ function _handle_connection(srv::Server, sock::TCPSocket)
         while _serve_one(srv, sock)
         end
     catch e
-        e isa Base.IOError || e isa EOFError || @error "connection failed" exception=(e, catch_backtrace())
+        e isa Base.IOError ||
+            e isa EOFError ||
+            @error "connection failed" exception=(e, catch_backtrace())
     finally
         Threads.atomic_sub!(srv.open_connections, 1)
         close(sock)
@@ -122,8 +139,16 @@ function _serve_one(srv::Server, sock::TCPSocket)::Bool
         _read_request_timed(srv, sock)
     catch e
         e isa HTTPError || rethrow()
-        _try_write(() -> write_error(sock, e.status, e.message; keepalive=false,
-            code=e.code, param=e.param))
+        _try_write(
+            () -> write_error(
+                sock,
+                e.status,
+                e.message;
+                keepalive=false,
+                code=e.code,
+                param=e.param,
+            ),
+        )
         return false
     end
     (timed_out || req === nothing) && return false
@@ -133,8 +158,16 @@ function _serve_one(srv::Server, sock::TCPSocket)::Bool
         return route(srv, req, sock, keepalive)
     catch e
         if e isa HTTPError
-            _try_write(() -> write_error(sock, e.status, e.message; keepalive=keepalive,
-                code=e.code, param=e.param))
+            _try_write(
+                () -> write_error(
+                    sock,
+                    e.status,
+                    e.message;
+                    keepalive=keepalive,
+                    code=e.code,
+                    param=e.param,
+                ),
+            )
             return keepalive
         elseif e isa Base.IOError || e isa EOFError
             return false

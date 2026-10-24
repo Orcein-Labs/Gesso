@@ -32,10 +32,8 @@ const _IQS_TYPES = (
     ("IQ1_M", _IQS.GGML_TYPE_IQ1_M),
 )
 # The two formats added for the Saluki GGUF (IQ2_XXS and IQ1_S).
-const _IQS_NEW_TYPES = (
-    ("IQ2_XXS", _IQS.GGML_TYPE_IQ2_XXS),
-    ("IQ1_S", _IQS.GGML_TYPE_IQ1_S),
-)
+const _IQS_NEW_TYPES =
+    (("IQ2_XXS", _IQS.GGML_TYPE_IQ2_XXS), ("IQ1_S", _IQS.GGML_TYPE_IQ1_S))
 # Formats present in the Qwen3.8-27B UD-IQ2_M file.
 const _IQS_QWEN_TYPES = (
     ("IQ2_S", _IQS.GGML_TYPE_IQ2_S),
@@ -46,17 +44,24 @@ const _IQS_QWEN_TYPES = (
 # Random valid rows: arbitrary bytes in every field, with finite small f16
 # super-scales. IQ2_S and IQ3_S keep d at byte 0; IQ1_M has no d field, so its
 # scale nibbles are written instead.
-function _iqs_random_rows(rng, ggml_type::Int32, nrows::Int, nb::Int; scale_lo=0.005f0, scale_span=0.05f0)
+function _iqs_random_rows(
+    rng,
+    ggml_type::Int32,
+    nrows::Int,
+    nb::Int;
+    scale_lo=0.005f0,
+    scale_span=0.05f0,
+)
     bsz = _IQS._iq_block_bytes(ggml_type)
     w = rand(rng, UInt8, nrows * nb * bsz)
-    for blk in 0:(nrows * nb - 1)
+    for blk in 0:(nrows*nb-1)
         dv = scale_lo + scale_span * rand(rng, Float32)
         if ggml_type == _IQS.GGML_TYPE_IQ1_M
             _IQS._iq1m_write_scale!(w, blk * bsz, dv)
         else
             bits = reinterpret(UInt16, Float16(dv))
-            w[blk * bsz + 1] = UInt8(bits & 0xff)
-            w[blk * bsz + 2] = UInt8(bits >> 8)
+            w[blk*bsz+1] = UInt8(bits & 0xff)
+            w[blk*bsz+2] = UInt8(bits >> 8)
         end
     end
     return w
@@ -106,8 +111,9 @@ end
     @test vals == Set(UInt8[0x00, 0x01, 0xff])
     # sign mask for s: byte j is 0xff when bit j of s is set, else 0x01
     for s in (0x00, 0x01, 0x05, 0x80, 0xa7, 0xff)
-        expected = reduce(|, (UInt64(((s >> j) & 1) == 1 ? 0xff : 0x01) << (8 * j) for j in 0:7))
-        @test _IQS._IQ_SIGN8_FULL_TAB[Int(s) + 1] == expected
+        expected =
+            reduce(|, (UInt64(((s >> j) & 1) == 1 ? 0xff : 0x01) << (8 * j) for j in 0:7))
+        @test _IQS._IQ_SIGN8_FULL_TAB[Int(s)+1] == expected
     end
     @test _IQS._IQ_SIGN8_FULL_TAB[1] == 0x0101010101010101
     @test _IQS._IQ_SIGN8_FULL_TAB[256] == 0xffffffffffffffff
@@ -119,11 +125,11 @@ end
         dv = Float16(0.001f0 + 0.1f0 * rand(rng, Float32))
         w = zeros(UInt8, 56)
         for k in 0:7
-            w[48 + k + 1] = rand(rng, UInt8) & 0x0f   # low nibbles: 3-bit sub-block scales
+            w[48+k+1] = rand(rng, UInt8) & 0x0f   # low nibbles: 3-bit sub-block scales
         end
         before = copy(w)
         _IQS._iq1m_write_scale!(w, 0, Float32(dv))
-        s = ntuple(k -> UInt16(w[49 + 2 * (k - 1)]) | (UInt16(w[50 + 2 * (k - 1)]) << 8), 4)
+        s = ntuple(k -> UInt16(w[49+2*(k-1)]) | (UInt16(w[50+2*(k-1)]) << 8), 4)
         @test reinterpret(Float16, _IQS._iq1m_scale_bits(s[1], s[2], s[3], s[4])) == dv
         # the sub-block scales in the low nibbles are untouched
         @test all(w[i] & 0x0f == before[i] & 0x0f for i in 1:56)
@@ -153,7 +159,9 @@ end
 @testset "F32 dequant of IQ2_XXS / IQ1_S bit-equal to ggml to_float" begin
     ggml_dir = get(ENV, "GESSO_GGML_DIR", "")
     if !isfile(joinpath(ggml_dir, "libggml-base.so"))
-        _skip("set GESSO_GGML_DIR to a directory with libggml-base.so — IQ2_XXS/IQ1_S dequant vs ggml to_float skipped")
+        _skip(
+            "set GESSO_GGML_DIR to a directory with libggml-base.so — IQ2_XXS/IQ1_S dequant vs ggml to_float skipped",
+        )
     else
         rng = Xoshiro(29)
         for (name, ty) in _IQS_NEW_TYPES
@@ -163,15 +171,15 @@ end
             W = _iqs_random_rows(rng, ty, 2, nb)
             bsz = _IQS._iq_block_bytes(ty)
             sat = fill(0xff, 2 * rb)
-            for ib in 0:(2 * nb - 1)
-                sat[ib * bsz + 1] = 0x00     # d = 1.0 (f16 0x3c00) for every block
-                sat[ib * bsz + 2] = 0x3c
+            for ib in 0:(2*nb-1)
+                sat[ib*bsz+1] = 0x00     # d = 1.0 (f16 0x3c00) for every block
+                sat[ib*bsz+2] = 0x3c
             end
             for (kind, data) in (("random", W), ("saturated", sat))
                 for j in 1:2
                     mine = Vector{Float32}(undef, ne0)
                     _IQS._iqs_dequant_row!(mine, data, (j - 1) * rb, ty, ne0)
-                    row = data[((j - 1) * rb + 1):(j * rb)]
+                    row = data[((j-1)*rb+1):(j*rb)]
                     ggml = _IQS._dequant_f32(row, 0, ty, ne0)
                     @testset "$name $kind row $j" begin
                         @test reinterpret.(UInt32, mine) == reinterpret.(UInt32, ggml)
@@ -192,7 +200,14 @@ end
             nmismatch = 0
             for trial in 1:300
                 nb = 1 + (trial % 4)
-                W = _iqs_random_rows(rng, ty, 4, nb; scale_lo=0.0f0, scale_span=0.1f0 + 2 * rand(rng, Float32))
+                W = _iqs_random_rows(
+                    rng,
+                    ty,
+                    4,
+                    nb;
+                    scale_lo=0.0f0,
+                    scale_span=0.1f0 + 2 * rand(rng, Float32),
+                )
                 x = randn(rng, Float32, 256 * nb) .* Float32(0.1 + 10 * rand(rng))
                 if trial % 7 == 0       # extreme activations: quants saturate at ±127
                     x .= x .* 1000.0f0
@@ -225,12 +240,12 @@ end
             # every field 0xff (grid index 511 / 1023, all signs set, scale nibbles 15)
             for fill_byte in (0x00, 0xff, 0x55, 0xaa)
                 W = fill(UInt8(fill_byte), nb * bsz)
-                for ib in 0:(nb - 1)
+                for ib in 0:(nb-1)
                     if ty == _IQS.GGML_TYPE_IQ1_M
                         _IQS._iq1m_write_scale!(W, ib * bsz, 0.25f0)
                     else
-                        W[ib * bsz + 1] = 0x00
-                        W[ib * bsz + 2] = 0x3c    # d = 1.0 in f16
+                        W[ib*bsz+1] = 0x00
+                        W[ib*bsz+2] = 0x3c    # d = 1.0 in f16
                     end
                 end
                 x = randn(Xoshiro(23 + Int(fill_byte)), Float32, 256 * nb)
@@ -243,12 +258,12 @@ end
             end
             # d = 0 everywhere: the row contributes exactly zero
             W = fill(UInt8(0xff), nb * bsz)
-            for ib in 0:(nb - 1)
+            for ib in 0:(nb-1)
                 if ty == _IQS.GGML_TYPE_IQ1_M
                     _IQS._iq1m_write_scale!(W, ib * bsz, 0.0f0)
                 else
-                    W[ib * bsz + 1] = 0x00
-                    W[ib * bsz + 2] = 0x00
+                    W[ib*bsz+1] = 0x00
+                    W[ib*bsz+2] = 0x00
                 end
             end
             xq = _IQS.quantize_q8_K!(_IQS.Q8KVec(nb), fill(1.0f0, 256 * nb))
@@ -321,7 +336,16 @@ end
     ne0 = 256 * nb
     for (name, ty) in _IQS_TYPES
         W = _iqs_random_rows(rng, ty, nrow, nb)
-        q = _IQS.QuantMatrix(W, 0, ty, ne0, nrow, _IQS._qrow_bytes(ty, ne0), C_NULL, Int64(256))
+        q = _IQS.QuantMatrix(
+            W,
+            0,
+            ty,
+            ne0,
+            nrow,
+            _IQS._qrow_bytes(ty, ne0),
+            C_NULL,
+            Int64(256),
+        )
         X = randn(rng, Float32, seq, ne0)
         dst = zeros(Float32, seq, nrow)
         _IQS._quant_matmul!(dst, X, q)
@@ -376,9 +400,22 @@ function _iqs_real_tensor_check(path::AbstractString, types, seed::Int)
         end
         relrms = sqrt(err2 / sig2)
         println(
-            "real ", basename(path), " ", info.name, " type=", name, " ne0=", ne0, " ne1=", ne1,
-            " rows=", length(rows), " rel_rms_err_vs_f32=", relrms,
-            " avx2_eq_scalar=", nmis == 0,
+            "real ",
+            basename(path),
+            " ",
+            info.name,
+            " type=",
+            name,
+            " ne0=",
+            ne0,
+            " ne1=",
+            ne1,
+            " rows=",
+            length(rows),
+            " rel_rms_err_vs_f32=",
+            relrms,
+            " avx2_eq_scalar=",
+            nmis == 0,
         )
         @test nmis == 0
         @test relrms <= 2.0e-2
@@ -388,7 +425,9 @@ end
 @testset "real tensors: IQ2_S / IQ3_S / IQ1_M vs F32 reference" begin
     path = get(ENV, "GESSO_QWEN38_27B_IQ2M_GGUF", "")
     if !isfile(path)
-        _skip("set GESSO_QWEN38_27B_IQ2M_GGUF to the Qwen3.8-27B UD-IQ2_M GGUF — real IQ2_S/IQ3_S/IQ1_M rows skipped")
+        _skip(
+            "set GESSO_QWEN38_27B_IQ2M_GGUF to the Qwen3.8-27B UD-IQ2_M GGUF — real IQ2_S/IQ3_S/IQ1_M rows skipped",
+        )
     else
         _iqs_real_tensor_check(path, _IQS_QWEN_TYPES, 27)
     end
@@ -397,7 +436,9 @@ end
 @testset "real tensors: Saluki IQ2_XXS / IQ1_S vs F32 reference" begin
     path = get(ENV, "GESSO_SALUKI_GGUF", "")
     if !isfile(path)
-        _skip("set GESSO_SALUKI_GGUF to the Saluki 27B GGUF — real IQ2_XXS/IQ1_S rows skipped")
+        _skip(
+            "set GESSO_SALUKI_GGUF to the Saluki 27B GGUF — real IQ2_XXS/IQ1_S rows skipped",
+        )
     else
         _iqs_real_tensor_check(path, _IQS_NEW_TYPES, 30)
     end

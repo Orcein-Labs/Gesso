@@ -5,7 +5,14 @@
 # skips cleanly without it. Expected ids are committed in
 # test/fixtures/qwen35_tokenizer/corpus.json, captured from llama-server.
 
-using Gesso.Inference: load_gguf_tokenizer, encode, decode, StreamDetokenizer, finish!, load_gguf_chat_template, chat_family
+using Gesso.Inference:
+    load_gguf_tokenizer,
+    encode,
+    decode,
+    StreamDetokenizer,
+    finish!,
+    load_gguf_chat_template,
+    chat_family
 using JSON
 
 const TOK_CORPUS_PATH = joinpath(@__DIR__, "fixtures", "qwen35_tokenizer", "corpus.json")
@@ -13,11 +20,12 @@ const ORNITH35_GGUF = get(ENV, "GESSO_ORNITH35_GGUF", "")
 
 # Ids that differ from the corpus, as the texts that differ. An empty result
 # means gate 1 passes.
-function _gate1_mismatches(tk, corpus; parse_special_override = nothing)
+function _gate1_mismatches(tk, corpus; parse_special_override=nothing)
     bad = String[]
     for c in corpus["cases"]
-        ps = parse_special_override === nothing ? c["parse_special"] : parse_special_override
-        got = encode(tk, c["text"]; parse_special = ps)
+        ps =
+            parse_special_override === nothing ? c["parse_special"] : parse_special_override
+        got = encode(tk, c["text"]; parse_special=ps)
         got == Int.(c["ids"]) || push!(bad, c["text"])
     end
     return bad
@@ -45,14 +53,14 @@ else
 
     @testset "gate 2: round trip and streaming equality" begin
         for c in _CORPUS["cases"]
-            ids = encode(_TK, c["text"]; parse_special = c["parse_special"])
+            ids = encode(_TK, c["text"]; parse_special=c["parse_special"])
             dec = StreamDetokenizer(_TK)
             pieces = String[push!(dec, id) for id in ids]
             streamed = join(pieces) * finish!(dec)
             @test streamed == decode(_TK, ids)
         end
         texts = [c["text"] for c in _CORPUS["cases"] if !c["parse_special"]]
-        @test all(s -> decode(_TK, encode(_TK, s; parse_special = false)) == s, texts)
+        @test all(s -> decode(_TK, encode(_TK, s; parse_special=false)) == s, texts)
     end
 
     @testset "speed: 200 KB single-threaded encode under 5 s after warmup" begin
@@ -82,7 +90,7 @@ else
     end
 
     @testset "negative control: dropping the special pass fails gate 1, then restores" begin
-        @test !isempty(_gate1_mismatches(_TK, _CORPUS; parse_special_override = false))
+        @test !isempty(_gate1_mismatches(_TK, _CORPUS; parse_special_override=false))
         @test isempty(_gate1_mismatches(_TK, _CORPUS))
     end
 

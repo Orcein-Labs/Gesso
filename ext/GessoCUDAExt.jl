@@ -103,8 +103,8 @@ struct CUDABackend <: AbstractGessoBackend
                 "without a device fails explicitly (§LXX); Gesso never falls " *
                 "back to CPU silently. Check the driver, or stay on " *
                 "CPUBackend (tier 0).";
-                requested_backend = :cuda,
-                functional = false,
+                requested_backend=:cuda,
+                functional=false,
             ),
         )
         return new()
@@ -195,14 +195,11 @@ function __init__()
     CUDA.CUDACore.register_reclaimable!(_HotPurge())
     _autotune_register!()   # §LXXXII: backend extensions register candidates (runtime state)
     if isdefined(Gesso, :to_device)
-        Core.eval(
-            Gesso,
-            quote
-                function to_device(b::CUDABackend, tensors)
-                    $(_to_device_cuda)(tensors)
-                end
-            end,
-        )
+        Core.eval(Gesso, quote
+            function to_device(b::CUDABackend, tensors)
+                $(_to_device_cuda)(tensors)
+            end
+        end)
     else
         Core.eval(Gesso, :(const to_device = $to_device))
     end

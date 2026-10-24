@@ -103,7 +103,7 @@ function _cpu_split_rows!(f, rows::Int)
         @sync for c in 1:nc
             lo = div((c - 1) * rows, nc) + 1
             hi = div(c * rows, nc)
-            Threads.@spawn f($lo:$hi)
+            Threads.@spawn f(($lo):($hi))
         end
     catch e
         _cpu_rethrow_task_error(e)
@@ -135,8 +135,14 @@ function _cpu_rmsnorm_storage!(
     stail = reshape(ss, (ntuple(_ -> 1, nd - 1)..., d))
     if nd >= 2 && _cpu_rows_threaded(xs, size(xs, 1))
         _cpu_split_rows!(size(xs, 1)) do rows
-            _cpu_rmsnorm_rows!(dsts, xs, stail, eps, d,
-                CartesianIndices((rows, size(xs)[2:(nd-1)]...)))
+            _cpu_rmsnorm_rows!(
+                dsts,
+                xs,
+                stail,
+                eps,
+                d,
+                CartesianIndices((rows, size(xs)[2:(nd-1)]...)),
+            )
         end
     else
         _cpu_rmsnorm_rows!(dsts, xs, stail, eps, d, CartesianIndices(size(xs)[1:(nd-1)]))
@@ -185,8 +191,15 @@ function _cpu_rope_storage!(
             _cpu_rope_rows!(storage, positions, tθ, inv_freq, interleaved, rotary_dim, rows)
         end
     else
-        _cpu_rope_rows!(storage, positions, tθ, inv_freq, interleaved, rotary_dim,
-            axes(storage, 1))
+        _cpu_rope_rows!(
+            storage,
+            positions,
+            tθ,
+            inv_freq,
+            interleaved,
+            rotary_dim,
+            axes(storage, 1),
+        )
     end
     return storage
 end

@@ -422,8 +422,12 @@ end
         Dict{String, Any}("model_type" => "qwen3_5", "text_config" => _Q35_TEXT),
     )
     m = Gesso.param_map(Gesso.Qwen35Adapter(), spec)
-    qref = only(filter(r -> Gesso.canonical_name(r.id) == "layer[0].attention.q", m.layer_refs))
-    gref = only(filter(r -> Gesso.canonical_name(r.id) == "layer[0].attention.gate", m.layer_refs))
+    qref = only(
+        filter(r -> Gesso.canonical_name(r.id) == "layer[0].attention.q", m.layer_refs),
+    )
+    gref = only(
+        filter(r -> Gesso.canonical_name(r.id) == "layer[0].attention.gate", m.layer_refs),
+    )
     @test qref.external == gref.external == "self_attn.q_proj.weight"
     want = Gesso.fused_qg_rows(spec.n_heads, spec.head_dim)
     @test qref.rows == want.q

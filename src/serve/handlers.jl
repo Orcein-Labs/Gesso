@@ -8,24 +8,36 @@ function route(srv::Server, req::HTTPRequest, io::IO, keepalive::Bool)::Bool
         return keepalive
     elseif path == "/props"
         _require_method(req, "GET")
-        write_json(io, 200, Dict(
+        write_json(
+            io,
+            200,
+            Dict(
                 "default_generation_settings" => Dict("n_ctx" => srv.model.n_ctx),
                 "total_slots" => 1,
                 "model_alias" => srv.model.model_id,
-            ); keepalive=keepalive)
+            );
+            keepalive=keepalive,
+        )
         return keepalive
     elseif path == "/v1/models"
         _require_method(req, "GET")
-        write_json(io, 200, Dict(
+        write_json(
+            io,
+            200,
+            Dict(
                 "object" => "list",
-                "data" => [Dict(
-                    "id" => srv.model.model_id,
-                    "object" => "model",
-                    "created" => 0,
-                    "owned_by" => "gesso",
-                    "meta" => Dict("n_ctx" => srv.model.n_ctx),
-                )],
-            ); keepalive=keepalive)
+                "data" => [
+                    Dict(
+                        "id" => srv.model.model_id,
+                        "object" => "model",
+                        "created" => 0,
+                        "owned_by" => "gesso",
+                        "meta" => Dict("n_ctx" => srv.model.n_ctx),
+                    ),
+                ],
+            );
+            keepalive=keepalive,
+        )
         return keepalive
     elseif path == "/v1/chat/completions"
         _require_method(req, "POST")
@@ -35,7 +47,8 @@ function route(srv::Server, req::HTTPRequest, io::IO, keepalive::Bool)::Bool
 end
 
 function _require_method(req::HTTPRequest, method::String)
-    req.method == method || throw(HTTPError(405, "$(req.method) not allowed here, use $method"))
+    req.method == method ||
+        throw(HTTPError(405, "$(req.method) not allowed here, use $method"))
     return nothing
 end
 
@@ -82,9 +95,14 @@ function handle_chat(srv::Server, req::HTTPRequest, io::IO, keepalive::Bool)::Bo
     prompt_ids = model.tokenize(model.render(msgs, collect(Any, tools), thinking))
     boundary = model.prefix_len(msgs, collect(Any, tools), thinking, prompt_ids)
     n = length(prompt_ids)
-    n >= model.n_ctx && throw(HTTPError(400,
-        "This model's maximum context length is $(model.n_ctx) tokens. However, your messages resulted in $n tokens. Please reduce the length of the messages.";
-        code="context_length_exceeded", param="messages"))
+    n >= model.n_ctx && throw(
+        HTTPError(
+            400,
+            "This model's maximum context length is $(model.n_ctx) tokens. However, your messages resulted in $n tokens. Please reduce the length of the messages.";
+            code="context_length_exceeded",
+            param="messages",
+        ),
+    )
     room = model.n_ctx - n
     max_new = requested === nothing ? room : min(requested, room)
 
@@ -96,9 +114,24 @@ function handle_chat(srv::Server, req::HTTPRequest, io::IO, keepalive::Bool)::Bo
     catch
     end
 
-    turn = Turn(model, QwenXMLParser(; tools=collect(Any, tools), thinking=thinking, stop=stop),
-        io, stream, include_usage, keepalive, cancelled, Ref(false), Int[], 0, 0,
-        _completion_id(), round(Int, time()), String[], String[], ToolCallDelta[])
+    turn = Turn(
+        model,
+        QwenXMLParser(; tools=collect(Any, tools), thinking=thinking, stop=stop),
+        io,
+        stream,
+        include_usage,
+        keepalive,
+        cancelled,
+        Ref(false),
+        Int[],
+        0,
+        0,
+        _completion_id(),
+        round(Int, time()),
+        String[],
+        String[],
+        ToolCallDelta[],
+    )
 
     gen = try
         lock(srv.gate) do
@@ -120,11 +153,19 @@ function handle_chat(srv::Server, req::HTTPRequest, io::IO, keepalive::Bool)::Bo
     usage = _usage(n, generated, gen.cached)
 
     if turn.stream
-        _write_event!(turn, _chunk(turn, Dict{String,Any}(), reason))
+        _write_event!(turn, _chunk(turn, Dict{String, Any}(), reason))
         if include_usage
-            _write_event!(turn, Dict(
-                "id" => turn.id, "object" => "chat.completion.chunk", "created" => turn.created,
-                "model" => model.model_id, "choices" => Any[], "usage" => usage))
+            _write_event!(
+                turn,
+                Dict(
+                    "id" => turn.id,
+                    "object" => "chat.completion.chunk",
+                    "created" => turn.created,
+                    "model" => model.model_id,
+                    "choices" => Any[],
+                    "usage" => usage,
+                ),
+            )
         end
         turn.cancelled[] && return false
         try
@@ -138,34 +179,53 @@ function handle_chat(srv::Server, req::HTTPRequest, io::IO, keepalive::Bool)::Bo
     end
 
     content = join(turn.content)
-    message = Dict{String,Any}("role" => "assistant")
+    message = Dict{String, Any}("role" => "assistant")
     message["content"] = (isempty(content) && !isempty(turn.calls)) ? nothing : content
     isempty(turn.reasoning) || (message["reasoning_content"] = join(turn.reasoning))
     isempty(turn.calls) || (message["tool_calls"] = [_call_object(c) for c in turn.calls])
-    write_json(io, 200, Dict(
+    write_json(
+        io,
+        200,
+        Dict(
             "id" => turn.id,
             "object" => "chat.completion",
             "created" => turn.created,
             "model" => model.model_id,
-            "choices" => [Dict("index" => 0, "message" => message, "finish_reason" => reason)],
+            "choices" =>
+                [Dict("index" => 0, "message" => message, "finish_reason" => reason)],
             "usage" => usage,
-        ); keepalive=keepalive)
+        );
+        keepalive=keepalive,
+    )
     return keepalive
 end
 
-function _run_turn!(turn::Turn, prompt_ids::Vector{Int}, max_new::Int, sampling, boundary::Int)
+function _run_turn!(
+    turn::Turn,
+    prompt_ids::Vector{Int},
+    max_new::Int,
+    sampling,
+    boundary::Int,
+)
     turn.cancelled[] && return nothing
     if turn.stream
         start_event_stream(turn.io; keepalive=turn.keepalive)
         turn.started[] = true
-        _write_event!(turn, _chunk(turn, Dict("role" => "assistant", "content" => ""), nothing))
+        _write_event!(
+            turn,
+            _chunk(turn, Dict("role" => "assistant", "content" => ""), nothing),
+        )
     end
     extra = sampling === nothing ? (;) : (sampling=sampling,)
     # the boundary is asked for only when the prompt holds one, so an engine
     # without the keyword is called as before
     boundary > 0 && (extra = merge(extra, (checkpoint_at=boundary,)))
-    return turn.model.generate(prompt_ids; max_new_tokens=max_new,
-        on_token=id -> _on_token(turn, id), extra...)
+    return turn.model.generate(
+        prompt_ids;
+        max_new_tokens=max_new,
+        on_token=id -> _on_token(turn, id),
+        extra...,
+    )
 end
 
 function _on_token(turn::Turn, id::Integer)
@@ -188,11 +248,11 @@ function _sync_text!(turn::Turn; final::Bool)
     n <= turn.read_at && return nothing
     detok = turn.model.detokenize
     prefix = if turn.prefix_at < turn.read_at
-        detok(turn.ids[(turn.prefix_at + 1):turn.read_at])
+        detok(turn.ids[(turn.prefix_at+1):turn.read_at])
     else
         ""
     end
-    text = detok(turn.ids[(turn.prefix_at + 1):n])
+    text = detok(turn.ids[(turn.prefix_at+1):n])
     !final && endswith(text, '\ufffd') && return nothing
     bytes = codeunits(text)
     skip = ncodeunits(prefix)
@@ -201,7 +261,7 @@ function _sync_text!(turn::Turn; final::Bool)
     turn.prefix_at = turn.read_at
     turn.read_at = n
     length(bytes) <= skip && return nothing
-    new = Vector{UInt8}(view(bytes, (skip + 1):length(bytes)))
+    new = Vector{UInt8}(view(bytes, (skip+1):length(bytes)))
     _deliver!(turn, feed!(turn.parser, new))
     return nothing
 end
@@ -210,15 +270,36 @@ function _deliver!(turn::Turn, events)
     for e in events
         if e isa ReasoningDelta
             push!(turn.reasoning, e.text)
-            turn.stream && _write_event!(turn, _chunk(turn, Dict("reasoning_content" => e.text), nothing))
+            turn.stream && _write_event!(
+                turn,
+                _chunk(turn, Dict("reasoning_content" => e.text), nothing),
+            )
         elseif e isa ContentDelta
             push!(turn.content, e.text)
-            turn.stream && _write_event!(turn, _chunk(turn, Dict("content" => e.text), nothing))
+            turn.stream &&
+                _write_event!(turn, _chunk(turn, Dict("content" => e.text), nothing))
         elseif e isa ToolCallDelta
             push!(turn.calls, e)
-            turn.stream && _write_event!(turn, _chunk(turn,
-                Dict("tool_calls" => [Dict("index" => e.index, "id" => e.id, "type" => "function",
-                    "function" => Dict("name" => e.name, "arguments" => e.arguments))]), nothing))
+            turn.stream && _write_event!(
+                turn,
+                _chunk(
+                    turn,
+                    Dict(
+                        "tool_calls" => [
+                            Dict(
+                                "index" => e.index,
+                                "id" => e.id,
+                                "type" => "function",
+                                "function" => Dict(
+                                    "name" => e.name,
+                                    "arguments" => e.arguments,
+                                ),
+                            ),
+                        ],
+                    ),
+                    nothing,
+                ),
+            )
         end
     end
     return nothing
@@ -251,8 +332,11 @@ function _finish_reason(turn::Turn, generated::Int, max_new::Int)
     return "stop"
 end
 
-_call_object(c::ToolCallDelta) = Dict("id" => c.id, "type" => "function",
-    "function" => Dict("name" => c.name, "arguments" => c.arguments))
+_call_object(c::ToolCallDelta) = Dict(
+    "id" => c.id,
+    "type" => "function",
+    "function" => Dict("name" => c.name, "arguments" => c.arguments),
+)
 
 _usage(prompt::Int, completion::Int, cached::Int) = Dict(
     "prompt_tokens" => prompt,
@@ -274,11 +358,11 @@ function _parse_body(raw::Vector{UInt8})
 end
 
 function _normalize_messages(messages::AbstractVector)
-    out = Dict{String,Any}[]
+    out = Dict{String, Any}[]
     for m in messages
         m isa AbstractDict || throw(HTTPError(400, "each message must be an object"))
         haskey(m, "role") || throw(HTTPError(400, "each message needs a role"))
-        msg = Dict{String,Any}(String(k) => v for (k, v) in m)
+        msg = Dict{String, Any}(String(k) => v for (k, v) in m)
         calls = get(m, "tool_calls", nothing)
         if calls isa AbstractVector
             msg["tool_calls"] = Any[_normalize_call(c) for c in calls]
@@ -304,9 +388,14 @@ function _normalize_call(c)
     else
         args
     end
-    parsed isa AbstractDict || throw(HTTPError(400, "tool call arguments must be a JSON object"))
-    return Dict{String,Any}("id" => get(c, "id", nothing), "type" => "function",
-        "function" => Dict{String,Any}("name" => String(get(f, "name", "")), "arguments" => parsed))
+    parsed isa AbstractDict ||
+        throw(HTTPError(400, "tool call arguments must be a JSON object"))
+    return Dict{String, Any}(
+        "id" => get(c, "id", nothing),
+        "type" => "function",
+        "function" =>
+            Dict{String, Any}("name" => String(get(f, "name", "")), "arguments" => parsed),
+    )
 end
 
 # `enable_thinking` may come at the top level or inside chat_template_kwargs. The
@@ -341,9 +430,12 @@ function _sampling(body::AbstractDict)
 end
 
 function _max_tokens(body::AbstractDict)
-    v = haskey(body, "max_completion_tokens") ? body["max_completion_tokens"] : get(body, "max_tokens", nothing)
+    v =
+        haskey(body, "max_completion_tokens") ? body["max_completion_tokens"] :
+        get(body, "max_tokens", nothing)
     v === nothing && return nothing
-    (v isa Integer && v > 0) || throw(HTTPError(400, "max_tokens must be a positive integer"))
+    (v isa Integer && v > 0) ||
+        throw(HTTPError(400, "max_tokens must be a positive integer"))
     return Int(v)
 end
 

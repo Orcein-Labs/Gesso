@@ -14,9 +14,7 @@ end
 using .GessoTestHelpers: approx_eq, deterministic_rng
 
 if !CUDA_LOADED || !CUDA.functional()
-    _skip(
-        "no NVIDIA device — CUDA hybrid / GDN tests skipped (§LXXVII skip law)",
-    )
+    _skip("no NVIDIA device — CUDA hybrid / GDN tests skipped (§LXXVII skip law)")
 else
     cuda = Gesso.CUDABackend()
     cpu = Gesso.CPUBackend()
@@ -47,7 +45,8 @@ else
     @testset "cuda F16 projection weights: placement and matmul" begin
         # placement: a >=1M-element projection is F16 on device by default,
         # F32 under GESSO_GPU_WEIGHT_DTYPE=f32, and the host copy stays F32
-        big = Gesso.ProjectionWeight(; shape=(1024, 1024), storage=ones(Float32, 1024, 1024))
+        big =
+            Gesso.ProjectionWeight(; shape=(1024, 1024), storage=ones(Float32, 1024, 1024))
         ts = (; embedding=big, blocks=[(; w=big)], lm_head=big)
         withenv("GESSO_GPU_WEIGHT_DTYPE" => "f16") do
             gpu = Gesso.to_device(cuda, ts)
@@ -62,11 +61,14 @@ else
         # matmul: F16 device weight vs a host reference computed from the same
         # F16-rounded weight, F32 accumulate; only summation order differs
         m, k, n = 37, 45, 3
-        W0 = reshape(Float32.(cos.(1:m*k)) ./ 4, m, k)
-        x0 = reshape(Float32.(sin.(1:n*k)), n, k)
+        W0 = reshape(Float32.(cos.(1:(m*k))) ./ 4, m, k)
+        x0 = reshape(Float32.(sin.(1:(n*k))), n, k)
         W16 = Float64.(Float16.(W0))
         ref = Float64.(x0) * transpose(W16)
-        wF = Gesso.ProjectionWeight(; shape=(m, k), storage=Float16.(CUDA.CuArray{Float32}(W0)))
+        wF = Gesso.ProjectionWeight(;
+            shape=(m, k),
+            storage=Float16.(CUDA.CuArray{Float32}(W0)),
+        )
         dst = mat(Gesso.Activation, CUDA.zeros(Float32, n, m))
         x = mat(Gesso.Activation, CuArray{Float32}(x0))
         Gesso.matmul!(cuda, dst, x, wF, Gesso.DecodeWorkload())
@@ -77,10 +79,13 @@ else
         # n=1 is the decode shape; m=70 spans three 32-row blocks with a
         # partial last block, and k=300 spans the 8 k-slices unevenly
         for (m, k, n) in ((70, 300, 1), (513, 2051, 1), (33, 8, 2))
-            W0 = reshape(Float32.(cos.(1:m*k)) ./ 4, m, k)
-            x0 = reshape(Float32.(sin.(1:n*k)), n, k)
+            W0 = reshape(Float32.(cos.(1:(m*k))) ./ 4, m, k)
+            x0 = reshape(Float32.(sin.(1:(n*k))), n, k)
             ref = Float64.(x0) * transpose(Float64.(Float16.(W0)))
-            wF = Gesso.ProjectionWeight(; shape=(m, k), storage=Float16.(CUDA.CuArray{Float32}(W0)))
+            wF = Gesso.ProjectionWeight(;
+                shape=(m, k),
+                storage=Float16.(CUDA.CuArray{Float32}(W0)),
+            )
             dst = mat(Gesso.Activation, CUDA.zeros(Float32, n, m))
             x = mat(Gesso.Activation, CuArray{Float32}(x0))
             Gesso.matmul!(cuda, dst, x, wF, Gesso.DecodeWorkload())
@@ -94,7 +99,11 @@ else
         s0 = randn(rng, 300)
         cpu_d = mat(Gesso.Activation, zeros(1, 300))
         Gesso.rmsnorm!(
-            cpu, cpu_d, mat(Gesso.Activation, x0), mat(Gesso.FrozenParameter, s0), wl,
+            cpu,
+            cpu_d,
+            mat(Gesso.Activation, x0),
+            mat(Gesso.FrozenParameter, s0),
+            wl,
         )
         gpu_d = mat(Gesso.Activation, CUDA.zeros(Float32, 1, 300))
         Gesso.rmsnorm!(
@@ -113,14 +122,28 @@ else
         inv = Gesso.rope_inv_freq(Gesso.RoPEPolicy(; rotary_dim=4, theta=10000.0), 8)
         cq, ck = mat(Gesso.Activation, copy(q0)), mat(Gesso.Activation, copy(k0))
         Gesso.rope!(
-            cpu, cq, ck, [0, 1], wl;
-            theta=10000.0, inv_freq=inv, interleaved=false, rotary_dim=4,
+            cpu,
+            cq,
+            ck,
+            [0, 1],
+            wl;
+            theta=10000.0,
+            inv_freq=inv,
+            interleaved=false,
+            rotary_dim=4,
         )
         q = mat(Gesso.Activation, CuArray{Float32}(q0))
         k = mat(Gesso.Activation, CuArray{Float32}(k0))
         Gesso.rope!(
-            cuda, q, k, [0, 1], wl;
-            theta=10000.0, inv_freq=inv, interleaved=false, rotary_dim=4,
+            cuda,
+            q,
+            k,
+            [0, 1],
+            wl;
+            theta=10000.0,
+            inv_freq=inv,
+            interleaved=false,
+            rotary_dim=4,
         )
         @test approx_eq(Array(q.storage), Float32.(cq.storage); atol=1e-3)
         @test approx_eq(Array(k.storage), Float32.(ck.storage); atol=1e-3)
@@ -134,7 +157,11 @@ else
         s0 = randn(rng, 4)
         cpu_d = mat(Gesso.Activation, zeros(size(x0)))
         Gesso.rmsnorm!(
-            cpu, cpu_d, mat(Gesso.Activation, x0), mat(Gesso.FrozenParameter, s0), wl,
+            cpu,
+            cpu_d,
+            mat(Gesso.Activation, x0),
+            mat(Gesso.FrozenParameter, s0),
+            wl,
         )
         gpu_d = mat(Gesso.Activation, CUDA.zeros(Float32, size(x0)))
         Gesso.rmsnorm!(
@@ -174,8 +201,13 @@ else
         g_g = CUDA.zeros(Float32, seq, nv)
         beta_g = CUDA.zeros(Float32, seq, nv)
         Inf_._gdn_gate_params!(
-            cuda, g_g, beta_g, CuArray{Float32}(a), CuArray{Float32}(b),
-            CuArray{Float32}(A_log), CuArray{Float32}(dt),
+            cuda,
+            g_g,
+            beta_g,
+            CuArray{Float32}(a),
+            CuArray{Float32}(b),
+            CuArray{Float32}(A_log),
+            CuArray{Float32}(dt),
         )
         @test approx_eq(Array(g_g), Float32.(g_c); atol=1e-3)
         @test approx_eq(Array(beta_g), Float32.(beta_c); atol=1e-3)
@@ -187,18 +219,32 @@ else
         core = randn(rng, Float32, seq, nv, dv)
         z = randn(rng, Float32, seq, nv * dv)
         w = randn(rng, Float32, dv)
-        eps = 1f-6
+        eps = 1.0f-6
         ref = zeros(Float32, seq, nv * dv)
         for t in 1:seq, hh in 1:nv
             inv = 1 / sqrt(sum(abs2, core[t, hh, :]) / dv + eps)
             for j in 1:dv
-                zv = z[t, (hh - 1) * dv + j]
-                ref[t, (hh - 1) * dv + j] = core[t, hh, j] * inv * w[j] * zv / (1 + exp(-zv))
+                zv = z[t, (hh-1)*dv+j]
+                ref[t, (hh-1)*dv+j] = core[t, hh, j] * inv * w[j] * zv / (1 + exp(-zv))
             end
         end
-        @test !Inf_._gdn_gnorm_merge!(cpu, zeros(Float32, seq, nv * dv), core, z, (; storage=w), eps)
+        @test !Inf_._gdn_gnorm_merge!(
+            cpu,
+            zeros(Float32, seq, nv * dv),
+            core,
+            z,
+            (; storage=w),
+            eps,
+        )
         merged = CUDA.zeros(Float32, seq, nv * dv)
-        @test Inf_._gdn_gnorm_merge!(cuda, merged, CuArray(core), CuArray(z), (; storage=CuArray(w)), eps)
+        @test Inf_._gdn_gnorm_merge!(
+            cuda,
+            merged,
+            CuArray(core),
+            CuArray(z),
+            (; storage=CuArray(w)),
+            eps,
+        )
         @test approx_eq(Array(merged), ref; atol=1e-5)
     end
 
@@ -214,7 +260,11 @@ else
         dst_g = CUDA.zeros(Float32, seq, channels)
         st_g = CuArray{Float32}(st)
         Inf_._causal_conv1d_silu!(
-            cuda, dst_g, CuArray{Float32}(x), CuArray{Float32}(w), st_g,
+            cuda,
+            dst_g,
+            CuArray{Float32}(x),
+            CuArray{Float32}(w),
+            st_g,
         )
         @test approx_eq(Array(dst_g), Float32.(dst_c); atol=1e-3)
         @test approx_eq(Array(st_g), Float32.(st_c); atol=1e-3)
@@ -224,7 +274,11 @@ else
         Inf_._causal_conv1d_silu!(cpu, dst1_c, x1, w, st_c)
         dst1_g = CUDA.zeros(Float32, 1, channels)
         Inf_._causal_conv1d_silu!(
-            cuda, dst1_g, CuArray{Float32}(x1), CuArray{Float32}(w), st_g,
+            cuda,
+            dst1_g,
+            CuArray{Float32}(x1),
+            CuArray{Float32}(w),
+            st_g,
         )
         @test approx_eq(Array(dst1_g), Float32.(dst1_c); atol=1e-3)
         @test approx_eq(Array(st_g), Float32.(st_c); atol=1e-3)
@@ -242,7 +296,16 @@ else
             out_c = zeros(seq, nv, dv)
             st_c = zeros(nv, dk, dv)
             Inf_._gated_delta_rule!(
-                cpu, out_c, q, k, v, g, beta, st_c; l2norm=true, v_head_tiled=tiled,
+                cpu,
+                out_c,
+                q,
+                k,
+                v,
+                g,
+                beta,
+                st_c;
+                l2norm=true,
+                v_head_tiled=tiled,
             )
             out_g = CUDA.zeros(Float32, seq, nv, dv)
             st_g = CUDA.zeros(Float32, nv, dk, dv)
@@ -272,7 +335,10 @@ else
     @testset "cuda gated_delta_rule register and shared-memory kernels match CPU" begin
         rng = deterministic_rng(12)
         for (seq, nk, nv, dk, dv) in ((37, 4, 8, 16, 24), (19, 2, 4, 128, 40)),
-                reg in ("1", "0"), tiled in (false, true), l2 in (true, false)
+            reg in ("1", "0"),
+            tiled in (false, true),
+            l2 in (true, false)
+
             sc = l2 ? 1.0 : 1 / sqrt(dk)
             q = sc .* randn(rng, seq, nk, dk)
             k = sc .* randn(rng, seq, nk, dk)
@@ -283,15 +349,31 @@ else
             out_c = zeros(seq, nv, dv)
             st_c = copy(st0)
             Inf_._gated_delta_rule!(
-                cpu, out_c, q, k, v, g, beta, st_c; l2norm=l2, v_head_tiled=tiled,
+                cpu,
+                out_c,
+                q,
+                k,
+                v,
+                g,
+                beta,
+                st_c;
+                l2norm=l2,
+                v_head_tiled=tiled,
             )
             out_g = CUDA.zeros(Float32, seq, nv, dv)
             st_g = CuArray{Float32}(st0)
             withenv("GESSO_GDN_RECUR_REG" => reg) do
                 Inf_._gated_delta_rule!(
-                    cuda, out_g, CuArray{Float32}(q), CuArray{Float32}(k), CuArray{Float32}(v),
-                    CuArray{Float32}(g), CuArray{Float32}(beta), st_g;
-                    l2norm=l2, v_head_tiled=tiled,
+                    cuda,
+                    out_g,
+                    CuArray{Float32}(q),
+                    CuArray{Float32}(k),
+                    CuArray{Float32}(v),
+                    CuArray{Float32}(g),
+                    CuArray{Float32}(beta),
+                    st_g;
+                    l2norm=l2,
+                    v_head_tiled=tiled,
                 )
             end
             @test approx_eq(Array(out_g), Float32.(out_c); atol=1e-3)
@@ -328,7 +410,14 @@ else
 
         prompt = [(i * 7919) % 50000 + 100 for i in 1:300]
         gen(c) = withenv("GESSO_PREFILL_CHUNK" => c) do
-            Gesso.reference_generate(model, gpu, prompt; max_new_tokens=6, eps=spec.rms_norm_eps, backend=cuda)
+            Gesso.reference_generate(
+                model,
+                gpu,
+                prompt;
+                max_new_tokens=6,
+                eps=spec.rms_norm_eps,
+                backend=cuda,
+            )
         end
         @test gen("128") == gen("0")
 
@@ -336,8 +425,24 @@ else
         # restores the GDN snapshot taken where the last prefill ended.
         st = Gesso.GenerateState(400)
         info = Ref{Any}(nothing)
-        fresh(p) = Gesso.reference_generate(model, gpu, p; max_new_tokens=6, eps=spec.rms_norm_eps, backend=cuda)
-        turn(p) = Gesso.reference_generate(model, gpu, p; max_new_tokens=6, eps=spec.rms_norm_eps, backend=cuda, state=st, info=info)
+        fresh(p) = Gesso.reference_generate(
+            model,
+            gpu,
+            p;
+            max_new_tokens=6,
+            eps=spec.rms_norm_eps,
+            backend=cuda,
+        )
+        turn(p) = Gesso.reference_generate(
+            model,
+            gpu,
+            p;
+            max_new_tokens=6,
+            eps=spec.rms_norm_eps,
+            backend=cuda,
+            state=st,
+            info=info,
+        )
         a = turn(prompt[1:200])
         @test a == fresh(prompt[1:200])
         p2 = vcat(a, prompt[201:300])

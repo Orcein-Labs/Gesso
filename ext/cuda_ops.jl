@@ -22,7 +22,8 @@ using Gesso: ERR_VERIFY_MISMATCH   # the all-fail / stale-winner code (§LXX, §
 # CuRef per call: a pool allocation (which can run CUDACore's early GC), a
 # pageable 4-byte upload and a finalizer. About 1200 of those per 35B token, so
 # the constants are kept on the device, one box per context and value.
-const _CU_SCALARS = Dict{Tuple{CUDA.CuContext, Float32}, CUDA.CUDACore.CuRefValue{Float32}}()
+const _CU_SCALARS =
+    Dict{Tuple{CUDA.CuContext, Float32}, CUDA.CUDACore.CuRefValue{Float32}}()
 const _CU_SCALARS_LOCK = ReentrantLock()
 _cu_scalar(x::Number) = x
 function _cu_scalar(x::Float32)
@@ -41,22 +42,28 @@ end
 # GPU ops CPU memory is ERR_INVALID_PLAN — the caller skipped to_device
 # (§LXXVII: "the interpreter does not copy"; §LXX: loud, typed failure)
 function _cuda_device_storage!(op::Symbol, t)
-    return _cuda_checked_storage(op,t.storage)
+    return _cuda_checked_storage(op, t.storage)
 end
 function _cuda_checked_storage(op::Symbol, s)
     Gesso.Inference._storage_root(s) isa CUDA.CuArray && eltype(s) === Float32 && return s
-    throw(gesso_error(ERR_INVALID_PLAN,
-        "$op: CUDABackend requires its own Float32 device storage; host Array, " *
-        "host views, other devices and unsupported arithmetic are rejected; call to_device explicitly";
-        op=op, storage_type=string(typeof(s))))
+    throw(
+        gesso_error(
+            ERR_INVALID_PLAN,
+            "$op: CUDABackend requires its own Float32 device storage; host Array, " *
+            "host views, other devices and unsupported arithmetic are rejected; call to_device explicitly";
+            op=op,
+            storage_type=string(typeof(s)),
+        ),
+    )
 end
 function Gesso.Inference._check_device_storage(op::Symbol, backend::CUDABackend, t)
     s = t.storage
-    (s isa Gesso.Inference.HostOffload ||
-     s isa Gesso.Inference.GgufQuantSlice ||
-     s isa Gesso.Inference.GpuQuantSlice ||
-     s isa Gesso.Inference.CachedExpertBank) &&
-        return nothing
+    (
+        s isa Gesso.Inference.HostOffload ||
+        s isa Gesso.Inference.GgufQuantSlice ||
+        s isa Gesso.Inference.GpuQuantSlice ||
+        s isa Gesso.Inference.CachedExpertBank
+    ) && return nothing
     s isa CuArray{Float16} && return nothing   # device F16 weight (matmul / table)
     s isa GpuDenseQuant && return nothing      # native dense quant weight (matmul)
     # Untied GGUF embedding gathered on the host. Projections are excluded so
@@ -77,14 +84,18 @@ end
 # --- op bodies -----------------------------------------------------------------
 
 function _cuda_embedding_lookup!(dst, table, tokens)
-    Gesso._validate_embedding_inputs(dst,table,tokens)
+    Gesso._validate_embedding_inputs(dst, table, tokens)
     tab = table.storage
     for (t, tok) in enumerate(tokens)
         d = size(dst.storage, 2)                  # 0-based token ids (§LXXV)
         d == 0 && continue
         nthreads = min(256, d)
         @fastcuda threads = (nthreads,) blocks = (cld(d, nthreads),) _cuda_embed_kernel!(
-            dst.storage, tab, t, tok + 1)
+            dst.storage,
+            tab,
+            t,
+            tok + 1,
+        )
     end
     return dst
 end
@@ -120,14 +131,28 @@ end
 # derived reference as soon as its last kernel is queued.
 _drop_derived!(a, parent) = (a === parent || CUDA.unsafe_free!(a); nothing)
 
-function _cuda_rmsnorm_storage!(dsts::AbstractArray, xs::AbstractArray, scales::AbstractArray, eps)
+function _cuda_rmsnorm_storage!(
+    dsts::AbstractArray,
+    xs::AbstractArray,
+    scales::AbstractArray,
+    eps,
+)
     native_eps=eltype(xs)(eps)
-    isfinite(native_eps) && native_eps>0 || throw(gesso_error(ERR_INVALID_PLAN,
-        "rmsnorm!: eps must be representable, finite and positive in storage dtype"))
+    isfinite(native_eps) && native_eps>0 || throw(
+        gesso_error(
+            ERR_INVALID_PLAN,
+            "rmsnorm!: eps must be representable, finite and positive in storage dtype",
+        ),
+    )
     nd = ndims(xs)
     d = size(xs, nd)                              # last dim is the feature dim
-    length(scales) == d ||
-        throw(gesso_error(ERR_INVALID_PLAN, "rmsnorm!: scale length $(length(scales)) ≠ feature dim $d"; op = :rmsnorm!))
+    length(scales) == d || throw(
+        gesso_error(
+            ERR_INVALID_PLAN,
+            "rmsnorm!: scale length $(length(scales)) ≠ feature dim $d";
+            op=:rmsnorm!,
+        ),
+    )
     if nd == 2 && size(xs, 1) == 1
         @fastcuda threads=256 blocks=1 _cuda_rmsnorm_row_kernel!(dsts, xs, scales, eps, d)
         return dsts
@@ -145,26 +170,44 @@ function _cuda_rmsnorm_storage!(dsts::AbstractArray, xs::AbstractArray, scales::
         d2 = reshape(dsts, rows, d)
         if d <= 256 && rows <= 8192
             @fastcuda threads = 32cld(d, 32) blocks = rows _cuda_rmsnorm_rows_kernel!(
-                d2, x2, scales, eps, d)
+                d2,
+                x2,
+                scales,
+                eps,
+                d,
+            )
         else
             ss = _rmsnorm_sumsq(rows)
             sum!(abs2, ss, x2)
             nthreads = min(256, d)
             @fastcuda threads = (nthreads,) blocks = (rows,) _cuda_rmsnorm_apply_kernel!(
-                d2, x2, ss, scales, eps, rows, d)
+                d2,
+                x2,
+                ss,
+                scales,
+                eps,
+                rows,
+                d,
+            )
             rows > 256 && CUDA.unsafe_free!(ss)
         end
         _drop_derived!(x2, xs)
         _drop_derived!(d2, dsts)
         return dsts
     end
-    rms = sqrt.(sum(abs2, xs; dims = nd) ./ d .+ eps)
+    rms = sqrt.(sum(abs2, xs; dims=nd) ./ d .+ eps)
     if nd == 2
         rows = size(dsts, 1)
         d == 0 && return dsts
         nthreads = min(256, d)
         @fastcuda threads = (nthreads,) blocks = (rows,) _cuda_rmsnorm_apply_kernel!(
-            dsts, xs, rms, scales, rows, d)
+            dsts,
+            xs,
+            rms,
+            scales,
+            rows,
+            d,
+        )
         return dsts
     end
     # generic rank: the previous chain, unchanged
@@ -233,7 +276,7 @@ function _cuda_rmsnorm_row_kernel!(dst, xs, scales, eps, d::Int)
     stride = 128
     while stride > 0
         if tid <= stride
-            part[tid] += part[tid + stride]
+            part[tid] += part[tid+stride]
         end
         CUDA.sync_threads()
         stride >>= 1
@@ -266,7 +309,7 @@ function _cuda_add_rmsnorm_row_kernel!(dst, hs, src, scales, eps, d::Int)
     stride = 128
     while stride > 0
         if tid <= stride
-            part[tid] += part[tid + stride]
+            part[tid] += part[tid+stride]
         end
         CUDA.sync_threads()
         stride >>= 1
@@ -287,19 +330,39 @@ function _add_rmsnorm!(
     src::CuArray,
     scale::FrozenParameter,
     wl::DecodeWorkload;
-    eps::Real = 1e-6,
+    eps::Real=1e-6,
 )
     hs = h.storage
     ds = dst.storage
-    if hs isa CuArray && ds isa CuArray && ndims(hs) == 2 && size(hs, 1) == 1 && length(src) == length(hs)
+    if hs isa CuArray &&
+       ds isa CuArray &&
+       ndims(hs) == 2 &&
+       size(hs, 1) == 1 &&
+       length(src) == length(hs)
         ss = _cuda_materialize_small(scale.storage)
         d = size(hs, 2)
         native_eps = eltype(hs)(eps)
-        isfinite(native_eps) && native_eps > 0 || throw(gesso_error(ERR_INVALID_PLAN,
-            "rmsnorm!: eps must be representable, finite and positive in storage dtype"))
-        length(ss) == d ||
-            throw(gesso_error(ERR_INVALID_PLAN, "rmsnorm!: scale length $(length(ss)) ≠ feature dim $d"; op = :rmsnorm!))
-        @fastcuda threads=256 blocks=1 _cuda_add_rmsnorm_row_kernel!(ds, hs, src, ss, eps, d)
+        isfinite(native_eps) && native_eps > 0 || throw(
+            gesso_error(
+                ERR_INVALID_PLAN,
+                "rmsnorm!: eps must be representable, finite and positive in storage dtype",
+            ),
+        )
+        length(ss) == d || throw(
+            gesso_error(
+                ERR_INVALID_PLAN,
+                "rmsnorm!: scale length $(length(ss)) ≠ feature dim $d";
+                op=:rmsnorm!,
+            ),
+        )
+        @fastcuda threads=256 blocks=1 _cuda_add_rmsnorm_row_kernel!(
+            ds,
+            hs,
+            src,
+            ss,
+            eps,
+            d,
+        )
         return dst
     end
     _add_storage!(hs, src)
@@ -347,15 +410,23 @@ end
 # RoPE: adjacent pairs by default; imported HF policy selects half-split
 # law), Q over its head axis and K over its own (GQA-safe, Phase 3 fix).
 # One @cuda kernel — broadcast cannot express the pair coupling.
-function _cuda_rope_kernel!(x, positions, theta, interleaved::Bool, rd::Int, use_inv::Bool, inv_freq)
+function _cuda_rope_kernel!(
+    x,
+    positions,
+    theta,
+    interleaved::Bool,
+    rd::Int,
+    use_inv::Bool,
+    inv_freq,
+)
     t = (blockIdx().x - 1) * blockDim().x + threadIdx().x    # sequence index
     h = blockIdx().y                                          # head index
     seq, nheads, d = size(x)
     t <= seq || return
     m = Float32(positions[t])
     n = rd ÷ 2
-    for i in 0:(n - 1)
-        θv = use_inv ? m * inv_freq[i + 1] : m * theta^(-2i / rd)
+    for i in 0:(n-1)
+        θv = use_inv ? m * inv_freq[i+1] : m * theta^(-2i / rd)
         c, s = cos(θv), sin(θv)
         a, b = interleaved ? (2i + 1, 2i + 2) : (i + 1, i + 1 + n)
         x1 = x[t, h, a]
@@ -370,12 +441,20 @@ function _cuda_rope!(
     q,
     k,
     positions;
-    theta = 10000.0,
-    interleaved = true,
-    rotary_dim = 0,
-    inv_freq = nothing,
+    theta=10000.0,
+    interleaved=true,
+    rotary_dim=0,
+    inv_freq=nothing,
 )
-    _cuda_rope_storage!(q.storage, k.storage, positions, theta, interleaved, rotary_dim, inv_freq)
+    _cuda_rope_storage!(
+        q.storage,
+        k.storage,
+        positions,
+        theta,
+        interleaved,
+        rotary_dim,
+        inv_freq,
+    )
     return q
 end
 
@@ -386,11 +465,14 @@ Base.getindex(o::_OnePos, ::Integer) = o.p
 
 # The frequency table is fixed per model, but arrives as a host vector on every
 # call; upload each distinct table once per context.
-const _ROPE_FREQ = Dict{Tuple{CUDA.CuContext, Union{Nothing, Vector{Float64}}}, CuArray{Float32, 1}}()
+const _ROPE_FREQ =
+    Dict{Tuple{CUDA.CuContext, Union{Nothing, Vector{Float64}}}, CuArray{Float32, 1}}()
 const _ROPE_FREQ_LOCK = ReentrantLock()
 function _rope_freq_device(inv_freq)
     ctx = CUDA.context()
-    host = inv_freq === nothing || inv_freq isa Vector{Float64} ? inv_freq : Vector{Float64}(inv_freq)
+    host =
+        inv_freq === nothing || inv_freq isa Vector{Float64} ? inv_freq :
+        Vector{Float64}(inv_freq)
     @lock _ROPE_FREQ_LOCK begin
         dev = get(_ROPE_FREQ, (ctx, host), nothing)
         dev === nothing || return dev
@@ -412,13 +494,14 @@ function _cuda_rope_storage!(
     inv_freq,
 )
     size(qs, 3) == size(ks, 3) ||
-        throw(gesso_error(ERR_INVALID_PLAN, "rope!: q d_head ≠ k d_head"; op = :rope!))
+        throw(gesso_error(ERR_INVALID_PLAN, "rope!: q d_head ≠ k d_head"; op=:rope!))
     tθ = Float64(theta)
     d = size(qs, 3)
     rd = rotary_dim == 0 ? Int(d) : Int(rotary_dim)
     # kernels never auto-transfer; a decode step's single position rides in
     # the launch parameters instead of a fresh device array
-    pos_d = length(positions) == 1 ? _OnePos(Int(first(positions))) : CuArray{Int}(positions)
+    pos_d =
+        length(positions) == 1 ? _OnePos(Int(first(positions))) : CuArray{Int}(positions)
     use_inv = inv_freq !== nothing
     freq_d = _rope_freq_device(inv_freq)
     for x in (qs, ks)
@@ -427,7 +510,14 @@ function _cuda_rope_storage!(
         nblocks = cld(seq, nthreads)
         # 2-D grid: x = sequence tiles, y = head (K rotates its OWN heads)
         @fastcuda threads = (nthreads,) blocks = (nblocks, nheads) _cuda_rope_kernel!(
-            x, pos_d, tθ, interleaved, rd, use_inv, freq_d)
+            x,
+            pos_d,
+            tθ,
+            interleaved,
+            rd,
+            use_inv,
+            freq_d,
+        )
     end
     pos_d isa CuArray && CUDA.unsafe_free!(pos_d)
     return nothing
@@ -481,7 +571,7 @@ function _cuda_swiglu_kernel!(dst, g, u)
     i = (blockIdx().x - 1) * blockDim().x + threadIdx().x
     i <= length(dst) || return
     gv = g[i]
-    dst[i] = (gv / (1f0 + exp(-gv))) * u[i]
+    dst[i] = (gv / (1.0f0 + exp(-gv))) * u[i]
     return
 end
 
@@ -489,13 +579,24 @@ function _cuda_swiglu!(dst, gate, up)
     n = length(dst.storage)
     n == 0 && return dst
     @fastcuda threads = (min(256, n),) blocks = (cld(n, 256),) _cuda_swiglu_kernel!(
-        dst.storage, gate.storage, up.storage)
+        dst.storage,
+        gate.storage,
+        up.storage,
+    )
     return dst
 end
 
 function _cuda_matmul_storage!(dst::AbstractArray, x::AbstractArray, w::AbstractArray)
     _xwt_ok(dst, x, w) && return _cuda_xwt!(dst, x, w)
-    _blas_gemm!('N', 'T', _cu_scalar(one(eltype(dst))), x, w, _cu_scalar(zero(eltype(dst))), dst)
+    _blas_gemm!(
+        'N',
+        'T',
+        _cu_scalar(one(eltype(dst))),
+        x,
+        w,
+        _cu_scalar(zero(eltype(dst))),
+        dst,
+    )
     return dst
 end
 
@@ -563,7 +664,7 @@ function _host_embed_rows(tab::AbstractMatrix, tokens)
     d = size(tab, 2)
     host = Matrix{Float32}(undef, length(tokens), d)
     @inbounds for (t, tok) in enumerate(tokens), j in 1:d
-        host[t, j] = Float32(tab[tok + 1, j])
+        host[t, j] = Float32(tab[tok+1, j])
     end
     return host
 end
@@ -574,7 +675,7 @@ function rmsnorm!(
     x::Activation,
     scale::FrozenParameter,
     ::Gesso.PrefillWorkload;
-    eps::Real = 1e-6,
+    eps::Real=1e-6,
 )
     _cuda_device_storage!(:rmsnorm!, dst)
     _cuda_device_storage!(:rmsnorm!, x)
@@ -587,7 +688,7 @@ function rmsnorm!(
     x::Activation,
     scale::FrozenParameter,
     ::Gesso.DecodeWorkload;
-    eps::Real = 1e-6,
+    eps::Real=1e-6,
 )
     _cuda_device_storage!(:rmsnorm!, dst)
     _cuda_device_storage!(:rmsnorm!, x)
@@ -600,10 +701,10 @@ function rope!(
     k::Activation,
     positions::AbstractVector{Int},
     ::Gesso.PrefillWorkload;
-    theta::Real = 10000.0,
-    inv_freq = nothing,
-    interleaved::Bool = true,
-    rotary_dim::Integer = 0,
+    theta::Real=10000.0,
+    inv_freq=nothing,
+    interleaved::Bool=true,
+    rotary_dim::Integer=0,
 )
     # Partial rotary and an explicit inv_freq table (linear / Llama3 / Qwen3.5
     # mRoPE-as-1D-text) rotate on device. Frequencies stay host metadata and
@@ -620,10 +721,10 @@ function rope!(
     k::Activation,
     positions::AbstractVector{Int},
     ::Gesso.DecodeWorkload;
-    theta::Real = 10000.0,
-    inv_freq = nothing,
-    interleaved::Bool = true,
-    rotary_dim::Integer = 0,
+    theta::Real=10000.0,
+    inv_freq=nothing,
+    interleaved::Bool=true,
+    rotary_dim::Integer=0,
 )
     _cuda_device_storage!(:rope!, q)
     _cuda_device_storage!(:rope!, k)
@@ -680,7 +781,7 @@ function _cuda_split_kernel!(dst3, src2, d_head::Int)
     r > size(dst3, 1) && return
     coloff = (h - 1) * d_head
     for f in 1:d_head
-        dst3[r, h, f] = src2[r, coloff + f]
+        dst3[r, h, f] = src2[r, coloff+f]
     end
     return
 end
@@ -690,7 +791,10 @@ function _split_heads!(dst::CuArray, src::AbstractArray, n_heads, d_head)
     rows == 0 && return dst
     nthreads = min(256, rows)
     @fastcuda threads = (nthreads,) blocks = (cld(rows, nthreads), n_heads) _cuda_split_kernel!(
-        dst, src, Int(d_head))
+        dst,
+        src,
+        Int(d_head),
+    )
     return dst
 end
 
@@ -700,7 +804,7 @@ function _cuda_merge_kernel!(dst2, src3, d_head::Int)
     r > size(dst2, 1) && return
     coloff = (h - 1) * d_head
     for f in 1:d_head
-        dst2[r, coloff + f] = src3[r, h, f]
+        dst2[r, coloff+f] = src3[r, h, f]
     end
     return
 end
@@ -710,7 +814,10 @@ function _merge_heads!(dst::CuArray, src::CuArray, n_heads, d_head)
     rows == 0 && return dst
     nthreads = min(256, rows)
     @fastcuda threads = (nthreads,) blocks = (cld(rows, nthreads), n_heads) _cuda_merge_kernel!(
-        dst, src, Int(d_head))
+        dst,
+        src,
+        Int(d_head),
+    )
     return dst
 end
 
@@ -720,7 +827,7 @@ function _cuda_repeat_kernel!(dst3, src3, group::Int, K::Int)
     sh = blockIdx().y
     r > K && return
     for g in 1:group, f in 1:size(dst3, 3)
-        dst3[r, (sh - 1) * group + g, f] = src3[r, sh, f]
+        dst3[r, (sh-1)*group+g, f] = src3[r, sh, f]
     end
     return
 end
@@ -731,7 +838,11 @@ function _repeat_heads!(dst::CuArray, src::CuArray, group::Int, K::Int)
     nkv = size(src, 2)
     nthreads = min(256, K)
     @fastcuda threads = (nthreads,) blocks = (cld(K, nthreads), nkv) _cuda_repeat_kernel!(
-        dst, src, group, K)
+        dst,
+        src,
+        group,
+        K,
+    )
     return dst
 end
 
@@ -745,7 +856,11 @@ function _cuda_copy_row_kernel!(dst3, src2, i::Int)
 end
 
 function _copy_row_storage!(dst::CuArray, src::AbstractArray, i::Int)
-    @fastcuda threads = (1,) blocks = (size(dst, 2), size(dst, 3)) _cuda_copy_row_kernel!(dst, src, i)
+    @fastcuda threads = (1,) blocks = (size(dst, 2), size(dst, 3)) _cuda_copy_row_kernel!(
+        dst,
+        src,
+        i,
+    )
     return dst
 end
 
@@ -763,7 +878,13 @@ function _cuda_kv_append_kernel!(kc, vc, kh, vh, row::Int)
 end
 
 function _kv_append_storage!(kc::CuArray, vc::CuArray, kh::CuArray, vh::CuArray, row::Int)
-    @fastcuda threads = (min(256, size(kc, 3)),) blocks = (size(kc, 2),) _cuda_kv_append_kernel!(kc, vc, kh, vh, row)
+    @fastcuda threads = (min(256, size(kc, 3)),) blocks = (size(kc, 2),) _cuda_kv_append_kernel!(
+        kc,
+        vc,
+        kh,
+        vh,
+        row,
+    )
     return nothing
 end
 
@@ -773,15 +894,20 @@ function _cuda_copy_rows_kernel!(dst3, src3, r1::Int, take::Int)
     h = blockIdx().y
     f = blockIdx().z
     t > take && return
-    dst3[r1 + t - 1, h, f] = src3[t, h, f]
+    dst3[r1+t-1, h, f] = src3[t, h, f]
     return
 end
 
 function _copy_rows_storage!(dest::CuArray, src::CuArray, r1::Int, take::Int)
     take <= 0 && return dest
     nthreads = min(256, take)
-    @fastcuda threads = (nthreads,) blocks = (cld(take, nthreads), size(dest, 2), size(dest, 3)) _cuda_copy_rows_kernel!(
-        dest, src, r1, take)
+    @fastcuda threads = (nthreads,) blocks =
+        (cld(take, nthreads), size(dest, 2), size(dest, 3)) _cuda_copy_rows_kernel!(
+        dest,
+        src,
+        r1,
+        take,
+    )
     return dest
 end
 
@@ -836,7 +962,11 @@ function _write_hidden_row_storage!(dst::CuArray, src::CuArray, row::Int)
     d = size(dst, 2)
     d == 0 && return dst
     nthreads = min(256, d)
-    @fastcuda threads = (nthreads,) blocks = (cld(d, nthreads),) _cuda_hidden_row_kernel!(dst, src, row)
+    @fastcuda threads = (nthreads,) blocks = (cld(d, nthreads),) _cuda_hidden_row_kernel!(
+        dst,
+        src,
+        row,
+    )
     return dst
 end
 
@@ -861,9 +991,9 @@ end
 function _autotune_dispatch!(dst, x, w, regime)
     A = Gesso.Autotune
     device=_autotune_device_id()
-    winner=A._cached_winner(:matmul!,:cuda,regime,device)
+    winner=A._cached_winner(:matmul!, :cuda, regime, device)
     if winner===nothing
-        winner=A.select(:matmul!,:cuda,regime,device,dst,x,w).winner
+        winner=A.select(:matmul!, :cuda, regime, device, dst, x, w).winner
     end
     runner = A._candidate_runner(:matmul!, :cuda, winner)
     runner === nothing && throw(
@@ -871,9 +1001,9 @@ function _autotune_dispatch!(dst, x, w, regime)
             ERR_VERIFY_MISMATCH,
             "matmul!: autotune winner :$(winner) has no registered " *
             "candidate — registry and cache disagree (§LXX: no silent keep)",
-            op = :matmul!,
-            regime = regime,
-            winner = string(winner),
+            op=:matmul!,
+            regime=regime,
+            winner=string(winner),
         ),
     )
     # Exact function identity preserves replacement-by-name while allowing the
@@ -896,7 +1026,12 @@ function matmul!(
     w.storage isa CuArray{Float16} && return _cuda_f16w_matmul!(dst, x, w)
     w.storage isa Gesso.Inference.HostOffload &&
         return _cuda_host_offload_matmul!(dst, x, w)
-    return _autotune_dispatch!(dst, x, w, _autotune_regime(size(x.storage, 2), size(w.storage, 1)))
+    return _autotune_dispatch!(
+        dst,
+        x,
+        w,
+        _autotune_regime(size(x.storage, 2), size(w.storage, 1)),
+    )
 end
 
 function matmul!(
@@ -912,7 +1047,12 @@ function matmul!(
     w.storage isa CuArray{Float16} && return _cuda_f16w_matmul!(dst, x, w)
     w.storage isa Gesso.Inference.HostOffload &&
         return _cuda_host_offload_matmul!(dst, x, w)
-    return _autotune_dispatch!(dst, x, w, _autotune_regime(size(x.storage, 2), size(w.storage, 1)))
+    return _autotune_dispatch!(
+        dst,
+        x,
+        w,
+        _autotune_regime(size(x.storage, 2), size(w.storage, 1)),
+    )
 end
 
 # tied head (§LXXV): the embedding table IS the lm_head — same function,
@@ -929,7 +1069,12 @@ function matmul!(
     w.storage isa CuArray{Float16} && return _cuda_f16w_matmul!(dst, x, w)
     w.storage isa Gesso.Inference.HostOffload &&
         return _cuda_host_offload_matmul!(dst, x, w)
-    return _autotune_dispatch!(dst, x, w, _autotune_regime(size(x.storage, 2), size(w.storage, 1)))
+    return _autotune_dispatch!(
+        dst,
+        x,
+        w,
+        _autotune_regime(size(x.storage, 2), size(w.storage, 1)),
+    )
 end
 
 function matmul!(
@@ -944,7 +1089,12 @@ function matmul!(
     w.storage isa CuArray{Float16} && return _cuda_f16w_matmul!(dst, x, w)
     w.storage isa Gesso.Inference.HostOffload &&
         return _cuda_host_offload_matmul!(dst, x, w)
-    return _autotune_dispatch!(dst, x, w, _autotune_regime(size(x.storage, 2), size(w.storage, 1)))
+    return _autotune_dispatch!(
+        dst,
+        x,
+        w,
+        _autotune_regime(size(x.storage, 2), size(w.storage, 1)),
+    )
 end
 
 # F16 device weights, F32 activations and accumulate. A table with F16 storage
@@ -999,10 +1149,18 @@ function _cuda_f16w_matmul!(dst, x, w)
     ds = dst.storage
     m, k = size(ws)
     n = size(xs, 1)
-    size(xs, 2) == k || throw(DimensionMismatch("f16 matmul: x is $(size(xs)), W is $(size(ws))"))
-    size(ds) == (n, m) || throw(DimensionMismatch("f16 matmul: dst is $(size(ds)), want ($n, $m)"))
+    size(xs, 2) == k ||
+        throw(DimensionMismatch("f16 matmul: x is $(size(xs)), W is $(size(ws))"))
+    size(ds) == (n, m) ||
+        throw(DimensionMismatch("f16 matmul: dst is $(size(ds)), want ($n, $m)"))
     n == 0 && return dst
-    @fastcuda threads = (32, _F16W_KSPLIT) blocks = (cld(m, 32), n) _cuda_f16w_kernel!(ds, xs, ws, k, m)
+    @fastcuda threads = (32, _F16W_KSPLIT) blocks = (cld(m, 32), n) _cuda_f16w_kernel!(
+        ds,
+        xs,
+        ws,
+        k,
+        m,
+    )
     return dst
 end
 
@@ -1105,9 +1263,9 @@ end
 
 # the correctness gate both candidates share: F64 host oracle vs a scratch
 # run of `impl`, at the Phase 4 CUDA op atol
-function _cuda_matmul_gate(impl, dst, x, w; atol = 1e-2)
+function _cuda_matmul_gate(impl, dst, x, w; atol=1e-2)
     ref = Float64.(Array(x.storage)) * Float64.(Array(w.storage))'
-    sc = typeof(dst)(; shape = dst.shape, storage = similar(dst.storage))
+    sc = typeof(dst)(; shape=dst.shape, storage=similar(dst.storage))
     impl(sc, x, w)
     return maximum(abs, Float64.(Array(sc.storage)) .- ref) <= atol
 end
@@ -1185,7 +1343,10 @@ _host_f32(s) = convert(Array{Float32}, s)
 
 function _to_device_cuda(tensors)
     _blas_reserve!()   # before the weights and pools leave no room for it
-    @debug "vram before dense placement" free_mib=div(Int64(CUDA.free_memory()), Int64(1024 * 1024)) dense_budget_mib=div(Gesso.Inference._gpu_budget_bytes(), Int64(1024 * 1024))
+    @debug "vram before dense placement" free_mib=div(
+        Int64(CUDA.free_memory()),
+        Int64(1024 * 1024),
+    ) dense_budget_mib=div(Gesso.Inference._gpu_budget_bytes(), Int64(1024 * 1024))
     budget = Gesso.Inference._gpu_budget_bytes()
     wdt = _gpu_weight_eltype()
     used = Int64(0)
@@ -1211,8 +1372,10 @@ function _to_device_cuda(tensors)
         else
             push!(pending, s)
             native && _dq_eligible(s) && push!(nativeset, objectid(s))
-            if matmul && (s isa Array || s isa Gesso.Inference.QuantMatrix) &&
-               ndims(s) == 2 && length(s) >= _GPU_F16_MIN_ELEMS
+            if matmul &&
+               (s isa Array || s isa Gesso.Inference.QuantMatrix) &&
+               ndims(s) == 2 &&
+               length(s) >= _GPU_F16_MIN_ELEMS
                 push!(f16set, objectid(s))
             end
         end
@@ -1223,9 +1386,11 @@ function _to_device_cuda(tensors)
         # A distinct lm_head is a ProjectionWeight and may stay quantized on
         # the device. A tied table is also the embedding lookup, which reads
         # F16 device rows, so it keeps the F16 path.
-        consider!(t.storage;
-            matmul = t isa Gesso.ProjectionWeight || t isa Gesso.EmbeddingTable,
-            native = t isa Gesso.ProjectionWeight)
+        consider!(
+            t.storage;
+            matmul=t isa Gesso.ProjectionWeight || t isa Gesso.EmbeddingTable,
+            native=t isa Gesso.ProjectionWeight,
+        )
         return
     end
     # Untied embedding: a row-gather table only. It stays on the host, so it
@@ -1237,7 +1402,8 @@ function _to_device_cuda(tensors)
         hasproperty(t, :storage) || return
         s = t.storage
         (s === nothing || haskey(conv, s)) && return
-        conv[s] = s isa Gesso.Inference.HostOffload || s isa Gesso.Inference.QuantMatrix ? s :
+        conv[s] =
+            s isa Gesso.Inference.HostOffload || s isa Gesso.Inference.QuantMatrix ? s :
             Gesso.Inference.HostOffload(_host_f32(s))
         return
     end
@@ -1293,14 +1459,19 @@ function _to_device_cuda(tensors)
             conv[s] = CuArray{Float32}(arr)
             remaining -= nbytes
         else
-            data = eltype(arr) === Float32 && arr isa Array ? arr : convert(Array{Float32}, arr)
+            data =
+                eltype(arr) === Float32 && arr isa Array ? arr :
+                convert(Array{Float32}, arr)
             conv[s] = Gesso.Inference.HostOffload(data)
         end
     end
 
     # Complete gate/up/down expert triples take the per-expert cache below,
     # never the whole-slab path, so one layer cannot end up mixed.
-    @debug "vram after dense placement" free_mib=div(Int64(CUDA.free_memory()), Int64(1024 * 1024))
+    @debug "vram after dense placement" free_mib=div(
+        Int64(CUDA.free_memory()),
+        Int64(1024 * 1024),
+    )
     # Opt-in (GESSO_GPU_EXPERT_CACHE=1) until misses run on the CPU: with
     # misses uploaded, the cache measured slower than whole-slab placement.
     use_cache = _expert_cache_enabled()
@@ -1336,7 +1507,8 @@ function _to_device_cuda(tensors)
         # A slab of a type the CUDA expert qgemv has no kernel for stays
         # host-resident and runs on the CPU expert path, instead of failing at
         # the first MoE.
-        if nbytes <= remaining && all(>(0), sizes) &&
+        if nbytes <= remaining &&
+           all(>(0), sizes) &&
            all(x -> x.ggml_type in _CUDA_QGEMV_TYPES, grp)
             for x in grp
                 packed = Gesso.Inference.packed_quant_bytes(x)
@@ -1353,7 +1525,7 @@ function _to_device_cuda(tensors)
     _conv_t(t) = begin
         hasproperty(t, :storage) || return t         # mixer tags and other metadata
         t.storage === nothing && return t            # unset storage stays unset
-        typeof(t)(; shape = t.shape, storage = conv[t.storage])
+        typeof(t)(; shape=t.shape, storage=conv[t.storage])
     end
     _conv_blk(b) = NamedTuple{keys(b)}(map(_conv_t, values(b)))
     embedding = _conv_t(tensors.embedding)
@@ -1377,7 +1549,10 @@ function _to_device_cuda(tensors)
     end
     _prefault_host_experts!(blocks)
     _hot_experts_enabled() ? _hot_register!(blocks) : _hot_release_all!()
-    @debug "expert storage census" cached_projections=cached_n whole_slab_projections=slab_n host_projections=host_n vram_free_mib=div(Int64(CUDA.free_memory()), Int64(1024 * 1024))
+    @debug "expert storage census" cached_projections=cached_n whole_slab_projections=slab_n host_projections=host_n vram_free_mib=div(
+        Int64(CUDA.free_memory()),
+        Int64(1024 * 1024),
+    )
     result = (; embedding, blocks, lm_head, final_rms)
     return merge(result, _keep_tensor_meta(tensors))
 end
@@ -1407,12 +1582,19 @@ function _prefault_host_experts!(blocks)
             lo = UInt(pointer(s.data)) + UInt(s.offset0)
             hi = lo + UInt(s.n_exp * s.bytes_per_expert)
             lo &= ~(page - 1)
-            rc = ccall(:madvise, Cint, (Ptr{Cvoid}, Csize_t, Cint), Ptr{Cvoid}(lo), hi - lo,
-                _MADV_POPULATE_READ)
+            rc = ccall(
+                :madvise,
+                Cint,
+                (Ptr{Cvoid}, Csize_t, Cint),
+                Ptr{Cvoid}(lo),
+                hi - lo,
+                _MADV_POPULATE_READ,
+            )
             rc == 0 || Threads.atomic_add!(failed, 1)
         end
     end
-    failed[] == 0 || @debug "host expert prefault skipped" slabs=length(slabs) failed=failed[]
+    failed[] == 0 ||
+        @debug "host expert prefault skipped" slabs=length(slabs) failed=failed[]
     return
 end
 
@@ -1431,25 +1613,33 @@ function _expert_cache_budget_bytes()
     raw = strip(get(ENV, "GESSO_GPU_EXPERT_CACHE_MIB", ""))
     if !isempty(raw)
         v = tryparse(Int, raw)
-        v === nothing && error("GESSO_GPU_EXPERT_CACHE_MIB must be an integer MiB, got '$raw'")
+        v === nothing &&
+            error("GESSO_GPU_EXPERT_CACHE_MIB must be an integer MiB, got '$raw'")
         return Int64(max(0, v)) * mib
     end
     rraw = strip(get(ENV, "GESSO_GPU_RESERVE_MIB", string(_EXPERT_RESERVE_DEFAULT_MIB)))
     reserve = tryparse(Int, rraw)
-    reserve === nothing && error("GESSO_GPU_RESERVE_MIB must be an integer MiB, got '$rraw'")
+    reserve === nothing &&
+        error("GESSO_GPU_RESERVE_MIB must be an integer MiB, got '$rraw'")
     free_raw = Int64(CUDA.free_memory())
     # GC level: a DROP would also destroy library handles that must be re-created later
     CUDA.reclaim(CUDA.CUDACore.RECLAIM_GC)   # return the allocator's cached blocks so the free figure is real
     free = Int64(CUDA.free_memory())
     budget = _expert_budget_from_free(free, reserve)
-    @debug "expert cache budget" free_before_reclaim_mib=div(free_raw, mib) free_mib=div(free, mib) reserve_mib=reserve budget_mib=div(budget, mib)
+    @debug "expert cache budget" free_before_reclaim_mib=div(free_raw, mib) free_mib=div(
+        free,
+        mib,
+    ) reserve_mib=reserve budget_mib=div(budget, mib)
     return budget
 end
 
 # Pure budget arithmetic: free device bytes minus the reserve, never negative.
 function _expert_budget_from_free(free_bytes::Integer, reserve_mib::Integer)
     free_bytes >= 0 || error("_expert_budget_from_free: negative free bytes $free_bytes")
-    return max(Int64(0), Int64(free_bytes) - Int64(max(0, reserve_mib)) * Int64(1024 * 1024))
+    return max(
+        Int64(0),
+        Int64(free_bytes) - Int64(max(0, reserve_mib)) * Int64(1024 * 1024),
+    )
 end
 
 # (layer, gate, up, down) for every block whose three expert banks are all
@@ -1458,12 +1648,16 @@ end
 function _moe_expert_triples(blocks)
     out = Any[]
     for (li, bt) in enumerate(blocks)
-        (haskey(bt, :wexp_gate) && haskey(bt, :wexp_up) && haskey(bt, :wexp_down)) || continue
+        (haskey(bt, :wexp_gate) && haskey(bt, :wexp_up) && haskey(bt, :wexp_down)) ||
+            continue
         g = bt.wexp_gate.storage
         u = bt.wexp_up.storage
         d = bt.wexp_down.storage
-        (g isa Gesso.Inference.GgufQuantSlice && u isa Gesso.Inference.GgufQuantSlice &&
-         d isa Gesso.Inference.GgufQuantSlice) || continue
+        (
+            g isa Gesso.Inference.GgufQuantSlice &&
+            u isa Gesso.Inference.GgufQuantSlice &&
+            d isa Gesso.Inference.GgufQuantSlice
+        ) || continue
         push!(out, (li, g, u, d))
     end
     return out
@@ -1479,7 +1673,7 @@ function _place_expert_caches!(conv, triples; budget::Int64=_expert_cache_budget
     per_layer = div(budget, Int64(length(triples)))
     slots_log = Int[]
     for (li, g, u, d) in triples
-        banks = convert(NTuple{3,Inf_.GgufQuantSlice}, (g, u, d))
+        banks = convert(NTuple{3, Inf_.GgufQuantSlice}, (g, u, d))
         n_exp = g.n_exp
         slots = Inf_.expert_layer_quota(per_layer, banks, n_exp)
         counts = profile === nothing ? nothing : get(profile, li, nothing)
@@ -1492,7 +1686,13 @@ function _place_expert_caches!(conv, triples; budget::Int64=_expert_cache_budget
             for p in 1:3
                 bank = banks[p]
                 nb = bank.bytes_per_expert
-                copyto!(pools[p], (s - 1) * nb + 1, bank.data, Inf_._quant_expert_off0(bank, e) + 1, nb)
+                copyto!(
+                    pools[p],
+                    (s - 1) * nb + 1,
+                    bank.data,
+                    Inf_._quant_expert_off0(bank, e) + 1,
+                    nb,
+                )
             end
         end
         conv[g] = Inf_.CachedExpertBank(cache, 1)
@@ -1500,7 +1700,9 @@ function _place_expert_caches!(conv, triples; budget::Int64=_expert_cache_budget
         conv[d] = Inf_.CachedExpertBank(cache, 3)
         push!(slots_log, slots)
     end
-    @debug "expert cache placed" budget_mib=div(budget, Int64(1024 * 1024)) layers=length(triples) slots=slots_log profile=(isempty(prof_path) ? "none" : prof_path)
+    @debug "expert cache placed" budget_mib=div(budget, Int64(1024 * 1024)) layers=length(
+        triples,
+    ) slots=slots_log profile=(isempty(prof_path) ? "none" : prof_path)
     return conv
 end
 
@@ -1530,21 +1732,66 @@ end
 
 # Ordinary strided per-head GEMM into existing score/attention scratch.
 # No copied head slices or product arrays survive between tokens.
-function _attention_scores_device!(::CUDABackend, sc, q::AbstractArray, k::AbstractArray, hh, d_head, K)
+function _attention_scores_device!(
+    ::CUDABackend,
+    sc,
+    q::AbstractArray,
+    k::AbstractArray,
+    hh,
+    d_head,
+    K,
+)
     qh = view(q, :, hh, :)
     kh = view(k, 1:K, hh, :)
     if size(q, 1) == 1
-        _blas_gemv!('N', _cu_scalar(eltype(sc)(1 / sqrt(d_head))), kh, view(q, 1, hh, :), _cu_scalar(zero(eltype(sc))), view(sc, 1, :))
+        _blas_gemv!(
+            'N',
+            _cu_scalar(eltype(sc)(1 / sqrt(d_head))),
+            kh,
+            view(q, 1, hh, :),
+            _cu_scalar(zero(eltype(sc))),
+            view(sc, 1, :),
+        )
     else
-        _blas_gemm!('N', 'T', _cu_scalar(eltype(sc)(1 / sqrt(d_head))), qh, kh, _cu_scalar(zero(eltype(sc))), sc)
+        _blas_gemm!(
+            'N',
+            'T',
+            _cu_scalar(eltype(sc)(1 / sqrt(d_head))),
+            qh,
+            kh,
+            _cu_scalar(zero(eltype(sc))),
+            sc,
+        )
     end
     return sc
 end
-function _attention_values_device!(::CUDABackend, attn::AbstractArray, probs, v::AbstractArray, hh, K)
+function _attention_values_device!(
+    ::CUDABackend,
+    attn::AbstractArray,
+    probs,
+    v::AbstractArray,
+    hh,
+    K,
+)
     if size(attn, 1) == 1
-        _blas_gemv!('T', _cu_scalar(one(eltype(attn))), view(v, 1:K, hh, :), view(probs, 1, :), _cu_scalar(zero(eltype(attn))), view(attn, 1, hh, :))
+        _blas_gemv!(
+            'T',
+            _cu_scalar(one(eltype(attn))),
+            view(v, 1:K, hh, :),
+            view(probs, 1, :),
+            _cu_scalar(zero(eltype(attn))),
+            view(attn, 1, hh, :),
+        )
     else
-        _blas_gemm!('N', 'N', _cu_scalar(one(eltype(attn))), probs, view(v, 1:K, hh, :), _cu_scalar(zero(eltype(attn))), view(attn, :, hh, :))
+        _blas_gemm!(
+            'N',
+            'N',
+            _cu_scalar(one(eltype(attn))),
+            probs,
+            view(v, 1:K, hh, :),
+            _cu_scalar(zero(eltype(attn))),
+            view(attn, :, hh, :),
+        )
     end
     return attn
 end
@@ -1563,10 +1810,19 @@ function _cuda_sigmoid_mul_kernel!(dst, src, gate)
     return
 end
 
-function _sigmoid_mul!(::CUDABackend, dst::AbstractArray, src::AbstractArray, gate::AbstractArray)
+function _sigmoid_mul!(
+    ::CUDABackend,
+    dst::AbstractArray,
+    src::AbstractArray,
+    gate::AbstractArray,
+)
     n = length(dst)
     n == 0 && return dst
-    @fastcuda threads = (min(256, n),) blocks = (cld(n, 256),) _cuda_sigmoid_mul_kernel!(dst, src, gate)
+    @fastcuda threads = (min(256, n),) blocks = (cld(n, 256),) _cuda_sigmoid_mul_kernel!(
+        dst,
+        src,
+        gate,
+    )
     return dst
 end
 
@@ -1578,10 +1834,19 @@ function _cuda_silu_mul_kernel!(dst, src, gate)
     return
 end
 
-function _silu_mul!(::CUDABackend, dst::AbstractArray, src::AbstractArray, gate::AbstractArray)
+function _silu_mul!(
+    ::CUDABackend,
+    dst::AbstractArray,
+    src::AbstractArray,
+    gate::AbstractArray,
+)
     n = length(dst)
     n == 0 && return dst
-    @fastcuda threads = (min(256, n),) blocks = (cld(n, 256),) _cuda_silu_mul_kernel!(dst, src, gate)
+    @fastcuda threads = (min(256, n),) blocks = (cld(n, 256),) _cuda_silu_mul_kernel!(
+        dst,
+        src,
+        gate,
+    )
     return dst
 end
 
@@ -1607,7 +1872,13 @@ function _gdn_gate_params!(::CUDABackend, g, beta, a, b, A_log, dt_bias)
     tx = min(16, seq)
     ty = min(16, nv)
     @fastcuda threads = (tx, ty) blocks = (cld(seq, tx), cld(nv, ty)) _cuda_gdn_gates_kernel!(
-        g, beta, a, b, A_log, dt_bias)
+        g,
+        beta,
+        a,
+        b,
+        A_log,
+        dt_bias,
+    )
     return g, beta
 end
 
@@ -1628,21 +1899,33 @@ function _cuda_gdn_gnorm_prefill_kernel!(merged, core, z, norm_w, dv::Int, eps::
     inv = 1.0f0 / sqrt(ss / dv + eps)
     base = (hh - 1) * dv
     for j in 1:dv
-        zv = z[t, base + j]
-        merged[t, base + j] = (core[t, hh, j] * inv) * norm_w[j] * (zv / (1.0f0 + exp(-zv)))
+        zv = z[t, base+j]
+        merged[t, base+j] = (core[t, hh, j] * inv) * norm_w[j] * (zv / (1.0f0 + exp(-zv)))
     end
     return
 end
 
-function _gdn_gnorm_merge!(::CUDABackend, merged::CuArray{Float32, 2}, core::CuArray{Float32, 3},
-                           z::CuArray{Float32, 2}, scale, eps)
+function _gdn_gnorm_merge!(
+    ::CUDABackend,
+    merged::CuArray{Float32, 2},
+    core::CuArray{Float32, 3},
+    z::CuArray{Float32, 2},
+    scale,
+    eps,
+)
     get(ENV, "GESSO_GDN_PREFILL_GNORM", "1") == "1" || return false
     seq, nv, dv = size(core)
     seq == 0 && return true
     norm_w = _cuda_materialize_small(scale.storage)
     tx = min(128, seq)
     @fastcuda threads = tx blocks = (cld(seq, tx), nv) _cuda_gdn_gnorm_prefill_kernel!(
-        merged, core, z, norm_w, dv, Float32(eps))
+        merged,
+        core,
+        z,
+        norm_w,
+        dv,
+        Float32(eps),
+    )
     return true
 end
 
@@ -1655,7 +1938,7 @@ function _cuda_conv1d_silu_kernel!(dst, x, weight, conv_state, k::Int)
     acc = zero(eltype(dst))
     for p in 1:k
         src = t - (k - p)
-        v = src <= 0 ? conv_state[c, src + (k - 1)] : x[src, c]
+        v = src <= 0 ? conv_state[c, src+(k-1)] : x[src, c]
         acc += weight[c, 1, p] * v
     end
     dst[t, c] = acc / (Float32(1) + exp(-acc))
@@ -1669,15 +1952,15 @@ function _cuda_conv_state_update_kernel!(conv_state, x, seq::Int, k::Int)
     k1 = k - 1
     if seq >= k1
         for p in 1:k1
-            conv_state[c, p] = x[seq - k1 + p, c]
+            conv_state[c, p] = x[seq-k1+p, c]
         end
     else
         keep = k1 - seq
         for p in 1:keep
-            conv_state[c, p] = conv_state[c, p + seq]
+            conv_state[c, p] = conv_state[c, p+seq]
         end
         for p in 1:seq
-            conv_state[c, keep + p] = x[p, c]
+            conv_state[c, keep+p] = x[p, c]
         end
     end
     return
@@ -1692,16 +1975,34 @@ function _causal_conv1d_silu!(::CUDABackend, dst, x, weight, conv_state)
         tx = min(16, seq)
         ty = min(16, channels)
         @fastcuda threads = (tx, ty) blocks = (cld(seq, tx), cld(channels, ty)) _cuda_conv1d_silu_kernel!(
-            dst, x, weight, conv_state, Int(k))
+            dst,
+            x,
+            weight,
+            conv_state,
+            Int(k),
+        )
     end
     nthreads = min(256, channels)
     @fastcuda threads = (nthreads,) blocks = (cld(channels, nthreads),) _cuda_conv_state_update_kernel!(
-        conv_state, x, Int(seq), Int(k))
+        conv_state,
+        x,
+        Int(seq),
+        Int(k),
+    )
     return dst
 end
 
 function _cuda_gdn_qk_prep_kernel!(
-    qn, kn, q, k, nk::Int, group::Int, tiled::Bool, do_l2::Bool, scale::Float32, eps::Float32,
+    qn,
+    kn,
+    q,
+    k,
+    nk::Int,
+    group::Int,
+    tiled::Bool,
+    do_l2::Bool,
+    scale::Float32,
+    eps::Float32,
 )
     t = Int(blockIdx().x)
     hh = Int(blockIdx().y)
@@ -1847,12 +2148,12 @@ function _cuda_gdn_norm_kernel!(invk, invq, q, k, do_l2::Bool, scale::Float32, e
 end
 
 # Four accumulators keep four FMA chains in flight to hide add latency.
-@inline function _gdn_dot4(a::NTuple{N,Float32}, b::NTuple{N,Float32}) where {N}
+@inline function _gdn_dot4(a::NTuple{N, Float32}, b::NTuple{N, Float32}) where {N}
     s1 = 0.0f0
     s2 = 0.0f0
     s3 = 0.0f0
     s4 = 0.0f0
-    @inbounds for c in 0:4:N-1
+    @inbounds for c in 0:4:(N-1)
         s1 = fma(a[c+1], b[c+1], s1)
         s2 = fma(a[c+2], b[c+2], s2)
         s3 = fma(a[c+3], b[c+3], s3)
@@ -1870,7 +2171,7 @@ end
 
 # Top level, not a closure: S is reassigned in the token loop, and a closure
 # capturing it would box S and fail with "unsupported dynamic function invocation".
-@inline _gdn_step(S::NTuple{M,Float32}, kk::NTuple{M,Float32}, coef, decay) where {M} =
+@inline _gdn_step(S::NTuple{M, Float32}, kk::NTuple{M, Float32}, coef, decay) where {M} =
     ntuple(m -> fma(kk[m], coef, S[m] * decay), Val(M))
 
 # Lane r holds float4 chunks r, r+4, ...; register m is element (m-1) % 4 of
@@ -1879,25 +2180,79 @@ end
 
 # Chunk loads and stores are top-level for the same reason as _gdn_step: inside
 # a closure the chunk counts are captured fields, so Val(NKQ) is not static.
-@inline function _gdn_v2_load(k, q, v, g, beta, invk, invq, tid, t0, seq, h, hh, j0, dv,
-        ::Val{NT}, ::Val{T}, ::Val{NKQ}, ::Val{NV}) where {NT,T,NKQ,NV}
+@inline function _gdn_v2_load(
+    k,
+    q,
+    v,
+    g,
+    beta,
+    invk,
+    invq,
+    tid,
+    t0,
+    seq,
+    h,
+    hh,
+    j0,
+    dv,
+    ::Val{NT},
+    ::Val{T},
+    ::Val{NKQ},
+    ::Val{NV},
+) where {NT, T, NKQ, NV}
     @inbounds begin
-        kr = ntuple(i -> (e = tid + NT * (i - 1); t = t0 + e % T + 1;
-            t <= seq ? Float32(k[t, h, e ÷ T + 1]) : 0.0f0), Val(NKQ))
-        qr = ntuple(i -> (e = tid + NT * (i - 1); t = t0 + e % T + 1;
-            t <= seq ? Float32(q[t, h, e ÷ T + 1]) : 0.0f0), Val(NKQ))
-        vr = ntuple(i -> (e = tid + NT * (i - 1); t = t0 + e % T + 1; jj = j0 + e ÷ T + 1;
-            (t <= seq && jj <= dv) ? Float32(v[t, hh, jj]) : 0.0f0), Val(NV))
-        sr = (tid < T && t0 + tid < seq) ?
-            (Float32(g[t0+tid+1, hh]), Float32(beta[t0+tid+1, hh]),
-             invk[t0+tid+1, h], invq[t0+tid+1, h]) :
-            (0.0f0, 0.0f0, 0.0f0, 0.0f0)
+        kr = ntuple(
+            i -> (
+                e=tid + NT * (i - 1);
+                t=t0 + e % T + 1;
+                t <= seq ? Float32(k[t, h, e÷T+1]) : 0.0f0
+            ),
+            Val(NKQ),
+        )
+        qr = ntuple(
+            i -> (
+                e=tid + NT * (i - 1);
+                t=t0 + e % T + 1;
+                t <= seq ? Float32(q[t, h, e÷T+1]) : 0.0f0
+            ),
+            Val(NKQ),
+        )
+        vr = ntuple(
+            i -> (
+                e=tid + NT * (i - 1);
+                t=t0 + e % T + 1;
+                jj=j0 + e ÷ T + 1;
+                (t <= seq && jj <= dv) ? Float32(v[t, hh, jj]) : 0.0f0
+            ),
+            Val(NV),
+        )
+        sr =
+            (tid < T && t0 + tid < seq) ?
+            (
+                Float32(g[t0+tid+1, hh]),
+                Float32(beta[t0+tid+1, hh]),
+                invk[t0+tid+1, h],
+                invq[t0+tid+1, h],
+            ) : (0.0f0, 0.0f0, 0.0f0, 0.0f0)
     end
     return kr, qr, vr, sr
 end
 
-@inline function _gdn_v2_store(ks, qs, vs, sm, kr, qr, vr, sr, tid,
-        ::Val{NT}, ::Val{T}, ::Val{KP}, ::Val{COLS}) where {NT,T,KP,COLS}
+@inline function _gdn_v2_store(
+    ks,
+    qs,
+    vs,
+    sm,
+    kr,
+    qr,
+    vr,
+    sr,
+    tid,
+    ::Val{NT},
+    ::Val{T},
+    ::Val{KP},
+    ::Val{COLS},
+) where {NT, T, KP, COLS}
     @inbounds begin
         for i in 1:length(kr)
             e = tid + NT * (i - 1)
@@ -1907,7 +2262,7 @@ end
         end
         for i in 1:length(vr)
             e = tid + NT * (i - 1)
-            vs[(e % T) * COLS + e ÷ T + 1] = vr[i]
+            vs[(e%T)*COLS+e÷T+1] = vr[i]
         end
         if tid < T
             for c in 1:4
@@ -1918,8 +2273,23 @@ end
     return
 end
 
-function _cuda_gdn_recur_reg_kernel!(out, q, k, v, g, beta, invk, invq, state,
-        nk::Int, group::Int, tiled::Bool, ::Val{COLS}, ::Val{T}, ::Val{DK}) where {COLS,T,DK}
+function _cuda_gdn_recur_reg_kernel!(
+    out,
+    q,
+    k,
+    v,
+    g,
+    beta,
+    invk,
+    invq,
+    state,
+    nk::Int,
+    group::Int,
+    tiled::Bool,
+    ::Val{COLS},
+    ::Val{T},
+    ::Val{DK},
+) where {COLS, T, DK}
     NT = 4 * COLS
     M = DK ÷ 4
     # padded to KP so each row is 16-byte aligned and the transposed stores
@@ -1948,24 +2318,41 @@ function _cuda_gdn_recur_reg_kernel!(out, q, k, v, g, beta, invk, invq, state,
         S = ntuple(m -> Float32(state[hh, _gdn_srow(r, m), jr]), Val(M))
         LA = (Val(NT), Val(T), Val(NKQ), Val(NV))
         SA = (Val(NT), Val(T), Val(KP), Val(COLS))
-        kr, qr, vr, sr = _gdn_v2_load(k, q, v, g, beta, invk, invq, tid, 0, seq, h, hh, j0, dv, LA...)
+        kr, qr, vr, sr =
+            _gdn_v2_load(k, q, v, g, beta, invk, invq, tid, 0, seq, h, hh, j0, dv, LA...)
         _gdn_v2_store(ks, qs, vs, sm, kr, qr, vr, sr, tid, SA...)
         sync_threads()
         nch = cld(seq, T)
-        for c in 0:nch-1
+        for c in 0:(nch-1)
             t0 = c * T
-            pk, pq, pv, ps = _gdn_v2_load(k, q, v, g, beta, invk, invq, tid, t0 + T, seq, h, hh, j0, dv, LA...)
+            pk, pq, pv, ps = _gdn_v2_load(
+                k,
+                q,
+                v,
+                g,
+                beta,
+                invk,
+                invq,
+                tid,
+                t0 + T,
+                seq,
+                h,
+                hh,
+                j0,
+                dv,
+                LA...,
+            )
             nt = min(T, seq - t0)
-            for tt in 0:nt-1
+            for tt in 0:(nt-1)
                 b = tt * KP
-                kk = ntuple(m -> ks[b + _gdn_srow(r, m)], Val(M))
+                kk = ntuple(m -> ks[b+_gdn_srow(r, m)], Val(M))
                 decay = exp(sm[tt+1, 1])
                 ik = sm[tt+1, 3]
                 sk = _gdn_sum4(_gdn_dot4(S, kk))
                 delta = (vs[tt*COLS+cl+1] - decay * sk * ik) * sm[tt+1, 2]
                 coef = delta * ik
                 S = _gdn_step(S, kk, coef, decay)
-                qq = ntuple(m -> qs[b + _gdn_srow(r, m)], Val(M))
+                qq = ntuple(m -> qs[b+_gdn_srow(r, m)], Val(M))
                 acc = _gdn_sum4(_gdn_dot4(S, qq)) * sm[tt+1, 4]
                 r == 0 && (os[tt*COLS+cl+1] = acc)
             end
@@ -1975,7 +2362,7 @@ function _cuda_gdn_recur_reg_kernel!(out, q, k, v, g, beta, invk, invq, state,
                 e = tid + NT * (i - 1)
                 t = t0 + e % T + 1
                 jj = j0 + e ÷ T + 1
-                (t <= seq && jj <= dv) && (out[t, hh, jj] = os[(e % T) * COLS + e ÷ T + 1])
+                (t <= seq && jj <= dv) && (out[t, hh, jj] = os[(e%T)*COLS+e÷T+1])
             end
             c + 1 < nch && _gdn_v2_store(ks, qs, vs, sm, pk, pq, pv, ps, tid, SA...)
             # publishes the prefetched chunk to the whole block
@@ -2020,12 +2407,33 @@ function _gated_delta_rule!(
         invq = similar(out, Float32, (seq, Int(nk)))
         Gesso.Inference.@decode_sub :gdn_qk backend begin
             @fastcuda threads = (32, 8) blocks = (cld(seq, 32), Int(nk)) _cuda_gdn_norm_kernel!(
-                invk, invq, q, k, l2norm, scale, Float32(1e-6))
+                invk,
+                invq,
+                q,
+                k,
+                l2norm,
+                scale,
+                Float32(1e-6),
+            )
         end
         Gesso.Inference.@decode_sub :gdn_recur backend begin
             @fastcuda threads = 4 * cols blocks = (cld(dv, cols), nv) _cuda_gdn_recur_reg_kernel!(
-                out, q, k, v, g, beta, invk, invq, state, Int(nk), Int(group), v_head_tiled,
-                Val(cols), Val(8), Val(dk))
+                out,
+                q,
+                k,
+                v,
+                g,
+                beta,
+                invk,
+                invq,
+                state,
+                Int(nk),
+                Int(group),
+                v_head_tiled,
+                Val(cols),
+                Val(8),
+                Val(dk),
+            )
         end
         CUDA.unsafe_free!(invk)
         CUDA.unsafe_free!(invq)
@@ -2035,13 +2443,30 @@ function _gated_delta_rule!(
     kn = similar(out, eltype(out), (seq, nv, dk))
     Gesso.Inference.@decode_sub :gdn_qk backend begin
         @fastcuda threads = 1 blocks = (seq, nv) _cuda_gdn_qk_prep_kernel!(
-            qn, kn, q, k, Int(nk), Int(group), v_head_tiled, l2norm, scale, Float32(1e-6))
+            qn,
+            kn,
+            q,
+            k,
+            Int(nk),
+            Int(group),
+            v_head_tiled,
+            l2norm,
+            scale,
+            Float32(1e-6),
+        )
     end
     tj = min(_GDN_RECUR_TILE, dv)
     shmem = (tj + 2) * dk * sizeof(eltype(state))
     Gesso.Inference.@decode_sub :gdn_recur backend begin
         @fastcuda threads = (tj,) blocks = (cld(dv, tj), nv) shmem = shmem _cuda_gdn_recurrent_kernel!(
-            out, qn, kn, v, g, beta, state)
+            out,
+            qn,
+            kn,
+            v,
+            g,
+            beta,
+            state,
+        )
     end
     CUDA.unsafe_free!(qn)
     CUDA.unsafe_free!(kn)
@@ -2079,16 +2504,16 @@ function _cuda_gdn_conv_decode_kernel!(conv_out, state, mixed, weight, k::Int)
     channels = size(state, 1)
     c > channels && return
     acc = zero(eltype(conv_out))
-    for p in 1:(k - 1)
+    for p in 1:(k-1)
         acc += weight[c, 1, p] * state[c, p]
     end
     xv = mixed[1, c]
     acc += weight[c, 1, k] * xv
     conv_out[1, c] = acc / (one(acc) + exp(-acc))
-    for p in 1:(k - 2)
-        state[c, p] = state[c, p + 1]
+    for p in 1:(k-2)
+        state[c, p] = state[c, p+1]
     end
-    state[c, k - 1] = xv
+    state[c, k-1] = xv
     return
 end
 
@@ -2101,7 +2526,7 @@ end
     s = T >> 1
     while s > 0
         if tid <= s
-            red[tid] += red[tid + s]
+            red[tid] += red[tid+s]
         end
         CUDA.sync_threads()
         s >>= 1
@@ -2116,8 +2541,20 @@ end
 # are applied to the sums instead of to every element, which is the same math
 # to rounding.
 function _cuda_gdn_delta_kernel!(
-    core, conv_out, a, b, A_log, dt_bias, state,
-    nk::Int, group::Int, tiled::Bool, dk::Int, dv::Int, scale::Float32, eps::Float32,
+    core,
+    conv_out,
+    a,
+    b,
+    A_log,
+    dt_bias,
+    state,
+    nk::Int,
+    group::Int,
+    tiled::Bool,
+    dk::Int,
+    dv::Int,
+    scale::Float32,
+    eps::Float32,
 )
     hh = Int(threadIdx().x)
     y = Int(threadIdx().y)
@@ -2141,8 +2578,8 @@ function _cuda_gdn_delta_kernel!(
     sm = 0.0f0
     i = y
     while i <= dk
-        qv = conv_out[1, qoff + i]
-        kv = conv_out[1, koff + i]
+        qv = conv_out[1, qoff+i]
+        kv = conv_out[1, koff+i]
         sq += qv * qv
         sk += kv * kv
         sm += (state[hh, i, j] * decay) * kv
@@ -2162,14 +2599,14 @@ function _cuda_gdn_delta_kernel!(
     end
     invq = scale / sqrt(sq + eps)
     invk = 1.0f0 / sqrt(sk + eps)
-    delta = (conv_out[1, 2 * key_dim + (hh - 1) * dv + j] - sm * invk) * beta
+    delta = (conv_out[1, 2*key_dim+(hh-1)*dv+j] - sm * invk) * beta
     kd = invk * delta
     acc = 0.0f0
     i = y
     while i <= dk
-        sn = state[hh, i, j] * decay + conv_out[1, koff + i] * kd
+        sn = state[hh, i, j] * decay + conv_out[1, koff+i] * kd
         state[hh, i, j] = sn
-        acc += sn * conv_out[1, qoff + i]
+        acc += sn * conv_out[1, qoff+i]
         i += Y
     end
     # Every thread must be done reading the first reduction before it is reused.
@@ -2181,7 +2618,7 @@ function _cuda_gdn_delta_kernel!(
         for t in 1:Y
             tot += red[hh, t, 1]
         end
-        core[1, (hh - 1) * dv + j] = tot * invq
+        core[1, (hh-1)*dv+j] = tot * invq
     end
     return
 end
@@ -2195,20 +2632,26 @@ function _cuda_gdn_gnorm_kernel!(merged, core, z, norm_w, dv::Int, eps::Float32)
     base = (hh - 1) * dv
     ss = 0.0f0
     for j in tid:T:dv
-        c = core[1, base + j]
+        c = core[1, base+j]
         ss += c * c
     end
     tot = _cuda_gdn_block_sum(red, ss, tid, T)
     inv = 1.0f0 / sqrt(tot / dv + eps)
     for j in tid:T:dv
-        zv = z[1, base + j]
-        merged[1, base + j] = (core[1, base + j] * inv) * norm_w[j] * (zv / (1.0f0 + exp(-zv)))
+        zv = z[1, base+j]
+        merged[1, base+j] = (core[1, base+j] * inv) * norm_w[j] * (zv / (1.0f0 + exp(-zv)))
     end
     return
 end
 
 function Gesso.Inference._gdn_decode_core!(
-    backend::CUDABackend, s, bt, spec, eps, conv_state, rec_state,
+    backend::CUDABackend,
+    s,
+    bt,
+    spec,
+    eps,
+    conv_state,
+    rec_state,
 )
     mx = spec.mixer
     nk, nv = mx.num_key_heads, mx.num_value_heads
@@ -2231,14 +2674,38 @@ function Gesso.Inference._gdn_decode_core!(
     Y = clamp(256 ÷ nv, 1, dk)
     Gesso.Inference.@decode_sub :gdn_conv backend begin
         @fastcuda threads = 256 blocks = cld(conv_dim, 256) _cuda_gdn_conv_decode_kernel!(
-            s.conv, conv_state, s.mixed, weight, Int(ksz))
+            s.conv,
+            conv_state,
+            s.mixed,
+            weight,
+            Int(ksz),
+        )
     end
     Gesso.Inference.@decode_sub :gdn_recur backend begin
         @fastcuda threads = (nv, Y) blocks = dv shmem = nv * Y * 3 * sizeof(Float32) _cuda_gdn_delta_kernel!(
-            s.core, s.conv, s.a, s.b, A_log, dt_bias, rec_state,
-            Int(nk), Int(div(nv, nk)), mx.v_head_tiled, Int(dk), Int(dv), scale, eps32)
+            s.core,
+            s.conv,
+            s.a,
+            s.b,
+            A_log,
+            dt_bias,
+            rec_state,
+            Int(nk),
+            Int(div(nv, nk)),
+            mx.v_head_tiled,
+            Int(dk),
+            Int(dv),
+            scale,
+            eps32,
+        )
         @fastcuda threads = T blocks = nv shmem = T * sizeof(Float32) _cuda_gdn_gnorm_kernel!(
-            s.merged, s.core, s.z, norm_w, Int(dv), eps32)
+            s.merged,
+            s.core,
+            s.z,
+            norm_w,
+            Int(dv),
+            eps32,
+        )
     end
     return s
 end
@@ -2301,7 +2768,7 @@ function _arena_relayout!(s::ArenaSlab)
     copy!(s.layout, s.requested)
     total = 0
     for key in s.layout
-        key[1] == 0 || (total += _arena_round(prod(key[2:(key[1] + 1)])))
+        key[1] == 0 || (total += _arena_round(prod(key[2:(key[1]+1)])))
     end
     s.slab = CuVector{Float32}(undef, max(total, 1))
     off = 0
@@ -2310,9 +2777,9 @@ function _arena_relayout!(s::ArenaSlab)
             push!(s.views, nothing)
             continue
         end
-        dims = key[2:(key[1] + 1)]
+        dims = key[2:(key[1]+1)]
         n = prod(dims)
-        push!(s.views, reshape(view(s.slab, (off + 1):(off + n)), dims))
+        push!(s.views, reshape(view(s.slab, (off+1):(off+n)), dims))
         off += _arena_round(n)
     end
     return s
@@ -2335,7 +2802,13 @@ const _DECODE_ARENAS = Dict{Int, ArenaSlab}()
 
 function Gesso.Inference._decode_zeros_like(::CUDABackend, tensors)
     s = get!(_DECODE_ARENAS, Int(CUDA.deviceid(CUDA.device()))) do
-        ArenaSlab(nothing, Union{Nothing, CuArray{Float32}}[], NTuple{5, Int}[], NTuple{5, Int}[], CuArray{Float32}[])
+        ArenaSlab(
+            nothing,
+            Union{Nothing, CuArray{Float32}}[],
+            NTuple{5, Int}[],
+            NTuple{5, Int}[],
+            CuArray{Float32}[],
+        )
     end
     # `loose` holds only the previous step's overflow buffers, so it is always
     # released here; the layout is rebuilt only when the requests changed.
@@ -2398,11 +2871,19 @@ function _cuda_take_row_kernel!(dst2, src2, row::Int)
     return
 end
 
-function Gesso.Inference._copy_row!(dst::CuMatrix{Float32}, src::CuMatrix{Float32}, row::Int)
+function Gesso.Inference._copy_row!(
+    dst::CuMatrix{Float32},
+    src::CuMatrix{Float32},
+    row::Int,
+)
     d = size(dst, 2)
     d == 0 && return dst
     nthreads = min(256, d)
-    @fastcuda threads = nthreads blocks = cld(d, nthreads) _cuda_take_row_kernel!(dst, src, row)
+    @fastcuda threads = nthreads blocks = cld(d, nthreads) _cuda_take_row_kernel!(
+        dst,
+        src,
+        row,
+    )
     return dst
 end
 
@@ -2423,12 +2904,12 @@ const _ARGMAX_THREADS = 256
     stride = _ARGMAX_THREADS >> 1
     while stride > 0
         if tid <= stride
-            v, i = sv[tid + stride], si[tid + stride]
+            v, i = sv[tid+stride], si[tid+stride]
             if _argmax_better(v, i, sv[tid], si[tid])
                 sv[tid] = v
                 si[tid] = i
             end
-            sb[tid] |= sb[tid + stride]
+            sb[tid] |= sb[tid+stride]
         end
         CUDA.sync_threads()
         stride >>= 1
@@ -2488,22 +2969,45 @@ const _ARGMAX_BUFS = Dict{Int, ArgmaxBuffers}()
 
 function Gesso.Inference._greedy_id(logits::CuVector{Float32})
     n = length(logits)
-    0 < n < typemax(Int32) || throw(ArgumentError("greedy id: logits length $n out of range"))
+    0 < n < typemax(Int32) ||
+        throw(ArgumentError("greedy id: logits length $n out of range"))
     b = get!(_ARGMAX_BUFS, Int(CUDA.deviceid(CUDA.device()))) do
-        ArgmaxBuffers(CuVector{Float32}(undef, _ARGMAX_THREADS), CuVector{Int32}(undef, _ARGMAX_THREADS),
-            CuVector{Int32}(undef, _ARGMAX_THREADS), CuVector{Int32}(undef, 1), Vector{Int32}(undef, 1))
+        ArgmaxBuffers(
+            CuVector{Float32}(undef, _ARGMAX_THREADS),
+            CuVector{Int32}(undef, _ARGMAX_THREADS),
+            CuVector{Int32}(undef, _ARGMAX_THREADS),
+            CuVector{Int32}(undef, 1),
+            Vector{Int32}(undef, 1),
+        )
     end
     # ~8 logits per thread; the final pass takes one partial per thread.
     nparts = clamp(cld(n, 8 * _ARGMAX_THREADS), 1, _ARGMAX_THREADS)
-    @fastcuda threads = _ARGMAX_THREADS blocks = nparts _cuda_argmax_partial_kernel!(b.pv, b.pi, b.pb, logits, n)
-    @fastcuda threads = _ARGMAX_THREADS blocks = 1 _cuda_argmax_final_kernel!(b.out, b.pv, b.pi, b.pb, nparts)
+    @fastcuda threads = _ARGMAX_THREADS blocks = nparts _cuda_argmax_partial_kernel!(
+        b.pv,
+        b.pi,
+        b.pb,
+        logits,
+        n,
+    )
+    @fastcuda threads = _ARGMAX_THREADS blocks = 1 _cuda_argmax_final_kernel!(
+        b.out,
+        b.pv,
+        b.pi,
+        b.pb,
+        nparts,
+    )
     copyto!(b.host, b.out)
     id = b.host[1]
     id < 0 && throw(Gesso.Inference._nonfinite_logits())
     return Int(id) - 1
 end
 
-function _fetch_expert!(::CUDABackend, W::CuMatrix{Float32}, bank::CuArray{Float32, 3}, e::Int)
+function _fetch_expert!(
+    ::CUDABackend,
+    W::CuMatrix{Float32},
+    bank::CuArray{Float32, 3},
+    e::Int,
+)
     copyto!(W, view(bank, e, :, :))
     return W
 end
@@ -2531,14 +3035,20 @@ function _shared_gate_add!(::CUDABackend, y, x, sd, gvec)
     g isa CuArray || (g = CuArray{Float32}(g))
     seq = size(x, 1)
     h = size(x, 2)
-    seq == 1 && x isa DenseCuArray && y isa DenseCuArray && sd isa DenseCuArray &&
+    seq == 1 &&
+        x isa DenseCuArray &&
+        y isa DenseCuArray &&
+        sd isa DenseCuArray &&
         return _cuda_shared_gate1!(y, x, sd, g)
     acc = _dev_scratch(:shared_gate_acc, seq)
     _blas_gemv!('N', _cu_scalar(one(eltype(y))), x, g, _cu_scalar(zero(eltype(y))), acc)
     tx = min(16, seq)
     ty = min(16, h)
     @fastcuda threads = (tx, ty) blocks = (cld(seq, tx), cld(h, ty)) _cuda_shared_gate_kernel!(
-        y, sd, acc)
+        y,
+        sd,
+        acc,
+    )
     return y
 end
 
@@ -2598,11 +3108,15 @@ mutable struct _MoeHostXfer
     route::Vector{Int32}
 end
 
-const _MOE_HOST_XFER = Ref{Union{Nothing,_MoeHostXfer}}(nothing)
+const _MOE_HOST_XFER = Ref{Union{Nothing, _MoeHostXfer}}(nothing)
 
 function _moe_host_xfer(seq::Int, n_exp::Int, h::Int, n_used::Int)
     b = _MOE_HOST_XFER[]
-    if b === nothing || b.cap < seq || b.n_exp != n_exp || b.h != h || length(b.experts) != n_used
+    if b === nothing ||
+       b.cap < seq ||
+       b.n_exp != n_exp ||
+       b.h != h ||
+       length(b.experts) != n_used
         # The previous buffers may still feed an in-flight H2D; unpinning them
         # (their finalizer) must not race it.
         b === nothing || _cuda_stream_wait()
@@ -2615,11 +3129,23 @@ function _moe_host_xfer(seq::Int, n_exp::Int, h::Int, n_used::Int)
         CUDA.pin(xx)
         CUDA.pin(yy)
         CUDA.pin(rt)
-        b = _MoeHostXfer(cap, n_exp, h, lg, xx, yy, Vector{Float32}(undef, h),
-            Vector{Float32}(undef, h), Vector{Int}(undef, n_exp),
-            Vector{Int}(undef, n_used), Vector{Float32}(undef, n_used),
-            Matrix{Int}(undef, n_used, cap), Matrix{Float32}(undef, n_used, cap),
-            Vector{Bool}(undef, cap), rt)
+        b = _MoeHostXfer(
+            cap,
+            n_exp,
+            h,
+            lg,
+            xx,
+            yy,
+            Vector{Float32}(undef, h),
+            Vector{Float32}(undef, h),
+            Vector{Int}(undef, n_exp),
+            Vector{Int}(undef, n_used),
+            Vector{Float32}(undef, n_used),
+            Matrix{Int}(undef, n_used, cap),
+            Matrix{Float32}(undef, n_used, cap),
+            Vector{Bool}(undef, cap),
+            rt,
+        )
         _MOE_HOST_XFER[] = b
     end
     return b
@@ -2642,8 +3168,12 @@ function _cuda_event_wait(e::CuEvent)
     return nothing
 end
 
-const _MOE_HOST_EVENT = Dict{Int,CuEvent}()
-_moe_host_event() = get!(() -> CuEvent(CUDA.EVENT_DISABLE_TIMING), _MOE_HOST_EVENT, CUDA.deviceid(CUDA.device()))
+const _MOE_HOST_EVENT = Dict{Int, CuEvent}()
+_moe_host_event() = get!(
+    () -> CuEvent(CUDA.EVENT_DISABLE_TIMING),
+    _MOE_HOST_EVENT,
+    CUDA.deviceid(CUDA.device()),
+)
 
 # GESSO_MOE_OVERLAP=0 runs the shared expert after the copies land instead, for A/B.
 _moe_overlap_enabled() = get(ENV, "GESSO_MOE_OVERLAP", "1") == "1"
@@ -2657,8 +3187,17 @@ const _MOE_HOST_HOLD_NS = 5_000_000
 # Top-k SwiGLU for one MoE layer whose expert slabs stay mmap'd on the host.
 # The GPU computes the router logits; the CPU routes and runs the experts; the
 # result returns to `y`. Per layer: one D2H wait and one async H2D.
-function _moe_topk_host!(backend::CUDABackend, y, x, router, gate, up, down, n_used::Int;
-    overlap=nothing)
+function _moe_topk_host!(
+    backend::CUDABackend,
+    y,
+    x,
+    router,
+    gate,
+    up,
+    down,
+    n_used::Int;
+    overlap=nothing,
+)
     seq, h = size(x)
     n_exp = size(router, 1)
     b = _moe_host_xfer(seq, n_exp, h, n_used)
@@ -2676,13 +3215,21 @@ function _moe_topk_host!(backend::CUDABackend, y, x, router, gate, up, down, n_u
     batch = seq > 1 && Gesso.Inference._moe_host_batchable(gate, up, down, h, gate.ne1)
     routed = batch && _moe_prefill_route_ok(n_exp, n_used)
     Gesso.Inference.@decode_stage :moe_router backend begin
-        rd = router isa CuArray ? router : CuArray{Float32}(Gesso.Inference._offload_host_array(router))
+        rd =
+            router isa CuArray ? router :
+            CuArray{Float32}(Gesso.Inference._offload_host_array(router))
         _cuda_router_logits!(logits, x, rd)
         Gesso.Inference._profile_copy!(true)
         if routed
             _moe_route_rows_launch!(b, logits, seq, n_exp, n_used, s)
         else
-            unsafe_copyto!(pointer(b.logits), pointer(logits), seq * n_exp; async=true, stream=s)
+            unsafe_copyto!(
+                pointer(b.logits),
+                pointer(logits),
+                seq * n_exp;
+                async=true,
+                stream=s,
+            )
         end
         unsafe_copyto!(pointer(b.x), pointer(xd), seq * h; async=true, stream=s)
     end
@@ -2705,12 +3252,33 @@ function _moe_topk_host!(backend::CUDABackend, y, x, router, gate, up, down, n_u
     Y = unsafe_wrap(Array, pointer(b.y), (seq, h))
     gpu_add = false
     if batch
-        gpu_add = _moe_host_prefill_layer!(backend, b, routed, L, X, Y, y, xd, hot, gate, up, down,
-            seq, n_exp, n_used, s)
+        gpu_add = _moe_host_prefill_layer!(
+            backend,
+            b,
+            routed,
+            L,
+            X,
+            Y,
+            y,
+            xd,
+            hot,
+            gate,
+            up,
+            down,
+            seq,
+            n_exp,
+            n_used,
+            s,
+        )
     else
         for t in 1:seq
             wsum = Gesso.Inference.@decode_stage :moe_router nothing _moe_route_row!(
-                b.order, b.experts, b.wbuf, view(L, t, :), n_exp, n_used,
+                b.order,
+                b.experts,
+                b.wbuf,
+                view(L, t, :),
+                n_exp,
+                n_used,
             )
             if !(wsum > 0)
                 @inbounds for i in 1:h
@@ -2725,8 +3293,18 @@ function _moe_topk_host!(backend::CUDABackend, y, x, router, gate, up, down, n_u
                 if seq == 1 && y isa DenseCuArray
                     _HOT_BUSY[] = true
                     done = try
-                        _hot_alloc!(hot, gate, up, n_used) &&
-                            _moe_hot_token!(backend, hot, y, xd, b, gate, up, down, n_used, s)
+                        _hot_alloc!(hot, gate, up, n_used) && _moe_hot_token!(
+                            backend,
+                            hot,
+                            y,
+                            xd,
+                            b,
+                            gate,
+                            up,
+                            down,
+                            n_used,
+                            s,
+                        )
                     finally
                         _HOT_BUSY[] = false
                     end
@@ -2738,7 +3316,14 @@ function _moe_topk_host!(backend::CUDABackend, y, x, router, gate, up, down, n_u
                 _hot_observe!(hot, b.experts, n_used)
             end
             Gesso.Inference.@decode_stage :moe_host nothing Gesso.Inference._moe_host_experts_auto!(
-                b.yrow, b.xrow, b.experts, b.wbuf, n_used, gate, up, down,
+                b.yrow,
+                b.xrow,
+                b.experts,
+                b.wbuf,
+                n_used,
+                gate,
+                up,
+                down,
             )
             @inbounds for i in 1:h
                 Y[t, i] = b.yrow[i]
@@ -2755,7 +3340,12 @@ function _moe_topk_host!(backend::CUDABackend, y, x, router, gate, up, down, n_u
         end
     end
     if gpu_add
-        Gesso.Inference.@decode_stage :moe_qgemv nothing _hot_prefill_add!(y, seq, h, n_used)
+        Gesso.Inference.@decode_stage :moe_qgemv nothing _hot_prefill_add!(
+            y,
+            seq,
+            h,
+            n_used,
+        )
         _HOT_VERIFY[] && _hot_prefill_verify!(y, b, X, gate, up, down, n_exp)
     end
     hot !== nothing && _hot_leave!(hot)
@@ -2767,26 +3357,74 @@ end
 # instead of once per token that picked it. Bit-identical to the token loop
 # unless the layer is hot, when the GPU takes part of the pairs and the result
 # is true: Y then holds the CPU's partial sum and the caller adds the GPU's.
-function _moe_host_prefill_layer!(backend, b::_MoeHostXfer, routed::Bool, L, X, Y, y, xd, hot, gate, up, down,
-    seq::Int, n_exp::Int, n_used::Int, s)
+function _moe_host_prefill_layer!(
+    backend,
+    b::_MoeHostXfer,
+    routed::Bool,
+    L,
+    X,
+    Y,
+    y,
+    xd,
+    hot,
+    gate,
+    up,
+    down,
+    seq::Int,
+    n_exp::Int,
+    n_used::Int,
+    s,
+)
     if routed
-        Gesso.Inference.@decode_stage :moe_router nothing _moe_route_rows_unpack!(b, seq, n_used)
+        Gesso.Inference.@decode_stage :moe_router nothing _moe_route_rows_unpack!(
+            b,
+            seq,
+            n_used,
+        )
     end
     for t in 1:seq
         ex = view(b.E, :, t)
         if !routed
             wsum = Gesso.Inference.@decode_stage :moe_router nothing _moe_route_row!(
-                b.order, ex, view(b.W, :, t), view(L, t, :), n_exp, n_used,
+                b.order,
+                ex,
+                view(b.W, :, t),
+                view(L, t, :),
+                n_exp,
+                n_used,
             )
             b.live[t] = wsum > 0
         end
         b.live[t] && hot !== nothing && _hot_observe!(hot, ex, n_used)
     end
-    hot !== nothing && y isa DenseCuArray &&
-        _moe_hot_prefill!(backend, hot, xd, b, X, Y, gate, up, down, seq, n_exp, n_used, s) &&
+    hot !== nothing &&
+        y isa DenseCuArray &&
+        _moe_hot_prefill!(
+            backend,
+            hot,
+            xd,
+            b,
+            X,
+            Y,
+            gate,
+            up,
+            down,
+            seq,
+            n_exp,
+            n_used,
+            s,
+        ) &&
         return true
     Gesso.Inference.@decode_stage :moe_host nothing Gesso.Inference._moe_host_prefill!(
-        Y, X, b.E, b.W, b.live, n_exp, gate, up, down,
+        Y,
+        X,
+        b.E,
+        b.W,
+        b.live,
+        n_exp,
+        gate,
+        up,
+        down,
     )
     return false
 end
@@ -2807,12 +3445,16 @@ struct _MoeRouteMeta
     u::_CuVec{Int32}
     d::_CuVec{Int32}
 end
-const _MOE_ROUTE_META = Dict{Tuple{Int,Int},_MoeRouteMeta}()
+const _MOE_ROUTE_META = Dict{Tuple{Int, Int}, _MoeRouteMeta}()
 
 function _moe_route_meta(n_used::Int)
     k = (Int(CUDA.deviceid(CUDA.device())), n_used)
     get!(_MOE_ROUTE_META, k) do
-        _MoeRouteMeta(CUDA.zeros(Int32, 2n_used), CUDA.zeros(Int32, 2n_used), CUDA.zeros(Int32, 2n_used))
+        _MoeRouteMeta(
+            CUDA.zeros(Int32, 2n_used),
+            CUDA.zeros(Int32, 2n_used),
+            CUDA.zeros(Int32, 2n_used),
+        )
     end
 end
 
@@ -2825,7 +3467,17 @@ end
 # uses. Taken experts drop to -1, below any probability. Row t of `logits`
 # leaves its top k in si (expert) and sv (probability), best first. Needs a
 # 256-thread block.
-@inline function _moe_route_block!(p, bv, bi, sv, si, logits, t::Int, n_exp::Int32, n_used::Int32)
+@inline function _moe_route_block!(
+    p,
+    bv,
+    bi,
+    sv,
+    si,
+    logits,
+    t::Int,
+    n_exp::Int32,
+    n_used::Int32,
+)
     tid = threadIdx().x
     nt = blockDim().x
     @inbounds begin
@@ -2842,7 +3494,7 @@ end
         stride = nt >> 1
         while stride > 0
             if tid <= stride
-                o = bv[tid + stride]
+                o = bv[tid+stride]
                 o > bv[tid] && (bv[tid] = o)
             end
             CUDA.sync_threads()
@@ -2888,8 +3540,8 @@ end
             stride = nt >> 1
             while stride > 0
                 if tid <= stride
-                    ov = bv[tid + stride]
-                    oi = bi[tid + stride]
+                    ov = bv[tid+stride]
+                    oi = bi[tid+stride]
                     if ov > bv[tid] || (ov == bv[tid] && oi < bi[tid])
                         bv[tid] = ov
                         bi[tid] = oi
@@ -2920,8 +3572,18 @@ macro _moe_route_shared()
     end)
 end
 
-function _moe_route_kernel!(ws, mg, mu, md, logits, n_exp::Int32, n_used::Int32,
-                            bpe_g::Int32, bpe_u::Int32, bpe_d::Int32)
+function _moe_route_kernel!(
+    ws,
+    mg,
+    mu,
+    md,
+    logits,
+    n_exp::Int32,
+    n_used::Int32,
+    bpe_g::Int32,
+    bpe_u::Int32,
+    bpe_d::Int32,
+)
     @_moe_route_shared
     _moe_route_block!(p, bv, bi, sv, si, logits, 1, n_exp, n_used)
     @inbounds begin
@@ -2937,9 +3599,9 @@ function _moe_route_kernel!(ws, mg, mu, md, logits, n_exp::Int32, n_used::Int32,
                 mg[k] = e0 * bpe_g
                 mu[k] = e0 * bpe_u
                 md[k] = e0 * bpe_d
-                mg[n_used + k] = k
-                mu[n_used + k] = k
-                md[n_used + k] = k
+                mg[n_used+k] = k
+                mu[n_used+k] = k
+                md[n_used+k] = k
             end
         end
     end
@@ -2964,24 +3626,38 @@ function _moe_route_rows_kernel!(R, logits, n_exp::Int32, n_used::Int32)
         invw = wsum > 0 ? 1.0f0 / wsum : 0.0f0
         for k in 1:n_used
             R[k, t] = si[k]
-            R[n_used + k, t] = reinterpret(Int32, sv[k] * invw)
+            R[n_used+k, t] = reinterpret(Int32, sv[k] * invw)
         end
-        R[2n_used + 1, t] = reinterpret(Int32, wsum)
+        R[2n_used+1, t] = reinterpret(Int32, wsum)
     end
     return
 end
 
-_moe_prefill_route_ok(n_exp::Int, n_used::Int) = get(ENV, "GESSO_MOE_PREFILL_ROUTE", "1") == "1" &&
-    n_exp <= _MOE_ROUTE_MAX_EXP && n_used <= _MOE_ROUTE_MAX_USED
+_moe_prefill_route_ok(n_exp::Int, n_used::Int) =
+    get(ENV, "GESSO_MOE_PREFILL_ROUTE", "1") == "1" &&
+    n_exp <= _MOE_ROUTE_MAX_EXP &&
+    n_used <= _MOE_ROUTE_MAX_USED
 
-const _MOE_ROUTE_ROWS = Ref{Union{Nothing,_CuVec{Int32}}}(nothing)
+const _MOE_ROUTE_ROWS = Ref{Union{Nothing, _CuVec{Int32}}}(nothing)
 
 # Queues the route table and its copy into b.route on stream s.
-function _moe_route_rows_launch!(b::_MoeHostXfer, logits, seq::Int, n_exp::Int, n_used::Int, s)
+function _moe_route_rows_launch!(
+    b::_MoeHostXfer,
+    logits,
+    seq::Int,
+    n_exp::Int,
+    n_used::Int,
+    s,
+)
     w = 2n_used + 1
     R = _MOE_ROUTE_ROWS[] = _hotp_dev(_MOE_ROUTE_ROWS[], Int32, w * seq)
     Rm = unsafe_wrap(CuArray, pointer(R), (w, seq))
-    @fastcuda threads = 256 blocks = seq _moe_route_rows_kernel!(Rm, logits, Int32(n_exp), Int32(n_used))
+    @fastcuda threads = 256 blocks = seq _moe_route_rows_kernel!(
+        Rm,
+        logits,
+        Int32(n_exp),
+        Int32(n_used),
+    )
     unsafe_copyto!(pointer(b.route), pointer(R), w * seq; async=true, stream=s)
     return nothing
 end
@@ -2993,21 +3669,29 @@ function _moe_route_rows_unpack!(b::_MoeHostXfer, seq::Int, n_used::Int)
     @inbounds for t in 1:seq
         o = (t - 1) * w
         for k in 1:n_used
-            b.E[k, t] = R[o + k]
-            b.W[k, t] = reinterpret(Float32, R[o + n_used + k])
+            b.E[k, t] = R[o+k]
+            b.W[k, t] = reinterpret(Float32, R[o+n_used+k])
         end
-        b.live[t] = reinterpret(Float32, R[o + w]) > 0
+        b.live[t] = reinterpret(Float32, R[o+w]) > 0
     end
     return nothing
 end
 
 function _moe_device_route_ok(y, x, router, gate, up, down, n_used::Int)
     G = Gesso.Inference.GpuQuantSlice
-    return _moe_device_route_enabled() && size(x, 1) == 1 &&
-           x isa DenseCuArray && y isa DenseCuArray && router isa CuArray &&
-           gate isa G && up isa G && down isa G &&
-           gate.data isa CuVector && up.data isa CuVector && down.data isa CuVector &&
-           size(router, 1) <= _MOE_ROUTE_MAX_EXP && n_used <= _MOE_ROUTE_MAX_USED &&
+    return _moe_device_route_enabled() &&
+           size(x, 1) == 1 &&
+           x isa DenseCuArray &&
+           y isa DenseCuArray &&
+           router isa CuArray &&
+           gate isa G &&
+           up isa G &&
+           down isa G &&
+           gate.data isa CuVector &&
+           up.data isa CuVector &&
+           down.data isa CuVector &&
+           size(router, 1) <= _MOE_ROUTE_MAX_EXP &&
+           n_used <= _MOE_ROUTE_MAX_USED &&
            down.n_exp * down.bytes_per_expert <= typemax(Int32) &&
            gate.n_exp * max(gate.bytes_per_expert, up.bytes_per_expert) <= typemax(Int32)
 end
@@ -3031,18 +3715,62 @@ function _moe_topk_device!(backend::CUDABackend, y, x, router, gate, up, down, n
     Gesso.Inference.@decode_stage :moe_router backend begin
         _cuda_router_logits!(logits, x, router)
         @fastcuda threads = 256 _moe_route_kernel!(
-            ws, rt.g, rt.u, rt.d, logits, Int32(n_exp), Int32(n_used),
-            Int32(gate.bytes_per_expert), Int32(up.bytes_per_expert), Int32(down.bytes_per_expert),
+            ws,
+            rt.g,
+            rt.u,
+            rt.d,
+            logits,
+            Int32(n_exp),
+            Int32(n_used),
+            Int32(gate.bytes_per_expert),
+            Int32(up.bytes_per_expert),
+            Int32(down.bytes_per_expert),
         )
     end
     xt = reshape(x, h, 1)
     Gesso.Inference.@decode_stage :moe_qgemv backend begin
-        _cuda_launch_qgemv!(Gbat, xt, gate.data, gate.ggml_type, rt.g, n_used, n_used, gate.ne0, gate.ne1, 1.0f0, 0.0f0)
+        _cuda_launch_qgemv!(
+            Gbat,
+            xt,
+            gate.data,
+            gate.ggml_type,
+            rt.g,
+            n_used,
+            n_used,
+            gate.ne0,
+            gate.ne1,
+            1.0f0,
+            0.0f0,
+        )
         # gate and up read the same x, so up reuses the q8_1 copy gate just made
-        _cuda_launch_qgemv!(Ubat, xt, up.data, up.ggml_type, rt.u, n_used, n_used, up.ne0, up.ne1, 1.0f0, 0.0f0;
-            quantize=up.ne0 != gate.ne0 || gate.ggml_type == Gesso.Inference.GGML_TYPE_F32)
+        _cuda_launch_qgemv!(
+            Ubat,
+            xt,
+            up.data,
+            up.ggml_type,
+            rt.u,
+            n_used,
+            n_used,
+            up.ne0,
+            up.ne1,
+            1.0f0,
+            0.0f0;
+            quantize=up.ne0 != gate.ne0 || gate.ggml_type == Gesso.Inference.GGML_TYPE_F32,
+        )
         _silu_mul!(backend, Hbat, Ubat, Gbat)
-        _cuda_launch_qgemv!(Dbat, Hbat, down.data, down.ggml_type, rt.d, n_used, n_used, down.ne0, down.ne1, 1.0f0, 0.0f0)
+        _cuda_launch_qgemv!(
+            Dbat,
+            Hbat,
+            down.data,
+            down.ggml_type,
+            rt.d,
+            n_used,
+            n_used,
+            down.ne0,
+            down.ne1,
+            1.0f0,
+            0.0f0,
+        )
         _cuda_combine!(reshape(y, h), Dbat, ws)
     end
     return y
@@ -3065,19 +3793,29 @@ const _MOE_PAIR_SEG = 1024
 
 mutable struct _MoePairBatch
     meta_h::Vector{Int32}    # pinned: per chunk, per launch [up off; down off; gate off; columns; tokens], then the combine table
-    meta_d::Union{Nothing,_CuVec{Int32}}
-    xt::Union{Nothing,_CuVec{Float32}}
-    g::Union{Nothing,_CuVec{Float32}}
-    u::Union{Nothing,_CuVec{Float32}}
-    a::Union{Nothing,_CuVec{Float32}}
-    d::Union{Nothing,_CuVec{Float32}}
+    meta_d::Union{Nothing, _CuVec{Int32}}
+    xt::Union{Nothing, _CuVec{Float32}}
+    g::Union{Nothing, _CuVec{Float32}}
+    u::Union{Nothing, _CuVec{Float32}}
+    a::Union{Nothing, _CuVec{Float32}}
+    d::Union{Nothing, _CuVec{Float32}}
     cnt::Vector{Int}
     first::Vector{Int}
     fill::Vector{Int}
 end
 
-const _MOE_PAIR_BATCH = _MoePairBatch(Int32[], nothing, nothing, nothing, nothing, nothing, nothing,
-    Int[], Int[], Int[])
+const _MOE_PAIR_BATCH = _MoePairBatch(
+    Int32[],
+    nothing,
+    nothing,
+    nothing,
+    nothing,
+    nothing,
+    nothing,
+    Int[],
+    Int[],
+    Int[],
+)
 
 # GPUArrays' permutedims! launches on vec(src), a derived array that holds a
 # reference to src's memory until a GC finalizes it, so the arena's unsafe_free!
@@ -3096,11 +3834,16 @@ function _moe_device_prefill_ok(y, x, router, gate, up, down, n_used::Int)
     _moe_device_prefill_enabled() && size(x, 1) > 1 || return false
     (x isa DenseCuArray && y isa DenseCuArray) || return false
     (gate isa G && up isa G && down isa G) || return false
-    (gate.data isa CuVector && up.data isa CuVector && down.data isa CuVector) || return false
+    (gate.data isa CuVector && up.data isa CuVector && down.data isa CuVector) ||
+        return false
     for sl in (gate, up, down)
         sl.ggml_type in (
-            I.GGML_TYPE_IQ2_XS, I.GGML_TYPE_IQ3_XXS, I.GGML_TYPE_IQ4_XS,
-            I.GGML_TYPE_Q2_K, I.GGML_TYPE_Q3_K, I.GGML_TYPE_Q4_K,
+            I.GGML_TYPE_IQ2_XS,
+            I.GGML_TYPE_IQ3_XXS,
+            I.GGML_TYPE_IQ4_XS,
+            I.GGML_TYPE_Q2_K,
+            I.GGML_TYPE_Q3_K,
+            I.GGML_TYPE_Q4_K,
         ) || return false
         sl.n_exp * sl.bytes_per_expert <= typemax(Int32) || return false
     end
@@ -3108,21 +3851,39 @@ function _moe_device_prefill_ok(y, x, router, gate, up, down, n_used::Int)
     return up.ne0 == gate.ne0
 end
 
-function _moe_pair_combine_kernel!(y, D, meta, gpoff::Int, woff::Int, n_used::Int, h::Int, t0::Int)
+function _moe_pair_combine_kernel!(
+    y,
+    D,
+    meta,
+    gpoff::Int,
+    woff::Int,
+    n_used::Int,
+    h::Int,
+    t0::Int,
+)
     i = (Int(blockIdx().x) - 1) * Int(blockDim().x) + Int(threadIdx().x)
     t = Int(blockIdx().y)
     i <= h || return
     base = (t - 1) * n_used
     acc = 0.0f0
     @inbounds for k in 1:n_used
-        g = Int(meta[gpoff + base + k])
-        g > 0 && (acc += D[i, g] * reinterpret(Float32, meta[woff + base + k]))
+        g = Int(meta[gpoff+base+k])
+        g > 0 && (acc += D[i, g] * reinterpret(Float32, meta[woff+base+k]))
     end
-    @inbounds y[t0 + t, i] = acc
+    @inbounds y[t0+t, i] = acc
     return
 end
 
-function _moe_topk_device_prefill!(backend::CUDABackend, y, x, router, gate, up, down, n_used::Int)
+function _moe_topk_device_prefill!(
+    backend::CUDABackend,
+    y,
+    x,
+    router,
+    gate,
+    up,
+    down,
+    n_used::Int,
+)
     seq, h = size(x)
     n_exp = size(router, 1)
     ff = size(gate, 2)
@@ -3134,13 +3895,21 @@ function _moe_topk_device_prefill!(backend::CUDABackend, y, x, router, gate, up,
     logits = _dev_scratch(:moe_logits, seq, n_exp)
     routed = _moe_prefill_route_ok(n_exp, n_used)
     Gesso.Inference.@decode_stage :moe_router backend begin
-        rd = router isa CuArray ? router : CuArray{Float32}(Gesso.Inference._offload_host_array(router))
+        rd =
+            router isa CuArray ? router :
+            CuArray{Float32}(Gesso.Inference._offload_host_array(router))
         _cuda_router_logits!(logits, x, rd)
         Gesso.Inference._profile_copy!(true)
         if routed
             _moe_route_rows_launch!(b, logits, seq, n_exp, n_used, s)
         else
-            unsafe_copyto!(pointer(b.logits), pointer(logits), seq * n_exp; async=true, stream=s)
+            unsafe_copyto!(
+                pointer(b.logits),
+                pointer(logits),
+                seq * n_exp;
+                async=true,
+                stream=s,
+            )
         end
         copied = _moe_host_event()
         CUDA.record(copied, s)
@@ -3165,11 +3934,22 @@ function _moe_topk_device_prefill!(backend::CUDABackend, y, x, router, gate, up,
     end
 
     if routed
-        Gesso.Inference.@decode_stage :moe_router nothing _moe_route_rows_unpack!(b, seq, n_used)
+        Gesso.Inference.@decode_stage :moe_router nothing _moe_route_rows_unpack!(
+            b,
+            seq,
+            n_used,
+        )
     else
         L = unsafe_wrap(Array, pointer(b.logits), (seq, n_exp))
         Gesso.Inference.@decode_stage :moe_router nothing for t in 1:seq
-            wsum = _moe_route_row!(b.order, view(b.E, :, t), view(b.W, :, t), view(L, t, :), n_exp, n_used)
+            wsum = _moe_route_row!(
+                b.order,
+                view(b.E, :, t),
+                view(b.W, :, t),
+                view(L, t, :),
+                n_exp,
+                n_used,
+            )
             b.live[t] = wsum > 0
         end
     end
@@ -3205,29 +3985,35 @@ function _moe_topk_device_prefill!(backend::CUDABackend, y, x, router, gate, up,
         woff = gpoff + nt * n_used
         @inbounds for t in t0:t1, k in 1:n_used
             i = (t - t0) * n_used + k
-            meta[woff + i] = reinterpret(Int32, b.W[k, t])
+            meta[woff+i] = reinterpret(Int32, b.W[k, t])
             if b.live[t]
                 e = b.E[k, t]
                 gi = pfirst[e] + fillc[e]
                 fillc[e] += 1
-                meta[gpoff + i] = Int32(gi)
+                meta[gpoff+i] = Int32(gi)
                 # the launch holding pair gi starts at pair a and has n pairs
                 a = ((gi - 1) ÷ seg) * seg + 1
                 n = min(seg, np - a + 1)
                 m0 = mo + 5(a - 1)
                 l = gi - a + 1
                 e0 = e - 1
-                meta[m0 + l] = Int32(e0 * bu)
-                meta[m0 + n + l] = Int32(e0 * bd)
-                meta[m0 + 2n + l] = Int32(e0 * bg)
-                meta[m0 + 3n + l] = Int32(l)
-                meta[m0 + 4n + l] = Int32(t - t0 + 1)
+                meta[m0+l] = Int32(e0 * bu)
+                meta[m0+n+l] = Int32(e0 * bd)
+                meta[m0+2n+l] = Int32(e0 * bg)
+                meta[m0+3n+l] = Int32(l)
+                meta[m0+4n+l] = Int32(t - t0 + 1)
             else
-                meta[gpoff + i] = 0
+                meta[gpoff+i] = 0
             end
         end
         nm = woff + nt * n_used - mo
-        unsafe_copyto!(pointer(B.meta_d, mo + 1), pointer(meta, mo + 1), nm; async=true, stream=s)
+        unsafe_copyto!(
+            pointer(B.meta_d, mo + 1),
+            pointer(meta, mo + 1),
+            nm;
+            async=true,
+            stream=s,
+        )
         xc = unsafe_wrap(CuArray, pointer(B.xt, (t0 - 1) * h + 1), (h, nt))
         Gesso.Inference.@decode_stage :moe_qgemv backend begin
             a = 1
@@ -3244,18 +4030,62 @@ function _moe_topk_device_prefill!(backend::CUDABackend, y, x, router, gate, up,
                 U = unsafe_wrap(CuArray, pointer(B.u), (ff, n))
                 A = unsafe_wrap(CuArray, pointer(B.a), (ff, n))
                 D = unsafe_wrap(CuArray, pointer(B.d, (a - 1) * h + 1), (h, n))
-                _cuda_launch_qgemv!(G, xc, gate.data, gate.ggml_type, mg, n, n, gate.ne0, gate.ne1,
-                    1.0f0, 0.0f0; xcoloff=2n)
-                _cuda_launch_qgemv!(U, xc, up.data, up.ggml_type, mu, 3n, n, up.ne0, up.ne1,
-                    1.0f0, 0.0f0; quantize=false, xcoloff=4n)
+                _cuda_launch_qgemv!(
+                    G,
+                    xc,
+                    gate.data,
+                    gate.ggml_type,
+                    mg,
+                    n,
+                    n,
+                    gate.ne0,
+                    gate.ne1,
+                    1.0f0,
+                    0.0f0;
+                    xcoloff=2n,
+                )
+                _cuda_launch_qgemv!(
+                    U,
+                    xc,
+                    up.data,
+                    up.ggml_type,
+                    mu,
+                    3n,
+                    n,
+                    up.ne0,
+                    up.ne1,
+                    1.0f0,
+                    0.0f0;
+                    quantize=false,
+                    xcoloff=4n,
+                )
                 _silu_mul!(backend, A, U, G)
-                _cuda_launch_qgemv!(D, A, down.data, down.ggml_type, md, 2n, n, down.ne0, down.ne1,
-                    1.0f0, 0.0f0)
+                _cuda_launch_qgemv!(
+                    D,
+                    A,
+                    down.data,
+                    down.ggml_type,
+                    md,
+                    2n,
+                    n,
+                    down.ne0,
+                    down.ne1,
+                    1.0f0,
+                    0.0f0,
+                )
                 a += n
             end
             Dall = unsafe_wrap(CuArray, pointer(B.d), (h, max(np, 1)))
             @fastcuda threads = 256 blocks = (cld(h, 256), nt) _moe_pair_combine_kernel!(
-                y, Dall, B.meta_d, gpoff, woff, n_used, h, t0 - 1)
+                y,
+                Dall,
+                B.meta_d,
+                gpoff,
+                woff,
+                n_used,
+                h,
+                t0 - 1,
+            )
         end
         mo += nm
     end
@@ -3318,7 +4148,9 @@ function _moe_topk_swiglu!(
     end
 
     Gesso.Inference.@decode_stage :moe_router backend begin
-        rd = router isa CuArray ? router : CuArray{Float32}(Gesso.Inference._offload_host_array(router))
+        rd =
+            router isa CuArray ? router :
+            CuArray{Float32}(Gesso.Inference._offload_host_array(router))
         _cuda_router_logits!(logits, x, rd)
         Gesso.Inference._profile_copy!(true)
         logits_h = Array(logits)
@@ -3354,7 +4186,12 @@ function _moe_topk_swiglu!(
     for t in 1:seq
         row = view(logits_h, t, :)
         wsum = Gesso.Inference.@decode_stage :moe_router nothing _moe_route_row!(
-            order, experts, wbuf, row, n_exp, n_used,
+            order,
+            experts,
+            wbuf,
+            row,
+            n_exp,
+            n_used,
         )
         invw = one(Float32) / wsum
         wsum > 0 || continue
@@ -3382,12 +4219,51 @@ function _moe_topk_swiglu!(
             Gesso.Inference._profile_count!(:expert_hits, nh)
             Gesso.Inference._profile_count!(:expert_misses, nm)
             io = Gesso.Inference.routing_trace_io()
-            io === nothing || Gesso.Inference.routing_trace_record!(io, layer, view(experts, 1:n_used))
+            io === nothing ||
+                Gesso.Inference.routing_trace_record!(io, layer, view(experts, 1:n_used))
             xg = reshape(xt, h, 1)
-            _cuda_cached_project!(Gbat, xg, layer, 1, hit_rank, hit_slot, nh, miss_rank, miss_exp, nm)
-            _cuda_cached_project!(Ubat, xg, layer, 2, hit_rank, hit_slot, nh, miss_rank, miss_exp, nm)
-            Gesso.Inference.@decode_stage :moe_qgemv backend _silu_mul!(backend, Hbat, Ubat, Gbat)
-            _cuda_cached_project!(Dbat, Hbat, layer, 3, hit_rank, hit_slot, nh, miss_rank, miss_exp, nm)
+            _cuda_cached_project!(
+                Gbat,
+                xg,
+                layer,
+                1,
+                hit_rank,
+                hit_slot,
+                nh,
+                miss_rank,
+                miss_exp,
+                nm,
+            )
+            _cuda_cached_project!(
+                Ubat,
+                xg,
+                layer,
+                2,
+                hit_rank,
+                hit_slot,
+                nh,
+                miss_rank,
+                miss_exp,
+                nm,
+            )
+            Gesso.Inference.@decode_stage :moe_qgemv backend _silu_mul!(
+                backend,
+                Hbat,
+                Ubat,
+                Gbat,
+            )
+            _cuda_cached_project!(
+                Dbat,
+                Hbat,
+                layer,
+                3,
+                hit_rank,
+                hit_slot,
+                nh,
+                miss_rank,
+                miss_exp,
+                nm,
+            )
             Gesso.Inference.@decode_stage :moe_qupload backend begin
                 Gesso.Inference._profile_copy!(false)
                 copyto!(ws, wbuf)
@@ -3397,7 +4273,12 @@ function _moe_topk_swiglu!(
             copyto!(xt, view(x, t, :))
             _cuda_qgemv_experts!(Gbat, xt, gate, experts)
             _cuda_qgemv_experts!(Ubat, xt, up, experts)
-            Gesso.Inference.@decode_stage :moe_qgemv backend _silu_mul!(backend, Hbat, Ubat, Gbat)
+            Gesso.Inference.@decode_stage :moe_qgemv backend _silu_mul!(
+                backend,
+                Hbat,
+                Ubat,
+                Gbat,
+            )
             _cuda_qgemv_experts!(Dbat, Hbat, down, experts)
             Gesso.Inference.@decode_stage :moe_qupload backend begin
                 Gesso.Inference._profile_copy!(false)
@@ -3412,8 +4293,22 @@ function _moe_topk_swiglu!(
                 _fetch_expert!(backend, Wg, gate, e)
                 _fetch_expert!(backend, Wu, up, e)
                 _fetch_expert!(backend, Wd, down, e)
-                _blas_gemv!('N', _cu_scalar(one(Float32)), Wg, xt, _cu_scalar(zero(Float32)), gacc)
-                _blas_gemv!('N', _cu_scalar(one(Float32)), Wu, xt, _cu_scalar(zero(Float32)), uacc)
+                _blas_gemv!(
+                    'N',
+                    _cu_scalar(one(Float32)),
+                    Wg,
+                    xt,
+                    _cu_scalar(zero(Float32)),
+                    gacc,
+                )
+                _blas_gemv!(
+                    'N',
+                    _cu_scalar(one(Float32)),
+                    Wu,
+                    xt,
+                    _cu_scalar(zero(Float32)),
+                    uacc,
+                )
                 _silu_mul!(backend, hact, uacc, gacc)
                 _blas_gemv!('N', w, Wd, hact, one(Float32), yrow)
             end

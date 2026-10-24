@@ -97,7 +97,13 @@ end
           reference_generate(ts.model, ts, p3; max_new_tokens=2)
     @test info[].reused == 0
 
-    @test_throws Gesso.GessoError reference_generate(ts.model, ts, PROMPT; max_new_tokens=40, state=st)
+    @test_throws Gesso.GessoError reference_generate(
+        ts.model,
+        ts,
+        PROMPT;
+        max_new_tokens=40,
+        state=st,
+    )
     close(st)
     @test reference_generate(ts.model, ts, PROMPT; max_new_tokens=3, state=st) == g1
     close(st)

@@ -2,22 +2,47 @@
 # CPU arithmetic over a synthetic 35B-shaped spec and hand-made cost curves, so
 # every expected value below is derived by hand in the comment beside it.
 
-using Gesso: kv_bytes_per_token, memory_ceiling_tokens, CostModel, prefill_seconds,
-    decode_seconds, ContextBudget, latency_ceiling_tokens, CompactionPolicy,
-    CompactionTracker, reset!, decide_compaction
+using Gesso:
+    kv_bytes_per_token,
+    memory_ceiling_tokens,
+    CostModel,
+    prefill_seconds,
+    decode_seconds,
+    ContextBudget,
+    latency_ceiling_tokens,
+    CompactionPolicy,
+    CompactionTracker,
+    reset!,
+    decide_compaction
 
 const _CB = Gesso.Inference
 
 # Ornith-1.5-35B shape: 40 layers, every 4th full attention (10 KV layers),
 # 2 KV heads, head_dim 256.
 function _spec35(; n_layers::Int=40, full_every::Int=4, head_dim::Int=256)
-    types = [i % full_every == full_every - 1 ? :full_attention : :linear_attention
-             for i in 0:(n_layers - 1)]
-    mixer = _CB.LinearMixerSpec(layer_types=types, num_key_heads=16, key_head_dim=128,
-        num_value_heads=32, value_head_dim=128, conv_kernel_dim=4)
-    return _CB.ArchitectureSpec(family=:qwen35moe, hidden_size=2048, num_layers=n_layers,
-        n_heads=16, n_kv_heads=2, head_dim=head_dim, vocab_size=1000,
-        intermediate_size=512, mixer=mixer)
+    types = [
+        i % full_every == full_every - 1 ? :full_attention : :linear_attention for
+        i in 0:(n_layers-1)
+    ]
+    mixer = _CB.LinearMixerSpec(
+        layer_types=types,
+        num_key_heads=16,
+        key_head_dim=128,
+        num_value_heads=32,
+        value_head_dim=128,
+        conv_kernel_dim=4,
+    )
+    return _CB.ArchitectureSpec(
+        family=:qwen35moe,
+        hidden_size=2048,
+        num_layers=n_layers,
+        n_heads=16,
+        n_kv_heads=2,
+        head_dim=head_dim,
+        vocab_size=1000,
+        intermediate_size=512,
+        mixer=mixer,
+    )
 end
 
 @testset "context budget: kv_bytes_per_token" begin
@@ -40,8 +65,16 @@ end
     @test kv_bytes_per_token(all_attn, :q4h) == 4 * 5760
 
     # A dense model has no mixer; every layer carries KV.
-    dense = _CB.ArchitectureSpec(family=:llama, hidden_size=2048, num_layers=40,
-        n_heads=16, n_kv_heads=2, head_dim=256, vocab_size=1000, intermediate_size=512)
+    dense = _CB.ArchitectureSpec(
+        family=:llama,
+        hidden_size=2048,
+        num_layers=40,
+        n_heads=16,
+        n_kv_heads=2,
+        head_dim=256,
+        vocab_size=1000,
+        intermediate_size=512,
+    )
     @test kv_bytes_per_token(dense, :q8) == 4 * 10880
 
     @test_throws Gesso.GessoError kv_bytes_per_token(spec, :q3)
@@ -53,20 +86,40 @@ end
 end
 
 @testset "context budget: memory_ceiling_tokens" begin
-    @test memory_ceiling_tokens(budget_bytes=1000, resident_bytes=200,
-        scratch_bytes=300, kv_bytes_per_token=100) == 5
+    @test memory_ceiling_tokens(
+        budget_bytes=1000,
+        resident_bytes=200,
+        scratch_bytes=300,
+        kv_bytes_per_token=100,
+    ) == 5
     # floor: 550 free bytes at 100 per token
-    @test memory_ceiling_tokens(budget_bytes=1050, resident_bytes=200,
-        scratch_bytes=300, kv_bytes_per_token=100) == 5
-    @test memory_ceiling_tokens(budget_bytes=1000, resident_bytes=0,
-        kv_bytes_per_token=10) == 100
+    @test memory_ceiling_tokens(
+        budget_bytes=1050,
+        resident_bytes=200,
+        scratch_bytes=300,
+        kv_bytes_per_token=100,
+    ) == 5
+    @test memory_ceiling_tokens(
+        budget_bytes=1000,
+        resident_bytes=0,
+        kv_bytes_per_token=10,
+    ) == 100
     # nothing fits: zero, not negative
-    @test memory_ceiling_tokens(budget_bytes=1000, resident_bytes=1000,
-        kv_bytes_per_token=10) == 0
-    @test memory_ceiling_tokens(budget_bytes=1000, resident_bytes=5000,
-        kv_bytes_per_token=10) == 0
-    @test_throws ArgumentError memory_ceiling_tokens(budget_bytes=1000,
-        resident_bytes=0, kv_bytes_per_token=0)
+    @test memory_ceiling_tokens(
+        budget_bytes=1000,
+        resident_bytes=1000,
+        kv_bytes_per_token=10,
+    ) == 0
+    @test memory_ceiling_tokens(
+        budget_bytes=1000,
+        resident_bytes=5000,
+        kv_bytes_per_token=10,
+    ) == 0
+    @test_throws ArgumentError memory_ceiling_tokens(
+        budget_bytes=1000,
+        resident_bytes=0,
+        kv_bytes_per_token=0,
+    )
 end
 
 @testset "context budget: CostModel" begin
@@ -84,9 +137,15 @@ end
     @test decode_seconds(cm, 10, 5000) == 20.0
     @test decode_seconds(cm, 0, 500) == 0.0
 
-    @test_throws ArgumentError CostModel(prefill=Pair{Int,Float64}[], decode=[0 => 1.0])
-    @test_throws ArgumentError CostModel(prefill=[200 => 1.0, 100 => 1.0], decode=[0 => 1.0])
-    @test_throws ArgumentError CostModel(prefill=[100 => 1.0, 100 => 2.0], decode=[0 => 1.0])
+    @test_throws ArgumentError CostModel(prefill=Pair{Int, Float64}[], decode=[0 => 1.0])
+    @test_throws ArgumentError CostModel(
+        prefill=[200 => 1.0, 100 => 1.0],
+        decode=[0 => 1.0],
+    )
+    @test_throws ArgumentError CostModel(
+        prefill=[100 => 1.0, 100 => 2.0],
+        decode=[0 => 1.0],
+    )
     @test_throws ArgumentError CostModel(prefill=[100 => 0.0], decode=[0 => 1.0])
     @test_throws ArgumentError CostModel(prefill=[100 => NaN], decode=[0 => 1.0])
     @test_throws ArgumentError CostModel(prefill=[-1 => 1.0], decode=[0 => 1.0])
@@ -102,10 +161,18 @@ end
     @test latency_ceiling_tokens(cm; min_decode_tok_s=0.5, max_len=5000) == 1000
     @test latency_ceiling_tokens(cm; max_reprefill_s=400.0, max_len=5000) == 800
     # both: the tighter one wins (min(1000, 800))
-    @test latency_ceiling_tokens(cm; min_decode_tok_s=0.5, max_reprefill_s=400.0,
-        max_len=5000) == 800
-    @test latency_ceiling_tokens(cm; min_decode_tok_s=0.5, max_reprefill_s=600.0,
-        max_len=5000) == 1000
+    @test latency_ceiling_tokens(
+        cm;
+        min_decode_tok_s=0.5,
+        max_reprefill_s=400.0,
+        max_len=5000,
+    ) == 800
+    @test latency_ceiling_tokens(
+        cm;
+        min_decode_tok_s=0.5,
+        max_reprefill_s=600.0,
+        max_len=5000,
+    ) == 1000
     # nothing constrained: the cap itself
     @test latency_ceiling_tokens(cm; max_len=5000) == 5000
     # the cap binds before either constraint
@@ -198,15 +265,25 @@ end
 
     # Hard ceiling: 96000 + 4096 > 100000 overflows, so it fires under every rule.
     for rule in (:rent_or_buy, :threshold, :never)
-        h = decide_compaction(CompactionPolicy(rule=rule), budget, rent_cm,
-            CompactionTracker(), 96000)
+        h = decide_compaction(
+            CompactionPolicy(rule=rule),
+            budget,
+            rent_cm,
+            CompactionTracker(),
+            96000,
+        )
         @test h.compact
         @test h.reason === :hard_ceiling
         @test h.target_tokens == 50000
     end
     # just under the ceiling, :never stays put
-    never = decide_compaction(CompactionPolicy(rule=:never), budget, rent_cm,
-        CompactionTracker(), 95000)
+    never = decide_compaction(
+        CompactionPolicy(rule=:never),
+        budget,
+        rent_cm,
+        CompactionTracker(),
+        95000,
+    )
     @test !never.compact
     @test never.reason === :never
 
@@ -224,16 +301,23 @@ end
 
     # Cannot fit: at 50000 (= target) plus a 60000-token turn overflows, and
     # compacting would not shrink the context, so the reply budget must shrink.
-    cf = decide_compaction(policy, budget, rent_cm, CompactionTracker(), 50000;
-        next_turn_tokens=60000)
+    cf = decide_compaction(
+        policy,
+        budget,
+        rent_cm,
+        CompactionTracker(),
+        50000;
+        next_turn_tokens=60000,
+    )
     @test !cf.compact && cf.reason === :cannot_fit
 
     # Red control: decode cost flat in length, so rent never accrues. Rent-or-buy
     # must not compact before the hard ceiling, which is where 96000 first overflows.
     flat_cm = CostModel(prefill=[0 => 0.002], decode=[0 => 0.01])
     tr = CompactionTracker()
-    seen = [(ctx=c, d=decide_compaction(policy, budget, flat_cm, tr, c))
-            for c in 0:1000:100000]
+    seen = [
+        (ctx=c, d=decide_compaction(policy, budget, flat_cm, tr, c)) for c in 0:1000:100000
+    ]
     @test !any(s -> s.d.reason === :rent_or_buy, seen)
     first_compact = findfirst(s -> s.d.compact, seen)
     @test seen[first_compact].ctx == 96000

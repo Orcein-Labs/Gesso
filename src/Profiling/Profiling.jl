@@ -100,14 +100,14 @@ function _project(r::Receipt)
         decode_tokens_per_s=begin
             dns = get(t, :decode_ns, nothing)
             ntok = get(tu, :new_tokens, nothing)
-            dns === nothing || ntok === nothing || dns == 0 || ntok == 0 ?
-                nothing : Float64(ntok) * 1.0e9 / Float64(dns)
+            dns === nothing || ntok === nothing || dns == 0 || ntok == 0 ? nothing :
+            Float64(ntok) * 1.0e9 / Float64(dns)
         end,
         decode_ms_per_token=begin
             dns = get(t, :decode_ns, nothing)
             ntok = get(tu, :new_tokens, nothing)
-            dns === nothing || ntok === nothing || ntok == 0 ?
-                nothing : Float64(dns) / 1.0e6 / Float64(ntok)
+            dns === nothing || ntok === nothing || ntok == 0 ? nothing :
+            Float64(dns) / 1.0e6 / Float64(ntok)
         end,
         total_tokens=get(tu, :total_tokens, nothing),
         kv_bytes=get(m, :kv_bytes, nothing),

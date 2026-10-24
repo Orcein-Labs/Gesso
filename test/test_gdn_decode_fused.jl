@@ -15,9 +15,7 @@ end
 using .GessoTestHelpers: approx_eq, deterministic_rng
 
 if !CUDA_LOADED || !CUDA.functional()
-    _skip(
-        "no NVIDIA device — fused GDN decode test skipped (§LXXVII skip law)",
-    )
+    _skip("no NVIDIA device — fused GDN decode test skipped (§LXXVII skip law)")
 else
     cuda = Gesso.CUDABackend()
     wl = Gesso.DecodeWorkload()
@@ -31,22 +29,47 @@ else
         value_dim = nv * dv
         conv_dim = 2 * key_dim + value_dim
         f32(dims...) = CUDA.CuArray{Float32}(0.1f0 .* randn(rng, Float32, dims...))
-        spec = (; mixer=(;
-            num_key_heads=nk, num_value_heads=nv,
-            key_head_dim=dk, value_head_dim=dv,
-            conv_kernel_dim=ksz, v_head_tiled=tiled,
-        ))
+        spec = (;
+            mixer=(;
+                num_key_heads=nk,
+                num_value_heads=nv,
+                key_head_dim=dk,
+                value_head_dim=dv,
+                conv_kernel_dim=ksz,
+                v_head_tiled=tiled,
+            )
+        )
         bt = (;
-            attn_rms=Gesso.FrozenParameter(; shape=(dim,), storage=CUDA.CuArray{Float32}(ones(Float32, dim))),
-            wgdn_qkv=Gesso.ProjectionWeight(; shape=(conv_dim, dim), storage=f32(conv_dim, dim)),
-            wgdn_z=Gesso.ProjectionWeight(; shape=(value_dim, dim), storage=f32(value_dim, dim)),
+            attn_rms=Gesso.FrozenParameter(;
+                shape=(dim,),
+                storage=CUDA.CuArray{Float32}(ones(Float32, dim)),
+            ),
+            wgdn_qkv=Gesso.ProjectionWeight(;
+                shape=(conv_dim, dim),
+                storage=f32(conv_dim, dim),
+            ),
+            wgdn_z=Gesso.ProjectionWeight(;
+                shape=(value_dim, dim),
+                storage=f32(value_dim, dim),
+            ),
             wgdn_a=Gesso.ProjectionWeight(; shape=(nv, dim), storage=f32(nv, dim)),
             wgdn_b=Gesso.ProjectionWeight(; shape=(nv, dim), storage=f32(nv, dim)),
-            wgdn_o=Gesso.ProjectionWeight(; shape=(dim, value_dim), storage=f32(dim, value_dim)),
-            wgdn_conv=Gesso.FrozenParameter(; shape=(conv_dim, 1, ksz), storage=f32(conv_dim, 1, ksz)),
+            wgdn_o=Gesso.ProjectionWeight(;
+                shape=(dim, value_dim),
+                storage=f32(dim, value_dim),
+            ),
+            wgdn_conv=Gesso.FrozenParameter(;
+                shape=(conv_dim, 1, ksz),
+                storage=f32(conv_dim, 1, ksz),
+            ),
             wgdn_A_log=Gesso.FrozenParameter(; shape=(nv,), storage=f32(nv)),
             wgdn_dt_bias=Gesso.FrozenParameter(; shape=(nv,), storage=f32(nv)),
-            wgdn_norm=Gesso.FrozenParameter(; shape=(dv,), storage=CUDA.CuArray{Float32}(ones(Float32, dv) .+ 0.1f0 .* randn(rng, Float32, dv))),
+            wgdn_norm=Gesso.FrozenParameter(;
+                shape=(dv,),
+                storage=CUDA.CuArray{Float32}(
+                    ones(Float32, dv) .+ 0.1f0 .* randn(rng, Float32, dv),
+                ),
+            ),
         )
         conv0 = f32(conv_dim, ksz - 1)
         rec0 = f32(nv, dk, dv)
@@ -75,14 +98,34 @@ else
             N = 6
             for step in 1:N
                 Inf_._hybrid_linear_block!(
-                    cuda, hu, normed, sub_u, fx.bt, fx.spec, wl, 1e-6, zl;
-                    conv_state=conv_u, rec_state=rec_u, gdn_fused=false,
+                    cuda,
+                    hu,
+                    normed,
+                    sub_u,
+                    fx.bt,
+                    fx.spec,
+                    wl,
+                    1e-6,
+                    zl;
+                    conv_state=conv_u,
+                    rec_state=rec_u,
+                    gdn_fused=false,
                 )
                 hu.storage .+= sub_u.storage
                 Inf_._hybrid_linear_block!(
-                    cuda, hf, normed, sub_f, fx.bt, fx.spec, wl, 1e-6, zl;
-                    conv_state=conv_f, rec_state=rec_f,
-                    gdn_scratch=scratch, gdn_fused=true,
+                    cuda,
+                    hf,
+                    normed,
+                    sub_f,
+                    fx.bt,
+                    fx.spec,
+                    wl,
+                    1e-6,
+                    zl;
+                    conv_state=conv_f,
+                    rec_state=rec_f,
+                    gdn_scratch=scratch,
+                    gdn_fused=true,
                 )
                 hf.storage .+= sub_f.storage
                 @test approx_eq(Array(sub_f.storage), Array(sub_u.storage); atol=1e-3)
@@ -104,9 +147,19 @@ else
         normed = Gesso.Activation(; shape=(1, fx.dim), storage=zl((1, fx.dim)))
         sub = Gesso.Activation(; shape=(1, fx.dim), storage=zl((1, fx.dim)))
         @test_throws ErrorException Inf_._hybrid_linear_block!(
-            cuda, hx, normed, sub, fx.bt, fx.spec, wl, 1e-6, zl;
-            conv_state=copy(fx.conv0), rec_state=bad_rec,
-            gdn_scratch=scratch, gdn_fused=true,
+            cuda,
+            hx,
+            normed,
+            sub,
+            fx.bt,
+            fx.spec,
+            wl,
+            1e-6,
+            zl;
+            conv_state=copy(fx.conv0),
+            rec_state=bad_rec,
+            gdn_scratch=scratch,
+            gdn_fused=true,
         )
     end
 end

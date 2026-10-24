@@ -15,17 +15,18 @@ else
         g,
         beta,
         initial;
-        tiled = false,
-        l2norm = true,
-        chunks = nothing,
+        tiled=false,
+        l2norm=true,
+        chunks=nothing,
     )
         seq, nv, dv = size(v)
-        chunks === nothing && (chunks = filter(!isempty, (1:max(1, seq÷2), (max(1, seq÷2)+1):seq)))
+        chunks === nothing &&
+            (chunks = filter(!isempty, (1:max(1, seq÷2), (max(1, seq÷2)+1):seq)))
         baseline = nothing
-        for rep = 1:3
+        for rep in 1:3
             state_cpu = copy(initial)
             state_gpu = Lava.LavaArray{Float32}(initial)
-            collected = Array{Float32,3}[]
+            collected = Array{Float32, 3}[]
             for chunk in chunks
                 inputs = (
                     copy(q[chunk, :, :]),
@@ -43,7 +44,7 @@ else
                     inputs...,
                     state_cpu;
                     l2norm,
-                    v_head_tiled = tiled,
+                    v_head_tiled=tiled,
                 )
                 output = Lava.LavaArray{Float32}(fill(NaN32, size(expected)))
                 returned = Gesso.Inference._gated_delta_rule!(
@@ -52,7 +53,7 @@ else
                     devices...,
                     state_gpu;
                     l2norm,
-                    v_head_tiled = tiled,
+                    v_head_tiled=tiled,
                 )
                 actual = Array(output)
                 @test returned === output
@@ -63,7 +64,7 @@ else
                 @test all(_gdn_ref_bits(Array(a), b) for (a, b) in zip(devices, originals))
                 push!(collected, actual)
             end
-            full = cat(collected...; dims = 1)
+            full = cat(collected...; dims=1)
             rep == 1 ? (baseline = full) : (@test _gdn_ref_bits(full, baseline))
             GC.gc(true)
         end
@@ -127,7 +128,7 @@ else
                 output,
                 input,
                 length(values);
-                ndrange = length(values),
+                ndrange=length(values),
             )
             actual = Array(output)
             @test all(
@@ -148,8 +149,12 @@ else
             @test bytes2hex(sha256(events)) ==
                   "509fac64aea23007a397bddf97b9e2c9b2ef5ddad6450bc779d124cd84897c5d"
             rows = [JSON.parse(line) for line in eachline(IOBuffer(events))]
-            stage(name) =
-                only(filter(x -> x["kind"]=="stage" && x["label"]=="cpu" && x["stage"]==name, rows))
+            stage(name) = only(
+                filter(
+                    x -> x["kind"]=="stage" && x["label"]=="cpu" && x["stage"]==name,
+                    rows,
+                ),
+            )
             function raw(rec)
                 bytes = read(joinpath(fixture, rec["path"]))
                 @test bytes2hex(sha256(bytes)) == rec["sha256"]
@@ -165,8 +170,8 @@ else
                 g,
                 beta,
                 zeros(Float32, size(v, 2), size(q, 3), size(v, 3));
-                tiled = true,
-                chunks = (1:size(q, 1),),
+                tiled=true,
+                chunks=(1:size(q, 1),),
             )
         end
     end

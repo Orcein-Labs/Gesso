@@ -11,8 +11,13 @@ end
 
 @testset "sampling: the same seed gives the same ids run to run" begin
     ts = toy2_tensors()
-    run(seed) = reference_generate(ts.model, ts, PROMPT; max_new_tokens=8,
-        sampler=Sampler(temperature=1.0, top_p=1.0, seed=seed))
+    run(seed) = reference_generate(
+        ts.model,
+        ts,
+        PROMPT;
+        max_new_tokens=8,
+        sampler=Sampler(temperature=1.0, top_p=1.0, seed=seed),
+    )
     @test run(7) == run(7)
     @test run(7) == run(7)
     @test 4 < length(run(7)) <= 12
@@ -20,15 +25,28 @@ end
 
 @testset "sampling: different seeds sample different ids" begin
     ts = toy2_tensors()
-    seqs = [reference_generate(ts.model, ts, PROMPT; max_new_tokens=8,
-        sampler=Sampler(temperature=1.0, top_p=1.0, seed=s)) for s in 1:8]
+    seqs = [
+        reference_generate(
+            ts.model,
+            ts,
+            PROMPT;
+            max_new_tokens=8,
+            sampler=Sampler(temperature=1.0, top_p=1.0, seed=s),
+        ) for s in 1:8
+    ]
     @test length(unique(seqs)) > 1
 end
 
 @testset "sampling: a sampler with a draft is refused" begin
     ts = toy2_tensors()
-    @test_throws ArgumentError reference_generate(ts.model, ts, PROMPT; max_new_tokens=4,
-        sampler=Sampler(temperature=1.0, seed=1), draft=:unused)
+    @test_throws ArgumentError reference_generate(
+        ts.model,
+        ts,
+        PROMPT;
+        max_new_tokens=4,
+        sampler=Sampler(temperature=1.0, seed=1),
+        draft=:unused,
+    )
 end
 
 @testset "sampling: sampler arguments are validated" begin
@@ -87,9 +105,9 @@ function sortperm_sample_id(s::Sampler, logits)
 end
 
 @testset "sampling: top-p draws the same ids as a full sort" begin
-    rows = Dict{String,Vector{Float32}}()
+    rows = Dict{String, Vector{Float32}}()
     x = UInt64(12345)
-    unit() = (x = x * 0x5851f42d4c957f2d + 0x14057b7ef767814f; Float64(x >> 11) * 0x1p-53)
+    unit() = (x=x * 0x5851f42d4c957f2d + 0x14057b7ef767814f; Float64(x >> 11) * 0x1p-53)
     # A flat row puts most of the vocab in the sorted band; the tied rows only
     # agree if ties still break on the lower id.
     rows["flat"] = Float32[unit() for _ in 1:5000]
@@ -111,7 +129,8 @@ end
     engine = ChatModel(
         tokenize=s -> Int.(codeunits(s)),
         detokenize=ids -> String(UInt8.(filter(<(256), ids))),
-        render=(msgs, tools, thinking) -> join((string(m["content"]) for m in msgs), "\n"),
+        render=(msgs, tools, thinking) ->
+            join((string(m["content"]) for m in msgs), "\n"),
         generate=(prompt_ids; max_new_tokens, on_token, sampling=nothing) -> begin
             push!(seen, sampling)
             (generated=Int[], cached=0)
@@ -121,8 +140,10 @@ end
     )
     srv = serve(engine; port=0, block=false)
     try
-        post(; fields...) = sv_request(srv.port, sv_post("/v1/chat/completions",
-            sv_chat(SV_USER; fields...)))
+        post(; fields...) = sv_request(
+            srv.port,
+            sv_post("/v1/chat/completions", sv_chat(SV_USER; fields...)),
+        )
 
         @test post().status == 200
         @test seen[end] === nothing

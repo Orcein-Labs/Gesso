@@ -34,12 +34,25 @@ struct ChatModel
     model_id::String
     prefix_len::Function
 
-    function ChatModel(; tokenize::Function, detokenize::Function, render::Function,
-            generate::Function, n_ctx::Integer, model_id::AbstractString,
-            prefix_len::Function=(msgs, tools, thinking, ids) -> 0)
+    function ChatModel(;
+        tokenize::Function,
+        detokenize::Function,
+        render::Function,
+        generate::Function,
+        n_ctx::Integer,
+        model_id::AbstractString,
+        prefix_len::Function=(msgs, tools, thinking, ids) -> 0,
+    )
         n_ctx > 0 || throw(ArgumentError("n_ctx must be positive, got $n_ctx"))
         isempty(model_id) && throw(ArgumentError("model_id must not be empty"))
-        return new(tokenize, detokenize, render, generate, Int(n_ctx), String(model_id),
-            prefix_len)
+        return new(
+            tokenize,
+            detokenize,
+            render,
+            generate,
+            Int(n_ctx),
+            String(model_id),
+            prefix_len,
+        )
     end
 end

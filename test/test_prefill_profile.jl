@@ -55,7 +55,10 @@ end
                 @test sum(values(r.stage_ns)) + r.other_ns == r.wall_ns
                 @test all(>=(0), values(r.stage_ns))
             end
-            @test any(r -> r.stage_ns.attn_mixer + r.stage_ns.gdn_mixer > 0, PPI.prefill_profile_records())
+            @test any(
+                r -> r.stage_ns.attn_mixer + r.stage_ns.gdn_mixer > 0,
+                PPI.prefill_profile_records(),
+            )
         end
 
         @testset "on: records and output match the off run" begin

@@ -22,7 +22,12 @@ function main(args::Vector{String})::Cint
     isfile(gguf) || (println(stderr, "set GESSO_QWEN38_27B_GGUF"); return 2)
     model, tensors, spec = Gesso.load_gguf(gguf)
     ids = Gesso.reference_generate(
-        model, tensors, [9419]; max_new_tokens=8, eps=spec.rms_norm_eps, backend=backend,
+        model,
+        tensors,
+        [9419];
+        max_new_tokens=8,
+        eps=spec.rms_norm_eps,
+        backend=backend,
     )
     println(stdout, "gesso trim stage2 ids=", ids)
     return 0

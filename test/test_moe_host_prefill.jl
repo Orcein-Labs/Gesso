@@ -31,7 +31,16 @@ function _mhp_token_loop(X, E, W, live, gate_s, up_s, down_s)
     yrow = zeros(Float32, h)
     for t in 1:seq
         live[t] || continue
-        _MKE._moe_host_experts_auto!(yrow, X[t, :], E[:, t], W[:, t], nused, gate_s, up_s, down_s)
+        _MKE._moe_host_experts_auto!(
+            yrow,
+            X[t, :],
+            E[:, t],
+            W[:, t],
+            nused,
+            gate_s,
+            up_s,
+            down_s,
+        )
         Y[t, :] .= yrow
     end
     return Y
@@ -51,7 +60,7 @@ end
             rows = rand(rng, 1:7)
             tot = _MKE._moe_prefill_cost!(s, rows)
             nc = rand(rng, 1:min(tot, 64))
-            seen = Dict{Tuple{Int,Int},Int}()
+            seen = Dict{Tuple{Int, Int}, Int}()
             for c in 1:nc
                 _MKE._moe_prefill_pieces(s, rows, nc, c) do e, r0, r1
                     for r in r0:r1
@@ -66,9 +75,24 @@ end
     rng = Xoshiro(44)
     h, ff, nexp, nused = 512, 256, 6, 3
     cases = (
-        ("Q2_K gate/up, Q3_K down", _MKE.GGML_TYPE_Q2_K, _MKE.GGML_TYPE_Q2_K, _MKE.GGML_TYPE_Q3_K),
-        ("Q4_K gate/up, Q6_K down", _MKE.GGML_TYPE_Q4_K, _MKE.GGML_TYPE_Q4_K, _MKE.GGML_TYPE_Q6_K),
-        ("IQ2_XS gate/up, IQ3_XXS down (35B)", _MKE.GGML_TYPE_IQ2_XS, _MKE.GGML_TYPE_IQ2_XS, _MKE.GGML_TYPE_IQ3_XXS),
+        (
+            "Q2_K gate/up, Q3_K down",
+            _MKE.GGML_TYPE_Q2_K,
+            _MKE.GGML_TYPE_Q2_K,
+            _MKE.GGML_TYPE_Q3_K,
+        ),
+        (
+            "Q4_K gate/up, Q6_K down",
+            _MKE.GGML_TYPE_Q4_K,
+            _MKE.GGML_TYPE_Q4_K,
+            _MKE.GGML_TYPE_Q6_K,
+        ),
+        (
+            "IQ2_XS gate/up, IQ3_XXS down (35B)",
+            _MKE.GGML_TYPE_IQ2_XS,
+            _MKE.GGML_TYPE_IQ2_XS,
+            _MKE.GGML_TYPE_IQ3_XXS,
+        ),
     )
     for (label, tg, tu, td) in cases
         gate_s = _mke_slice(_mke_random_bytes(rng, tg, nexp, ff, h), tg, nexp, h, ff)
@@ -87,8 +111,18 @@ end
                     _MKE._PREFILL_MULTI[] = multi
                     Y = fill(NaN32, seq, h)
                     _MKE._moe_host_prefill!(Y, X, E, W, live, nexp, gate_s, up_s, down_s)
-                    println("moe prefill ", label, " seq=", seq, " multi=", multi, " bitwise=", Y == Yref,
-                        " max_abs=", maximum(abs.(Y .- Yref)))
+                    println(
+                        "moe prefill ",
+                        label,
+                        " seq=",
+                        seq,
+                        " multi=",
+                        multi,
+                        " bitwise=",
+                        Y == Yref,
+                        " max_abs=",
+                        maximum(abs.(Y .- Yref)),
+                    )
                     @test Y == Yref
                     seq >= 5 && @test all(iszero, Y[3, :])
                 end
@@ -119,13 +153,35 @@ end
         Ya = fill(NaN32, seq, h)
         Yb = fill(NaN32, seq, h)
         _MKE._moe_host_prefill!(Ya, X, E, W, live, nexp, gate_s, up_s, down_s; cpu=cpu)
-        _MKE._moe_host_prefill!(Yb, X, E, W, live, nexp, gate_s, up_s, down_s; cpu=[!c for c in cpu])
+        _MKE._moe_host_prefill!(
+            Yb,
+            X,
+            E,
+            W,
+            live,
+            nexp,
+            gate_s,
+            up_s,
+            down_s;
+            cpu=[!c for c in cpu],
+        )
         split = _mhb_relrms(Ya .+ Yb, Y)
         println("moe prefill ", label, " cpu_mask_split_rel_rms=", split)
         @test split < 1.0e-5
         @test _mhb_relrms(Ya, Y) > 1.0e-2
         Ynone = fill(NaN32, seq, h)
-        _MKE._moe_host_prefill!(Ynone, X, E, W, live, nexp, gate_s, up_s, down_s; cpu=fill(false, nexp))
+        _MKE._moe_host_prefill!(
+            Ynone,
+            X,
+            E,
+            W,
+            live,
+            nexp,
+            gate_s,
+            up_s,
+            down_s;
+            cpu=fill(false, nexp),
+        )
         @test all(iszero, Ynone)
     end
 end

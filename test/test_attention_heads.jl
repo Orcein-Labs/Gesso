@@ -46,28 +46,28 @@ end
     L, K, H = 64, 600, 3
     # d = 64 scales by an exact power of two (sqrt 8), d = 48 by a true divide.
     for d in (64, 48)
-    q = randn(rng, Float32, L, H, d)
-    k = randn(rng, Float32, K, H, d)
-    v = randn(rng, Float32, K, H, d)
-    probs = rand(rng, Float32, L, K)
-    for hh in 1:H
-        ref = zeros(Float32, L, K)
-        for t in 1:L, u in 1:K, j in 1:d
-            ref[t, u] += q[t, hh, j] * k[u, hh, j] / sqrt(d)
+        q = randn(rng, Float32, L, H, d)
+        k = randn(rng, Float32, K, H, d)
+        v = randn(rng, Float32, K, H, d)
+        probs = rand(rng, Float32, L, K)
+        for hh in 1:H
+            ref = zeros(Float32, L, K)
+            for t in 1:L, u in 1:K, j in 1:d
+                ref[t, u] += q[t, hh, j] * k[u, hh, j] / sqrt(d)
+            end
+            sc = zeros(Float32, L, K)
+            Gesso.Inference._attention_scores_cpu!(sc, q, k, hh, d, L, K)
+            @test reinterpret(UInt32, sc) == reinterpret(UInt32, ref)
         end
-        sc = zeros(Float32, L, K)
-        Gesso.Inference._attention_scores_cpu!(sc, q, k, hh, d, L, K)
-        @test reinterpret(UInt32, sc) == reinterpret(UInt32, ref)
-    end
-    ref = zeros(Float32, L, H, d)
-    attn = zeros(Float32, L, H, d)
-    for hh in 1:H
-        for t in 1:L, j in 1:d, u in 1:K
-            ref[t, hh, j] += probs[t, u] * v[u, hh, j]
+        ref = zeros(Float32, L, H, d)
+        attn = zeros(Float32, L, H, d)
+        for hh in 1:H
+            for t in 1:L, j in 1:d, u in 1:K
+                ref[t, hh, j] += probs[t, u] * v[u, hh, j]
+            end
+            Gesso.Inference._attention_values_cpu!(attn, probs, v, hh, d, L, K)
         end
-        Gesso.Inference._attention_values_cpu!(attn, probs, v, hh, d, L, K)
-    end
-    @test reinterpret(UInt32, attn) == reinterpret(UInt32, ref)
+        @test reinterpret(UInt32, attn) == reinterpret(UInt32, ref)
     end
 end
 
@@ -85,15 +85,36 @@ end
         for window in (0, 100)
             ref = zeros(Float32, L, H, d)
             for hh in 1:H
-                sc = Gesso.Inference._attention_scores_cpu!(zeros(Float32, L, K), q, k, hh, d, L, K)
+                sc = Gesso.Inference._attention_scores_cpu!(
+                    zeros(Float32, L, K),
+                    q,
+                    k,
+                    hh,
+                    d,
+                    L,
+                    K,
+                )
                 window > 0 && Gesso.Inference._window_mask!(sc, L, K, window)
                 probs = Gesso._cpu_softmax_storage!(similar(sc), sc)
                 Gesso.Inference._attention_values_cpu!(ref, probs, v, hh, d, L, K)
             end
             ws() = Gesso.TemporaryWorkspace(; shape=(L, K), storage=zeros(Float32, L, K))
             attn = zeros(Float32, L, H, d)
-            Gesso.Inference._attention_heads!(Gesso.CPUBackend(), attn, ws(), ws(), q, k, v, H, d,
-                L, K, Gesso.PrefillWorkload(); window)
+            Gesso.Inference._attention_heads!(
+                Gesso.CPUBackend(),
+                attn,
+                ws(),
+                ws(),
+                q,
+                k,
+                v,
+                H,
+                d,
+                L,
+                K,
+                Gesso.PrefillWorkload();
+                window,
+            )
             @test reinterpret(UInt32, attn) == reinterpret(UInt32, ref)
         end
     end
@@ -110,8 +131,20 @@ end
     q[150, 2, 3] = NaN32
     ws() = Gesso.TemporaryWorkspace(; shape=(L, L), storage=zeros(Float32, L, L))
     err = try
-        Gesso.Inference._attention_heads!(Gesso.CPUBackend(), zeros(Float32, L, H, d), ws(), ws(),
-            q, k, v, H, d, L, L, Gesso.PrefillWorkload())
+        Gesso.Inference._attention_heads!(
+            Gesso.CPUBackend(),
+            zeros(Float32, L, H, d),
+            ws(),
+            ws(),
+            q,
+            k,
+            v,
+            H,
+            d,
+            L,
+            L,
+            Gesso.PrefillWorkload(),
+        )
         nothing
     catch e
         e

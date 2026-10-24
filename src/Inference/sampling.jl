@@ -16,14 +16,17 @@ mutable struct Sampler
     state::UInt64
 
     function Sampler(temperature::Real, top_p::Real, seed::Integer)
-        temperature > 0 || throw(ArgumentError("sampler temperature must be > 0, got $temperature"))
-        0 < top_p <= 1 || throw(ArgumentError("sampler top_p must be in (0, 1], got $top_p"))
+        temperature > 0 ||
+            throw(ArgumentError("sampler temperature must be > 0, got $temperature"))
+        0 < top_p <= 1 ||
+            throw(ArgumentError("sampler top_p must be in (0, 1], got $top_p"))
         seed >= 0 || throw(ArgumentError("sampler seed must be >= 0, got $seed"))
         return new(Float64(temperature), Float64(top_p), UInt64(seed))
     end
 end
 
-Sampler(; temperature::Real, top_p::Real=1.0, seed::Integer) = Sampler(temperature, top_p, seed)
+Sampler(; temperature::Real, top_p::Real=1.0, seed::Integer) =
+    Sampler(temperature, top_p, seed)
 
 # One splitmix64 step; a Float64 in [0, 1) from 53 bits.
 function _sampler_unit!(s::Sampler)

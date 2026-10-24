@@ -13,7 +13,10 @@
 # accumulation maps one warp per output dim with lanes striding over keys, so
 # both phases read the cache coalesced.
 
-import Gesso.Inference: _attention_decode_device!, _attention_prefill_device!, _attention_partial_device!,
+import Gesso.Inference:
+    _attention_decode_device!,
+    _attention_prefill_device!,
+    _attention_partial_device!,
     _partial_download!
 
 const _ATTN_TILE = 1024
@@ -46,21 +49,30 @@ end
     wid = (tid - 1) ÷ 32
     v = _attn_warp_reduce(op, v)
     if lane == 0
-        sh[red + wid + 1] = v
+        sh[red+wid+1] = v
     end
     CUDA.sync_threads()
     if wid == 0
-        x = lane < nw ? sh[red + lane + 1] : ident
+        x = lane < nw ? sh[red+lane+1] : ident
         x = _attn_warp_reduce(op, x)
         if lane == 0
-            sh[red + 33] = x
+            sh[red+33] = x
         end
     end
     CUDA.sync_threads()
-    return sh[red + 33]
+    return sh[red+33]
 end
 
-function _cuda_attn_decode_kernel!(attn, q, kc, vc, group::Int, K::Int, scale::Float32, d::Int)
+function _cuda_attn_decode_kernel!(
+    attn,
+    q,
+    kc,
+    vc,
+    group::Int,
+    K::Int,
+    scale::Float32,
+    d::Int,
+)
     # shared layout: scores/probs [1, TILE] | q [1, d] | accumulator [1, d] | reduce [33]
     sh = CUDA.@cuDynamicSharedMem(Float32, _ATTN_TILE + 2 * d + 33)
     qo = _ATTN_TILE
@@ -75,14 +87,14 @@ function _cuda_attn_decode_kernel!(attn, q, kc, vc, group::Int, K::Int, scale::F
     hk = div(h - 1, group) + 1
 
     for j in tid:nt:d
-        sh[qo + j] = q[1, h, j]
-        sh[ao + j] = 0.0f0
+        sh[qo+j] = q[1, h, j]
+        sh[ao+j] = 0.0f0
     end
     CUDA.sync_threads()
 
     m = -Inf32
     l = 0.0f0
-    for t0 in 0:_ATTN_TILE:(K - 1)
+    for t0 in 0:_ATTN_TILE:(K-1)
         n = min(_ATTN_TILE, K - t0)
 
         lmax = -Inf32
@@ -90,7 +102,7 @@ function _cuda_attn_decode_kernel!(attn, q, kc, vc, group::Int, K::Int, scale::F
             u = t0 + i
             s = 0.0f0
             for j in 1:d
-                s += sh[qo + j] * kc[u, hk, j]
+                s += sh[qo+j] * kc[u, hk, j]
             end
             s *= scale
             sh[i] = s
@@ -112,14 +124,14 @@ function _cuda_attn_decode_kernel!(attn, q, kc, vc, group::Int, K::Int, scale::F
         l = l * alpha + tsum
         m = m_new
 
-        for j in (wid + 1):nw:d
+        for j in (wid+1):nw:d
             part = 0.0f0
-            for i in (lane + 1):32:n
-                part += sh[i] * vc[t0 + i, hk, j]
+            for i in (lane+1):32:n
+                part += sh[i] * vc[t0+i, hk, j]
             end
             part = _attn_warp_reduce(+, part)
             if lane == 0
-                sh[ao + j] = sh[ao + j] * alpha + part
+                sh[ao+j] = sh[ao+j] * alpha + part
             end
         end
         CUDA.sync_threads()
@@ -127,7 +139,7 @@ function _cuda_attn_decode_kernel!(attn, q, kc, vc, group::Int, K::Int, scale::F
 
     inv = 1.0f0 / l
     for j in tid:nt:d
-        attn[1, h, j] = sh[ao + j] * inv
+        attn[1, h, j] = sh[ao+j] * inv
     end
     return
 end
@@ -143,16 +155,28 @@ function _attention_decode_device!(
     group::Int,
     K::Int,
 )
-    K >= 1 || throw(ArgumentError("decode attention needs at least one cache row, got K=$K"))
+    K >= 1 ||
+        throw(ArgumentError("decode attention needs at least one cache row, got K=$K"))
     n_kv = div(n_heads, group)
     scale = Float32(1 / sqrt(d_head))
-    group == 8 && return _attn_decode_split!(attn, q, kc, vc, n_kv, d_head, K, scale, Val(8))
-    group == 4 && return _attn_decode_split!(attn, q, kc, vc, n_kv, d_head, K, scale, Val(4))
-    group == 2 && return _attn_decode_split!(attn, q, kc, vc, n_kv, d_head, K, scale, Val(2))
-    group == 1 && return _attn_decode_split!(attn, q, kc, vc, n_kv, d_head, K, scale, Val(1))
+    group == 8 &&
+        return _attn_decode_split!(attn, q, kc, vc, n_kv, d_head, K, scale, Val(8))
+    group == 4 &&
+        return _attn_decode_split!(attn, q, kc, vc, n_kv, d_head, K, scale, Val(4))
+    group == 2 &&
+        return _attn_decode_split!(attn, q, kc, vc, n_kv, d_head, K, scale, Val(2))
+    group == 1 &&
+        return _attn_decode_split!(attn, q, kc, vc, n_kv, d_head, K, scale, Val(1))
     shmem = (_ATTN_TILE + 2 * d_head + 33) * sizeof(Float32)
     @fastcuda threads = _ATTN_THREADS blocks = n_heads shmem = shmem _cuda_attn_decode_kernel!(
-        attn, q, kc, vc, group, K, Float32(1 / sqrt(d_head)), d_head,
+        attn,
+        q,
+        kc,
+        vc,
+        group,
+        K,
+        Float32(1 / sqrt(d_head)),
+        d_head,
     )
     return true
 end
@@ -168,8 +192,8 @@ const _ATTN_SPLIT_BLOCKS = 128
 const _ATTN_SPLIT_W = 32
 
 mutable struct _AttnSplitScratch
-    o::Union{Nothing,CuVector{Float32}}
-    ml::Union{Nothing,CuVector{Float32}}
+    o::Union{Nothing, CuVector{Float32}}
+    ml::Union{Nothing, CuVector{Float32}}
 end
 const _ATTN_SPLIT = _AttnSplitScratch(nothing, nothing)
 
@@ -184,19 +208,31 @@ end
 # shared rows padded to W+1 (key-major writes and dim-major reads both miss
 # bank conflicts). Every load of the thread's share is issued before the
 # first store: one at a time, each waited out its own DRAM latency.
-@inline function _attn_tile_load!(sh, to::Int, src, t0::Int, hk::Int, j0::Int, n::Int, W::Int, tid::Int,
-    ::Val{C}, ::Val{R}, ::Val) where {C,R}
+@inline function _attn_tile_load!(
+    sh,
+    to::Int,
+    src,
+    t0::Int,
+    hk::Int,
+    j0::Int,
+    n::Int,
+    W::Int,
+    tid::Int,
+    ::Val{C},
+    ::Val{R},
+    ::Val,
+) where {C, R}
     vals = ntuple(Val(R)) do r
         x = tid - 1 + (r - 1) * _ATTN_THREADS
         jj = x ÷ C
         i = x - jj * C
-        (i < n && jj < W) ? Float32(@inbounds(src[t0 + i + 1, hk, j0 + jj + 1])) : 0.0f0
+        (i < n && jj < W) ? Float32(@inbounds(src[t0+i+1, hk, j0+jj+1])) : 0.0f0
     end
     for r in 1:R
         x = tid - 1 + (r - 1) * _ATTN_THREADS
         jj = x ÷ C
         i = x - jj * C
-        @inbounds sh[to + i * (_ATTN_SPLIT_W + 1) + jj + 1] = vals[r]
+        @inbounds sh[to+i*(_ATTN_SPLIT_W+1)+jj+1] = vals[r]
     end
     return
 end
@@ -210,15 +246,23 @@ end
 # 8-byte load per tile. Units are (row group, column) with the group fastest:
 # a warp reads contiguous runs of the column, and a thread's group stays put
 # across its units because 256 is a multiple of C ÷ 4.
-@inline _attn_vload(::Type{T}, a, lin::Int, ::Val{A}) where {T,A} =
-    unsafe_load(reinterpret(Core.LLVMPtr{T,1}, pointer(a, lin)), 1, Val(A))
+@inline _attn_vload(::Type{T}, a, lin::Int, ::Val{A}) where {T, A} =
+    unsafe_load(reinterpret(Core.LLVMPtr{T, 1}, pointer(a, lin)), 1, Val(A))
 
-@inline _attn_f16_bits(w::UInt64, k::Int) = Float32(reinterpret(Float16, (w >> (16 * k)) % UInt16))
+@inline _attn_f16_bits(w::UInt64, k::Int) =
+    Float32(reinterpret(Float16, (w >> (16 * k)) % UInt16))
 
-@inline function _attn_tile_store4!(sh, to::Int, i0::Int, jj::Int, n::Int, v::NTuple{4,Float32})
+@inline function _attn_tile_store4!(
+    sh,
+    to::Int,
+    i0::Int,
+    jj::Int,
+    n::Int,
+    v::NTuple{4, Float32},
+)
     for k in 0:3
         i = i0 + k
-        @inbounds sh[to + i * (_ATTN_SPLIT_W + 1) + jj + 1] = i < n ? v[k + 1] : 0.0f0
+        @inbounds sh[to+i*(_ATTN_SPLIT_W+1)+jj+1] = i < n ? v[k+1] : 0.0f0
     end
     return
 end
@@ -227,21 +271,45 @@ end
 # the table to local memory
 @inline function _attn_q4_level(c::UInt32)
     m = c & 0x07
-    a = m < 0x04 ?
-        (m < 0x02 ? (m == 0x00 ? _Q4_LEVELS[1] : _Q4_LEVELS[2]) : (m == 0x02 ? _Q4_LEVELS[3] : _Q4_LEVELS[4])) :
-        (m < 0x06 ? (m == 0x04 ? _Q4_LEVELS[5] : _Q4_LEVELS[6]) : (m == 0x06 ? _Q4_LEVELS[7] : _Q4_LEVELS[8]))
+    a =
+        m < 0x04 ?
+        (
+            m < 0x02 ? (m == 0x00 ? _Q4_LEVELS[1] : _Q4_LEVELS[2]) :
+            (m == 0x02 ? _Q4_LEVELS[3] : _Q4_LEVELS[4])
+        ) :
+        (
+            m < 0x06 ? (m == 0x04 ? _Q4_LEVELS[5] : _Q4_LEVELS[6]) :
+            (m == 0x06 ? _Q4_LEVELS[7] : _Q4_LEVELS[8])
+        )
     return c >= 0x08 ? -a : a
 end
 
 @inline function _attn_tile_scales(scales, t0::Int, i0::Int, hk::Int, j0::Int, n::Int)
     rows, nkv = size(scales, 1), size(scales, 2)
     i0 < n || return (0.0f0, 0.0f0, 0.0f0, 0.0f0)
-    w = _attn_vload(UInt64, scales, t0 + i0 + (hk - 1) * rows + (j0 >> 5) * rows * nkv + 1, Val(8))
+    w = _attn_vload(
+        UInt64,
+        scales,
+        t0 + i0 + (hk - 1) * rows + (j0 >> 5) * rows * nkv + 1,
+        Val(8),
+    )
     return ntuple(k -> _attn_f16_bits(w, k - 1), Val(4))
 end
 
-@inline function _attn_tile_load!(sh, to::Int, src::QuantKV{:q8,<:CuDeviceArray}, t0::Int, hk::Int, j0::Int,
-    n::Int, W::Int, tid::Int, ::Val{C}, ::Val, ::Val{true}) where {C}
+@inline function _attn_tile_load!(
+    sh,
+    to::Int,
+    src::QuantKV{:q8, <:CuDeviceArray},
+    t0::Int,
+    hk::Int,
+    j0::Int,
+    n::Int,
+    W::Int,
+    tid::Int,
+    ::Val{C},
+    ::Val,
+    ::Val{true},
+) where {C}
     CG = C ÷ 4
     NR = CG * _ATTN_SPLIT_W ÷ _ATTN_THREADS
     codes = src.codes
@@ -251,12 +319,16 @@ end
     base = t0 + i0 + (hk - 1) * rows + 1
     ws = ntuple(Val(NR)) do r
         jj = (tid - 1 + (r - 1) * _ATTN_THREADS) ÷ CG
-        i0 < n ? _attn_vload(UInt32, codes, base + (j0 + jj) * rows * nkv, Val(4)) : UInt32(0)
+        i0 < n ? _attn_vload(UInt32, codes, base + (j0 + jj) * rows * nkv, Val(4)) :
+        UInt32(0)
     end
     for r in 1:NR
         jj = (tid - 1 + (r - 1) * _ATTN_THREADS) ÷ CG
         w = ws[r]
-        v = ntuple(k -> Float32(reinterpret(Int8, (w >> (8 * (k - 1))) % UInt8)) * sc[k], Val(4))
+        v = ntuple(
+            k -> Float32(reinterpret(Int8, (w >> (8 * (k - 1))) % UInt8)) * sc[k],
+            Val(4),
+        )
         _attn_tile_store4!(sh, to, i0, jj, n, v)
     end
     return
@@ -264,8 +336,20 @@ end
 
 # a byte holds channels 2b-1 (low nibble) and 2b, so a UInt32 is 4 rows x 2
 # dims and a tile is half the units of q8: at C = 32 half the threads idle
-@inline function _attn_tile_load!(sh, to::Int, src::QuantKV{:q4h,<:CuDeviceArray}, t0::Int, hk::Int, j0::Int,
-    n::Int, W::Int, tid::Int, ::Val{C}, ::Val, ::Val{true}) where {C}
+@inline function _attn_tile_load!(
+    sh,
+    to::Int,
+    src::QuantKV{:q4h, <:CuDeviceArray},
+    t0::Int,
+    hk::Int,
+    j0::Int,
+    n::Int,
+    W::Int,
+    tid::Int,
+    ::Val{C},
+    ::Val,
+    ::Val{true},
+) where {C}
     CG = C ÷ 4
     NU = CG * (_ATTN_SPLIT_W ÷ 2)
     NR = cld(NU, _ATTN_THREADS)
@@ -277,7 +361,9 @@ end
     ws = ntuple(Val(NR)) do r
         u = tid - 1 + (r - 1) * _ATTN_THREADS
         jb = u ÷ CG
-        (u < NU && i0 < n) ? _attn_vload(UInt32, codes, base + ((j0 >> 1) + jb) * rows * nkv, Val(4)) : UInt32(0)
+        (u < NU && i0 < n) ?
+        _attn_vload(UInt32, codes, base + ((j0 >> 1) + jb) * rows * nkv, Val(4)) :
+        UInt32(0)
     end
     for r in 1:NR
         u = tid - 1 + (r - 1) * _ATTN_THREADS
@@ -292,8 +378,20 @@ end
     return
 end
 
-@inline function _attn_tile_load!(sh, to::Int, src::CuDeviceArray{Float16,3}, t0::Int, hk::Int, j0::Int,
-    n::Int, W::Int, tid::Int, ::Val{C}, ::Val, ::Val{true}) where {C}
+@inline function _attn_tile_load!(
+    sh,
+    to::Int,
+    src::CuDeviceArray{Float16, 3},
+    t0::Int,
+    hk::Int,
+    j0::Int,
+    n::Int,
+    W::Int,
+    tid::Int,
+    ::Val{C},
+    ::Val,
+    ::Val{true},
+) where {C}
     CG = C ÷ 4
     NR = CG * _ATTN_SPLIT_W ÷ _ATTN_THREADS
     rows, nkv = size(src, 1), size(src, 2)
@@ -301,7 +399,8 @@ end
     base = t0 + i0 + (hk - 1) * rows + 1
     ws = ntuple(Val(NR)) do r
         jj = (tid - 1 + (r - 1) * _ATTN_THREADS) ÷ CG
-        (i0 < n && jj < W) ? _attn_vload(UInt64, src, base + (j0 + jj) * rows * nkv, Val(8)) : UInt64(0)
+        (i0 < n && jj < W) ?
+        _attn_vload(UInt64, src, base + (j0 + jj) * rows * nkv, Val(8)) : UInt64(0)
     end
     for r in 1:NR
         jj = (tid - 1 + (r - 1) * _ATTN_THREADS) ÷ CG
@@ -314,13 +413,25 @@ end
 
 # whether a cache takes the 4-row loads; f32 keeps the generic path
 _attn_vec4(::Any) = false
-_attn_vec4(x::QuantKV{<:Any,<:CuArray}) = size(x, 1) % 4 == 0
-_attn_vec4(x::CuArray{Float16,3}) = size(x, 1) % 4 == 0
+_attn_vec4(x::QuantKV{<:Any, <:CuArray}) = size(x, 1) % 4 == 0
+_attn_vec4(x::CuArray{Float16, 3}) = size(x, 1) % 4 == 0
 
 # Rows r0+1:K are attended, so r0 only moves where the chunks start. The
 # default decode passes r0 = 0 and gets the same tiles as before.
-function _cuda_attn_split_kernel!(op, ml, q, kc, vc, r0::Int, K::Int, scale::Float32, d::Int, ::Val{G},
-    ::Val{C}, ::Val{V}) where {G,C,V}
+function _cuda_attn_split_kernel!(
+    op,
+    ml,
+    q,
+    kc,
+    vc,
+    r0::Int,
+    K::Int,
+    scale::Float32,
+    d::Int,
+    ::Val{G},
+    ::Val{C},
+    ::Val{V},
+) where {G, C, V}
     R = C * _ATTN_SPLIT_W ÷ _ATTN_THREADS
     WP = _ATTN_SPLIT_W + 1
     # shared layout: q [d, G] | scores, then probs [C, G] | tile [W+1, C]
@@ -341,65 +452,65 @@ function _cuda_attn_split_kernel!(op, ml, q, kc, vc, r0::Int, K::Int, scale::Flo
 
     @inbounds begin
         for g in 1:G, j in tid:nt:d
-            sh[(g - 1) * d + j] = q[1, h0 + g, j]
+            sh[(g-1)*d+j] = q[1, h0+g, j]
         end
         # the score loop below keeps this mapping, so each thread clears what it adds to
-        for x in tid:nt:(G * C)
-            sh[po + x] = 0.0f0
+        for x in tid:nt:(G*C)
+            sh[po+x] = 0.0f0
         end
 
-        for j0 in 0:_ATTN_SPLIT_W:(d - 1)
+        for j0 in 0:_ATTN_SPLIT_W:(d-1)
             W = min(_ATTN_SPLIT_W, d - j0)
             CUDA.sync_threads()
             _attn_tile_load!(sh, to, kc, t0, hk, j0, n, W, tid, Val(C), Val(R), Val(V))
             CUDA.sync_threads()
-            for x in tid:nt:(G * C)
+            for x in tid:nt:(G*C)
                 g0 = (x - 1) ÷ C
                 i = x - g0 * C
                 acc = 0.0f0
                 for jj in 1:W
-                    acc += sh[g0 * d + j0 + jj] * sh[to + (i - 1) * WP + jj]
+                    acc += sh[g0*d+j0+jj] * sh[to+(i-1)*WP+jj]
                 end
-                sh[po + x] += acc
+                sh[po+x] += acc
             end
         end
         CUDA.sync_threads()
 
         # one warp per query head: the chunk's max, then probabilities in place
-        for g in (wid + 1):nw:G
+        for g in (wid+1):nw:G
             b = po + (g - 1) * C
             mx = -Inf32
-            for i in (lane + 1):32:n
-                mx = max(mx, sh[b + i] * scale)
+            for i in (lane+1):32:n
+                mx = max(mx, sh[b+i] * scale)
             end
             mx = _attn_warp_allreduce(max, mx)
             sm = 0.0f0
-            for i in (lane + 1):32:n
-                p = exp(sh[b + i] * scale - mx)
-                sh[b + i] = p
+            for i in (lane+1):32:n
+                p = exp(sh[b+i] * scale - mx)
+                sh[b+i] = p
                 sm += p
             end
             sm = _attn_warp_reduce(+, sm)
             if lane == 0
-                ml[(s - 1) * 2 * nh + h0 + g] = mx
-                ml[(s - 1) * 2 * nh + nh + h0 + g] = sm
+                ml[(s-1)*2*nh+h0+g] = mx
+                ml[(s-1)*2*nh+nh+h0+g] = sm
             end
         end
 
-        for j0 in 0:_ATTN_SPLIT_W:(d - 1)
+        for j0 in 0:_ATTN_SPLIT_W:(d-1)
             W = min(_ATTN_SPLIT_W, d - j0)
             CUDA.sync_threads()
             _attn_tile_load!(sh, to, vc, t0, hk, j0, n, W, tid, Val(C), Val(R), Val(V))
             CUDA.sync_threads()
-            for x in tid:nt:(G * _ATTN_SPLIT_W)
+            for x in tid:nt:(G*_ATTN_SPLIT_W)
                 g0 = (x - 1) ÷ _ATTN_SPLIT_W
                 jj = x - g0 * _ATTN_SPLIT_W
                 jj <= W || continue
                 acc = 0.0f0
                 for i in 1:n
-                    acc += sh[po + g0 * C + i] * sh[to + (i - 1) * WP + jj]
+                    acc += sh[po+g0*C+i] * sh[to+(i-1)*WP+jj]
                 end
-                op[((s - 1) * nh + h0 + g0) * d + j0 + jj] = acc
+                op[((s-1)*nh+h0+g0)*d+j0+jj] = acc
             end
         end
     end
@@ -417,20 +528,20 @@ function _cuda_attn_combine_kernel!(attn, op, ml, S::Int, d::Int, nh::Int)
     @inbounds begin
         mx = -Inf32
         for s in tid:nt:S
-            mx = max(mx, ml[(s - 1) * 2 * nh + h])
+            mx = max(mx, ml[(s-1)*2*nh+h])
         end
         mx = _attn_block_reduce(max, mx, -Inf32, sh, S, tid, nw)
         l = 0.0f0
         for s in tid:nt:S
-            w = exp(ml[(s - 1) * 2 * nh + h] - mx)
+            w = exp(ml[(s-1)*2*nh+h] - mx)
             sh[s] = w
-            l += ml[(s - 1) * 2 * nh + nh + h] * w
+            l += ml[(s-1)*2*nh+nh+h] * w
         end
         inv = 1.0f0 / _attn_block_reduce(+, l, 0.0f0, sh, S, tid, nw)
         for j in tid:nt:d
             acc = 0.0f0
             for s in 1:S
-                acc += op[((s - 1) * nh + h - 1) * d + j] * sh[s]
+                acc += op[((s-1)*nh+h-1)*d+j] * sh[s]
             end
             attn[1, h, j] = acc * inv
         end
@@ -446,14 +557,46 @@ function _attn_split_chunk(n_kv::Int, nrows::Int)
     return Val(128)
 end
 
-function _attn_decode_split!(attn, q, kc, vc, n_kv::Int, d::Int, K::Int, scale::Float32, vg::Val)
-    return _attn_split_launch!(attn, q, kc, vc, n_kv, d, 0, K, scale, vg, _attn_split_chunk(n_kv, K))
+function _attn_decode_split!(
+    attn,
+    q,
+    kc,
+    vc,
+    n_kv::Int,
+    d::Int,
+    K::Int,
+    scale::Float32,
+    vg::Val,
+)
+    return _attn_split_launch!(
+        attn,
+        q,
+        kc,
+        vc,
+        n_kv,
+        d,
+        0,
+        K,
+        scale,
+        vg,
+        _attn_split_chunk(n_kv, K),
+    )
 end
 
 # The vector loads take 4-row groups that start on a multiple of 4, so they
 # are only valid for r0 % 4 == 0; other ranges take the per-element path.
-function _attn_split_pass!(q, kc, vc, n_kv::Int, d::Int, r0::Int, r1::Int, scale::Float32, ::Val{G},
-    ::Val{C}) where {G,C}
+function _attn_split_pass!(
+    q,
+    kc,
+    vc,
+    n_kv::Int,
+    d::Int,
+    r0::Int,
+    r1::Int,
+    scale::Float32,
+    ::Val{G},
+    ::Val{C},
+) where {G, C}
     S = cld(r1 - r0, C)
     nh = n_kv * G
     sc = _ATTN_SPLIT
@@ -462,25 +605,72 @@ function _attn_split_pass!(q, kc, vc, n_kv::Int, d::Int, r0::Int, r1::Int, scale
     shmem = (G * d + G * C + (_ATTN_SPLIT_W + 1) * C) * sizeof(Float32)
     vv = r0 % 4 == 0 && _attn_vec4(kc) && _attn_vec4(vc)
     @fastcuda threads = _ATTN_THREADS blocks = (n_kv, S) shmem = shmem _cuda_attn_split_kernel!(
-        sc.o, sc.ml, q, kc, vc, r0, r1, scale, d, Val(G), Val(C), Val(vv),
+        sc.o,
+        sc.ml,
+        q,
+        kc,
+        vc,
+        r0,
+        r1,
+        scale,
+        d,
+        Val(G),
+        Val(C),
+        Val(vv),
     )
     return S, nh
 end
 
-function _attn_split_launch!(attn, q, kc, vc, n_kv::Int, d::Int, r0::Int, r1::Int, scale::Float32, ::Val{G},
-    ::Val{C}) where {G,C}
+function _attn_split_launch!(
+    attn,
+    q,
+    kc,
+    vc,
+    n_kv::Int,
+    d::Int,
+    r0::Int,
+    r1::Int,
+    scale::Float32,
+    ::Val{G},
+    ::Val{C},
+) where {G, C}
     S, nh = _attn_split_pass!(q, kc, vc, n_kv, d, r0, r1, scale, Val(G), Val(C))
     @fastcuda threads = _ATTN_THREADS blocks = nh shmem = (S + 34) * sizeof(Float32) _cuda_attn_combine_kernel!(
-        attn, _ATTN_SPLIT.o, _ATTN_SPLIT.ml, S, d, nh,
+        attn,
+        _ATTN_SPLIT.o,
+        _ATTN_SPLIT.ml,
+        S,
+        d,
+        nh,
     )
     return true
 end
 
-function _attn_partial_launch!(pm, pl, pacc, q, kc, vc, n_kv::Int, d::Int, r0::Int, r1::Int, scale::Float32,
-    ::Val{G}, ::Val{C}) where {G,C}
+function _attn_partial_launch!(
+    pm,
+    pl,
+    pacc,
+    q,
+    kc,
+    vc,
+    n_kv::Int,
+    d::Int,
+    r0::Int,
+    r1::Int,
+    scale::Float32,
+    ::Val{G},
+    ::Val{C},
+) where {G, C}
     S, nh = _attn_split_pass!(q, kc, vc, n_kv, d, r0, r1, scale, Val(G), Val(C))
     @fastcuda threads = _ATTN_THREADS blocks = nh shmem = (S + 34) * sizeof(Float32) _cuda_attn_partial_combine_kernel!(
-        pm, pl, pacc, _ATTN_SPLIT.o, _ATTN_SPLIT.ml, S, d, nh,
+        pm,
+        pl,
+        pacc,
+        _ATTN_SPLIT.o,
+        _ATTN_SPLIT.ml,
+        S,
+        d,
+        nh,
     )
     return true
 end
@@ -497,14 +687,14 @@ function _cuda_attn_partial_combine_kernel!(pm, pl, pacc, op, ml, S::Int, d::Int
     @inbounds begin
         mx = -Inf32
         for s in tid:nt:S
-            mx = max(mx, ml[(s - 1) * 2 * nh + h])
+            mx = max(mx, ml[(s-1)*2*nh+h])
         end
         mx = _attn_block_reduce(max, mx, -Inf32, sh, S, tid, nw)
         l = 0.0f0
         for s in tid:nt:S
-            w = exp(ml[(s - 1) * 2 * nh + h] - mx)
+            w = exp(ml[(s-1)*2*nh+h] - mx)
             sh[s] = w
-            l += ml[(s - 1) * 2 * nh + nh + h] * w
+            l += ml[(s-1)*2*nh+nh+h] * w
         end
         tot = _attn_block_reduce(+, l, 0.0f0, sh, S, tid, nw)
         if tid == 1
@@ -514,7 +704,7 @@ function _cuda_attn_partial_combine_kernel!(pm, pl, pacc, op, ml, S::Int, d::Int
         for j in tid:nt:d
             acc = 0.0f0
             for s in 1:S
-                acc += op[((s - 1) * nh + h - 1) * d + j] * sh[s]
+                acc += op[((s-1)*nh+h-1)*d+j] * sh[s]
             end
             pacc[h, j] = acc
         end
@@ -540,33 +730,102 @@ function _attention_partial_device!(
     group::Int,
 )
     n_kv = div(n_heads, group)
-    n_kv * group == n_heads || throw(ArgumentError(
-        "partial attention: n_heads=$n_heads is not a multiple of group=$group"))
-    length(pm) == n_heads && length(pl) == n_heads && size(pacc) == (n_heads, d_head) || throw(ArgumentError(
-        "partial attention: buffers do not match n_heads=$n_heads, d_head=$d_head"))
+    n_kv * group == n_heads || throw(
+        ArgumentError(
+            "partial attention: n_heads=$n_heads is not a multiple of group=$group",
+        ),
+    )
+    length(pm) == n_heads && length(pl) == n_heads && size(pacc) == (n_heads, d_head) ||
+        throw(
+            ArgumentError(
+                "partial attention: buffers do not match n_heads=$n_heads, d_head=$d_head",
+            ),
+        )
     if isempty(rows)
         fill!(pm, -Inf32)
         fill!(pl, 0.0f0)
         fill!(pacc, 0.0f0)
         return true
     end
-    first(rows) >= 1 && last(rows) <= size(kc, 1) || throw(ArgumentError(
-        "partial attention: rows $rows outside the cache's 1:$(size(kc, 1))"))
-    group in (1, 2, 4, 8) || throw(ArgumentError("partial attention: group $group is not 1, 2, 4 or 8"))
+    first(rows) >= 1 && last(rows) <= size(kc, 1) || throw(
+        ArgumentError("partial attention: rows $rows outside the cache's 1:$(size(kc, 1))"),
+    )
+    group in (1, 2, 4, 8) ||
+        throw(ArgumentError("partial attention: group $group is not 1, 2, 4 or 8"))
     r0 = first(rows) - 1
     r1 = last(rows)
     scale = Float32(1 / sqrt(d_head))
     C = _attn_split_chunk(n_kv, length(rows))
-    group == 8 && return _attn_partial_launch!(pm, pl, pacc, q, kc, vc, n_kv, d_head, r0, r1, scale, Val(8), C)
-    group == 4 && return _attn_partial_launch!(pm, pl, pacc, q, kc, vc, n_kv, d_head, r0, r1, scale, Val(4), C)
-    group == 2 && return _attn_partial_launch!(pm, pl, pacc, q, kc, vc, n_kv, d_head, r0, r1, scale, Val(2), C)
-    return _attn_partial_launch!(pm, pl, pacc, q, kc, vc, n_kv, d_head, r0, r1, scale, Val(1), C)
+    group == 8 && return _attn_partial_launch!(
+        pm,
+        pl,
+        pacc,
+        q,
+        kc,
+        vc,
+        n_kv,
+        d_head,
+        r0,
+        r1,
+        scale,
+        Val(8),
+        C,
+    )
+    group == 4 && return _attn_partial_launch!(
+        pm,
+        pl,
+        pacc,
+        q,
+        kc,
+        vc,
+        n_kv,
+        d_head,
+        r0,
+        r1,
+        scale,
+        Val(4),
+        C,
+    )
+    group == 2 && return _attn_partial_launch!(
+        pm,
+        pl,
+        pacc,
+        q,
+        kc,
+        vc,
+        n_kv,
+        d_head,
+        r0,
+        r1,
+        scale,
+        Val(2),
+        C,
+    )
+    return _attn_partial_launch!(
+        pm,
+        pl,
+        pacc,
+        q,
+        kc,
+        vc,
+        n_kv,
+        d_head,
+        r0,
+        r1,
+        scale,
+        Val(1),
+        C,
+    )
 end
 
 # Copies a device partial into the host KVPartial. A separate path from the
 # decode output: three small arrays, no normalisation.
-function _partial_download!(part::Gesso.Inference.KVPartial, pm::CuVector{Float32}, pl::CuVector{Float32},
-    pacc::CuMatrix{Float32})
+function _partial_download!(
+    part::Gesso.Inference.KVPartial,
+    pm::CuVector{Float32},
+    pl::CuVector{Float32},
+    pacc::CuMatrix{Float32},
+)
     part.m .= Array(pm)
     part.l .= Array(pl)
     part.acc .= Array(pacc)
@@ -579,8 +838,13 @@ end
 const _ATTN_PF_TILE_BYTES = 16 << 20
 const _ATTN_PF_TILE_MIN = 256
 
-_attn_prefill_tile(L::Int, K::Int) =
-    min(K, max(_ATTN_PF_TILE_MIN, fld(_ATTN_PF_TILE_BYTES ÷ 4, max(L, 1)) ÷ _ATTN_PF_TILE_MIN * _ATTN_PF_TILE_MIN))
+_attn_prefill_tile(L::Int, K::Int) = min(
+    K,
+    max(
+        _ATTN_PF_TILE_MIN,
+        fld(_ATTN_PF_TILE_BYTES ÷ 4, max(L, 1)) ÷ _ATTN_PF_TILE_MIN * _ATTN_PF_TILE_MIN,
+    ),
+)
 
 # One block per query row over one key tile. St is (tile, L) so a row's scores
 # are contiguous. Keys past the row's own position are masked: row i sees key
@@ -588,7 +852,18 @@ _attn_prefill_tile(L::Int, K::Int) =
 # into the running max m and sum l, and rescales the row's accumulated output
 # by exp(m_old - m_new) before the tile's P*V lands on it. The first tile has
 # no accumulator yet: its GEMM writes with beta = 0.
-function _cuda_attn_pf_tile_kernel!(St, m, l, attn, hh::Int, g::Int, Tn::Int, lim0::Int, first::Bool, d::Int)
+function _cuda_attn_pf_tile_kernel!(
+    St,
+    m,
+    l,
+    attn,
+    hh::Int,
+    g::Int,
+    Tn::Int,
+    lim0::Int,
+    first::Bool,
+    d::Int,
+)
     sh = CUDA.@cuStaticSharedMem(Float32, 33)
     tid = Int(threadIdx().x)
     nt = Int(blockDim().x)
@@ -636,8 +911,16 @@ function _cuda_attn_pf_norm_kernel!(attn, l, d::Int)
 end
 
 function _attention_prefill_device!(
-    ::CUDABackend, attn::CuArray{Float32}, q::CuArray{Float32}, k, v,
-    n_heads::Int, d_head::Int, group::Int, L::Int, K::Int,
+    ::CUDABackend,
+    attn::CuArray{Float32},
+    q::CuArray{Float32},
+    k,
+    v,
+    n_heads::Int,
+    d_head::Int,
+    group::Int,
+    L::Int,
+    K::Int,
 )
     L == 0 && return true
     T = _attn_prefill_tile(L, K)
@@ -652,9 +935,9 @@ function _attention_prefill_device!(
     try
         scale = _cu_scalar(Float32(1 / sqrt(d_head)))
         one_, zero_ = _cu_scalar(1.0f0), _cu_scalar(0.0f0)
-        for hk in 1:(n_heads ÷ group), t0 in 0:T:(K - 1)
+        for hk in 1:(n_heads÷group), t0 in 0:T:(K-1)
             Tn = min(T, K - t0)
-            rows = (t0 + 1):(t0 + Tn)
+            rows = (t0+1):(t0+Tn)
             kt = dense ? view(k, rows, hk, :) : _kv_load_tile!(Kt, k, t0, hk, Tn)
             vt = dense ? view(v, rows, hk, :) : _kv_load_tile!(Vt, v, t0, hk, Tn)
             S = view(St, 1:Tn, :)
@@ -662,12 +945,33 @@ function _attention_prefill_device!(
                 hh = (hk - 1) * group + g
                 _blas_gemm!('N', 'T', scale, kt, view(q, :, hh, :), zero_, S)
                 @fastcuda threads = _ATTN_THREADS blocks = L _cuda_attn_pf_tile_kernel!(
-                    St, m, l, attn, hh, g, Tn, K - L - t0, t0 == 0, d_head,
+                    St,
+                    m,
+                    l,
+                    attn,
+                    hh,
+                    g,
+                    Tn,
+                    K - L - t0,
+                    t0 == 0,
+                    d_head,
                 )
-                _blas_gemm!('T', 'N', one_, S, vt, t0 == 0 ? zero_ : one_, view(attn, :, hh, :))
+                _blas_gemm!(
+                    'T',
+                    'N',
+                    one_,
+                    S,
+                    vt,
+                    t0 == 0 ? zero_ : one_,
+                    view(attn, :, hh, :),
+                )
             end
         end
-        @fastcuda threads = min(_ATTN_THREADS, d_head) blocks = (L, n_heads) _cuda_attn_pf_norm_kernel!(attn, l, d_head)
+        @fastcuda threads = min(_ATTN_THREADS, d_head) blocks = (L, n_heads) _cuda_attn_pf_norm_kernel!(
+            attn,
+            l,
+            d_head,
+        )
     finally
         CUDA.unsafe_free!(St)
         CUDA.unsafe_free!(m)

@@ -62,7 +62,7 @@ usage: julia --project scripts/gesso-serve.jl --check
 # Flags take a value, except --cpu and --check. Anything unknown is an error,
 # because a mistyped flag silently ignored would serve the wrong model.
 function parse_launch(args)
-    opts = Dict{String,Any}("cpu" => false)
+    opts = Dict{String, Any}("cpu" => false)
     i = 1
     while i <= length(args)
         a = args[i]
@@ -70,7 +70,7 @@ function parse_launch(args)
             opts["cpu"] = true
         elseif a in ("--gguf", "--host", "--port", "--n-ctx", "--model-id")
             i < length(args) || throw(ArgumentError("$a needs a value"))
-            opts[a] = args[i + 1]
+            opts[a] = args[i+1]
             i += 1
         else
             throw(ArgumentError("unknown argument $a"))
@@ -82,8 +82,8 @@ end
 
 function resolve_gguf(opts)
     path = get(opts, "--gguf", get(ENV, "GESSO_ORNITH35_GGUF", ""))
-    isempty(path) && throw(ArgumentError(
-        "no GGUF given: pass --gguf <path> or set GESSO_ORNITH35_GGUF"))
+    isempty(path) &&
+        throw(ArgumentError("no GGUF given: pass --gguf <path> or set GESSO_ORNITH35_GGUF"))
     isfile(path) || throw(ArgumentError("GGUF not found: $path"))
     return path
 end
@@ -110,21 +110,51 @@ function launch(opts)
         throw(ArgumentError("GESSO_BACKEND must be lava, cuda or cpu, got '$which'"))
     model, tensors, spec = Gesso.load_gguf(path)
     tk = Gesso.Inference.load_gguf_tokenizer(path)
-    which == "cpu" && return serve_loaded(model, tensors, spec, tk, Gesso.CPUBackend(), host, port, n_ctx, model_id)
+    which == "cpu" && return serve_loaded(
+        model,
+        tensors,
+        spec,
+        tk,
+        Gesso.CPUBackend(),
+        host,
+        port,
+        n_ctx,
+        model_id,
+    )
     backend = gpu_backend(which)
     # The GPU methods are newer than this frame. Every later call dispatches on
     # the backend, the warm-up and the server tasks included, so the rest of the
     # launch runs in the latest world instead of wrapping each call.
     tensors = Base.invokelatest(() -> Gesso.to_device(backend, tensors))
-    return Base.invokelatest(serve_loaded, model, tensors, spec, tk, backend, host, port, n_ctx, model_id)
+    return Base.invokelatest(
+        serve_loaded,
+        model,
+        tensors,
+        spec,
+        tk,
+        backend,
+        host,
+        port,
+        n_ctx,
+        model_id,
+    )
 end
 
 function serve_loaded(model, tensors, spec, tk, backend, host, port, n_ctx, model_id)
-    chat = gguf_chat_model(model, tensors, spec, tk; backend=backend, n_ctx=n_ctx, model_id=model_id)
+    chat = gguf_chat_model(
+        model,
+        tensors,
+        spec,
+        tk;
+        backend=backend,
+        n_ctx=n_ctx,
+        model_id=model_id,
+    )
 
     # One short generation before the port opens, so the first client does not
     # pay for kernel setup and the GPU allocations that come with it.
-    warm = chat.render([Dict{String,Any}("role" => "user", "content" => "hi")], Any[], false)
+    warm =
+        chat.render([Dict{String, Any}("role" => "user", "content" => "hi")], Any[], false)
     chat.generate(chat.tokenize(warm); max_new_tokens=4, on_token=_ -> true)
 
     srv = serve(chat; host=host, port=port, block=false)

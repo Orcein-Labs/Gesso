@@ -31,14 +31,16 @@ using Gesso
 const GGUF = get(ENV, "GESSO_ORNITH35_GGUF", "")
 isfile(GGUF) || error("profile_35b: set GESSO_ORNITH35_GGUF to the Ornith 35B GGUF file")
 const GGML_DIR = get(ENV, "GESSO_GGML_DIR", "")
-isdir(GGML_DIR) || error("profile_35b: set GESSO_GGML_DIR to the llama.cpp build/bin directory")
+isdir(GGML_DIR) ||
+    error("profile_35b: set GESSO_GGML_DIR to the llama.cpp build/bin directory")
 const EXPECTED = [9419, 11, 271, 40, 2688, 4313, 310, 958, 279]
 const N = parse(Int, get(ENV, "GESSO_PROFILE_TOKENS", "8"))
 N >= 1 || error("profile_35b: GESSO_PROFILE_TOKENS must be >= 1")
 const WALL = parse(Int, get(ENV, "GESSO_WALL_TOKENS", "16"))
 const CTX = parse(Int, get(ENV, "GESSO_PROFILE_CTX", "1"))
 CTX >= 1 || error("profile_35b: GESSO_PROFILE_CTX must be >= 1")
-const TEXT = get(ENV, "GESSO_PROFILE_TEXT", joinpath(@__DIR__, "..", "docs", "Gesso_Stack.md"))
+const TEXT =
+    get(ENV, "GESSO_PROFILE_TEXT", joinpath(@__DIR__, "..", "docs", "Gesso_Stack.md"))
 
 which = get(ENV, "GESSO_BACKEND", "lava")
 if which == "lava"
@@ -69,7 +71,12 @@ else
 end
 
 gen(n) = Gesso.reference_generate(
-    model, dev, prompt; max_new_tokens=n, eps=spec.rms_norm_eps, backend=backend,
+    model,
+    dev,
+    prompt;
+    max_new_tokens=n,
+    eps=spec.rms_norm_eps,
+    backend=backend,
 )
 
 dtype = get(ENV, "GESSO_GPU_WEIGHT_DTYPE", "f16")
@@ -93,7 +100,7 @@ function INF._sample_id(s::ForcedIds, logits_row)
     row = vec(Array(logits_row))
     s.k += 1
     id = s.ids[s.k]
-    push!(s.gaps, maximum(row) - row[id + 1])
+    push!(s.gaps, maximum(row) - row[id+1])
     return id
 end
 
@@ -127,9 +134,27 @@ function measure()
     tw = @elapsed (ids_wall = gen(WALL + 1))
     wall_ms = 1e3 * (tw - t1) / max(1, length(ids_wall) - 1)
     forced = ForcedIds(EXPECTED[2:end], 0, Float32[])
-    CTX == 1 && Gesso.reference_generate(model, dev, prompt; max_new_tokens=length(EXPECTED) - 1,
-        eps=spec.rms_norm_eps, backend=backend, sampler=forced)
-    return (; forced, ids_cold, cold, a, hits0, ids_warm, hits1, b, wall_ms, nwall=length(ids_wall) - 1)
+    CTX == 1 && Gesso.reference_generate(
+        model,
+        dev,
+        prompt;
+        max_new_tokens=length(EXPECTED) - 1,
+        eps=spec.rms_norm_eps,
+        backend=backend,
+        sampler=forced,
+    )
+    return (;
+        forced,
+        ids_cold,
+        cold,
+        a,
+        hits0,
+        ids_warm,
+        hits1,
+        b,
+        wall_ms,
+        nwall=length(ids_wall) - 1,
+    )
 end
 (; forced, ids_cold, cold, a, hits0, ids_warm, hits1, b, wall_ms, nwall) = measure()
 
@@ -140,33 +165,45 @@ let H = 0, M = 0
         m = x1.misses - x0.misses
         H += h
         M += m
-        println("expert layer=$(x1.layer) slots=$(x1.slots) hits=$h misses=$m rate=$(round(h / max(1, h + m); digits=3))")
+        println(
+            "expert layer=$(x1.layer) slots=$(x1.slots) hits=$h misses=$m rate=$(round(h / max(1, h + m); digits=3))",
+        )
     end
-    println("RECEIPT expert_hits warm_hits=$H warm_misses=$M rate=$(round(H / max(1, H + M); digits=4))")
+    println(
+        "RECEIPT expert_hits warm_hits=$H warm_misses=$M rate=$(round(H / max(1, H + M); digits=4))",
+    )
 end
 
-ids_warm == ids_cold || error("profile_35b: ids differ between the cold and warm profiled runs")
+ids_warm == ids_cold ||
+    error("profile_35b: ids differ between the cold and warm profiled runs")
 checked = !isempty(forced.gaps)
 ok = !checked || maximum(forced.gaps) <= IDS_TOL
 ids_ok = checked ? string(ok) : "unchecked"
-greedy = length(ids_cold) >= length(EXPECTED) ? ids_cold[1:length(EXPECTED)] == EXPECTED : missing
+greedy =
+    length(ids_cold) >= length(EXPECTED) ? ids_cold[1:length(EXPECTED)] == EXPECTED :
+    missing
 
 d = INF.profile_delta(b, a)
-d.tokens == N || error("profile_35b: measured $(d.tokens) decode tokens, expected $N (EOS reached?)")
+d.tokens == N ||
+    error("profile_35b: measured $(d.tokens) decode tokens, expected $N (EOS reached?)")
 
 println(
     "RECEIPT profile_35b backend=$which threads=$(Threads.nthreads()) ",
     "dtype=$dtype moe_host_experts=$moe_host ctx=$CTX decode_tokens=$N ",
     "ids_ok=$ids_ok greedy_match=$greedy load_s=$(round(t_load; digits=1))",
 )
-println("RECEIPT unprofiled decode_tokens=$nwall ms_per_token=$(round(wall_ms; digits=2)) ",
-    "tok_s=$(round(1e3 / wall_ms; digits=2))")
+println(
+    "RECEIPT unprofiled decode_tokens=$nwall ms_per_token=$(round(wall_ms; digits=2)) ",
+    "tok_s=$(round(1e3 / wall_ms; digits=2))",
+)
 println()
 println("== cold token log (JIT warm, then first profiled run in this process) ==")
 INF.print_token_log(stdout, cold)
 println()
 println("== warm per-token table (difference of profiled runs, $N decode tokens) ==")
 INF.print_decode_profile(stdout, d; label="backend=$which dtype=$dtype moe_host=$moe_host")
-checked && println("RECEIPT forced_ids tol=$IDS_TOL max_gap=$(maximum(forced.gaps)) ",
-    "gaps=$(round.(forced.gaps; digits=4))")
+checked && println(
+    "RECEIPT forced_ids tol=$IDS_TOL max_gap=$(maximum(forced.gaps)) ",
+    "gaps=$(round.(forced.gaps; digits=4))",
+)
 ok || (println("ids got  $ids_cold\nids want $EXPECTED"); exit(1))

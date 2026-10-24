@@ -23,7 +23,8 @@
 using Gesso
 
 const GGUF = get(ENV, "GESSO_QWEN38_27B_GGUF", "")
-isfile(GGUF) || error("bench_qwen38_27b: set GESSO_QWEN38_27B_GGUF to the Qwen3.8-27B GGUF file")
+isfile(GGUF) ||
+    error("bench_qwen38_27b: set GESSO_QWEN38_27B_GGUF to the Qwen3.8-27B GGUF file")
 const PROMPT = [parse(Int, s) for s in split(get(ENV, "GESSO_27B_PROMPT", "9419"), ',')]
 const N = parse(Int, get(ENV, "GESSO_BENCH_N", "8"))
 N >= 2 || error("bench_qwen38_27b: GESSO_BENCH_N must be >= 2")
@@ -47,7 +48,12 @@ end
 rss_after_load = _proc_status_mib("VmRSS:")
 
 gen(n) = Gesso.reference_generate(
-    model, tensors, PROMPT; max_new_tokens=n, eps=spec.rms_norm_eps, backend=backend,
+    model,
+    tensors,
+    PROMPT;
+    max_new_tokens=n,
+    eps=spec.rms_norm_eps,
+    backend=backend,
 )
 
 ids = gen(N)            # compile + correctness

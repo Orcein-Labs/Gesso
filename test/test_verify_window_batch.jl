@@ -15,10 +15,10 @@ function _vwb_random_qm(rng, ty::Int32, nrows::Int, ne0::Int)
     data = rand(rng, UInt8, nrows * rb)
     bsz = _GIB._iq_block_bytes(ty)
     offs = filter(>=(0), [_GIB._q8k_d_offset(ty), _GIB._q8k_dmin_offset(ty)])
-    for blk in 0:(nrows * div(rb, bsz) - 1), off in offs
+    for blk in 0:(nrows*div(rb, bsz)-1), off in offs
         bits = reinterpret(UInt16, Float16(0.005f0 + 0.05f0 * rand(rng, Float32)))
-        data[blk * bsz + off + 1] = UInt8(bits & 0xff)
-        data[blk * bsz + off + 2] = UInt8(bits >> 8)
+        data[blk*bsz+off+1] = UInt8(bits & 0xff)
+        data[blk*bsz+off+2] = UInt8(bits >> 8)
     end
     return _GIB.QuantMatrix(data, 0, ty, ne0, nrows, rb, C_NULL, Int64(_GIB.QK_K))
 end
@@ -27,7 +27,12 @@ end
     rng = Xoshiro(20261011)
     ne0 = 1024
     T = 5
-    for ty in (_GIB.GGML_TYPE_IQ4_XS, _GIB.GGML_TYPE_Q4_K, _GIB.GGML_TYPE_Q5_K, _GIB.GGML_TYPE_Q6_K)
+    for ty in (
+        _GIB.GGML_TYPE_IQ4_XS,
+        _GIB.GGML_TYPE_Q4_K,
+        _GIB.GGML_TYPE_Q5_K,
+        _GIB.GGML_TYPE_Q6_K,
+    )
         qm = _vwb_random_qm(rng, ty, 37, ne0)
         X = randn(rng, Float32, T, ne0)
         dst = zeros(Float32, T, qm.nrows)
@@ -96,10 +101,31 @@ function _vw_decode_one_by_one(ts, prompt::Vector{Int})
     inv_freq = _GIB.tensors_rope_inv_freq(ts, d_head; theta)
     rotary_dim = _GIB._tensor_rotary_dim(ts)
     for k in 2:length(prompt)
-        _GIB._decode_step!(model, ts, st.kc, st.vc, prompt[k], k, cpu, wd, st.h;
-            on_cpu=true, n_heads, n_kv_heads, d_head, group, eps=1e-6, theta, inv_freq, rotary_dim,
-            gdn_conv=st.gdn_conv, gdn_rec=st.gdn_rec, gdn_scratch=st.gdn_scratch,
-            cpu_scratch=st.cpu_scratch, hrow=1)
+        _GIB._decode_step!(
+            model,
+            ts,
+            st.kc,
+            st.vc,
+            prompt[k],
+            k,
+            cpu,
+            wd,
+            st.h;
+            on_cpu=true,
+            n_heads,
+            n_kv_heads,
+            d_head,
+            group,
+            eps=1e-6,
+            theta,
+            inv_freq,
+            rotary_dim,
+            gdn_conv=st.gdn_conv,
+            gdn_rec=st.gdn_rec,
+            gdn_scratch=st.gdn_scratch,
+            cpu_scratch=st.cpu_scratch,
+            hrow=1,
+        )
         push!(st.ids, prompt[k])
     end
     return st

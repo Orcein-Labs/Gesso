@@ -28,11 +28,11 @@ const _QTYPES = (
 function _q_random_rows(rng, ggml_type::Int32, nrows::Int, nb::Int)
     bsz = _QSIMD._iq_block_bytes(ggml_type)
     w = rand(rng, UInt8, nrows * nb * bsz)
-    for blk in 0:(nrows * nb - 1)
+    for blk in 0:(nrows*nb-1)
         d = Float16(0.005f0 + 0.05f0 * rand(rng, Float32))
         bits = reinterpret(UInt16, d)
-        w[blk * bsz + 1] = UInt8(bits & 0xff)
-        w[blk * bsz + 2] = UInt8(bits >> 8)
+        w[blk*bsz+1] = UInt8(bits & 0xff)
+        w[blk*bsz+2] = UInt8(bits >> 8)
     end
     return w
 end
@@ -46,7 +46,7 @@ function _q_ref_quantize(x::AbstractVector{Float32})
     bs = zeros(Int16, 16 * nb)
     d = zeros(Float32, nb)
     for i in 1:nb
-        blk = x[((i - 1) * 256 + 1):(i * 256)]
+        blk = x[((i-1)*256+1):(i*256)]
         amax, mx = 0.0f0, 0.0f0
         for v in blk
             if abs(v) > amax
@@ -56,10 +56,10 @@ function _q_ref_quantize(x::AbstractVector{Float32})
         amax == 0 && continue
         iscale = -127.0f0 / mx
         for j in 1:256
-            qs[(i - 1) * 256 + j] = Int8(min(127, round(Int, iscale * blk[j])))
+            qs[(i-1)*256+j] = Int8(min(127, round(Int, iscale * blk[j])))
         end
         for j in 1:16
-            bs[(i - 1) * 16 + j] = Int16(sum(Int(qs[(i - 1) * 256 + (j - 1) * 16 + ii]) for ii in 1:16))
+            bs[(i-1)*16+j] = Int16(sum(Int(qs[(i-1)*256+(j-1)*16+ii]) for ii in 1:16))
         end
         d[i] = 1.0f0 / iscale
     end
@@ -73,7 +73,8 @@ end
 
 @testset "Q8_K quantizer: rounding helper" begin
     # Julia's round() is ties-to-even, the same rule as nearest_int's magic add
-    for f in Float32[0.5, 1.5, 2.5, -0.5, -1.5, -2.5, 0.49999997f0, 126.5f0, -126.5f0, 3.0f0]
+    for f in
+        Float32[0.5, 1.5, 2.5, -0.5, -1.5, -2.5, 0.49999997f0, 126.5f0, -126.5f0, 3.0f0]
         @test _QSIMD._q8k_nearest_int(f) == Int32(round(f))
     end
     rng = Xoshiro(1)
@@ -114,7 +115,7 @@ end
     y = _QSIMD.quantize_q8_K!(_QSIMD.Q8KVec(4), x)
     xr = _QSIMD.dequantize_q8_K(y)
     for b in 1:4
-        r = ((b - 1) * 256 + 1):(b * 256)
+        r = ((b-1)*256+1):(b*256)
         @test maximum(abs.(xr[r] .- x[r])) <= 0.5f0 * abs(y.d[b]) * (1 + 1.0f-5)
     end
 end
@@ -174,9 +175,9 @@ end
                 nb = 2
                 bsz = _QSIMD._iq_block_bytes(ty)
                 W = fill(UInt8(0xff), nb * bsz)
-                for ib in 0:(nb - 1)
-                    W[ib * bsz + 1] = 0x00
-                    W[ib * bsz + 2] = 0x00   # d = 0: contributes exactly zero
+                for ib in 0:(nb-1)
+                    W[ib*bsz+1] = 0x00
+                    W[ib*bsz+2] = 0x00   # d = 0: contributes exactly zero
                 end
                 x = fill(1.0f0, 256 * nb)
                 xq = _QSIMD.quantize_q8_K!(_QSIMD.Q8KVec(nb), x)
@@ -247,7 +248,14 @@ end
     xq = _QSIMD.Q8KVec(1)
     @test_throws ErrorException _QSIMD._qgemv_q8k!(zeros(Float32, 2), xq, W, ty, 100, 2)
     @test_throws ErrorException _QSIMD._qgemv_q8k!(zeros(Float32, 3), xq, W, ty, 256, 2)
-    @test_throws ErrorException _QSIMD._qgemv_q8k!(zeros(Float32, 2), xq, W, _QSIMD.GGML_TYPE_F32, 256, 2)
+    @test_throws ErrorException _QSIMD._qgemv_q8k!(
+        zeros(Float32, 2),
+        xq,
+        W,
+        _QSIMD.GGML_TYPE_F32,
+        256,
+        2,
+    )
     @test_throws ErrorException _QSIMD._qgemv_q8k!(zeros(Float32, 4), xq, W, ty, 256, 4)
 end
 
@@ -257,10 +265,14 @@ end
     gguf = get(ENV, "GESSO_ORNITH35_GGUF", "")
     ggml_dir = get(ENV, "GESSO_GGML_DIR", "")
     if !isfile(gguf)
-        _skip("set GESSO_ORNITH35_GGUF to the Ornith 35B GGUF — Q8_K accuracy on real slices skipped")
+        _skip(
+            "set GESSO_ORNITH35_GGUF to the Ornith 35B GGUF — Q8_K accuracy on real slices skipped",
+        )
     elseif !isfile(joinpath(ggml_dir, "libggml-base.so"))
         # _expert_slice reads ggml block traits (sizes) from libggml-base; no ggml compute runs here
-        _skip("set GESSO_GGML_DIR to a directory with libggml-base.so — Ornith slices skipped")
+        _skip(
+            "set GESSO_GGML_DIR to a directory with libggml-base.so — Ornith slices skipped",
+        )
     else
         hdr = Gesso.gguf_header(gguf)
         rng = Xoshiro(9)
@@ -281,24 +293,59 @@ end
                 y32 = zeros(Float32, slice.ne1)
                 _QSIMD._qgemv_expert!(y32, x, slice, e)
                 y8s = zeros(Float32, slice.ne1)
-                _QSIMD._qgemv_q8k!(y8s, xq, q, slice.ggml_type, slice.ne0, slice.ne1; simd=false)
+                _QSIMD._qgemv_q8k!(
+                    y8s,
+                    xq,
+                    q,
+                    slice.ggml_type,
+                    slice.ne0,
+                    slice.ne1;
+                    simd=false,
+                )
                 y8 = zeros(Float32, slice.ne1)
-                _QSIMD._qgemv_q8k_threaded!(y8, xq, q, slice.ggml_type, slice.ne0, slice.ne1)
+                _QSIMD._qgemv_q8k_threaded!(
+                    y8,
+                    xq,
+                    q,
+                    slice.ggml_type,
+                    slice.ne0,
+                    slice.ne1,
+                )
                 ymax = maximum(abs, y32)
                 abserr = maximum(abs, y8 .- y32)
                 relmax = abserr / ymax
                 relrms = sqrt(sum(abs2, y8 .- y32) / sum(abs2, y32))
                 println(
-                    "ornith ", tname, " type=", slice.ggml_type, " expert=", e,
-                    " ne0=", slice.ne0, " ne1=", slice.ne1,
-                    " max_abs_err=", abserr, " max_rel_err(vs max|y|)=", relmax,
-                    " rel_rms_err=", relrms,
+                    "ornith ",
+                    tname,
+                    " type=",
+                    slice.ggml_type,
+                    " expert=",
+                    e,
+                    " ne0=",
+                    slice.ne0,
+                    " ne1=",
+                    slice.ne1,
+                    " max_abs_err=",
+                    abserr,
+                    " max_rel_err(vs max|y|)=",
+                    relmax,
+                    " rel_rms_err=",
+                    relrms,
                 )
                 @test reinterpret.(UInt32, y8) == reinterpret.(UInt32, y8s)
                 @test relrms <= 2.0e-2
                 if _QSIMD._cpu_has_avx2()
                     y8a = zeros(Float32, slice.ne1)
-                    _QSIMD._qgemv_q8k!(y8a, xq, q, slice.ggml_type, slice.ne0, slice.ne1; simd=true)
+                    _QSIMD._qgemv_q8k!(
+                        y8a,
+                        xq,
+                        q,
+                        slice.ggml_type,
+                        slice.ne0,
+                        slice.ne1;
+                        simd=true,
+                    )
                     @test reinterpret.(UInt32, y8a) == reinterpret.(UInt32, y8s)
                 end
             end

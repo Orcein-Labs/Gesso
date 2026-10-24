@@ -47,7 +47,7 @@ end
 function bench_median(v::Vector{Float64})
     s = sort(v)
     n = length(s)
-    return isodd(n) ? s[(n + 1) ÷ 2] : (s[n ÷ 2] + s[n ÷ 2 + 1]) / 2
+    return isodd(n) ? s[(n+1)÷2] : (s[n÷2] + s[n÷2+1]) / 2
 end
 
 # Median seconds per call. Each sample runs enough calls to take about BENCH_TARGET_S.
@@ -70,10 +70,10 @@ function bench_weights(ne0::Int, ne1::Int)
     nb = div(ne0, I._q8k_block_values(FMT))
     doff = I._q8k_d_offset(FMT)
     w = rand(UInt8, ne1 * nb * bsz)
-    for blk in 0:(ne1 * nb - 1)
+    for blk in 0:(ne1*nb-1)
         bits = reinterpret(UInt16, Float16(0.01f0 + 0.02f0 * rand(Float32)))
-        w[blk * bsz + doff + 1] = UInt8(bits & 0xff)
-        w[blk * bsz + doff + 2] = UInt8(bits >> 8)
+        w[blk*bsz+doff+1] = UInt8(bits & 0xff)
+        w[blk*bsz+doff+2] = UInt8(bits >> 8)
     end
     return w
 end
@@ -87,7 +87,7 @@ function bench_shape(name::String, ne0::Int, ne1::Int, nt::Int)
     Ws = rotated_weights(ne0, ne1)
     nbytes = ne1 * I._qrow_bytes(FMT, ne0)
     k = Ref(0)
-    next_w() = (k[] = mod(k[], length(Ws)) + 1; Ws[k[]])
+    next_w() = (k[]=mod(k[], length(Ws)) + 1; Ws[k[]])
     x = rand(Float32, ne0) .- 0.5f0
     xq = I._q8k_quantize_act(FMT, x)
     simd = I.q8k_simd_enabled()
@@ -100,12 +100,20 @@ function bench_shape(name::String, ne0::Int, ne1::Int, nt::Int)
     exact = yp == yt
 
     y1 = zeros(Float32, ne1)
-    t_thr = bench_seconds(() -> I._qgemv_q8k_threaded!(y1, xq, next_w(), FMT, ne0, ne1; nchunks=nt))
+    t_thr = bench_seconds(
+        () -> I._qgemv_q8k_threaded!(y1, xq, next_w(), FMT, ne0, ne1; nchunks=nt),
+    )
     y2 = zeros(Float32, ne1)
-    t_pool = bench_seconds(() -> RT.pool_run!(GemvChunks(y2, xq, next_w(), ne0, ne1, nt, simd), nt))
+    t_pool = bench_seconds(
+        () -> RT.pool_run!(GemvChunks(y2, xq, next_w(), ne0, ne1, nt, simd), nt),
+    )
     # Second, interleaved pass: removes order effects from the first.
-    t_pool2 = bench_seconds(() -> RT.pool_run!(GemvChunks(y2, xq, next_w(), ne0, ne1, nt, simd), nt))
-    t_thr2 = bench_seconds(() -> I._qgemv_q8k_threaded!(y1, xq, next_w(), FMT, ne0, ne1; nchunks=nt))
+    t_pool2 = bench_seconds(
+        () -> RT.pool_run!(GemvChunks(y2, xq, next_w(), ne0, ne1, nt, simd), nt),
+    )
+    t_thr2 = bench_seconds(
+        () -> I._qgemv_q8k_threaded!(y1, xq, next_w(), FMT, ne0, ne1; nchunks=nt),
+    )
 
     thr_gbs = nbytes / min(t_thr, t_thr2) / 1.0e9
     pool_gbs = nbytes / min(t_pool, t_pool2) / 1.0e9
@@ -113,12 +121,21 @@ function bench_shape(name::String, ne0::Int, ne1::Int, nt::Int)
     pool_med = nbytes / bench_median([t_pool, t_pool2]) / 1.0e9
     println(
         rpad(name, 18),
-        " threads=", lpad(nt, 2),
-        "  @threads GB/s=", lpad(round(thr_med; digits=2), 6),
-        "  pool GB/s=", lpad(round(pool_med; digits=2), 6),
-        "  gain=", lpad(round(100 * (pool_med - thr_med) / thr_med; digits=1), 6), "%",
-        "  call_us thr/pool=", round(t_thr * 1.0e6; digits=1), "/", round(t_pool * 1.0e6; digits=1),
-        "  bitexact=", exact,
+        " threads=",
+        lpad(nt, 2),
+        "  @threads GB/s=",
+        lpad(round(thr_med; digits=2), 6),
+        "  pool GB/s=",
+        lpad(round(pool_med; digits=2), 6),
+        "  gain=",
+        lpad(round(100 * (pool_med - thr_med) / thr_med; digits=1), 6),
+        "%",
+        "  call_us thr/pool=",
+        round(t_thr * 1.0e6; digits=1),
+        "/",
+        round(t_pool * 1.0e6; digits=1),
+        "  bitexact=",
+        exact,
     )
     flush(stdout)
     return exact
@@ -127,8 +144,16 @@ end
 function main()
     nt = Threads.nthreads()
     RT._cpu_pool_configure!(nt)
-    println("mode: IQ4_XS, threads=", nt, ", pool participants=", RT._cpu_pool_participants(),
-        ", samples=", BENCH_SAMPLES, ", target_s=", BENCH_TARGET_S)
+    println(
+        "mode: IQ4_XS, threads=",
+        nt,
+        ", pool participants=",
+        RT._cpu_pool_participants(),
+        ", samples=",
+        BENCH_SAMPLES,
+        ", target_s=",
+        BENCH_TARGET_S,
+    )
     ok = true
     for (name, ne0, ne1) in SHAPES
         ok &= bench_shape(name, ne0, ne1, nt)

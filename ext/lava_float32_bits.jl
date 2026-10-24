@@ -16,7 +16,8 @@ end
     exponent=Int32((u>>52)&UInt64(0x7ff))
     fraction=u&UInt64(0x000fffffffffffff)
     if exponent==2047
-        payload=fraction==0 ? UInt32(0) : unsafe_trunc(UInt32, fraction>>29)|UInt32(0x00400000)
+        payload=fraction==0 ? UInt32(0) :
+                unsafe_trunc(UInt32, fraction>>29)|UInt32(0x00400000)
         return sign|UInt32(0x7f800000)|payload
     end
     exponent==0&&return sign
@@ -57,7 +58,9 @@ end
             position+=Int32(1)
         end
         normalized=UInt64(fraction)<<(Int32(52)-position)
-        return sign|(UInt64(position+Int32(874))<<52)|(normalized&UInt64(0x000fffffffffffff))
+        return sign|(UInt64(position+Int32(874))<<52)|(
+            normalized&UInt64(0x000fffffffffffff)
+        )
     end
     sign|((UInt64(exponent)+UInt64(896))<<52)|(UInt64(fraction)<<29)
 end

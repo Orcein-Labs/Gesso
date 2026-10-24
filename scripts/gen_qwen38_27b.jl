@@ -42,12 +42,28 @@ end
 t_load = @elapsed begin
     model, tensors, spec = Gesso.load_gguf(GGUF)
 end
-println("MEM after_load rss_mib=$(_rss_mib()) peak_rss_mib=$(_peak_rss_mib()) load_s=$(round(t_load; digits=1))")
+println(
+    "MEM after_load rss_mib=$(_rss_mib()) peak_rss_mib=$(_peak_rss_mib()) load_s=$(round(t_load; digits=1))",
+)
 
 t_gen = @elapsed ids = Gesso.reference_generate(
-    model, tensors, PROMPT; max_new_tokens=NEW, eps=spec.rms_norm_eps,
+    model,
+    tensors,
+    PROMPT;
+    max_new_tokens=NEW,
+    eps=spec.rms_norm_eps,
     backend=Gesso.CPUBackend(),
 )
 println("IDS ", ids)
-println("MEM after_decode rss_mib=$(_rss_mib()) peak_rss_mib=$(_peak_rss_mib()) decode_s=$(round(t_gen; digits=1))")
-println("MTP ", tensors.mtp === nothing ? "none" : (layer=tensors.mtp.layer, n_predict=tensors.mtp.n_predict, n_tensors=length(tensors.mtp.tensor_names)))
+println(
+    "MEM after_decode rss_mib=$(_rss_mib()) peak_rss_mib=$(_peak_rss_mib()) decode_s=$(round(t_gen; digits=1))",
+)
+println(
+    "MTP ",
+    tensors.mtp === nothing ? "none" :
+    (
+        layer=tensors.mtp.layer,
+        n_predict=tensors.mtp.n_predict,
+        n_tensors=length(tensors.mtp.tensor_names),
+    ),
+)

@@ -40,7 +40,12 @@ t_load = @elapsed begin
 end
 
 gen(n) = Gesso.reference_generate(
-    model, dev, [9419]; max_new_tokens=n, eps=spec.rms_norm_eps, backend=backend,
+    model,
+    dev,
+    [9419];
+    max_new_tokens=n,
+    eps=spec.rms_norm_eps,
+    backend=backend,
 )
 
 ids = gen(NEW)          # compile + correctness

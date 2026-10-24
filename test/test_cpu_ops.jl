@@ -247,8 +247,14 @@ end
         nd = ndims(xs)
         stail = reshape(ss, (ntuple(_ -> 1, nd - 1)..., size(xs, nd)))
         ref = similar(xs)
-        Gesso._cpu_rmsnorm_rows!(ref, xs, stail, 1e-6, size(xs, nd),
-            CartesianIndices(size(xs)[1:(nd-1)]))
+        Gesso._cpu_rmsnorm_rows!(
+            ref,
+            xs,
+            stail,
+            1e-6,
+            size(xs, nd),
+            CartesianIndices(size(xs)[1:(nd-1)]),
+        )
         got = Gesso._cpu_rmsnorm_storage!(similar(xs), xs, ss, 1e-6)
         @test reinterpret(UInt32, got) == reinterpret(UInt32, ref)
     end
@@ -256,8 +262,17 @@ end
     positions = collect(0:299)
     for (inv_freq, interleaved, rd) in ((nothing, true, 0), (rand(rng, 32), false, 64))
         ref = copy(x)
-        Gesso._cpu_rope_rows!(ref, positions, 10000.0, inv_freq, interleaved, rd, axes(ref, 1))
-        got = Gesso._cpu_rope_storage!(copy(x), positions, 10000.0, inv_freq, interleaved, rd)
+        Gesso._cpu_rope_rows!(
+            ref,
+            positions,
+            10000.0,
+            inv_freq,
+            interleaved,
+            rd,
+            axes(ref, 1),
+        )
+        got =
+            Gesso._cpu_rope_storage!(copy(x), positions, 10000.0, inv_freq, interleaved, rd)
         @test reinterpret(UInt32, got) == reinterpret(UInt32, ref)
     end
     bad = randn(rng, Float32, 300, 1024)

@@ -56,16 +56,27 @@ function row(name, r)
     g = r.gcstats
     println(
         rpad(name, 8),
-        " wall_s=", round(r.time; digits=3),
-        " compile_s=", round(r.compile_time; digits=3),
-        " recompile_s=", round(r.recompile_time; digits=3),
-        " gc_s=", round(r.gctime; digits=3),
-        " gc_pauses=", g.pause,
-        " alloc_MiB=", round(r.bytes / 2^20; digits=1),
+        " wall_s=",
+        round(r.time; digits=3),
+        " compile_s=",
+        round(r.compile_time; digits=3),
+        " recompile_s=",
+        round(r.recompile_time; digits=3),
+        " gc_s=",
+        round(r.gctime; digits=3),
+        " gc_pauses=",
+        g.pause,
+        " alloc_MiB=",
+        round(r.bytes / 2^20; digits=1),
     )
 end
 
-println("pkg_load_s=", round(PKG_LOAD_S; digits=3), " cuda_pkg_load_s=", round(CUDA_PKG_LOAD_S; digits=3))
+println(
+    "pkg_load_s=",
+    round(PKG_LOAD_S; digits=3),
+    " cuda_pkg_load_s=",
+    round(CUDA_PKG_LOAD_S; digits=3),
+)
 
 rl = @timed Gesso.load_gguf(GGUF)
 model, tensors, spec = rl.value
@@ -73,7 +84,12 @@ dev = which == "cpu" ? tensors : Gesso.to_device(backend, tensors)
 row("load", rl)
 
 gen(n) = Gesso.reference_generate(
-    model, dev, PROMPT; max_new_tokens=n, eps=spec.rms_norm_eps, backend=backend,
+    model,
+    dev,
+    PROMPT;
+    max_new_tokens=n,
+    eps=spec.rms_norm_eps,
+    backend=backend,
 )
 
 r1 = @timed gen(1)

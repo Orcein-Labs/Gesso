@@ -27,7 +27,10 @@ _kv_dense(x) = Float32[x[u, h, j] for u in axes(x, 1), h in axes(x, 2), j in axe
         @test withenv(() -> _KVI._kv_format(), "GESSO_KV_FORMAT" => raw) === want
     end
     @test withenv(() -> _KVI._kv_format(), "GESSO_KV_FORMAT" => nothing) === :f32
-    @test_throws Gesso.GessoError withenv(() -> _KVI._kv_format(), "GESSO_KV_FORMAT" => "q3")
+    @test_throws Gesso.GessoError withenv(
+        () -> _KVI._kv_format(),
+        "GESSO_KV_FORMAT" => "q3",
+    )
     # unset takes the backend default; a set variable overrides it either way
     @test withenv(() -> _KVI._kv_format(:q8), "GESSO_KV_FORMAT" => nothing) === :q8
     @test withenv(() -> _KVI._kv_format(:q8), "GESSO_KV_FORMAT" => "f32") === :f32
@@ -71,8 +74,8 @@ end
     q8 = _KVI._kv_alloc(:q8, like, rows, n_kv, d)
     _KVI._kv_write_rows!(q8, x, 1)
     err = abs.(_kv_dense(q8) .- x)
-    for u in 1:rows, h in 1:n_kv, b in 1:(d ÷ 32)
-        js = ((b - 1) * 32 + 1):(b * 32)
+    for u in 1:rows, h in 1:n_kv, b in 1:(d÷32)
+        js = ((b-1)*32+1):(b*32)
         @test maximum(err[u, h, js]) <= maximum(abs.(x[u, h, js])) / 127
     end
 
@@ -111,13 +114,25 @@ end
         a = zeros(Float32, 1, n_heads, d)
         b = zeros(Float32, 1, n_heads, d)
         _KVI._attention_decode_cpu!(a, q, kc, vc, zeros(Float32, K), n_heads, d, 2, K)
-        _KVI._attention_decode_cpu!(b, q, _kv_dense(kc), _kv_dense(vc), zeros(Float32, K), n_heads, d, 2, K)
+        _KVI._attention_decode_cpu!(
+            b,
+            q,
+            _kv_dense(kc),
+            _kv_dense(vc),
+            zeros(Float32, K),
+            n_heads,
+            d,
+            2,
+            K,
+        )
         @test a == b
     end
 end
 
 if !CUDA_LOADED || !CUDA.functional()
-    _skip("no NVIDIA device — CUDA KV format and tiled prefill tests skipped (§LXXVII skip law)")
+    _skip(
+        "no NVIDIA device — CUDA KV format and tiled prefill tests skipped (§LXXVII skip law)",
+    )
 else
     _kv_cuda = Gesso.CUDABackend()
     _kv_like = CUDA.zeros(Float32, 0, 0, 0)
@@ -164,7 +179,9 @@ else
         q = CuArray(randn(rng, Float32, 1, n_heads, d))
         # rows % 4 == 0 takes the 4-row loads, with the last chunk ending on
         # and off a row group; 1503 rows take the per-element loads
-        for (rows, K) in ((1504, 1500), (1504, 1501), (1503, 1499)), fmt in (:f16, :q8, :q4h)
+        for (rows, K) in ((1504, 1500), (1504, 1501), (1503, 1499)),
+            fmt in (:f16, :q8, :q4h)
+
             kc = _KVI._kv_alloc(fmt, _kv_like, rows, n_kv, d)
             vc = _KVI._kv_alloc(fmt, _kv_like, rows, n_kv, d)
             _KVI._kv_write_rows!(kc, CuArray(kx[1:rows, :, :]), 1)
@@ -184,7 +201,10 @@ else
         for h in 1:n_heads, i in 1:L
             hk = div(h - 1, group) + 1
             vis = K - L + i
-            s = [sum(Float64(q[i, h, j]) * Float64(k[u, hk, j]) for j in 1:d) / sqrt(d) for u in 1:vis]
+            s = [
+                sum(Float64(q[i, h, j]) * Float64(k[u, hk, j]) for j in 1:d) / sqrt(d)
+                for u in 1:vis
+            ]
             p = exp.(s .- maximum(s))
             p ./= sum(p)
             for j in 1:d
@@ -207,12 +227,22 @@ else
             q = randn(rng, Float32, L, nh, d)
             k = randn(rng, Float32, K + 3, nk, d)
             v = randn(rng, Float32, K + 3, nk, d)
-            k[K+1:end, :, :] .= 1.0f3
-            v[K+1:end, :, :] .= 1.0f3
+            k[(K+1):end, :, :] .= 1.0f3
+            v[(K+1):end, :, :] .= 1.0f3
             want = _prefill_attn_oracle(q, k, v, nh, div(nh, nk), L, K, d)
             attn = CUDA.zeros(Float32, L, nh, d)
             kv = (view(CuArray(k), 1:K, :, :), view(CuArray(v), 1:K, :, :))
-            @test _KVI._attention_prefill_device!(_kv_cuda, attn, CuArray(q), kv..., nh, d, div(nh, nk), L, K)
+            @test _KVI._attention_prefill_device!(
+                _kv_cuda,
+                attn,
+                CuArray(q),
+                kv...,
+                nh,
+                d,
+                div(nh, nk),
+                L,
+                K,
+            )
             @test maximum(abs.(Float64.(Array(attn)) .- want)) <= 1e-4
             i == 3 && @test cld(K, HE._attn_prefill_tile(L, K)) == 3
         end
@@ -232,8 +262,30 @@ else
             kd, vd = CuArray(_kv_dense(_kv_host(kc))), CuArray(_kv_dense(_kv_host(vc)))
             a = CUDA.zeros(Float32, L, nh, d)
             b = CUDA.zeros(Float32, L, nh, d)
-            @test _KVI._attention_prefill_device!(_kv_cuda, a, q, view(kc, 1:K, :, :), view(vc, 1:K, :, :), nh, d, 8, L, K)
-            @test _KVI._attention_prefill_device!(_kv_cuda, b, q, view(kd, 1:K, :, :), view(vd, 1:K, :, :), nh, d, 8, L, K)
+            @test _KVI._attention_prefill_device!(
+                _kv_cuda,
+                a,
+                q,
+                view(kc, 1:K, :, :),
+                view(vc, 1:K, :, :),
+                nh,
+                d,
+                8,
+                L,
+                K,
+            )
+            @test _KVI._attention_prefill_device!(
+                _kv_cuda,
+                b,
+                q,
+                view(kd, 1:K, :, :),
+                view(vd, 1:K, :, :),
+                nh,
+                d,
+                8,
+                L,
+                K,
+            )
             @test maximum(abs.(Array(a) .- Array(b))) <= 1e-5
         end
     end

@@ -55,8 +55,15 @@ it is emitted and the rest is discarded. `p.stopped` tells the caller to stop.
 """
 function QwenXMLParser(; tools=Any[], thinking::Bool=true, stop=String[])
     stops = Vector{UInt8}[Vector{UInt8}(s) for s in stop if !isempty(s)]
-    return QwenXMLParser(collect(Any, tools), thinking ? :reasoning : :content,
-        UInt8[], false, stops, 0, false)
+    return QwenXMLParser(
+        collect(Any, tools),
+        thinking ? :reasoning : :content,
+        UInt8[],
+        false,
+        stops,
+        0,
+        false,
+    )
 end
 
 """
@@ -103,8 +110,8 @@ function _advance!(p::QwenXMLParser, out::Vector{Any})
         if p.state === :tool
             i = _find(p.buf, _TOOL_CLOSE)
             i === nothing && return
-            body = String(p.buf[1:(i - 1)])
-            p.buf = p.buf[(i + length(_TOOL_CLOSE)):end]
+            body = String(p.buf[1:(i-1)])
+            p.buf = p.buf[(i+length(_TOOL_CLOSE)):end]
             _close_tool!(p, out, body)
             p.state = :content
             p.lead_pending = true
@@ -113,8 +120,8 @@ function _advance!(p::QwenXMLParser, out::Vector{Any})
 
         i, kind, len = _next_match(p)
         if i !== nothing
-            _emit!(p, out, p.buf[1:(i - 1)])
-            p.buf = p.buf[(i + len):end]
+            _emit!(p, out, p.buf[1:(i-1)])
+            p.buf = p.buf[(i+len):end]
             if kind === :think_close
                 p.state = :content
                 p.lead_pending = true
@@ -132,14 +139,15 @@ function _advance!(p::QwenXMLParser, out::Vector{Any})
         n = length(p.buf) - hold
         if n > 0
             _emit!(p, out, p.buf[1:n])
-            p.buf = p.buf[(n + 1):end]
+            p.buf = p.buf[(n+1):end]
         end
         return
     end
 end
 
 function _next_match(p::QwenXMLParser)
-    tag, kind = p.state === :reasoning ? (_THINK_CLOSE, :think_close) : (_TOOL_OPEN, :tool_open)
+    tag, kind =
+        p.state === :reasoning ? (_THINK_CLOSE, :think_close) : (_TOOL_OPEN, :tool_open)
     best = _find(p.buf, tag)
     best_kind, best_len = kind, length(tag)
     for s in p.stops
@@ -164,8 +172,8 @@ end
 function _partial_suffix(p::QwenXMLParser)
     best = 0
     for tag in _tags(p)
-        for k in min(length(tag) - 1, length(p.buf)):-1:1
-            if view(p.buf, (length(p.buf) - k + 1):length(p.buf)) == view(tag, 1:k)
+        for k in min(length(tag)-1, length(p.buf)):-1:1
+            if view(p.buf, (length(p.buf)-k+1):length(p.buf)) == view(tag, 1:k)
                 best = max(best, k)
                 break
             end
@@ -178,7 +186,7 @@ end
 function _utf8_incomplete_tail(buf::Vector{UInt8})
     n = length(buf)
     for j in 1:min(4, n)
-        b = buf[n - j + 1]
+        b = buf[n-j+1]
         b < 0x80 && return 0
         if b >= 0xC0
             need = b >= 0xF0 ? 4 : b >= 0xE0 ? 3 : 2
@@ -211,8 +219,8 @@ end
 function _find(buf::Vector{UInt8}, pat::Vector{UInt8})
     n, m = length(buf), length(pat)
     m == 0 && return nothing
-    for i in 1:(n - m + 1)
-        @inbounds if buf[i] == pat[1] && view(buf, i:(i + m - 1)) == pat
+    for i in 1:(n-m+1)
+        @inbounds if buf[i] == pat[1] && view(buf, i:(i+m-1)) == pat
             return i
         end
     end
@@ -243,11 +251,11 @@ function _parse_call_body(body::AbstractString)
     start = last(f) + 1
     gt = findnext('>', body, start)
     gt === nothing && return nothing
-    name = _unquote(body[start:(gt - 1)])
+    name = _unquote(body[start:(gt-1)])
     fend = findnext("</function>", body, gt + 1)
-    fbody = fend === nothing ? body[(gt + 1):end] : body[(gt + 1):(first(fend) - 1)]
+    fbody = fend === nothing ? body[(gt+1):end] : body[(gt+1):(first(fend)-1)]
 
-    params = Tuple{String,String}[]
+    params = Tuple{String, String}[]
     pos = 1
     while true
         ps = findnext("<parameter=", fbody, pos)
@@ -257,8 +265,8 @@ function _parse_call_body(body::AbstractString)
         kgt === nothing && break
         pe = findnext("</parameter>", fbody, kgt + 1)
         pe === nothing && break
-        key = _unquote(fbody[ks:(kgt - 1)])
-        push!(params, (key, _trim_value(fbody[(kgt + 1):(first(pe) - 1)])))
+        key = _unquote(fbody[ks:(kgt-1)])
+        push!(params, (key, _trim_value(fbody[(kgt+1):(first(pe)-1)])))
         pos = last(pe) + 1
     end
     return (name, params)
@@ -268,14 +276,15 @@ end
 # Strip exactly one of each. Everything else in the value is the value.
 function _trim_value(v::AbstractString)
     startswith(v, '\n') && (v = v[2:end])
-    endswith(v, '\n') && (v = v[1:(end - 1)])
+    endswith(v, '\n') && (v = v[1:(end-1)])
     return String(v)
 end
 
 function _unquote(s::AbstractString)
     t = strip(s)
-    if length(t) >= 2 && ((t[1] == '"' && t[end] == '"') || (t[1] == '\'' && t[end] == '\''))
-        return String(t[2:(end - 1)])
+    if length(t) >= 2 &&
+       ((t[1] == '"' && t[end] == '"') || (t[1] == '\'' && t[end] == '\''))
+        return String(t[2:(end-1)])
     end
     return String(t)
 end
@@ -327,7 +336,8 @@ function _coerce(raw::AbstractString, typ)
         catch
             return String(raw)
         end
-        return (typ == "object" ? v isa AbstractDict : v isa AbstractVector) ? v : String(raw)
+        return (typ == "object" ? v isa AbstractDict : v isa AbstractVector) ? v :
+               String(raw)
     end
     return String(raw)
 end

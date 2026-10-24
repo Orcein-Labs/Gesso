@@ -28,9 +28,11 @@ using Statistics: mean, median, quantile
 
 const GGUF = get(ENV, "GESSO_ORNITH35_GGUF", "")
 isfile(GGUF) || error("bench_35b: set GESSO_ORNITH35_GGUF to the Ornith 35B GGUF file")
-const CONTEXTS = parse.(Int, split(get(ENV, "GESSO_BENCH_CONTEXTS", "512,8192,16384,32768"), ','))
+const CONTEXTS =
+    parse.(Int, split(get(ENV, "GESSO_BENCH_CONTEXTS", "512,8192,16384,32768"), ','))
 const NEW = parse(Int, get(ENV, "GESSO_BENCH_NEW", "65"))
-const TEXT = get(ENV, "GESSO_BENCH_TEXT", joinpath(@__DIR__, "..", "docs", "Gesso_Stack.md"))
+const TEXT =
+    get(ENV, "GESSO_BENCH_TEXT", joinpath(@__DIR__, "..", "docs", "Gesso_Stack.md"))
 const IDS_OUT = get(ENV, "GESSO_BENCH_IDS", "")
 const REPS = parse(Int, get(ENV, "GESSO_BENCH_REPS", "2"))
 NEW >= 3 || error("bench_35b: GESSO_BENCH_NEW must be at least 3 to have inter-token gaps")
@@ -59,9 +61,16 @@ prompt_of(P) = [corpus[mod1(i, length(corpus))] for i in 1:P]
 function timed_generate(prompt, n)
     stamps = Float64[]
     t0 = time()
-    ids = Gesso.reference_generate(model, dev, prompt; max_new_tokens=n,
-        eps=spec.rms_norm_eps, backend=backend, eos_ids=(),
-        on_token=_ -> (push!(stamps, time()); true))
+    ids = Gesso.reference_generate(
+        model,
+        dev,
+        prompt;
+        max_new_tokens=n,
+        eps=spec.rms_norm_eps,
+        backend=backend,
+        eos_ids=(),
+        on_token=_ -> (push!(stamps, time()); true),
+    )
     return ids, stamps .- t0
 end
 
@@ -69,9 +78,11 @@ end
 timed_generate(prompt_of(64), 4)
 
 ids_io = isempty(IDS_OUT) ? nothing : open(IDS_OUT, "w")
-println("RECEIPT bench_35b load backend=$which threads=$(Threads.nthreads()) load_s=$(round(t_load; digits=1)) ",
+println(
+    "RECEIPT bench_35b load backend=$which threads=$(Threads.nthreads()) load_s=$(round(t_load; digits=1)) ",
     "kv=$(get(ENV, "GESSO_KV_FORMAT", "default")) hot=$(get(ENV, "GESSO_GPU_HOT_EXPERTS", "1")) ",
-    "hot_mib=$(get(ENV, "GESSO_GPU_HOT_EXPERTS_MIB", "auto")) model=$(basename(GGUF))")
+    "hot_mib=$(get(ENV, "GESSO_GPU_HOT_EXPERTS_MIB", "auto")) model=$(basename(GGUF))",
+)
 for P in CONTEXTS
     prompt = prompt_of(P)
     ids, t = timed_generate(prompt, NEW)
@@ -81,12 +92,31 @@ for P in CONTEXTS
         ids, t = timed_generate(prompt, NEW)
     end
     gaps = diff(t) .* 1e3
-    @printf("RECEIPT bench_35b ctx=%d new=%d ttft_cold_s=%.3f ttft_s=%.3f prefill_tok_s=%.1f decode_tok_s=%.2f itl_mean_ms=%.2f itl_p50_ms=%.2f itl_p90_ms=%.2f itl_p99_ms=%.2f itl_max_ms=%.2f maxrss_gib=%.2f\n",
-        P, length(t), cold, t[1], P / t[1], (length(t) - 1) / (t[end] - t[1]), mean(gaps), median(gaps),
-        quantile(gaps, 0.9), quantile(gaps, 0.99), maximum(gaps), Sys.maxrss() / 2^30)
+    @printf(
+        "RECEIPT bench_35b ctx=%d new=%d ttft_cold_s=%.3f ttft_s=%.3f prefill_tok_s=%.1f decode_tok_s=%.2f itl_mean_ms=%.2f itl_p50_ms=%.2f itl_p90_ms=%.2f itl_p99_ms=%.2f itl_max_ms=%.2f maxrss_gib=%.2f\n",
+        P,
+        length(t),
+        cold,
+        t[1],
+        P / t[1],
+        (length(t) - 1) / (t[end] - t[1]),
+        mean(gaps),
+        median(gaps),
+        quantile(gaps, 0.9),
+        quantile(gaps, 0.99),
+        maximum(gaps),
+        Sys.maxrss() / 2^30
+    )
     flush(stdout)
     if ids_io !== nothing
-        println(ids_io, P, '\t', join(prompt, ','), '\t', join(ids[length(prompt)+1:end], ','))
+        println(
+            ids_io,
+            P,
+            '\t',
+            join(prompt, ','),
+            '\t',
+            join(ids[(length(prompt)+1):end], ','),
+        )
         flush(ids_io)
     end
     GC.gc()

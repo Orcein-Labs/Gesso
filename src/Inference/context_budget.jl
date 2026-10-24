@@ -21,16 +21,27 @@ family counts only its full-attention layers. Quantized formats need a head
 dimension that fills whole scale blocks, as the cache allocator requires.
 """
 function kv_bytes_per_token(spec::ArchitectureSpec, kv_format::Symbol)
-    kv_format in KV_FORMATS || throw(gesso_error(ERR_INVALID_PLAN,
-        "kv_bytes_per_token: unknown KV format $kv_format"))
+    kv_format in KV_FORMATS || throw(
+        gesso_error(ERR_INVALID_PLAN, "kv_bytes_per_token: unknown KV format $kv_format"),
+    )
     d = spec.head_dim
     if kv_format in (:q8, :q4h)
-        d % _KV_BLOCK == 0 || throw(gesso_error(ERR_INVALID_PLAN,
-            "kv_bytes_per_token: $kv_format needs head_dim divisible by $_KV_BLOCK, got $d"))
+        d % _KV_BLOCK == 0 || throw(
+            gesso_error(
+                ERR_INVALID_PLAN,
+                "kv_bytes_per_token: $kv_format needs head_dim divisible by $_KV_BLOCK, got $d",
+            ),
+        )
     end
-    kv_format === :q4h && !ispow2(d) && throw(gesso_error(ERR_INVALID_PLAN,
-        "kv_bytes_per_token: q4h needs a power-of-two head_dim, got $d"))
-    attn = count(l -> layer_mixer(spec, l) === :full_attention, 0:(spec.num_layers - 1))
+    kv_format === :q4h &&
+        !ispow2(d) &&
+        throw(
+            gesso_error(
+                ERR_INVALID_PLAN,
+                "kv_bytes_per_token: q4h needs a power-of-two head_dim, got $d",
+            ),
+        )
+    attn = count(l -> layer_mixer(spec, l) === :full_attention, 0:(spec.num_layers-1))
     return attn * 2 * spec.n_kv_heads * _kv_head_bytes(d, kv_format)  # K and V
 end
 
@@ -49,8 +60,12 @@ end
 Largest context whose KV cache fits in what the weights and scratch leave of
 `budget_bytes`. Zero when nothing fits; never negative.
 """
-function memory_ceiling_tokens(; budget_bytes::Integer, resident_bytes::Integer,
-        scratch_bytes::Integer=0, kv_bytes_per_token::Integer)
+function memory_ceiling_tokens(;
+    budget_bytes::Integer,
+    resident_bytes::Integer,
+    scratch_bytes::Integer=0,
+    kv_bytes_per_token::Integer,
+)
     budget_bytes >= 0 && resident_bytes >= 0 && scratch_bytes >= 0 ||
         throw(ArgumentError("memory_ceiling_tokens: byte counts must be nonnegative"))
     kv_bytes_per_token > 0 ||
@@ -66,8 +81,8 @@ function _interp(xs::Vector{Float64}, ys::Vector{Float64}, x::Real)
     x <= xs[1] && return ys[1]
     x >= xs[end] && return ys[end]
     i = searchsortedlast(xs, x)
-    t = (x - xs[i]) / (xs[i + 1] - xs[i])
-    return ys[i] + t * (ys[i + 1] - ys[i])
+    t = (x - xs[i]) / (xs[i+1] - xs[i])
+    return ys[i] + t * (ys[i+1] - ys[i])
 end
 
 # Integral of _interp over [a, b]: the cost of tokens a+1..b, each paying the
@@ -92,8 +107,13 @@ function _cost_samples(name::AbstractString, samples)
         n >= 0 || throw(ArgumentError("CostModel: $name length $n is negative"))
         isfinite(s) && s > 0 ||
             throw(ArgumentError("CostModel: $name seconds $s must be finite and positive"))
-        !isempty(lens) && n <= lens[end] && throw(ArgumentError(
-            "CostModel: $name lengths must strictly increase (got $n after $(lens[end]))"))
+        !isempty(lens) &&
+            n <= lens[end] &&
+            throw(
+                ArgumentError(
+                    "CostModel: $name lengths must strictly increase (got $n after $(lens[end]))",
+                ),
+            )
         push!(lens, n)
         push!(secs, s)
     end
@@ -136,7 +156,12 @@ grows through, not the length-0 rate throughout.
 """
 function prefill_seconds(cm::CostModel, n_tokens::Real, at_len::Real)
     _check_span(n_tokens, at_len)
-    return _integrate(cm.prefill_len, cm.prefill_s, Float64(at_len), Float64(at_len) + n_tokens)
+    return _integrate(
+        cm.prefill_len,
+        cm.prefill_s,
+        Float64(at_len),
+        Float64(at_len) + n_tokens,
+    )
 end
 
 """
@@ -147,7 +172,12 @@ over the span as `prefill_seconds` is.
 """
 function decode_seconds(cm::CostModel, n_tokens::Real, at_len::Real)
     _check_span(n_tokens, at_len)
-    return _integrate(cm.decode_len, cm.decode_s, Float64(at_len), Float64(at_len) + n_tokens)
+    return _integrate(
+        cm.decode_len,
+        cm.decode_s,
+        Float64(at_len),
+        Float64(at_len) + n_tokens,
+    )
 end
 
 """
@@ -166,14 +196,17 @@ struct ContextBudget
     binding::Symbol
 end
 
-function ContextBudget(; memory_tokens::Integer=typemax(Int),
-        quality_tokens::Integer=typemax(Int), latency_tokens::Integer=typemax(Int))
+function ContextBudget(;
+    memory_tokens::Integer=typemax(Int),
+    quality_tokens::Integer=typemax(Int),
+    latency_tokens::Integer=typemax(Int),
+)
     m, q, l = Int(memory_tokens), Int(quality_tokens), Int(latency_tokens)
     m >= 0 && q >= 0 && l >= 0 ||
         throw(ArgumentError("ContextBudget: ceilings must be nonnegative"))
     safe = min(m, q, l)
-    binding = safe == typemax(Int) ? :none :
-              m == safe ? :memory : q == safe ? :quality : :latency
+    binding =
+        safe == typemax(Int) ? :none : m == safe ? :memory : q == safe ? :quality : :latency
     return ContextBudget(m, q, l, safe, binding)
 end
 
@@ -190,21 +223,31 @@ The answer is found from the sampled lengths, the crossings of the decode
 constraint between samples, and the prefill bound, so the scan never invents
 cost data between or beyond the samples.
 """
-function latency_ceiling_tokens(cm::CostModel; min_decode_tok_s=nothing,
-        max_reprefill_s=nothing, max_len::Integer)
-    max_len >= 0 || throw(ArgumentError("latency_ceiling_tokens: max_len must be nonnegative"))
+function latency_ceiling_tokens(
+    cm::CostModel;
+    min_decode_tok_s=nothing,
+    max_reprefill_s=nothing,
+    max_len::Integer,
+)
+    max_len >= 0 ||
+        throw(ArgumentError("latency_ceiling_tokens: max_len must be nonnegative"))
     max_dec_s = nothing
     if min_decode_tok_s !== nothing
-        min_decode_tok_s > 0 ||
-            throw(ArgumentError("latency_ceiling_tokens: min_decode_tok_s must be positive"))
+        min_decode_tok_s > 0 || throw(
+            ArgumentError("latency_ceiling_tokens: min_decode_tok_s must be positive"),
+        )
         max_dec_s = 1 / min_decode_tok_s
     end
     if max_reprefill_s !== nothing
-        isfinite(max_reprefill_s) && max_reprefill_s >= 0 ||
-            throw(ArgumentError("latency_ceiling_tokens: max_reprefill_s must be finite and nonnegative"))
+        isfinite(max_reprefill_s) && max_reprefill_s >= 0 || throw(
+            ArgumentError(
+                "latency_ceiling_tokens: max_reprefill_s must be finite and nonnegative",
+            ),
+        )
     end
-    feasible(L) = (max_dec_s === nothing || _interp(cm.decode_len, cm.decode_s, L) <= max_dec_s) &&
-                  (max_reprefill_s === nothing || prefill_seconds(cm, L, 0) <= max_reprefill_s)
+    feasible(L) =
+        (max_dec_s === nothing || _interp(cm.decode_len, cm.decode_s, L) <= max_dec_s) &&
+        (max_reprefill_s === nothing || prefill_seconds(cm, L, 0) <= max_reprefill_s)
 
     cands = Int[0, max_len]
     for x in cm.decode_len
@@ -215,10 +258,10 @@ function latency_ceiling_tokens(cm::CostModel; min_decode_tok_s=nothing,
     end
     if max_dec_s !== nothing
         xs, ys = cm.decode_len, cm.decode_s
-        for i in 1:(length(xs) - 1)
-            ys[i] == ys[i + 1] && continue
-            (ys[i] - max_dec_s) * (ys[i + 1] - max_dec_s) <= 0 || continue
-            x = xs[i] + (max_dec_s - ys[i]) * (xs[i + 1] - xs[i]) / (ys[i + 1] - ys[i])
+        for i in 1:(length(xs)-1)
+            ys[i] == ys[i+1] && continue
+            (ys[i] - max_dec_s) * (ys[i+1] - max_dec_s) <= 0 || continue
+            x = xs[i] + (max_dec_s - ys[i]) * (xs[i+1] - xs[i]) / (ys[i+1] - ys[i])
             push!(cands, floor(Int, x), ceil(Int, x))
         end
     end
@@ -257,9 +300,13 @@ struct CompactionPolicy
     threshold_fraction::Float64
     summary_tokens::Int
 
-    function CompactionPolicy(; rule::Symbol=:rent_or_buy, reserve_tokens::Integer=4096,
-            target_fraction::Real=0.5, threshold_fraction::Real=0.9,
-            summary_tokens::Integer=1024)
+    function CompactionPolicy(;
+        rule::Symbol=:rent_or_buy,
+        reserve_tokens::Integer=4096,
+        target_fraction::Real=0.5,
+        threshold_fraction::Real=0.9,
+        summary_tokens::Integer=1024,
+    )
         rule in (:rent_or_buy, :threshold, :never) ||
             throw(ArgumentError("CompactionPolicy: unknown rule $(repr(rule))"))
         reserve_tokens >= 0 ||
@@ -268,11 +315,19 @@ struct CompactionPolicy
             throw(ArgumentError("CompactionPolicy: summary_tokens must be positive"))
         isfinite(target_fraction) && isfinite(threshold_fraction) ||
             throw(ArgumentError("CompactionPolicy: fractions must be finite"))
-        0 < target_fraction < threshold_fraction <= 1 || throw(ArgumentError(
-            "CompactionPolicy: need 0 < target_fraction ($target_fraction) < " *
-            "threshold_fraction ($threshold_fraction) <= 1"))
-        return new(rule, Int(reserve_tokens), Float64(target_fraction),
-            Float64(threshold_fraction), Int(summary_tokens))
+        0 < target_fraction < threshold_fraction <= 1 || throw(
+            ArgumentError(
+                "CompactionPolicy: need 0 < target_fraction ($target_fraction) < " *
+                "threshold_fraction ($threshold_fraction) <= 1",
+            ),
+        )
+        return new(
+            rule,
+            Int(reserve_tokens),
+            Float64(target_fraction),
+            Float64(threshold_fraction),
+            Int(summary_tokens),
+        )
     end
 end
 
@@ -337,9 +392,15 @@ each call advances `tracker`.
 
 When `compact` is true, `target_tokens < ctx_len` always holds.
 """
-function decide_compaction(policy::CompactionPolicy, budget::ContextBudget,
-        cm::CostModel, tracker::CompactionTracker, ctx_len::Integer;
-        next_turn_tokens::Integer=policy.reserve_tokens, new_tokens_per_turn::Integer=256)
+function decide_compaction(
+    policy::CompactionPolicy,
+    budget::ContextBudget,
+    cm::CostModel,
+    tracker::CompactionTracker,
+    ctx_len::Integer;
+    next_turn_tokens::Integer=policy.reserve_tokens,
+    new_tokens_per_turn::Integer=256,
+)
     ctx_len >= 0 || throw(ArgumentError("decide_compaction: ctx_len must be nonnegative"))
     next_turn_tokens >= 0 ||
         throw(ArgumentError("decide_compaction: next_turn_tokens must be nonnegative"))
@@ -348,11 +409,17 @@ function decide_compaction(policy::CompactionPolicy, budget::ContextBudget,
     ctx = Int(ctx_len)
     safe = budget.safe_tokens
     target = _tokens_of(policy.target_fraction, safe)
-    cost = decode_seconds(cm, policy.summary_tokens, ctx) +
-           prefill_seconds(cm, Float64(target) + policy.summary_tokens, 0)
+    cost =
+        decode_seconds(cm, policy.summary_tokens, ctx) +
+        prefill_seconds(cm, Float64(target) + policy.summary_tokens, 0)
     tracker.turns_since_compaction += 1
-    out(compact, reason) = (compact=compact, reason=reason, target_tokens=target,
-        compaction_cost_s=cost, accumulated_slowdown_s=tracker.accumulated_slowdown_s)
+    out(compact, reason) = (
+        compact=compact,
+        reason=reason,
+        target_tokens=target,
+        compaction_cost_s=cost,
+        accumulated_slowdown_s=tracker.accumulated_slowdown_s,
+    )
 
     # Subtraction, not addition: safe may be typemax(Int).
     if ctx > safe - Int(next_turn_tokens)
@@ -366,8 +433,11 @@ function decide_compaction(policy::CompactionPolicy, budget::ContextBudget,
         return out(fire, fire ? :threshold : :wait)
     end
 
-    rent = max(0.0, decode_seconds(cm, new_tokens_per_turn, ctx) -
-                    decode_seconds(cm, new_tokens_per_turn, target))
+    rent = max(
+        0.0,
+        decode_seconds(cm, new_tokens_per_turn, ctx) -
+        decode_seconds(cm, new_tokens_per_turn, target),
+    )
     tracker.accumulated_slowdown_s += rent
     fire = tracker.accumulated_slowdown_s >= cost
     return out(fire, fire ? :rent_or_buy : :wait)
