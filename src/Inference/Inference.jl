@@ -2284,6 +2284,7 @@ include("cpu_decode.jl")           # CPU seq = 1 GDN decode: preallocated F32 mi
 include("sampling.jl")             # opt-in temperature/top-p sampler for reference_generate
 include("verify_window.jl")        # speculative verify window: layer-major rows, fused GDN, commit
 include("mtp_draft.jl")           # MTP (nextn) draft head over the target's hidden rows
+include("dflash_draft.jl")        # DFlash2 block drafter over the target's tapped residual rows
 include("tokenizer_protocol.jl")   # Pass C: the tokenizer PROTOCOL
 include("gguf_tokenizer.jl")       # GGUF tokenizer section: qwen35 BPE, streaming decode
 include("chat_template.jl")         # Qwen3.5 XML chat template renderer (no Jinja)
