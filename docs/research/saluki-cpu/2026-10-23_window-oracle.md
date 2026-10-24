@@ -178,3 +178,59 @@ within ±0.05.
 
 Logs (local only): `.local/2026-10-23_saluki-bean-bench.log` (ungated),
 `.local/2026-10-24_saluki-bean-gated.log` (gated, with a `.vmstat` alongside).
+
+## Combined drafter (2026-10-24)
+
+Script: `scripts/saluki_combo_bench.jl` (43ae128). The n-gram `SuffixSource` (min_match 3)
+proposes first, and the gated bean (τ=0.5) runs only when the n-gram is silent. An optional
+back-off `after:skip` answers the next `skip` proposals empty after `after` consecutive gated
+bean calls, so those steps run plain with no bean. Each prompt also reran the bean alone as a
+same-session reference. Every run reproduced the plain ids. `GESSO_BENCH_ONLY` reruns a
+subset of prompts.
+
+Speedup over plain decode (plain step 661–692 ms):
+
+| Prompt | Bean k=3 | Combo k=3 | +2:4 | +3:8 | Bean k=4 | Combo k=4 | +2:4 | +3:8 |
+|---|---|---|---|---|---|---|---|---|
+| json | 1.39 | 1.42 | 1.54 | 1.46 | 1.52 | 1.54 | 1.56 | 1.57 |
+| code | **1.38** | 1.20 | 1.31 | 1.32 | 1.31 | **1.39** | 1.37 | 1.38 |
+| shell | 1.16 | 1.05 | 1.01 | 1.03 | **1.20** | 1.10 | 1.01 | 1.03 |
+| math | 1.48 | 1.43 | 1.42 | 1.43 | 1.46 | 1.50 | **1.52** | 1.50 |
+| prose | **1.00** | **1.00** | 0.96 | 0.96 | 0.99 | 0.99 | 0.95 | 0.96 |
+| mean | 1.28 | 1.22 | 1.25 | 1.24 | 1.30 | **1.30** | 1.28 | 1.29 |
+
+The json column is the mean of two runs. In all eight json settings the n-gram never fired
+and nothing was skipped, so the drafts were identical. Even so, single json runs ranged from
+1.36 to 1.64. With only 29 new tokens, json differences below about 0.1 are noise. Two json
+runs in the first pass stalled machine-wide (0.55 and 0.23, with the bean at 2214 ms per
+window against the usual 280). A rerun replaced them. During the stall, I/O pressure
+averaged 11% over a minute with 15 GB of swap in use, which points to the mmapped weights
+being evicted and re-read from disk.
+
+- **The combination does not beat the bean alone.** At k=4 the means are level (1.30). At
+  k=3 the combo is lower (1.22 against 1.28).
+- **Code** gains at k=4 (1.39 against 1.31) but loses at k=3 (1.20 against 1.38). The n-gram
+  answers 12–18 of 23–29 windows, and its drafts are accepted less often than the bean's
+  (0.82 against 0.91 at k=3).
+- **Shell** loses at every setting (1.01–1.10 against 1.16–1.20). The n-gram fires on only 3
+  to 5 windows, but almost none of those drafts are accepted: acceptance drops from 0.93 to
+  0.62–0.72. This is the same pattern as the n-gram alone (long matches whose continuations
+  differ).
+- **Back-off never helps.** On prose it skips 32–40 bean calls and the bean's share of wall
+  time falls from 0.15 to 0.10, but accepted tokens drop from 26 to 15–17, so the speedup
+  falls to 0.95–0.96. On shell it skips 8–12 calls and loses 0.07–0.09. A run of gated bean
+  calls does not predict that the next calls will be gated too.
+- The best single setting is still the gated bean alone at k=4 τ=0.5 (1.30 here, 1.31 in the
+  earlier run). Prose stays at break-even.
+
+Next steps for the drafter, if it gets more time:
+
+- Let the n-gram stop proposing after its drafts are rejected (a per-source acceptance
+  record). That would keep the code gain without the shell loss. On these numbers it is
+  worth about +0.02 on the mean.
+- Gate the bean on Saluki's own confidence, which costs nothing, instead of the bean's
+  history. Prose is where the bean's 14–15% share of wall time is spent proposing tokens that
+  are then gated away.
+
+Logs (local only): `.local/2026-10-24_saluki-combo-bench.log`,
+`.local/2026-10-24_saluki-combo-json-rerun.log`, with a `.vmstat` alongside the first.
