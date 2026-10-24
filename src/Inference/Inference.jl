@@ -769,7 +769,7 @@ function _attention_heads!(
     for hh in 1:n_heads
         if on_cpu
             fill!(sc, zero(eltype(sc)))
-            _attention_scores_cpu!(sc, q, k, hh, d_head, L, K; masked=true, window)
+            _attention_scores_cpu!(sc, q, k, hh, d_head, L, K, true, window)
         else
             # Ordinary per-head GEMM over explicit device slices. No host
             # transfer, no cross-head contraction, no padded keys.
@@ -778,7 +778,7 @@ function _attention_heads!(
         window > 0 && _window_mask!(sc, L, K, window)
         softmax!(backend, scores_out, scores, workload)
         if on_cpu
-            _attention_values_cpu!(attn, probs, v, hh, d_head, L, K; masked=true, window)
+            _attention_values_cpu!(attn, probs, v, hh, d_head, L, K, true, window)
         else
             _attention_values_device!(backend, attn, probs, v, hh, K)
         end
@@ -891,7 +891,12 @@ function _attention_score_scale(d_head::Int)
     return significand(s) == 1.0 ? _ScoreMul(inv(s)) : _ScoreDiv(s)
 end
 
-function _attention_scores_cpu!(sc, q, k, hh, d_head, L, K; masked::Bool=false, window::Int=0)
+# The keyword forms wrap positional methods: decode calls the positional ones,
+# because a keyword call with a runtime `window` heap-allocates its NamedTuple.
+_attention_scores_cpu!(sc, q, k, hh, d_head, L, K; masked::Bool=false, window::Int=0) =
+    _attention_scores_cpu!(sc, q, k, hh, d_head, L, K, masked, window)
+
+function _attention_scores_cpu!(sc, q, k, hh, d_head, L, K, masked::Bool, window::Int)
     _attention_scores_rows!(sc, q, k, hh, d_head, L, K, masked, window,
         _attention_score_scale(d_head))
     return sc
@@ -925,7 +930,10 @@ function _attention_scores_rows!(sc, q, k, hh, d_head, L, K, masked, window, sca
     return sc
 end
 
-function _attention_values_cpu!(attn, probs, v, hh, d_head, L, K; masked::Bool=false, window::Int=0)
+_attention_values_cpu!(attn, probs, v, hh, d_head, L, K; masked::Bool=false, window::Int=0) =
+    _attention_values_cpu!(attn, probs, v, hh, d_head, L, K, masked, window)
+
+function _attention_values_cpu!(attn, probs, v, hh, d_head, L, K, masked::Bool, window::Int)
     if !_attention_rows_threaded(L, K * d_head)
         for t in 1:L, j in 1:d_head, u in _attention_keys(t, L, K, masked, window)
             attn[t, hh, j] += probs[t, u] * v[u, hh, j]
