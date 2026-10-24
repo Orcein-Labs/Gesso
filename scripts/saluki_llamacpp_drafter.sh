@@ -11,7 +11,10 @@
 # With only <label> it runs plain decode. Prints one line per prompt:
 #   LCPP <label> <tag> new= ms_per_token= draft_n= draft_accepted= accept_rate=
 # Optional env: GESSO_BENCH_NEW (default 96), GESSO_LCPP_THREADS (default 16),
-# GESSO_LCPP_PORT (default 8931).
+# GESSO_LCPP_PORT (default 8931), GESSO_BENCH_ONLY (space-separated tags), GESSO_LCPP_SAVE
+# (a directory: keeps each response as <label>-<tag>.json with token ids and top-2 probs).
+# llama-server reads LLAMA_ARG_* settings from the environment, e.g.
+# LLAMA_ARG_SPEC_DRAFT_P_MIN for a draft confidence gate.
 set -euo pipefail
 
 GGUF=${GESSO_QWEN38_27B_GGUF:?set GESSO_QWEN38_27B_GGUF}
@@ -23,6 +26,9 @@ NMAX=${4:-4}
 NEW=${GESSO_BENCH_NEW:-96}
 THREADS=${GESSO_LCPP_THREADS:-16}
 PORT=${GESSO_LCPP_PORT:-8931}
+TAGS=${GESSO_BENCH_ONLY:-json code shell math prose}
+SAVE=${GESSO_LCPP_SAVE:-}
+keep=false; [[ -n $SAVE ]] && keep=true
 HERE=$(cd "$(dirname "$0")" && pwd)
 
 work=$(mktemp -d)
@@ -51,10 +57,12 @@ done
 # JIT-free, but the first request still pages weights in: warm once.
 curl -sf "http://127.0.0.1:$PORT/completion" -d '{"prompt":"Hi","n_predict":4}' >/dev/null
 
-for tag in json code shell math prose; do
-    body=$(jq -n --rawfile p "$work/$tag.txt" --argjson n "$NEW" \
-        '{prompt:$p, n_predict:$n, temperature:0, top_k:1, cache_prompt:false}')
+for tag in $TAGS; do
+    body=$(jq -n --rawfile p "$work/$tag.txt" --argjson n "$NEW" --argjson keep $keep \
+        '{prompt:$p, n_predict:$n, temperature:0, top_k:1, cache_prompt:false}
+        + if $keep then {n_probs:2, return_tokens:true} else {} end')
     curl -sf "http://127.0.0.1:$PORT/completion" -d "$body" >"$work/out.json"
+    $keep && cp "$work/out.json" "$SAVE/$LABEL-$tag.json"
     # text hash: greedy speculation must reproduce the plain run's text
     sha=$(jq -j .content "$work/out.json" | sha1sum | cut -c1-12)
     jq -r --arg l "$LABEL" --arg t "$tag" --arg s "$sha" '
