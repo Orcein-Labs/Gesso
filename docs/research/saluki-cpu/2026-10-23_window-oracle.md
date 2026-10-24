@@ -91,3 +91,44 @@ So with a cheap bean, T=4 is worth about 1.25–1.6× on structured output.
   the worst tensor.
 - These are oracle predictions. A real bean-in-the-loop draft source is needed to measure
   the actual speedup.
+
+## Real n-gram drafter (SuffixSource)
+
+Script: `scripts/saluki_draft_bench.jl`. This is an end-to-end run, not an oracle. The
+source is `SuffixSource` (prompt lookup): the longest suffix of the context that occurred
+earlier proposes the tokens that followed it. It runs on the host in microseconds, so the
+measured time is the whole cost. Prefill and the first token are timed once and
+subtracted. Every drafted run reproduced the plain ids. Each setting ran once, so
+results within about ±0.05 of 1.0 are noise.
+
+With `min_match=1` (the old behaviour), a single shared token triggers a draft. Most of
+those drafts are rejected and each one still pays for a verify window:
+
+| Prompt | Speedup k=3 | k=7 | Accept rate k=3 |
+|---|---|---|---|
+| json | 0.76 | 0.60 | 0.13 |
+| code | **1.16** | 0.79 | 0.58 |
+| shell | 0.83 | 0.56 | 0.15 |
+| math | 0.84 | 0.64 | 0.25 |
+| prose | 0.78 | 0.61 | 0.04 |
+
+`SuffixSource` now takes `min_match` (74cd8c1). Speedup at k=3, with the best k=7 result:
+
+| Prompt | min=2 | min=3 | min=4 | Best k=7 |
+|---|---|---|---|---|
+| code | 1.20 | **1.34** (accept 0.90) | 1.29 | 1.32 (min=4) |
+| math | 1.09 | 1.04 | **1.10** | 1.02 |
+| json | 0.81 | 1.02 | 1.00 | 1.01 |
+| prose | 0.98 | 1.02 | 1.02 | 1.04 |
+| shell | 0.85 | 0.92 | 0.94 | 0.87 |
+
+- A higher `min_match` removes the losses because the drafter stops proposing. At min≥3 it
+  proposes nothing on json and almost nothing on prose, so those are break-even, not gains.
+- Code gains up to 1.34x, because the answer repeats the prompt's file.
+- Shell still loses at every setting: its matches are long but the continuations differ.
+- The n-gram drafter suits code (and other copy-heavy output) with min_match=3, k=3. The
+  bean remains the drafter for other text. The default stays `min_match=1` until a caller
+  picks a policy.
+
+Logs (local only): `.local/2026-10-23_saluki-suffix-bench.log`,
+`.local/2026-10-23_saluki-suffix-minmatch.log`.
