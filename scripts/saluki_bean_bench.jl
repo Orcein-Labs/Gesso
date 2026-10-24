@@ -138,6 +138,7 @@ for (tag, msg) in PROMPTS
     n_dec = length(ids) - P - 1
     plain_ms = 1000 * (tN - t1)
     @printf("PLAIN %s prompt=%d new=%d step_ms=%.1f\n", tag, P, length(ids) - P, plain_ms / n_dec)
+    flush(stdout)
     for k in KS, tau in TAUS
         # fresh source and state per run, so runs are independent
         src = BeanSource(bean, btensors, Float64(bspec.rms_norm_eps), backend,
@@ -156,5 +157,6 @@ for (tag, msg) in PROMPTS
             1e-6 * src.ns / max(sp.windows, 1),
             (src.ns / 1e9) / drafted_s, bp_ms,
             plain_ms / (1000 * drafted_s))
+        flush(stdout)
     end
 end
