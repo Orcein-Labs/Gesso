@@ -272,3 +272,65 @@ candidates are drafters trained against Qwen3.8-27B itself (its MTP head and DFl
 read Saluki's own hidden states instead of running a separate model.
 
 Log (local only): `.local/2026-10-24_saluki-2b-drafter.log`.
+
+## Published drafters through llama.cpp (2026-10-24)
+
+Script: `scripts/saluki_llamacpp_drafter.sh`. Before porting a drafter into Gesso, this
+measures the drafters trained for base Qwen3.8-27B on Saluki through llama.cpp's server
+(CPU only, 16 threads, same prompts, greedy, 96 new tokens): the official MTP head
+(`draft-mtp`, one extra layer reading Saluki's final-normed hidden state), z-lab's DFlash2
+(`draft-dflash`, a block drafter reading five target layers) and the 0.8B bean as a plain
+draft model (`draft-simple`). Both trained drafters are the Q4_0 files from
+ggml-org/Qwen3.8-27B-GGUF. Saluki is a fine-tune of that model, so these read hidden
+states they were not trained on. `pN` labels add llama.cpp's draft confidence gate
+(`LLAMA_ARG_SPEC_DRAFT_P_MIN` = 0.N): drafting stops at the first token whose top
+probability is below it.
+
+Speedup over llama.cpp plain decode (plain 650–722 ms per token, the first run's numbers
+for every column):
+
+| Prompt | MTP 2 | MTP 3 | MTP 3 p50 | DFlash 4 | DFlash 7 | DFlash 7 p50 | DFlash 7 p70 | bean 4 |
+|---|---|---|---|---|---|---|---|---|
+| json | 1.64 | 1.45 | 1.44 | 1.50 | 1.83 | 1.77 | 2.04 | 1.28 |
+| code | 1.65 | 1.82 | 1.77 | 1.73 | **2.38** | 2.21 | 2.15 | 1.38 |
+| shell | 1.28 | 1.15 | 1.30 | 1.13 | 1.06 | 1.32 | **1.38** | 0.96 |
+| math | 1.48 | 1.56 | 1.47 | 1.78 | 2.11 | **2.19** | **2.19** | 1.34 |
+| prose | 1.02 | 0.91 | **1.15** | 0.79 | 0.59 | 0.99 | 1.08 | 0.69 |
+| mean without json | 1.36 | 1.36 | 1.42 | 1.36 | 1.54 | 1.68 | **1.70** | 1.09 |
+| texts equal to plain | 5/5 | 3/5 | 4/5 | 3/5 | 2/5 | 2/5 | 3/5 | 3/5 |
+
+Draft acceptance, DFlash 7 p70: json 0.92, code 0.93, shell 0.68, math 0.90, prose 0.67.
+MTP 3 p50: 0.70, 0.93, 0.63, 0.87, 0.68.
+
+- **DFlash2 with a 0.7 gate is the fastest drafter measured on Saluki: 1.70x without
+  json**, 2.15–2.19x on code and math. Ungated, its long drafts are mostly rejected on prose
+  (acceptance 0.15, 0.59x). The gate fixes that: prose draft tokens drop from 321 to 60 and
+  acceptance rises to 0.67.
+- **The MTP head reaches 1.42x with a 0.5 gate** (k=3). The gate moved shell from 1.15 to
+  1.30 and prose from 0.91 to 1.15. On code, math and json it changed almost nothing, because
+  the head is already confident there.
+- **Both trained drafters beat the bean** in every setting. The bean as a llama.cpp draft
+  model reaches only 1.09x, below Gesso's own gated bean (1.24–1.25x on the same prompts).
+- Both trained drafters work on Saluki even though they were trained for the base model:
+  acceptance on code and math is 0.87–0.93.
+
+**Text differences are llama.cpp numerics, not drafter errors.** Plain decode is repeatable
+(a second plain run gave the same three texts). The speculative runs that differ from plain
+diverge at a near-tie, where Saluki's top two tokens are within 0.008 nats (code, token 53),
+0.042 (shell, token 12) and 0.103 (prose, token 16) of each other, checked with saved top-2
+probabilities. llama.cpp's batched verify computes those logits slightly differently from
+its single-token decode, and the near-tie flips. Gesso's batched verify is exact (every Gesso
+drafter run above reproduced the plain ids), so a port into Gesso should keep all five texts.
+
+What this means for Gesso:
+
+- Port the MTP head first. It is one layer (about 0.95 GB of Q4_0 weights read per draft
+  step, against 7.89 GB for a Saluki step) and needs only Saluki's final-normed hidden rows,
+  which the verify window already computes.
+- Then DFlash2 (five layers, block of 8, reads target layers 5, 19, 33, 47 and 61). It is
+  the bigger prize (1.70x) but needs per-layer hidden rows from the target.
+- Both need the confidence gate.
+
+Logs (local only): `.local/2026-10-24_saluki-llamacpp-drafters.log`,
+`.local/2026-10-24_saluki-llamacpp-drafters-2.log`, token dumps in
+`.local/2026-10-24_lcpp-tokens/`.
