@@ -132,3 +132,47 @@ those drafts are rejected and each one still pays for a verify window:
 
 Logs (local only): `.local/2026-10-23_saluki-suffix-bench.log`,
 `.local/2026-10-23_saluki-suffix-minmatch.log`.
+
+## Real bean drafter (2026-10-24)
+
+Script: `scripts/saluki_bean_bench.jl` (4c92a41). The Q8_0 bean runs as a `DraftSource`
+inside the verify window, end to end, with 96 new tokens per prompt (json stops at 29). The
+bean's prompt prefill is primed outside the timed decode and reported apart, like Saluki's.
+Every drafted run reproduced the plain ids. Each setting ran once.
+
+`GESSO_BEAN_TAU` gates the draft: drafting stops at the first token whose bean top-1
+probability is below tau. `GESSO_BEAN_SELFTEST=1` runs the bean as its own target, which
+must accept every self-draft. It passes at tau 0 and 0.6.
+
+Speedup over plain decode (plain step 662–700 ms):
+
+| Prompt | k=2 τ=0 | k=3 τ=0 | k=4 τ=0 | k=2 τ=0.5 | k=3 τ=0.5 | k=4 τ=0.5 | k=4 τ=0.7 |
+|---|---|---|---|---|---|---|---|
+| json | 1.32 | 1.48 | 1.49 | 1.36 | 1.50 | 1.58 | **1.61** |
+| code | 1.32 | 1.32 | 1.31 | 1.28 | **1.35** | 1.29 | 1.33 |
+| shell | 1.03 | 0.93 | 0.85 | 1.19 | 1.15 | **1.23** | 1.11 |
+| math | 1.41 | 1.43 | 1.33 | 1.45 | **1.50** | 1.45 | 1.44 |
+| prose | 0.89 | 0.76 | 0.67 | **0.99** | **0.99** | **0.99** | 0.96 |
+
+Accept rate rises from 0.26–0.91 ungated to 0.81–0.98 at τ=0.5 and 0.94–1.0 at τ=0.7.
+
+- The ungated bean matches the oracle on json, code and math (1.3–1.5×). As the oracle
+  predicted, it loses on prose and about breaks even on shell.
+- Gating at τ=0.5 removes the losses. Shell turns into a 1.15–1.23× gain. Prose is about
+  break-even, because the bean still runs at every step to propose a token that is then
+  gated away. That overhead is 13–14% of prose wall time.
+- τ=0.9 gates too much: windows shrink to one or two tokens and the bean cost stays.
+- k=3 or k=4 with τ=0.5 is a single setting that never loses. k=4 τ=0.5 averages 1.31×
+  over the five prompts and k=3 τ=0.5 averages 1.30×.
+- Code with the bean (1.35×) is level with the n-gram drafter at min_match=3 (1.34×). The
+  n-gram drafter is free, so combining them (n-gram first, bean when it is silent) is the
+  next drafter step.
+
+Noise: two runs stalled machine-wide, with bean and Saluki time both inflated. In this run
+they were code k=2 τ=0 at 0.48 and code k=2 τ=0.9 at 0.62. The previous ungated run had
+the same kind of stall on json (0.05 / 0.73 / 0.34 at k=2/3/4), and those three settings
+measure 1.32 / 1.48 / 1.49 here. The table uses this run, and the earlier ungated run for
+code k=2 τ=0 (1.32). The other ungated settings agree across the two runs within ±0.05.
+
+Logs (local only): `.local/2026-10-23_saluki-bean-bench.log` (ungated),
+`.local/2026-10-24_saluki-bean-gated.log` (gated, with a `.vmstat` alongside).
