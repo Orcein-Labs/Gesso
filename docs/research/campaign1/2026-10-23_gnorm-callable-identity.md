@@ -1,7 +1,7 @@
 # Campaign 1: runtime callable identity for the GN model control
 
 ## Objective and retained result
-Replace callable **display-text** identity with actual runtime Type identity, then resume the unchanged original13 discriminator. Keep the executable policy in `CAMPAIGN1_GNORM_MODEL_PROGRAM_IDENTITY_2026-10-23.md`: all15 SPIR-V modules must match after only pinned ID compaction; raw SPIR-V/LLVM are archived before comparison; LLVM remains diagnostic.
+Replace callable **display-text** identity with actual runtime Type identity, then resume the unchanged original13 discriminator. Keep the executable policy in `2026-10-23_gnorm-model-program-identity.md`: all15 SPIR-V modules must match after only pinned ID compaction; raw SPIR-V/LLVM are archived before comparison; LLVM remains diagnostic.
 
 V3 session80337 exited1 before model loading. Its six CPU-fast finals and48 captured stage comparisons are exact, all15 actual archived executables match after compaction, and geometry/NoContraction/float-control checks pass. The sole program-comparison issue is Julia displaying a function type as `typeof(Module.gpu__name!)` in the accepted capture and `Module.var"#gpu__name!"` in the new one. Display spelling is not runtime identity. Keep V3 failed/ineligible; it has no model_start or original13 events.
 

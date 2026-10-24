@@ -44,7 +44,7 @@ A qualified model positive or negative deciding whether to generalize this convo
 TERMINAL NEGATIVE FOR THIS DIAGNOSTIC. The convolution correction retains 9/13
 with the four hello two-token mismatches. The subsequent projection diagnostic also remains9/13, with zero integrity/source
 errors and600model calls. Current control is
-`CAMPAIGN1_GDN_ROUTE_MODEL_DISCRIMINATOR_2026-10-21.md`, running as
+`2026-10-21_gdn-route-model-discriminator.md`, running as
 `gdn-route-model-1` session70073/Julia2372129 after guarded admission.
 Maintained source admission and all original full-stress/release gates remain
 open; no inference-throughput claim is made.

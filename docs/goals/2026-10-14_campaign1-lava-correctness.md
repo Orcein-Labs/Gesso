@@ -1,7 +1,7 @@
 # Campaign 1: correct and stress-tested Lava baseline
 
 Opened 2026-10-14. Status: active; targeted repairs under stress, completion unproven.
-Parent: [release campaigns](RELEASE_PARITY_2026-10.md), campaign 1.
+Parent: [release campaigns](2026-10_release-parity.md), campaign 1.
 
 ## Objective
 
@@ -243,7 +243,7 @@ explicitly require SignedZeroInfNanPreserve 32/64. Adding only those declaration
 changes the invalid result from zeros to NaNs; arithmetic/control bytes are
 unchanged. A total-based guard additionally passes 24 special-value controls
 without depending on GLSL Sqrt special-value semantics. Permit the bounded new
-isolated source experiment in [CAMPAIGN1_RMS_FLOAT_CONTROLS.md](CAMPAIGN1_RMS_FLOAT_CONTROLS.md),
+isolated source experiment in [2026-10-15_rms-float-controls.md](../research/campaign1/2026-10-15_rms-float-controls.md),
 including per-kernel compiler requirements, per-device support and cache identity.
 This does not admit a runtime repair, change any CPU/model acceptance gate or
 permit blanket precision/semantics changes to unrelated kernels.

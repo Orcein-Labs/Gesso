@@ -46,7 +46,7 @@ CPU-only final-suite and actual make-test wrappers are prepared, not executed. T
 ### Original forward boundary qualification
 softmax-tree64-source-boundary-forward-validation-1.json independently passes53/53,24repeat comparisons, zero integrity/source errors and912unchanged files. Controller72844 has advanced to reverse53/chunk128 (runner child3131544); the16fresh matrix stays gated. Source and all consumed helpers remain frozen.
 
-Completed numeric payload preparation is documented separately in CAMPAIGN1_NUMERIC_STATE_PAYLOAD_2026-10-19.md. Its CPU-only format preflight passes495assertions; this is neither GPU payload nor model acceptance.
+Completed numeric payload preparation is documented separately in 2026-10-19_numeric-state-payload.md. Its CPU-only format preflight passes495assertions; this is neither GPU payload nor model acceptance.
 
 ### Original reverse boundary qualification
 softmax-tree64-source-boundary-reverse-validation-1.json independently passes53/53 with24repeat comparisons, zero integrity/source errors and912unchanged source files. All four formerly failing p127 requests now match the frozen CPU1503 sequence in implicit/state modes and both repetitions. Controller72844 has started the original16fresh-process matrix (batch runner3136575), not yet qualified. Remaining gates stay open.

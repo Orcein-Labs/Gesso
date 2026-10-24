@@ -5,7 +5,7 @@ External and public operators pass, but the unchanged model gate is 39/41: fresh
 p64 cancellation and its continuation fail. Normal history passes all 36 rows,
 including three p65 cases. See the checkpoint and raw validation receipt; retain
 the candidate for diagnosis without admitting it as the production baseline.
-Parent: `CAMPAIGN1_LAVA_CORRECTNESS.md`.
+Parent: `2026-10-14_campaign1-lava-correctness.md`.
 
 ## Objective
 

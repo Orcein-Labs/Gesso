@@ -1,7 +1,7 @@
 # Campaign 1: complete GDN CPU-reference control
 
 Opened 2026-10-16. Status: bounded external causal diagnostic.
-Parent: `CAMPAIGN1_LAVA_CORRECTNESS.md`; no acceptance gate changes.
+Parent: `2026-10-14_campaign1-lava-correctness.md`; no acceptance gate changes.
 
 ## Objective
 
@@ -261,7 +261,7 @@ exact inverse recovery after removing NoContraction. No model/source admission.
 The user reserves GPU for Qwen retraining and then Claude. Operator replays
 using the primitive are prepared, unrun and not queued. The recurrence auditor
 is incomplete; the gated-norm auditor is unexecuted. See the complete bounded
-resume frontier in `CAMPAIGN1_CHECKPOINT_2026-10-16_EXP32.md`. Final Campaign 1
+resume frontier in `2026-10-16_checkpoint-exp32.md`. Final Campaign 1
 acceptance is unchanged and remains incomplete.
 
 ## Physical division discriminator — 2026-10-18

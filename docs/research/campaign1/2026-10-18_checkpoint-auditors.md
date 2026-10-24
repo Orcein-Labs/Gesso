@@ -2,7 +2,7 @@
 
 **Superseded supplier status:** the standalone compiler contract is now
 qualified as local Lava commit `289d0693e84a3ad6ae6869cbf81b47dd4bc20ba7`.
-See `CAMPAIGN1_NO_CONTRACTION_RECEIPT_2026-10-18.md` for exact source/AST,
+See `2026-10-18_no-contraction-receipt.md` for exact source/AST,
 GPU/native/mutation and cost scopes. The pending-source statements below are
 historical. Gesso remains ef086ef, 39/41; Campaign 1 stays active.
 
@@ -14,7 +14,7 @@ preparation while the user's Qwen/Claude GPU reservation remained active.
 The user subsequently released the GPU; live checks found no competing compute
 job or held shared locks. The sequential GPU results below supersede the
 earlier unrun/preparation statements. The previous exponential proof remains
-valid; see `CAMPAIGN1_CHECKPOINT_2026-10-16_EXP32.md`.
+valid; see `2026-10-16_checkpoint-exp32.md`.
 
 ## Latest GPU evidence
 

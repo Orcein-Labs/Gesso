@@ -80,12 +80,12 @@ behavior, cache corruption, GPU dispatch, formatting and cost are UNTESTED.
 It is not admitted or vendored. Exact draft is preserved as
 `R/no-contraction-source-draft-20261016.patch`, SHA256
 `47bbb55dd2e215244a6c9c798ecb2a05cb791a74c753b8dc32b8b7483a8ab5ae`.
-Its bounded work item is `CAMPAIGN1_NO_CONTRACTION_CONTRACT.md`.
+Its bounded work item is `2026-10-16_no-contraction-contract.md`.
 
 ## Resume order
 
 1. Review/complete the prepared independent operator auditors before observing
-   new captures. Read `CAMPAIGN1_GDN_REFERENCE_CONTROL.md` for unchanged gates.
+   new captures. Read `2026-10-16_gdn-reference-control.md` for unchanged gates.
 2. When the user's GPU queue is clear, run the recurrence and gated-norm
    experiments through the existing bounded `run_cpu_rms_candidate.sh`, with
    new output/log/shader paths, 4800 MiB GPU budget and shared locks. Do not

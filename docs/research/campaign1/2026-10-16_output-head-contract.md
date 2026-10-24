@@ -1,7 +1,7 @@
 # Campaign 1: identical-input Ornith output-head diagnostic
 
 Opened 2026-10-16. Status: external diagnostic; no runtime repair selected.
-Parent: `CAMPAIGN1_LAVA_CORRECTNESS.md`; original acceptance gates unchanged.
+Parent: `2026-10-14_campaign1-lava-correctness.md`; original acceptance gates unchanged.
 
 ## Objective
 
@@ -97,7 +97,7 @@ Six bounded ABI/quantizer/dot witnesses passed before the full replay. Receipts:
 limits are recorded. The first native helper was changed after its self-test;
 that lineage remains retained, while immutable v2 was separately self-tested.
 
-Next causal control: `CAMPAIGN1_GDN_REFERENCE_CONTROL.md`. The head comparison
+Next causal control: `2026-10-16_gdn-reference-control.md`. The head comparison
 constrains the diagnosis to upstream computation for this captured row; it does
 not establish which GDN or attention precision seam needs a production repair.
 

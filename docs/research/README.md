@@ -1,8 +1,11 @@
 # Gesso research parking lot
 
 Current release campaigns:
-[`Qwen3.5 and Gemma4 release plan`](../goals/RELEASE_PARITY_2026-10.md)
+[`Qwen3.5 and Gemma4 release plan`](../goals/2026-10_release-parity.md)
 (2026-10-14). Follow its evidence gates before opening exotic research.
+Campaign 1 (Lava correctness) status:
+[`campaign1-status`](../goals/2026-10-14_campaign1-status.md); its dated
+evidence notes are in [`campaign1/`](campaign1/).
 
     Document class:     index (this folder)
     Status:             programs parked until a phase owns them
