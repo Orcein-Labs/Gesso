@@ -136,8 +136,8 @@ end
     Gesso.Inference.dflash_rows!(b, 3, X[3:6, :])
     @test a.have == b.have == 6
     for l in eachindex(a.kc)
-        @test isapprox(a.kc[l][1:6, :, :], b.kc[l][1:6, :, :]; rtol=1e-5, atol=1e-6)
-        @test isapprox(a.vc[l][1:6, :, :], b.vc[l][1:6, :, :]; rtol=1e-5, atol=1e-6)
+        @test isapprox(a.kc[l][:, :, 1:6], b.kc[l][:, :, 1:6]; rtol=1e-5, atol=1e-6)
+        @test isapprox(a.vc[l][:, :, 1:6], b.vc[l][:, :, 1:6]; rtol=1e-5, atol=1e-6)
     end
 end
 
@@ -192,6 +192,8 @@ end
         m = _dft_toy(; window)
         Gesso.Inference.dflash_rows!(m, 1, X)
         out = Gesso.Inference._dflash_block_attn(m, 1, q, kb, vb, L)
+        # the threaded split runs the same per-job loops
+        @test Gesso.Inference._dflash_block_attn(m, 1, q, kb, vb, L; threaded=true) == out
         ref = zeros(Float64, B, 8)
         for i in 1:B, hd in 1:2
             qp = L + i - 2
@@ -200,8 +202,8 @@ end
             vals = Vector{Float64}[]
             for r in 1:(L - 1)
                 qp - (r - 1) >= window && continue
-                push!(keys, m.kc[1][r, 1, :])
-                push!(vals, m.vc[1][r, 1, :])
+                push!(keys, m.kc[1][:, 1, r])
+                push!(vals, m.vc[1][:, 1, r])
             end
             for j in 1:B
                 push!(keys, kb[j, :])
