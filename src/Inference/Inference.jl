@@ -2283,6 +2283,7 @@ include("moe_host.jl")              # batched Q8_K top-k SwiGLU for host-residen
 include("cpu_decode.jl")           # CPU seq = 1 GDN decode: preallocated F32 mixer
 include("sampling.jl")             # opt-in temperature/top-p sampler for reference_generate
 include("verify_window.jl")        # speculative verify window: layer-major rows, fused GDN, commit
+include("mtp_draft.jl")           # MTP (nextn) draft head over the target's hidden rows
 include("tokenizer_protocol.jl")   # Pass C: the tokenizer PROTOCOL
 include("gguf_tokenizer.jl")       # GGUF tokenizer section: qwen35 BPE, streaming decode
 include("chat_template.jl")         # Qwen3.5 XML chat template renderer (no Jinja)

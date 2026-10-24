@@ -334,3 +334,41 @@ What this means for Gesso:
 Logs (local only): `.local/2026-10-24_saluki-llamacpp-drafters.log`,
 `.local/2026-10-24_saluki-llamacpp-drafters-2.log`, token dumps in
 `.local/2026-10-24_lcpp-tokens/`.
+
+## MTP head in Gesso (2026-10-24)
+
+Script: `scripts/saluki_mtp_bench.jl`. The published MTP head (`mtp-Qwen3.8-27B-Q4_0.gguf`) now
+drafts inside Gesso's verify window (`Gesso.Inference.MTPDraft`). It reads Saluki's final-normed
+hidden rows through the new `on_rows` hook, keeps its own KV cache, and gates drafts on top-1
+probability (`p_min`). Same box, 16 threads, same prompts, greedy, up to 96 new tokens. Every
+drafted run gave exactly the plain run's ids (the script errors on a mismatch), so all five
+texts match plain decode.
+
+`own` uses the head file's Q4_0 embedding and lm_head; `target` uses Saluki's (IQ1_M embedding,
+IQ3_S lm_head). Speedup over Gesso plain decode (plain 653–896 ms per token):
+
+| Prompt | own 2 | own 2 p50 | own 3 | own 3 p50 | target 2 |
+|---|---|---|---|---|---|
+| json | 1.22 | 1.34 | 1.34 | 1.34 | 1.46 |
+| code | 1.42 | 1.27 | 1.88 | **1.96** | 1.45 |
+| shell | 1.10 | 1.22 | 0.97 | 1.11 | **1.26** |
+| math | 1.44 | 1.50 | 1.47 | **1.51** | 1.44 |
+| prose | 0.90 | **1.05** | 0.80 | 0.95 | 0.99 |
+| mean without json | 1.22 | 1.26 | 1.28 | **1.38** | 1.29 |
+
+Acceptance, own 3 p50: json 0.74, code 0.92, shell 0.66, math 0.88, prose 0.52. Target 2:
+0.90, 0.91, 0.75, 0.93, 0.43. The head costs 121–302 ms per window (10–18% of the run) when
+it uses its own lm_head and 132–257 ms when it uses Saluki's. The first config of each prompt
+carries JIT warm-up (code own 2 spent 653 ms per window there), and json is a short run (29
+new tokens).
+
+- **The port matches llama.cpp: 1.38x without json against llama.cpp's 1.42x** for MTP 3 p50,
+  and here all five texts match plain (llama.cpp kept 4/5).
+- **Saluki's own lm_head helps.** With k=2 and no gate, the target head beats the own head on
+  shell (acceptance 0.75 against 0.63) and costs less per window. Saluki is a fine-tune, so its
+  output layer suits its hidden rows better than the base model's. The gated k=3 target run is
+  still to measure.
+- **Prose stays at or below plain** for every setting (acceptance 0.29–0.60). The gate limits
+  the loss but does not turn it into a gain.
+
+Log (local only): `.local/2026-10-24_saluki-mtp-bench.log`.

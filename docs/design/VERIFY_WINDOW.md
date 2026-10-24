@@ -108,6 +108,11 @@ never constrained to resident experts in the exact arm: that would change the mo
    bitwise; the 27B CPU tokens/s at T = 2–4 with oracle drafts (replayed known-greedy ids) measures
    the ceiling.
 3. **P3 — MTP draft forward** with its own KV and commit; measure acceptance on named prompts.
+   - Done 2026-10-24 (`Inference.MTPDraft`, fed by the `on_rows` hook). Saluki on CPU: 1.38x
+     without json at k = 3, p_min 0.5, ids equal to plain on every prompt. See
+     `docs/research/saluki-cpu/2026-10-23_window-oracle.md`.
+   - The DFlash2 block drafter (`Inference.DFlashDraft`, fed by `on_taps`) follows the same
+     pattern.
 4. **P4 — GPU multi-column kernels** (dp4a, F16 split-K, fused GDN, attention).
 5. **P5 — policy.** Source arbitration, per-origin receipts, T chosen by measured acceptance.
 
