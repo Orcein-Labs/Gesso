@@ -234,3 +234,41 @@ Next steps for the drafter, if it gets more time:
 
 Logs (local only): `.local/2026-10-24_saluki-combo-bench.log`,
 `.local/2026-10-24_saluki-combo-json-rerun.log`, with a `.vmstat` alongside the first.
+
+## Qwen3.5-2B as the drafter (2026-10-24)
+
+The same script (`scripts/saluki_bean_bench.jl`) with `GESSO_BEAN_GGUF` pointed at
+Qwen3.5-2B Q4_K_M instead of the 0.8B Q8_0 bean. The question was whether a bigger, more
+accurate drafter pays for its extra cost. Every run reproduced the plain ids. Each setting ran
+once.
+
+Speedup over plain decode (plain step 663–720 ms), with the 0.8B bean from the combined run
+for reference:
+
+| Prompt | 2B k=3 τ=0.5 | 2B k=3 τ=0.7 | 2B k=4 τ=0.5 | 2B k=4 τ=0.7 | 0.8B k=3 τ=0.5 | 0.8B k=4 τ=0.5 |
+|---|---|---|---|---|---|---|
+| json | (1.06) | 1.52 | (0.67) | **1.60** | 1.39 | 1.52 |
+| code | 1.18 | 1.10 | 1.20 | 1.28 | **1.38** | 1.31 |
+| shell | 1.13 | 1.12 | 1.14 | 1.12 | 1.16 | **1.20** |
+| math | 1.36 | 1.40 | 1.37 | **1.51** | 1.48 | 1.46 |
+| prose | 0.95 | 0.93 | 0.92 | 0.95 | **1.00** | 0.99 |
+| mean without json | 1.16 | 1.14 | 1.16 | 1.22 | **1.25** | 1.24 |
+
+Values in parentheses stalled machine-wide: the 2B took 696 and 2369 ms per window there
+against its usual 380–500, with swap-in running. The means leave json out, because of those
+stalls and because json differences below about 0.1 are noise (29 tokens).
+
+- **The 2B does not beat the 0.8B.** Its acceptance is only slightly higher (0.82–1.00
+  against 0.81–0.98), but each window costs 380–640 ms against about 280. The extra cost eats
+  the gain. Its best setting (k=4 τ=0.7, 1.22 without json) is level with or below the 0.8B
+  at τ=0.5 (1.24–1.25).
+- **Prose gets worse, not better** (0.92–0.95 against 0.99–1.00). At τ=0.5 the 2B accepts
+  only 0.67–0.70 of its prose drafts. At τ=0.7, 50 of its proposals are gated away and it still takes
+  17% of wall time.
+- The 2B gains only where the 0.8B is already good (json, math) and only at τ=0.7.
+
+Conclusion: a bigger off-the-shelf Qwen drafter is not the way forward on CPU. The next
+candidates are drafters trained against Qwen3.8-27B itself (its MTP head and DFlash2), which
+read Saluki's own hidden states instead of running a separate model.
+
+Log (local only): `.local/2026-10-24_saluki-2b-drafter.log`.
