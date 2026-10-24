@@ -172,7 +172,9 @@ Noise: two runs stalled machine-wide, with bean and Saluki time both inflated. I
 they were code k=2 τ=0 at 0.48 and code k=2 τ=0.9 at 0.62. The previous ungated run had
 the same kind of stall on json (0.05 / 0.73 / 0.34 at k=2/3/4), and those three settings
 measure 1.32 / 1.48 / 1.49 here. The table uses this run, and the earlier ungated run for
-code k=2 τ=0 (1.32). The other ungated settings agree across the two runs within ±0.05.
+code k=2 τ=0 (1.32). Code k=3 τ=0 also ran slow in the earlier run (1.07 against 1.32
+here). The other ungated settings on code, shell, math and prose agree across the two runs
+within ±0.05.
 
 Logs (local only): `.local/2026-10-23_saluki-bean-bench.log` (ungated),
 `.local/2026-10-24_saluki-bean-gated.log` (gated, with a `.vmstat` alongside).
