@@ -1,4 +1,4 @@
-# Receipts (Gesso_Stack.md §XLII; engineering receipts §LXXII).
+# Receipts.
 #
 # Law: significant actions are auditable. Every receipt answers what happened,
 # in what context, at what cost, and with what result — well enough for

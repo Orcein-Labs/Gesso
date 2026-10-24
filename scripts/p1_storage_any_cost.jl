@@ -1,5 +1,4 @@
-# scripts/p1_storage_any_cost.jl — the measurement behind DECISION PACKET 3
-# (`docs/DECISION_PACKETS.md`, "storage::Any and what it costs").
+# scripts/p1_storage_any_cost.jl — measures what `storage::Any` fields cost.
 #
 # Run: julia --project=. scripts/p1_storage_any_cost.jl
 #

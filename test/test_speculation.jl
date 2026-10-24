@@ -1,4 +1,4 @@
-# Phase 20 (§XCIII; docs/design/SPECULATION_SEAM.md): the host-side draft
+# Phase 20: the host-side draft
 # seam and its sources. Ported from the GessoSymbolicDrafts package at commit
 # 59553aa (v0.2.0); the assertions are unchanged except where noted below.
 #

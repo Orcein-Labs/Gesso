@@ -1,4 +1,4 @@
-# Explicit-failure vocabulary (Gesso_Stack.md §LXX; North Star §22 taxonomy).
+# Explicit-failure vocabulary.
 #
 # Law: Gesso fails explicitly. No silent representation downgrade, backend
 # switch, quantization mismatch, memory-plan violation, or kernel substitution
@@ -56,9 +56,9 @@ search/session may continue.
 end
 
 # Intended producers — documentation of ownership, not a registry. Which
-# module raises a code is settled by the phase that owns the failing concept
-# (docs/ARCHITECTURE.md); adding a code means editing this taxonomy, its
-# stability test (test/test_errors.jl), and the owning phase's work item.
+# module raises a code is settled by the module that owns the failing concept;
+# adding a code means editing this taxonomy and its stability test
+# (test/test_errors.jl).
 #
 #   ERR_INTERNAL                     any module, on an invariant violation
 #   ERR_INVALID_PLAN                 Planning (§XVII)
@@ -123,7 +123,7 @@ Base.showerror(io::IO, e::LoweringNotImplemented) = print(
     e.op,
     " has no lowering for backend :",
     e.backend,
-    " (explicit failure per Gesso_Stack.md §LXX — no silent substitution)",
+    " (explicit failure: no silent substitution of another lowering)",
 )
 
 """

@@ -1,2 +1,0 @@
-julia scripts/format.jl --check
-formatting OK

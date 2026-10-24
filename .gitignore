@@ -5,9 +5,6 @@ Manifest.toml
 # Local dev sources (Lava checkout etc.) — never part of the package
 libs/
 
-# Freeze bundles are snapshots, not source
-*.zip
-
 # Local model snapshots (GESSO_SMOLLM2_DIR); never part of the package
 snapshots/
 
@@ -16,17 +13,14 @@ snapshots/
 .idea/
 .DS_Store
 
-# ChatGPT Work-mode campaign drops (depots, scratch, nested checkout)
+# Local scratch trays, never part of the package
 work(from chatgpt)/
 outputs(from chatgpt)/
+/Performant Julia toolchain/
+/Julia Compiler Optimizations for Gesso/
 
-# Local research scratch (repo-hygiene standard): never pushed
+# Local research scratch, never pushed
 /research/
 
-# Local scratch and handoff notes (repo-hygiene standard): never pushed
+# Local scratch and handoff notes, never pushed
 /.local/
-
-# Local Performant Julia R&D tray (Matt; spaces; never pushed).
-# Nested shadow must stay a symlink to the git worktree *outside* this
-# checkout — git will not register a worktree inside master.
-/Performant Julia toolchain/

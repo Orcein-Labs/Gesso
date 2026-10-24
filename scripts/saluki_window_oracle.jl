@@ -1,5 +1,4 @@
-# Saluki 27B verify-window oracle on the CPU backend (docs/design/VERIFY_WINDOW.md,
-# "Acceptance oracle" and "Cost model for this box").
+# Saluki 27B verify-window oracle on the CPU backend: acceptance and cost.
 #
 #   GESSO_QWEN38_27B_GGUF=/path/to/Underdog-Saluki-27B-1.0-IQ2-mix.gguf \
 #   GESSO_BEAN_GGUF=/path/to/Qwen3.5-0.8B-BF16.gguf \

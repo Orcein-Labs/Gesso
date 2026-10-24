@@ -159,7 +159,7 @@ function _check_ggml_traits(ggml_type::Integer, blck::Integer, tsize::Integer)
             "gguf_import: libggml reports block size $blck and type size $tsize for ggml " *
             "type $ggml_type, expected $want. The ggml_type_traits layout read here " *
             "(blck_size@8, type_size@24, to_float@40) does not match the libggml in " *
-            "GESSO_GGML_DIR; use a llama.cpp build this layout matches (see DEBT.md).";
+            "GESSO_GGML_DIR; use a llama.cpp build this layout matches.";
             ggml_type=Int(ggml_type),
             blck_size=Int(blck),
             type_size=Int(tsize),

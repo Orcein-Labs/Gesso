@@ -1,4 +1,4 @@
-# Logging & telemetry conventions (Phase 0, Gesso_Stack.md §LXXIII).
+# Logging & telemetry conventions.
 #
 # Laws this file exists to enforce (before the machinery that will enforce them
 # better exists):

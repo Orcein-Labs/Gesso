@@ -1,6 +1,6 @@
-# Gesso dev commands (wrappers over scripts/ — see AGENTS.md §8)
+# Gesso dev commands (wrappers over scripts/)
 
-.PHONY: test bench format format-check env-vars freeze clean
+.PHONY: test bench format format-check env-vars
 
 test:
 	julia scripts/test.jl
@@ -16,9 +16,3 @@ format-check:
 
 env-vars:
 	julia scripts/env-vars.jl
-
-freeze:
-	julia scripts/freeze.jl
-
-clean:
-	rm -f Gesso_*_Freeze_*.zip

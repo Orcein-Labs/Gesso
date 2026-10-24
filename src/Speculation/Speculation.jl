@@ -1,5 +1,5 @@
 # Speculation — the host-side draft seam for speculative decoding
-# (Phase 20, §XCIII; contract: docs/design/SPECULATION_SEAM.md).
+# (Phase 20).
 #
 # Owns: the DraftSource interface (the source, the context a source may read,
 # the proposal it returns, and the post-verify feedback hook) and the
@@ -7,9 +7,8 @@
 # never touch a device.
 #
 # Not owned here: the verify window, state commit and rollback, and the
-# decode loop. Those belong to the runtime throughput campaign
-# (docs/goals/ARCH_GAUNTLET.md). Nothing in this module wires a source into
-# decoding.
+# decode loop, which live in Inference. Nothing in this module wires a source
+# into decoding.
 
 module Speculation
 

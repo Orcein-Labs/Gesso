@@ -99,11 +99,6 @@ end
 end
 
 @testset "§CIX fence: packet resolutions stay law in code" begin
-    @test isfile(joinpath(pkgdir(Gesso), "docs", "DECISION_PACKETS.md"))
-    md = read(joinpath(pkgdir(Gesso), "docs", "DECISION_PACKETS.md"), String)
-    @test occursin("## Status", md)
-    @test occursin("RESOLVED INTO CANON", md)
-
     # Packet 1 (§CIX): the two-level law. The dispatch types exist; no
     # mega-enum does, and the singleton cuts are distinct.
     @test !isdefined(Gesso, :ExecutionPhase)

@@ -1,7 +1,7 @@
 # Phase 7 item B tests (§LXXX): Session `fork` — DECLARED identity prefix
 # share (Magenta §9.5 step 3).
 #
-# Gates (docs/goals/PHASE7_PREFIX_SHARE.md):
+# Gates:
 #   * fork before prefill! is ERR_INVALID_PLAN (sharing needs a ready prefix)
 #   * after prefill!, the child aliases the prefix pages (`===`, shared=true)
 #     and carries copied h/seqlen/ready with its own manager and sink

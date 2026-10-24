@@ -543,7 +543,8 @@ function main()
         ggml=get(ENV, "GESSO_GGML_DIR", "")
         isfile(gguf) || error("model file missing")
         isdir(ggml) || error("invalid GESSO_GGML_DIR")
-        isfile(joinpath(repo, "docs", "Gesso_Stack.md")) || error("corpus missing")
+        isfile(joinpath(repo, "benchmark", "corpus-pride-and-prejudice.txt")) ||
+            error("corpus missing")
         source=realpath(pkgdir(Gesso))
         source==repo || error("active Gesso source differs from GESSO_REPO")
         backend_name=="lava" &&
@@ -583,7 +584,7 @@ function main()
         corpus=Int.(
             Gesso.Inference.encode(
                 tk,
-                read(joinpath(repo, "docs", "Gesso_Stack.md"), String);
+                read(joinpath(repo, "benchmark", "corpus-pride-and-prejudice.txt"), String);
                 parse_special=false,
             ),
         )

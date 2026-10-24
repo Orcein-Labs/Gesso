@@ -3,7 +3,7 @@ OpenAI-compatible server, so gesso-serve and llama-server are measured by the
 same client over the same HTTP path.
 
     python -I benchmark/stream_client.py --url http://127.0.0.1:8080 \
-        --label gesso-cuda --text docs/Gesso_Stack.md --chars 2000,32000 \
+        --label gesso-cuda --text benchmark/corpus-pride-and-prejudice.txt --chars 2000,32000 \
         --max-tokens 64 --out results.tsv
 
 A prompt of N characters is the first N characters of --text, prefixed with a

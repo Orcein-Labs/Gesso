@@ -7,8 +7,7 @@
 # decode!s, so compilation and first-fill are already paid). Every number in
 # the table below was measured on THIS box with THIS tree; nothing here is
 # carried over from a receipt written for a machine or a tree that no longer
-# exists. See docs/goals/PHASE10E_FUSED_DECODE.md for the status of the other
-# three goal docs whose receipts describe code that was never recovered.
+# exists.
 #
 #   workload        backend   before        after      gate      state
 #   toy2            CPU          87,008 B    12,848 B    16 KiB    MET

@@ -39,8 +39,11 @@ N >= 1 || error("profile_35b: GESSO_PROFILE_TOKENS must be >= 1")
 const WALL = parse(Int, get(ENV, "GESSO_WALL_TOKENS", "16"))
 const CTX = parse(Int, get(ENV, "GESSO_PROFILE_CTX", "1"))
 CTX >= 1 || error("profile_35b: GESSO_PROFILE_CTX must be >= 1")
-const TEXT =
-    get(ENV, "GESSO_PROFILE_TEXT", joinpath(@__DIR__, "..", "docs", "Gesso_Stack.md"))
+const TEXT = get(
+    ENV,
+    "GESSO_PROFILE_TEXT",
+    joinpath(@__DIR__, "..", "benchmark", "corpus-pride-and-prejudice.txt"),
+)
 
 which = get(ENV, "GESSO_BACKEND", "lava")
 if which == "lava"

@@ -1,5 +1,4 @@
-# CPU reference operator methods (§LXXV Phase 2; math law transcribed from
-# docs/goals/PHASE2_CPU_ORACLE.md).
+# CPU reference operator methods: the math every other backend is checked against.
 #
 # Laws:
 #   * CPU math is dense Array{Float32 or Float64} in `storage` (`shape ==

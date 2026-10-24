@@ -1,4 +1,4 @@
-# Backend interface (Gesso_Stack.md §XX, §XXI, §XXII-XXIII; §LXXIII draft).
+# Backend interface.
 #
 # This is the seam every backend lowering implements — CUDA.jl in Phase 4,
 # Lava in Phase 8 — written now so later phases cannot quietly design their
