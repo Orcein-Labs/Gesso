@@ -59,8 +59,8 @@ function _moe_host_scratch(h::Int, ff::Int, n_used::Int)
     return s
 end
 
-# Q8_0 needs a Q8_0 activation, so it stays on the per-expert path.
-_moe_host_q8k_type(t::Int32) = _quant_q8k_native(t) && t != GGML_TYPE_Q8_0
+# Q8_0 and Q4_0 need a Q8_0 activation, so they stay on the per-expert path.
+_moe_host_q8k_type(t::Int32) = _quant_q8k_native(t) && !_q80_act_type(t)
 
 function _moe_host_batchable(gate_s::GgufQuantSlice, up_s::GgufQuantSlice,
     down_s::GgufQuantSlice, h::Int, ff::Int)

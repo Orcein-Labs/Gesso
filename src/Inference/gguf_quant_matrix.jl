@@ -401,8 +401,8 @@ function _quant_matmul_multi!(dst::AbstractMatrix, x::AbstractMatrix, q::QuantMa
     # slowest thread (2-3x on the 27B's verify window). Rows are independent,
     # so the bits do not depend on the chunk count.
     nc = _qgemv_nchunks(q.nrows)
-    # The Q6_K and Q8_0 tiles read their columns' d values from one table.
-    dt = simd && (q.ggml_type == GGML_TYPE_Q6_K || q.ggml_type == GGML_TYPE_Q8_0) ? _multi_d_table(xqs) : nothing
+    # The Q6_K, Q8_0 and Q4_0 tiles read their columns' d values from one table.
+    dt = simd && (q.ggml_type == GGML_TYPE_Q6_K || _q80_act_type(q.ggml_type)) ? _multi_d_table(xqs) : nothing
     chunk = _PrefillChunk(dst, _quant_bytes(q), xqs, dt, q.ggml_type, q.ne0, q.nrows, nc, simd)
     _run_row_chunks!(chunk, nc, q.nrows * q.ne0 * seq)
     return dst
@@ -492,9 +492,9 @@ end
 # ---------------------------------------------------------------- shared input
 
 # True when `q` multiplies through the Q8_K integer kernel, so one Q8_K
-# quantization of its input serves every weight that reads that input. Q8_0
-# weights use a Q8_0 activation and fall back to the per-weight path.
-_quant_q8k_kind(q::QuantMatrix) = _quant_q8k_native(q.ggml_type) && q.ggml_type != GGML_TYPE_Q8_0
+# quantization of its input serves every weight that reads that input. Q8_0 and
+# Q4_0 weights use a Q8_0 activation and fall back to the per-weight path.
+_quant_q8k_kind(q::QuantMatrix) = _quant_q8k_native(q.ggml_type) && !_q80_act_type(q.ggml_type)
 
 """
     _quant_matmul_group!(dsts, xq, ws; simd) -> dsts

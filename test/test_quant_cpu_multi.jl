@@ -37,6 +37,7 @@ const _MQ_TYPES = (
     ("Q4_K", _MQ.GGML_TYPE_Q4_K),
     ("Q6_K", _MQ.GGML_TYPE_Q6_K),
     ("Q8_0", _MQ.GGML_TYPE_Q8_0),
+    ("Q4_0", _MQ.GGML_TYPE_Q4_0),
 )
 
 # Random valid rows: arbitrary bytes everywhere, with finite small f16 scales at
@@ -49,8 +50,8 @@ function _mq_scale_offsets(ggml_type::Int32)
 end
 
 function _mq_random_rows(rng, ggml_type::Int32, nrows::Int, nb::Int)
-    # nb counts 256-value super-blocks; Q8_0 blocks hold 32 values.
-    ggml_type == _MQ.GGML_TYPE_Q8_0 && (nb *= 8)
+    # nb counts 256-value super-blocks; Q8_0 and Q4_0 blocks hold 32 values.
+    _MQ._q80_act_type(ggml_type) && (nb *= 8)
     bsz = _MQ._iq_block_bytes(ggml_type)
     w = rand(rng, UInt8, nrows * nb * bsz)
     for blk in 0:(nrows * nb - 1)
@@ -71,10 +72,10 @@ _mq_acts(rng, ne0::Int, n::Int, ggml_type::Int32=_MQ.GGML_TYPE_Q4_K) =
     [_MQ._q8k_quantize_act(ggml_type, randn(rng, Float32, ne0)) for _ in 1:n]
 
 # Checks every column of a tile of `ntile` activations starting at t0 against
-# the single-column kernel, for both simd modes, on the rows of w. Q6_K and
-# Q8_0 tiles that start a d-table tile are also checked through the table.
+# the single-column kernel, for both simd modes, on the rows of w. Q6_K, Q8_0
+# and Q4_0 tiles that start a d-table tile are also checked through the table.
 _mq_uses_table(ggml_type::Int32, t0::Int, ntile::Int) =
-    (ggml_type == _MQ.GGML_TYPE_Q6_K || ggml_type == _MQ.GGML_TYPE_Q8_0) &&
+    (ggml_type == _MQ.GGML_TYPE_Q6_K || _MQ._q80_act_type(ggml_type)) &&
     (t0 - 1) % _MQ._MULTI_TILE == 0 && ntile <= _MQ._MULTI_TILE
 
 function _mq_check_tiles(ggml_type::Int32, w, nrows::Int, rb::Int, xqs, t0::Int, ntile::Int)
@@ -179,7 +180,7 @@ end
 @testset "multi-column dot: the d table" begin
     rng = Xoshiro(0xd7ab)
     nb = 3
-    for ty in (_MQ.GGML_TYPE_Q6_K, _MQ.GGML_TYPE_Q8_0)
+    for ty in (_MQ.GGML_TYPE_Q6_K, _MQ.GGML_TYPE_Q8_0, _MQ.GGML_TYPE_Q4_0)
         rb = _MQ._qrow_bytes(ty, 256 * nb)
         w = _mq_random_rows(rng, ty, 2, nb)
         xqs = _mq_acts(rng, 256 * nb, 9, ty)
@@ -206,7 +207,7 @@ end
     nb = 4
     ne0 = 256 * nb
     for ty in (_MQ.GGML_TYPE_IQ2_XXS, _MQ.GGML_TYPE_IQ3_S, _MQ.GGML_TYPE_Q2_K, _MQ.GGML_TYPE_Q4_K,
-        _MQ.GGML_TYPE_Q6_K, _MQ.GGML_TYPE_Q8_0)
+        _MQ.GGML_TYPE_Q6_K, _MQ.GGML_TYPE_Q8_0, _MQ.GGML_TYPE_Q4_0)
         rb = _MQ._qrow_bytes(ty, ne0)
         w = _mq_random_rows(rng, ty, 1, nb)
         xqs = _mq_acts(rng, ne0, 4, ty)

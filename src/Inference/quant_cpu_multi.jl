@@ -885,20 +885,28 @@ end
 # into one vector of K block totals (integer adds, so exact in any order), and
 # the float step Float32(sumi) * (dw * x.d) + sumf runs on all K columns at once,
 # unfused, as the single kernel does it per column.
+#
+# With q4 the weights are Q4_0 nibbles and the float step is the Q4_0 one,
+# (Float32(sumi) * dw) * x.d + sumf, with dw and x.d passed as two vectors.
 
-function _kq_ir_q80_multi(K::Int)
+function _kq_ir_q80_multi(K::Int, q4::Bool=false)
     io = IOBuffer()
     qargs = join(("ptr %q$c" for c in 0:(K - 1)), ", ")
+    dargs = q4 ? "<$K x float> %dw, <$K x float> %d" : "<$K x float> %d"
     print(io,
         "declare <8 x i32> @llvm.x86.avx2.pmadd.wd(<16 x i16>, <16 x i16>)\n",
         "declare <8 x i32> @llvm.x86.avx2.phadd.d(<8 x i32>, <8 x i32>)\n",
-        "define <$K x float> @entry(ptr %w, $qargs, <$K x float> %s, <$K x float> %d) #0 {\n")
-    _kq_ld(io, "wv", "w", 2)
-    _kq_half(io, "wl", "wv", 0)
-    _kq_half(io, "wh", "wv", 1)
-    print(io,
-        "  %wl16 = sext <16 x i8> %wl to <16 x i16>\n",
-        "  %wh16 = sext <16 x i8> %wh to <16 x i16>\n")
+        "define <$K x float> @entry(ptr %w, $qargs, <$K x float> %s, $dargs) #0 {\n")
+    if q4
+        _kq_q40_weights(io)
+    else
+        _kq_ld(io, "wv", "w", 2)
+        _kq_half(io, "wl", "wv", 0)
+        _kq_half(io, "wh", "wv", 1)
+        print(io,
+            "  %wl16 = sext <16 x i8> %wl to <16 x i16>\n",
+            "  %wh16 = sext <16 x i8> %wh to <16 x i16>\n")
+    end
     for c in 0:(K - 1)
         _kq_ld(io, "x$c", "q$c", 0)
         _kq_half(io, "xl$c", "x$c", 0)
@@ -938,6 +946,7 @@ function _kq_ir_q80_multi(K::Int)
         "  %tk = shufflevector <$n x i32> %t, <$n x i32> poison, <$K x i32> <",
         join(("i32 $c" for c in 0:(K - 1)), ", "), ">\n",
         "  %fa = sitofp <$K x i32> %tk to <$K x float>\n",
+        q4 ? "  %fw = fmul <$K x float> %fa, %dw\n  %fm = fmul <$K x float> %fw, %d\n" :
         "  %fm = fmul <$K x float> %fa, %d\n",
         "  %fs = fadd <$K x float> %s, %fm\n",
         "  ret <$K x float> %fs\n}\n", _KQ_ATTRS)
@@ -951,6 +960,34 @@ for K in 1:8
     argt = Tuple{Ptr{UInt8},ntuple(_ -> Ptr{Int8}, K)...,V,V}
     @eval @inline _q80_multi_step(pw::Ptr{UInt8}, pq::NTuple{$K,Ptr{Int8}}, s::$V, d::$V) =
         Base.llvmcall(($(_kq_ir_q80_multi(K)), "entry"), $V, $argt, pw, $(qs...), s, d)
+    argt4 = Tuple{Ptr{UInt8},ntuple(_ -> Ptr{Int8}, K)...,V,V,V}
+    @eval @inline _q40_multi_step(pw::Ptr{UInt8}, pq::NTuple{$K,Ptr{Int8}}, s::$V, dw::$V, d::$V) =
+        Base.llvmcall(($(_kq_ir_q80_multi(K, true)), "entry"), $V, $argt4, pw, $(qs...), s, dw, d)
+end
+
+# Q4_0 tile: the d table holds each column's x.d, and 1.0f0 * x.d is exact, so
+# _multi_tile_d with dw = 1 reads it back unchanged.
+@noinline function _dot_q40_multi!(out::AbstractVector{Float32}, w::AbstractVector{UInt8},
+    woff::Int, xqs, t0::Int, ::Val{K}, dt=nothing) where {K}
+    nb = length(xqs[t0].d)
+    _q8k_check_row(w, woff, 18 * nb)
+    _multi_check(xqs, t0, K, nb)
+    nb == 0 && return _multi_zero!(out, t0, K)
+    i0 = _multi_d_base(dt, t0, K, nb)
+    GC.@preserve w xqs begin
+        xv = ntuple(c -> xqs[t0 + c - 1], Val(K))
+        sumf = ntuple(_ -> VecElement(0.0f0), Val(K))
+        @inbounds for ib in 0:(nb - 1)
+            b = woff + ib * 18
+            dw = ntuple(_ -> VecElement(_kq_f16(w, b)), Val(K))
+            d = map(VecElement, _multi_tile_d(dt, xv, i0, ib, 1.0f0))
+            sumf = _q40_multi_step(pointer(w, b + 1), ntuple(c -> pointer(xv[c].qs, 32 * ib + 1), Val(K)), sumf, dw, d)
+        end
+        for c in 1:K
+            out[t0 + c - 1] = sumf[c].value
+        end
+    end
+    return out
 end
 
 @noinline function _dot_q80_multi!(out::AbstractVector{Float32}, w::AbstractVector{UInt8},
@@ -984,7 +1021,7 @@ _q8k_multi_type(t::Int32) =
     t == GGML_TYPE_IQ2_XXS || t == GGML_TYPE_IQ3_S || t == GGML_TYPE_IQ2_S ||
     t == GGML_TYPE_IQ2_XS || t == GGML_TYPE_IQ3_XXS || t == GGML_TYPE_IQ1_S ||
     t == GGML_TYPE_IQ1_M || t == GGML_TYPE_IQ4_XS || t == GGML_TYPE_Q2_K ||
-    t == GGML_TYPE_Q6_K || t == GGML_TYPE_Q8_0
+    t == GGML_TYPE_Q6_K || t == GGML_TYPE_Q8_0 || t == GGML_TYPE_Q4_0
 
 function _dot_q8k_multi_kernel!(out::AbstractVector{Float32}, ggml_type::Int32,
     w::AbstractVector{UInt8}, woff::Int, xqs, t0::Int, v::Val, dt=nothing)
@@ -998,6 +1035,7 @@ function _dot_q8k_multi_kernel!(out::AbstractVector{Float32}, ggml_type::Int32,
     ggml_type == GGML_TYPE_Q2_K && return _dot_q2k_multi!(out, w, woff, xqs, t0, v)
     ggml_type == GGML_TYPE_Q6_K && return _dot_q6k_multi!(out, w, woff, xqs, t0, v, dt)
     ggml_type == GGML_TYPE_Q8_0 && return _dot_q80_multi!(out, w, woff, xqs, t0, v, dt)
+    ggml_type == GGML_TYPE_Q4_0 && return _dot_q40_multi!(out, w, woff, xqs, t0, v, dt)
     return _dot_iq4_xs_multi!(out, w, woff, xqs, t0, v)
 end
 

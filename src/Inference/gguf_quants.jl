@@ -15,6 +15,7 @@ const GGML_TYPE_IQ3_S = Int32(21)
 const GGML_TYPE_IQ2_S = Int32(22)
 const GGML_TYPE_IQ4_XS = Int32(23)
 const GGML_TYPE_IQ1_M = Int32(29)
+const GGML_TYPE_Q4_0 = Int32(2)
 const GGML_TYPE_Q8_0 = Int32(8)
 const GGML_TYPE_Q2_K = Int32(10)
 const GGML_TYPE_Q3_K = Int32(11)
@@ -55,14 +56,15 @@ function _iq_block_bytes(ggml_type::Int32)
     ggml_type == GGML_TYPE_IQ2_S && return 82
     ggml_type == GGML_TYPE_IQ3_S && return 110
     ggml_type == GGML_TYPE_IQ1_M && return 56
-    # K-quants and Q8_0 (quant_cpu_kquants.jl). Q8_0 blocks hold 32 values,
-    # not QK_K; _qrow_bytes handles that.
+    # K-quants, Q8_0 and Q4_0 (quant_cpu_kquants.jl). Q8_0 and Q4_0 blocks hold
+    # 32 values, not QK_K; _qrow_bytes handles that.
     ggml_type == GGML_TYPE_Q2_K && return 84
     ggml_type == GGML_TYPE_Q3_K && return 110
     ggml_type == GGML_TYPE_Q4_K && return 144
     ggml_type == GGML_TYPE_Q5_K && return 176
     ggml_type == GGML_TYPE_Q6_K && return 210
     ggml_type == GGML_TYPE_Q8_0 && return 34
+    ggml_type == GGML_TYPE_Q4_0 && return 18
     error("gguf_quants: no fused GEMV for ggml type $ggml_type")
 end
 
@@ -392,7 +394,7 @@ end
 
 function _qrow_bytes(ggml_type::Int32, ne0::Int)
     ggml_type == GGML_TYPE_F32 && return ne0 * 4
-    ggml_type == GGML_TYPE_Q8_0 && return div(ne0, 32) * _iq_block_bytes(ggml_type)
+    _q80_act_type(ggml_type) && return div(ne0, 32) * _iq_block_bytes(ggml_type)
     return div(ne0, QK_K) * _iq_block_bytes(ggml_type)
 end
 

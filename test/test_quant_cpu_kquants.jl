@@ -4,8 +4,9 @@
 #   * F32 dequant bit-equal to ggml's to_float (env GESSO_GGML_DIR; skipped if unset)
 #   * AVX2 kernels bit-exact against the scalar reference, per format
 #   * zero allocations per dot; GEMV threading invariance
-#   * real tensors from the Ornith 35B and Qwen3.8-27B GGUFs (env-gated; reads
-#     only the header and the rows it tests, the models are never loaded)
+#   * real tensors from the Ornith 35B and Qwen3.8-27B GGUFs and the Qwen3.8-27B
+#     MTP head in Q4_0 (env-gated; reads only the header and the rows it tests,
+#     the models are never loaded)
 
 using Random: Xoshiro
 using Test: AbstractTestSet, Broken, get_testset, record
@@ -26,9 +27,10 @@ const _KQTYPES = (
     ("Q5_K", _KQ.GGML_TYPE_Q5_K),
     ("Q6_K", _KQ.GGML_TYPE_Q6_K),
     ("Q8_0", _KQ.GGML_TYPE_Q8_0),
+    ("Q4_0", _KQ.GGML_TYPE_Q4_0),
 )
 
-_kq_nvals(ty::Int32) = ty == _KQ.GGML_TYPE_Q8_0 ? 32 : _KQ.QK_K
+_kq_nvals(ty::Int32) = _KQ._q80_act_type(ty) ? 32 : _KQ.QK_K
 
 function _kq_put_f16!(w::Vector{UInt8}, off0::Int, v::Float32)
     bits = reinterpret(UInt16, Float16(v))
@@ -59,7 +61,7 @@ function _kq_dequant_q80(x::_KQ.Q80Vec)
     return out
 end
 
-_kq_dequant_act(ty::Int32, xq) = ty == _KQ.GGML_TYPE_Q8_0 ? _kq_dequant_q80(xq) : _KQ.dequantize_q8_K(xq)
+_kq_dequant_act(ty::Int32, xq) = _KQ._q80_act_type(ty) ? _kq_dequant_q80(xq) : _KQ.dequantize_q8_K(xq)
 
 # Independent port of quantize_row_q8_0_ref. roundf (half away from zero) is
 # written out with trunc, so this does not share the implementation under test.
@@ -349,6 +351,7 @@ function _kq_ggml_generic_sym(ty::Int32)
         _KQ.GGML_TYPE_Q5_K => :ggml_vec_dot_q5_K_q8_K_generic,
         _KQ.GGML_TYPE_Q6_K => :ggml_vec_dot_q6_K_q8_K_generic,
         _KQ.GGML_TYPE_Q8_0 => :ggml_vec_dot_q8_0_q8_0_generic,
+        _KQ.GGML_TYPE_Q4_0 => :ggml_vec_dot_q4_0_q8_0_generic,
     )
     _KQ._ensure_ggml!()
     hcpu = _KQ._GGML_LIBS[][2]
@@ -461,9 +464,10 @@ end
     named = ("blk.0.attn_qkv.weight", "blk.0.ssm_out.weight", "output.weight", "blk.0.ffn_down_shexp.weight")
     ggml_ok_dir = isfile(joinpath(get(ENV, "GESSO_GGML_DIR", ""), "libggml-base.so"))
     ran = false
-    for path in (get(ENV, "GESSO_ORNITH35_GGUF", ""), get(ENV, "GESSO_QWEN38_27B_IQ4XS_GGUF", ""))
+    for path in (get(ENV, "GESSO_ORNITH35_GGUF", ""), get(ENV, "GESSO_QWEN38_27B_IQ4XS_GGUF", ""),
+                 get(ENV, "GESSO_QWEN38_MTP_GGUF", ""))
         if !isfile(path)
-            _skip("set GESSO_ORNITH35_GGUF / GESSO_QWEN38_27B_IQ4XS_GGUF to a GGUF — real K-quant tensors skipped")
+            _skip("set GESSO_ORNITH35_GGUF / GESSO_QWEN38_27B_IQ4XS_GGUF / GESSO_QWEN38_MTP_GGUF to a GGUF — real tensors skipped")
             continue
         end
         ran = true
@@ -473,7 +477,7 @@ end
             info = findfirst(t -> t.name == nm, hdr.tensors)
             info === nothing || push!(targets, hdr.tensors[info])
         end
-        for ty in (_KQ.GGML_TYPE_Q5_K, _KQ.GGML_TYPE_Q6_K, _KQ.GGML_TYPE_Q4_K, _KQ.GGML_TYPE_Q3_K, _KQ.GGML_TYPE_Q2_K, _KQ.GGML_TYPE_Q8_0)
+        for ty in (_KQ.GGML_TYPE_Q5_K, _KQ.GGML_TYPE_Q6_K, _KQ.GGML_TYPE_Q4_K, _KQ.GGML_TYPE_Q3_K, _KQ.GGML_TYPE_Q2_K, _KQ.GGML_TYPE_Q8_0, _KQ.GGML_TYPE_Q4_0)
             haskey(found, ty) && push!(targets, found[ty])
         end
         rng = Xoshiro(70)
