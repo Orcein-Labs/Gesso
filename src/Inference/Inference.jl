@@ -1407,6 +1407,16 @@ last one returned. Any other return value, `nothing` included, continues.
 returned like EOS. The defaults (`on_token=nothing`, `stop_ids=()`) leave the
 output and the state unchanged.
 
+`on_hidden`: called before each argmax step as `on_hidden(pos, v)`, where `v`
+is a fresh `Float32` copy of the final-normed row the head reads and `pos` is
+the 1-based index in the returned ids of the token that row came from, so the
+argmax of the head on `v` is `ids[pos + 1]`. It is exclusive with `draft`.
+
+`draft`: a `Speculation.DraftSource` that proposes ids for each verify window,
+capped at `max_draft` (default 8) per window and at `max_new_tokens`. The
+target checks the proposals in one window and keeps the greedy-agreeing prefix.
+`info[].speculation` then reports `(windows, drafted, accepted)`.
+
 `eos_ids`: the ids that end generation. The default is the toy contract's
 EOS (id 2). A real vocabulary must pass its own: in a GPT-2 byte-level vocab,
 id 2 is `#`, and generation would end at the first markdown heading.
@@ -1434,6 +1444,7 @@ function reference_generate(
     theta=nothing,
     state::Union{Nothing,GenerateState}=nothing,
     on_token=nothing,
+    on_hidden=nothing,
     stop_ids=(),
     eos_ids=(TOY_EOS,),
     draft=nothing,
@@ -1444,6 +1455,8 @@ function reference_generate(
     isempty(prompt) && error("reference_generate: prompt is empty")
     (sampler === nothing || draft === nothing) || throw(ArgumentError(
         "reference_generate: a sampler and a speculative draft are exclusive; speculation verifies greedily"))
+    (on_hidden === nothing || draft === nothing) || throw(ArgumentError(
+        "reference_generate: on_hidden and a speculative draft are exclusive; the window skips per-token hidden states"))
     theta=_resolved_rope_theta(tensors, theta)
     _infer_device_storage!(:reference_generate, backend, tensors)
     cpu = backend
@@ -1734,6 +1747,8 @@ function reference_generate(
         end
         while steps < cap
             tok_t0 = _profile_token_begin()
+            # the row the head below reads belongs to ids[P + steps], the last input
+            on_hidden === nothing || on_hidden(P + steps, _final_normed_host(tensors, h, cpu, wd; eps))
             # greedy argmax at the current last position (row P + steps); the
             # argmax may run over device storage — only the scalar id crosses
             # back to the host
@@ -1873,6 +1888,23 @@ function _last_logits(model, tensors, h, cpu, wl, vocab, row::Int; eps::Real=1e-
     )
     _dec_matmul_group!(cpu, (out,), _decode_xq(buf, Val(:xq_dim)), lastrow, (tensors.lm_head,), wl)
     return vec(out.storage)
+end
+
+# Host copy of the row the head reads: the residual row `h` of the current last
+# position, final-normed when `tensors` carries a final RMSNorm. Every buffer is
+# fresh, so the caller keeps the vector and the decode scratch is not touched.
+function _final_normed_host(tensors, h, cpu, wl; eps::Real=1e-6)
+    dim = size(h.storage, 2)
+    T = eltype(h.storage)
+    row = Activation(; shape=(1, dim), storage=fill!(similar(h.storage, T, (1, dim)), zero(T)))
+    row.storage .= h.storage[1:1, :]
+    final_rms = haskey(tensors, :final_rms) ? tensors.final_rms : nothing
+    if final_rms !== nothing
+        normed = Activation(; shape=(1, dim), storage=fill!(similar(h.storage, T, (1, dim)), zero(T)))
+        rmsnorm!(cpu, normed, row, final_rms, wl; eps)
+        row = normed
+    end
+    return Vector{Float32}(vec(Array(row.storage)))
 end
 
 # Row buffers for one single-token decode or one verify-window row: the residual
