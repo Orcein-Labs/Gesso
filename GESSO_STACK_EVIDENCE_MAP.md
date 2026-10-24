@@ -83,7 +83,7 @@ That is admirable discipline, and it is also a finding about the ecosystem compo
 | SnoopCompile, PrecompileTools | 7 each | Named on the untried rungs of the compiler ladder |
 | LLVM | 7 | Same ladder |
 | JET | 4 | Static analysis |
-| Flux | 1 | Listed in the archived `Harpe_Stack_old.md` as a checkpoint origin |
+| Flux | 1 | Listed in the archived `docs/archive/2026-10_harpe-stack/harpe-stack.md` as a checkpoint origin |
 | Lux | 1 | Same |
 | Enzyme | 1 | Listed under things explicitly out of scope |
 
@@ -105,7 +105,7 @@ The name history matters because it records two separations. From `docs/ARCHITEC
 - **Harpe** became **Gesso** (mechanism). Commit `c65a56c`, 2026-09-29, "Rename the public product from Harpe to Gesso."
 - **NIRA** is the internal codename for Cyan policy.
 
-`docs/Harpe_Stack_old.md` (1,481 lines) survives as the predecessor vision and is marked "superseded where they disagree." It contains the checkpoint-transport principle that survives into current canon: parameters from Hugging Face, Lux, Flux, Harpe training, or any other exporter are all equivalent, because "checkpoint format is transport" and "execution semantics are separate."
+`docs/archive/2026-10_harpe-stack/harpe-stack.md` (1,481 lines) survives as the predecessor vision and is marked "superseded where they disagree." It contains the checkpoint-transport principle that survives into current canon: parameters from Hugging Face, Lux, Flux, Harpe training, or any other exporter are all equivalent, because "checkpoint format is transport" and "execution semantics are separate."
 
 ### The eras
 
@@ -629,7 +629,7 @@ One incidental observation: my first two attempts at running the suite failed wi
 
 ### Adjacent research worth reading in the original
 
-- `docs/Harpe_Stack_old.md` (1,481 lines), the predecessor vision, marked superseded where it disagrees.
+- `docs/archive/2026-10_harpe-stack/harpe-stack.md` (1,481 lines), the predecessor vision, marked superseded where it disagrees.
 - `docs/Gesso_musings.md` (1,433 lines), the "dangerous notebook."
 - `Julia Compiler Optimizations for Gesso/docs/the_ancient_texts.md` (1,580 lines), the compiler ladder instrument list.
 - `docs/Native_Julia_Kernel_Autotuning_North_Star_README.md` (2,270 lines, 2026-09-22), the ecosystem survey that Gesso Phase 9 consumes.
