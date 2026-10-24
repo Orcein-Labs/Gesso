@@ -1,0 +1,564 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Matt C <latentcollapse@gmail.com>
+Date: Wed, 14 Oct 2026 22:00:34 -0400
+Subject: [PATCH] gemm: hand off direct accumulators through shared tiles
+
+---
+ src/array/gemm.jl                   |  43 +++-
+ src/runtime/device.jl               |  10 +-
+ test/runtests.jl                    |   4 +
+ test/test_coopmat_gemm_subgroup.jl  |  13 +-
+ test/test_gemm_accumulator_store.jl | 362 ++++++++++++++++++++++++++++
+ 5 files changed, 416 insertions(+), 16 deletions(-)
+ create mode 100644 test/test_gemm_accumulator_store.jl
+
+diff --git a/src/array/gemm.jl b/src/array/gemm.jl
+index aec782f..1c670f4 100644
+--- a/src/array/gemm.jl
++++ b/src/array/gemm.jl
+@@ -341,7 +341,8 @@ const GEMM_SUBGROUP = COOPMAT_SUBGROUP
+ # wave-size agnostic would mean retuning GEMM_WORKGROUP and the block factors
+ # together, and those were measured at 32.
+ function coopmat_gemm_available(ctx::VkContext = vk_context())
+-    coopmat_shape(ctx, Float16, GEMM_TILE, GEMM_TILE, GEMM_TILE) &&
++    ctx.wg_explicit_layout_enabled &&
++        coopmat_shape(ctx, Float16, GEMM_TILE, GEMM_TILE, GEMM_TILE) &&
+         (device_subgroup_size(ctx) == GEMM_SUBGROUP ||
+          can_require_subgroup_size(ctx, GEMM_SUBGROUP))
+ end
+@@ -428,7 +429,9 @@ not.
+             m = coopmat_setcomp(m, i, f(coopmat_getcomp(m, i)))
+         end
+     end
+-    copyto!(pointer(C), off, ld, m)
++    # Shared and global destinations use the same conversion and epilogue.
++    dest = C isa LavaSharedArray ? C : pointer(C)
++    copyto!(dest, off, ld, m)
+ end
+ 
+ const GEMM_BLOCK_KERNELS = Dict{Int,Any}()
+@@ -508,10 +511,27 @@ for BLK in (1, 2, 4)
+                 kt += 1
+             end
+ 
+-            Base.Cartesian.@nexprs $BLK j -> Base.Cartesian.@nexprs $BLK i ->
+-                accstore!(C, 1 + coff + tm + (i - 1) * GEMM_TILE +
+-                             (tn + (j - 1) * GEMM_TILE) * M + sk * M * N,
+-                          M, c_i_j, epi)
++            # Hand off one accumulator tile through subgroup-disjoint shared
++            # memory, then copy its elements to the original output positions.
++            # Reuse the tile only after every lane finishes reading it. The
++            # launcher selects full workgroups so both barriers are uniform.
++            output_tile = @localmem eltype(C) (
++                (GEMM_WORKGROUP ÷ GEMM_SUBGROUP) * GEMM_TILE * GEMM_TILE,)
++            local_lane = @index(Local, Linear) - 1
++            lane_in_subgroup = local_lane % GEMM_SUBGROUP
++            shared_base = (local_lane ÷ GEMM_SUBGROUP) * GEMM_TILE * GEMM_TILE
++            Base.Cartesian.@nexprs $BLK j -> Base.Cartesian.@nexprs $BLK i -> begin
++                accstore!(output_tile, 1 + shared_base, GEMM_TILE, c_i_j, epi)
++                @synchronize
++                for element in (lane_in_subgroup + 1):GEMM_SUBGROUP:(GEMM_TILE * GEMM_TILE)
++                    row = (element - 1) % GEMM_TILE
++                    col = (element - 1) ÷ GEMM_TILE
++                    dst = 1 + coff + tm + (i - 1) * GEMM_TILE + row +
++                          (tn + (j - 1) * GEMM_TILE + col) * M + sk * M * N
++                    unsafe_store!(pointer(C), output_tile[shared_base + element], dst)
++                end
++                @synchronize
++            end
+         end
+         GEMM_BLOCK_KERNELS[$BLK] = $kname
+     end
+@@ -1509,6 +1529,8 @@ function coopmat_gemm!(C, A, B, M::Int, N::Int, K::Int;
+     # and the buffer's own device never sees it. `get_backend` derives the
+     # context from the array's buffer, which has always carried it.
+     backend = KernelAbstractions.get_backend(C)
++    vk_context(C).wg_explicit_layout_enabled ||
++        throw(ArgumentError("coopmat_gemm! requires enabled Workgroup explicit-layout features"))
+     # A bias goes into the accumulator's initial value, so it must land exactly
+     # once — with `splitk > 1` every plane would carry its own copy and the
+     # reduction would sum them. The caller keeps its own epilogue there.
+@@ -1550,9 +1572,12 @@ function coopmat_gemm!(C, A, B, M::Int, N::Int, K::Int;
+     # The epilogue belongs to whoever reduces the planes.
+     epilogue === identity || splitk == 1 ||
+         throw(ArgumentError("coopmat_gemm!: an epilogue needs splitk == 1, got $splitk"))
+-    GEMM_BLOCK_KERNELS[blk](backend, GEMM_WORKGROUP)(
++    ndrange = ntiles * splitk * GEMM_SUBGROUP * nbatch
++    # A one-subgroup tail must not leave half a workgroup before its barrier.
++    workgroup = ndrange % GEMM_WORKGROUP == 0 ? GEMM_WORKGROUP : GEMM_SUBGROUP
++    GEMM_BLOCK_KERNELS[blk](backend, workgroup)(
+         dst, A, B, bias, epilogue, Val(M), Val(N), Val(K),
+-        Val((K ÷ GEMM_TILE) ÷ splitk); ndrange = ntiles * splitk * 32 * nbatch)
++        Val((K ÷ GEMM_TILE) ÷ splitk); ndrange)
+     splitk == 1 && return C
+     # `reduce=false` hands the partial planes back untouched, for a caller whose
+     # own epilogue can sum them — a convolution already reads every element of
+@@ -1667,7 +1692,7 @@ function gemmlaunch!(C, A, B, M, N, K, α, β)
+     c = gemmstrides(C)
+     # See the note in `mul!` above: the backend comes from the destination.
+     backend = KernelAbstractions.get_backend(c[1])
+-    if staged_gemm_ok(C, A, B, M, N)
++    if vk_context(c[1]).wg_explicit_layout_enabled && staged_gemm_ok(C, A, B, M, N)
+         nblk_m = cld(M, SGEMM_BM)
+         nblk_n = cld(N, SGEMM_BN)
+         # The reference's `is_aligned && is_in_bounds`, decided once on the host:
+diff --git a/src/runtime/device.jl b/src/runtime/device.jl
+index 39662ce..36dd5d0 100644
+--- a/src/runtime/device.jl
++++ b/src/runtime/device.jl
+@@ -406,6 +406,9 @@ mutable struct VkContext
+     # hardware only implements a fixed set, so a kernel must pick one of these
+     # rather than any tile size it likes. Empty when unsupported.
+     coopmat_available::Bool
++    # The enabled explicit-layout feature group includes Float16 Workgroup
++    # storage. Shared-memory GEMM kernels require it independently of coopmat.
++    wg_explicit_layout_enabled::Bool
+     coopmat_shapes::Vector{NamedTuple{(:M, :N, :K, :ab_type, :c_type, :scope),
+                                       Tuple{Int, Int, Int, UInt32, UInt32, UInt32}}}
+     # VK_NV_cooperative_matrix2, per sub-feature. NVIDIA-only; every kernel that
+@@ -541,7 +544,8 @@ mutable struct VkContext
+                        driver_version::AbstractString="unknown",
+                        video_decode_available::Bool=false,
+                        video_decode_queue::Union{Nothing, Vulkan.Queue}=nothing,
+-                       video_decode_queue_family_index::Union{Nothing, UInt32}=nothing)
++                       video_decode_queue_family_index::Union{Nothing, UInt32}=nothing;
++                       wg_explicit_layout_enabled::Bool=false)
+         ctx = new()
+         ctx.instance = instance
+         ctx.physical_device = physical_device
+@@ -563,6 +567,7 @@ mutable struct VkContext
+         ctx.ray_query_available = ray_query_available
+         ctx.ser_available = ser_available
+         ctx.coopmat_available = coopmat_available
++        ctx.wg_explicit_layout_enabled = wg_explicit_layout_enabled
+         ctx.coopmat_shapes = coopmat_shapes === nothing ?
+             eltype(fieldtype(VkContext, :coopmat_shapes))[] : coopmat_shapes
+         ctx.coopmat2 = coopmat2
+@@ -1580,7 +1585,8 @@ function VkContext(; select = pick_physical_device, debug::DebugConfig = DebugCo
+         gpu_assisted,
+         debug,
+         string(phys_props.driver_version),
+-        has_video_decode, video_decode_queue, video_qf_idx,
++        has_video_decode, video_decode_queue, video_qf_idx;
++        wg_explicit_layout_enabled = has_wg_explicit,
+     )
+     # After construction, because it is resolved from THIS device and the inner
+     # constructor has no access to the local. Per device — a module-global one
+diff --git a/test/runtests.jl b/test/runtests.jl
+index ac9c414..cfffdda 100644
+--- a/test/runtests.jl
++++ b/test/runtests.jl
+@@ -214,6 +214,10 @@ end
+         include(joinpath(@__DIR__, "test_gemm_fp16_accum.jl"))
+     end
+ 
++    @testset "cooperative-matrix GEMM accumulator store contract" begin
++        include(joinpath(@__DIR__, "test_gemm_accumulator_store.jl"))
++    end
++
+     # The scalar half of the same port: `mul!`'s fp32 path, which had no tiling
+     # at all and ran at 0.448 TFLOP/s where this reaches 4.301.
+     @testset "staged scalar GEMM" begin
+diff --git a/test/test_coopmat_gemm_subgroup.jl b/test/test_coopmat_gemm_subgroup.jl
+index 8b472bf..5952050 100644
+--- a/test/test_coopmat_gemm_subgroup.jl
++++ b/test/test_coopmat_gemm_subgroup.jl
+@@ -8,14 +8,16 @@
+ # silently wrong answer, not a crash. It reproduced down to a single 16x16x16
+ # tile with nbatch=1.
+ #
+-# `coopmat_gemm_available()` therefore requires the device subgroup size to match,
+-# and `mul!` falls back to `gemmlaunch!`, which is correct at any wave width.
++# `coopmat_gemm_available()` therefore requires the device subgroup size to match
++# and Float16 Workgroup explicit-layout support. Without either, `mul!` falls
++# back to `gemmlaunch!`, which is correct at any wave width and without that
++# feature group.
+ #
+ # Written against whatever the running device reports, so it is meaningful on
+ # wave32 hardware (where the coopmat path is taken) and wave64 (where it is not).
+ 
+-using Test, Lava, LinearAlgebra, KernelAbstractions
+-const KA = KernelAbstractions
++using Test, Lava, LinearAlgebra
++const KA = Lava.KernelAbstractions
+ 
+ @testset "coopmat GEMM requires a matching subgroup size" begin
+     ctx = Lava.vk_context()
+@@ -29,7 +31,8 @@ const KA = KernelAbstractions
+         @test sg == Lava.GEMM_SUBGROUP || Lava.can_require_subgroup_size(ctx, Lava.GEMM_SUBGROUP)
+     else
+         @test !(sg == Lava.GEMM_SUBGROUP || Lava.can_require_subgroup_size(ctx, Lava.GEMM_SUBGROUP)) ||
+-              !Lava.coopmat_shape(ctx, Float16, Lava.GEMM_TILE, Lava.GEMM_TILE, Lava.GEMM_TILE)
++              !Lava.coopmat_shape(ctx, Float16, Lava.GEMM_TILE, Lava.GEMM_TILE, Lava.GEMM_TILE) ||
++              !ctx.wg_explicit_layout_enabled
+     end
+ 
+     # A pinnable device must actually be pinned, and only for coopmat modules —
+diff --git a/test/test_gemm_accumulator_store.jl b/test/test_gemm_accumulator_store.jl
+new file mode 100644
+index 0000000..dbb8d07
+--- /dev/null
++++ b/test/test_gemm_accumulator_store.jl
+@@ -0,0 +1,362 @@
++module LavaGemmAccumulatorStoreContractTest
++
++# Tier 3 device regression for Lava's direct register-blocked coopmat GEMM.
++# Every call below forces `staged=false` and passes (BLK, SPLITK) explicitly;
++# there is no mul! dispatch or scalar fallback in the path under test.
++
++using Test, Lava, LinearAlgebra, Random
++const KA = Lava.KernelAbstractions
++
++const C1_CTX = Lava.vk_context()
++Lava.coopmat_gemm_available(C1_CTX) ||
++    error("this suite requires the device's direct 16x16x16 F16 cooperative-matrix path")
++const C1_F16 = Lava._vk_component_type(Float16)
++const C1_F32 = Lava._vk_component_type(Float32)
++any(
++    s ->
++        s.M == 16 &&
++        s.N == 16 &&
++        s.K == 16 &&
++        s.ab_type == C1_F16 &&
++        s.c_type == C1_F32 &&
++        s.scope == Lava.VK_SCOPE_SUBGROUP,
++    C1_CTX.coopmat_shapes,
++) || error("device does not report the required 16x16x16 F16-to-F32 accumulator shape")
++println(
++    "C1_COOPMAT_DEVICE name=$(C1_CTX.device_name) " *
++    "subgroup=$(Lava.device_subgroup_size(C1_CTX)) threads=$(Threads.nthreads())",
++)
++
++# Dyadic inputs make every F16 product and every F32 partial sum exactly
++# representable: A,B are multiples of 1/8, K <= 512, and |sum| <= 2048.
++# The first two rows and first column force both signs for the ReLU cases.
++function c1_dyadic_inputs(M::Int, K::Int, N::Int, seed::Int)
++    rng = MersenneTwister(seed)
++    A = Float16.(rand(rng, -16:16, M, K) ./ 8)
++    B = Float16.(rand(rng, -16:16, K, N) ./ 8)
++    A[1, :] .= Float16(0.5)
++    A[2, :] .= Float16(-0.5)
++    B[:, 1] .= Float16(0.5)
++    return A, B
++end
++
++function c1_continuous_inputs(M::Int, K::Int, N::Int, seed::Int)
++    rng = MersenneTwister(seed)
++    A = Float16.(0.25f0 .* randn(rng, Float32, M, K))
++    B = Float16.(0.25f0 .* randn(rng, Float32, K, N))
++    return A, B
++end
++
++c1_relu(x::T) where {T<:AbstractFloat} = max(x, zero(T))
++
++function c1_host_dot(
++    A::AbstractMatrix,
++    B::AbstractMatrix,
++    krange::UnitRange{Int} = 1:size(A, 2),
++)
++    Float64.(view(A, :, krange)) * Float64.(view(B, krange, :))
++end
++
++function c1_host_output(
++    A,
++    B,
++    ::Type{T};
++    bias = nothing,
++    epilogue = identity,
++    krange::UnitRange{Int} = 1:size(A, 2),
++) where {T<:AbstractFloat}
++    dot = c1_host_dot(A, B, krange)
++    out = Matrix{T}(undef, size(dot))
++    @inbounds for i in eachindex(dot)
++        v = dot[i] + (bias === nothing ? 0.0 : Float64(bias[mod1(i, size(dot, 1))]))
++        rounded = T(v) # Lava converts the F32 accumulator to C before the epilogue.
++        out[i] = epilogue(rounded)
++    end
++    return out
++end
++
++function c1_dispatch(
++    Ah::Matrix{Float16},
++    Bh::Matrix{Float16},
++    ::Type{TC};
++    blk::Int,
++    split::Int,
++    reduce::Bool = true,
++    bias_host = nothing,
++    epilogue = identity,
++) where {TC<:AbstractFloat}
++    M, K = size(Ah)
++    size(Bh, 1) == K || error("host test operands do not conform")
++    N = size(Bh, 2)
++    A = Lava.LavaArray(Ah)
++    B = Lava.LavaArray(Bh)
++    C = Lava.LavaArray{TC}(undef, M, N)
++    fill!(C, TC(NaN))
++    bias = bias_host === nothing ? nothing : Lava.LavaArray(bias_host)
++    partials = split == 1 ? nothing : Lava.LavaArray{Float32}(undef, M, N, split)
++    partials === nothing || fill!(partials, Float32(NaN))
++
++    Lava.coopmat_gemm!(
++        C,
++        A,
++        B,
++        M,
++        N,
++        K;
++        blk_split = (blk, split),
++        partials,
++        reduce,
++        bias,
++        epilogue,
++        staged = false,
++    )
++    KA.synchronize(KA.get_backend(C))
++    got_C = Array(C)
++    got_partials = partials === nothing ? nothing : Array(partials)
++    return got_C, got_partials
++end
++
++function c1_assert_exact(got, want)
++    @test size(got) == size(want)
++    @test all(isfinite, got)
++    @test got == want
++end
++
++function c1_assert_partial_planes(got, A, B, split::Int, kper::Int)
++    @test size(got) == (size(A, 1), size(B, 2), split)
++    @test all(isfinite, got)
++    for s = 1:split
++        lo = (s - 1) * kper * 16 + 1
++        hi = s * kper * 16
++        want = Float32.(c1_host_dot(A, B, lo:hi))
++        @test got[:, :, s] == want
++    end
++end
++
++function c1_assert_close(got, want; tolerance::Float64 = 1e-4)
++    @test size(got) == size(want)
++    @test all(isfinite, got)
++    scale = max(1.0, maximum(abs, want))
++    err = maximum(abs.(Float64.(got) .- want)) / scale
++    @test err <= tolerance
++end
++
++function c1_strided_gemm_spirv(ctx)
++    for linked in values(ctx.caches.linked)
++        occursin("strided_gemm_kernel", Lava.kernel_source_name(linked.compiled)) ||
++            continue
++        return linked.compiled.spirv_bytes
++    end
++    for (key, linked) in ctx.caches.frozen_mem
++        linked isa Lava.LavaLinkedKernel || continue
++        occursin("strided_gemm_kernel", Lava.frozen_key_source_name(key)) || continue
++        return linked.compiled.spirv_bytes
++    end
++    return nothing
++end
++
++@testset "direct cooperative-matrix GEMM store contract" begin
++    # 3 BLKs × 2 split counts × 2 KPER parity values × 2 output-tile counts.
++    # The one-tile/split-one configurations have an odd subgroup total; all
++    # two-tile and split-eight configurations have an even total.
++    # Keep those odd subgroup totals as a dispatch-boundary case too.
++    @testset "basic output and reduce=false partial-plane coverage" begin
++        case = 0
++        odd_subgroup_cases = 0
++        even_subgroup_cases = 0
++        for blk in (1, 2, 4), split in (1, 8), kper in (3, 4), tiles in (1, 2)
++            case += 1
++            M, N, K = 16 * blk, 16 * blk * tiles, 16 * split * kper
++            nsubgroups = tiles * split
++            isodd(nsubgroups) ? (odd_subgroup_cases += 1) : (even_subgroup_cases += 1)
++            dtype_flip = iseven(kper + tiles)
++            TC =
++                split == 1 ? (dtype_flip ? Float32 : Float16) :
++                (dtype_flip ? Float16 : Float32)
++            Ah, Bh = c1_dyadic_inputs(M, K, N, 80_000 + case)
++            label =
++                "BLK=$blk split=$split KPER=$kper output_tiles=$tiles " *
++                "subgroups=$nsubgroups C=$(nameof(TC))"
++            @testset "$label" begin
++                got_C, got_partials =
++                    c1_dispatch(Ah, Bh, TC; blk, split, reduce = (split == 1))
++                if split == 1
++                    c1_assert_exact(got_C, c1_host_output(Ah, Bh, TC))
++                else
++                    c1_assert_partial_planes(got_partials, Ah, Bh, split, kper)
++                    # reduce=false must leave the caller's poisoned C untouched.
++                    @test all(isnan, got_C)
++                end
++            end
++        end
++        @test case == 24
++        @test odd_subgroup_cases == 6
++        @test even_subgroup_cases == 18
++    end
++
++    # Exercise every output/bias element-type pair with both identity and a
++    # type-preserving activation, across all three register blocks.
++    @testset "split-one bias and post-conversion epilogue" begin
++        case = 0
++        for blk in (1, 2, 4),
++            BiasT in (Float16, Float32),
++            CT in (Float16, Float32),
++            epi in (identity, c1_relu)
++
++            case += 1
++            tiles = isodd(case + blk) ? 1 : 2
++            kper = isodd(case) ? 3 : 4
++            M, N, K = 16 * blk, 16 * blk * tiles, 16 * kper
++            Ah, Bh = c1_dyadic_inputs(M, K, N, 90_000 + case)
++            bias_host = BiasT.(rand(MersenneTwister(100_000 + case), -16:16, M) ./ 16)
++            epi_name = epi === identity ? "identity" : "relu"
++            label =
++                "BLK=$blk C=$(nameof(CT)) bias=$(nameof(BiasT)) epi=$epi_name " *
++                "output_tiles=$tiles KPER=$kper"
++            @testset "$label" begin
++                got_C, _ =
++                    c1_dispatch(Ah, Bh, CT; blk, split = 1, bias_host, epilogue = epi)
++                want = c1_host_output(Ah, Bh, CT; bias = bias_host, epilogue = epi)
++                c1_assert_exact(got_C, want)
++                if epi === c1_relu
++                    @test any(iszero, want)
++                    @test any(x -> x > zero(CT), want)
++                end
++            end
++        end
++        @test case == 24
++    end
++
++    # With reduce=true, poison both C and the caller-owned partial buffer, then
++    # check every partial plane as well as the final reduction result.
++    @testset "split-K reduction covers every explicit partial plane" begin
++        case = 0
++        for blk in (1, 2, 4), (kper, tiles, TC) in ((3, 1, Float32), (4, 2, Float16))
++            case += 1
++            split = 8
++            M, N, K = 16 * blk, 16 * blk * tiles, 16 * split * kper
++            Ah, Bh = c1_dyadic_inputs(M, K, N, 110_000 + case)
++            label = "BLK=$blk split=8 KPER=$kper output_tiles=$tiles C=$(nameof(TC))"
++            @testset "$label" begin
++                got_C, got_partials = c1_dispatch(Ah, Bh, TC; blk, split, reduce = true)
++                c1_assert_exact(got_C, c1_host_output(Ah, Bh, TC))
++                c1_assert_partial_planes(got_partials, Ah, Bh, split, kper)
++            end
++        end
++        @test case == 6
++    end
++
++    # Continuous F16 inputs use a tolerance against a Float64 host reference;
++    # they avoid imposing bitwise equality where F32 accumulation order matters.
++    @testset "continuous-input F32 accuracy" begin
++        case = 0
++        for blk in (1, 2, 4), (split, kper, tiles) in ((1, 3, 1), (8, 4, 2))
++            case += 1
++            M, N, K = 16 * blk, 16 * blk * tiles, 16 * split * kper
++            Ah, Bh = c1_continuous_inputs(M, K, N, 120_000 + case)
++            label = "BLK=$blk split=$split KPER=$kper output_tiles=$tiles"
++            @testset "$label" begin
++                got_C, got_partials =
++                    c1_dispatch(Ah, Bh, Float32; blk, split, reduce = true)
++                c1_assert_close(got_C, c1_host_dot(Ah, Bh))
++                if split > 1
++                    @test all(isfinite, got_partials)
++                    for s = 1:split
++                        lo = (s - 1) * kper * 16 + 1
++                        hi = s * kper * 16
++                        c1_assert_close(got_partials[:, :, s], c1_host_dot(Ah, Bh, lo:hi))
++                    end
++                end
++            end
++        end
++        @test case == 6
++    end
++
++    @testset "explicit-layout feature gates GEMM dispatch" begin
++        ctx = C1_CTX
++        M = N = 256
++        K = 32
++        rng = MersenneTwister(130_001)
++        Ah = Float16.(rand(rng, -8:8, M, K) ./ 8)
++        Bh = Float16.(rand(rng, -8:8, K, N) ./ 8)
++        A = Lava.LavaArray(Ah)
++        B = Lava.LavaArray(Bh)
++        C = Lava.LavaArray{Float32}(undef, M, N)
++        backend = KA.get_backend(C)
++        KA.synchronize(backend)
++
++        @test ctx.wg_explicit_layout_enabled
++        @test ctx.coopmat_available
++        @test Lava.coopmat_gemm_available(ctx)
++        @test Lava.staged_gemm_ok(C, A, B, M, N)
++
++        old_wg_explicit = ctx.wg_explicit_layout_enabled
++        old_caps = ctx.caches.caps
++        old_dispatch_logging = ctx.diag.dispatch_logging
++        old_dispatch_log_file = ctx.diag.dispatch_log_file
++        old_dispatch_log = Lava.get_dispatch_log(ctx)
++        old_coopmat_available = ctx.coopmat_available
++        try
++            ctx.wg_explicit_layout_enabled = false
++            ctx.caches.caps = nothing
++            ctx.diag.dispatch_log_file = nothing
++            empty!(ctx.diag.dispatch_log)
++            Lava.set_dispatch_logging!(true, ctx)
++
++            @test ctx.coopmat_available == old_coopmat_available
++            @test !Lava.coopmat_gemm_available(ctx)
++            @test !Lava.caps(ctx).coopmat
++
++            @test_throws ArgumentError Lava.coopmat_gemm!(
++                C,
++                A,
++                B,
++                M,
++                N,
++                K;
++                blk_split = (1, 1),
++                staged = false,
++            )
++            @test isempty(Lava.get_dispatch_log(ctx))
++
++            LinearAlgebra.mul!(C, A, B, 1.0f0, 0.0f0)
++            KA.synchronize(backend)
++            got = Array(C)
++            c1_assert_exact(got, Float32.(Ah) * Float32.(Bh))
++
++            dispatches = Lava.get_dispatch_log(ctx)
++            @test length(dispatches) == 1
++            @test occursin("strided_gemm_kernel!", only(dispatches))
++            @test !any(s -> occursin("scalar_gemm_staged_kernel!", s), dispatches)
++            @test !any(s -> occursin("coopmat", lowercase(s)), dispatches)
++
++            # The dispatch name identifies the selected path; inspect the actual
++            # compiled module as well so capability absence is part of the proof.
++            strided_spirv = c1_strided_gemm_spirv(ctx)
++            @test strided_spirv !== nothing
++            if strided_spirv !== nothing
++                @test !Lava.spirv_declares_capability(
++                    strided_spirv,
++                    Lava.Cap.WorkgroupMemoryExplicitLayoutKHR,
++                )
++                @test !Lava.spirv_declares_capability(
++                    strided_spirv,
++                    Lava.Cap.CooperativeMatrixKHR,
++                )
++            end
++        finally
++            ctx.wg_explicit_layout_enabled = old_wg_explicit
++            ctx.caches.caps = old_caps
++            ctx.diag.dispatch_log_file = old_dispatch_log_file
++            empty!(ctx.diag.dispatch_log)
++            append!(ctx.diag.dispatch_log, old_dispatch_log)
++            Lava.set_dispatch_logging!(old_dispatch_logging, ctx)
++        end
++    end
++end
++
++println(
++    "C1_COOPMAT_STORE_CONTRACT_CASES=60; direct=staged_false; split8_partial_planes=poison_checked",
++)
++
++end # module LavaGemmAccumulatorStoreContractTest

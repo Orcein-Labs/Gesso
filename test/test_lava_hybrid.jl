@@ -197,6 +197,8 @@ else
         _lh_check("shared gate", y, ref)
     end
 
+    include("test_lava_shared_gate_bits.jl")
+
     @testset "Lava fused GDN decode matches the CPU oracle over carried steps" begin
         @test _lh_inf._gdn_fused_decode(_lh_lava)
         # nv*Y < 256 leaves idle lanes, dk not a multiple of Y leaves a ragged

@@ -1,5 +1,12 @@
 # GESSO ROADMAP NOW
 
+Current release execution plan (2026-10-14):
+[`RELEASE_PARITY_2026-10.md`](../goals/RELEASE_PARITY_2026-10.md).
+It continues the October 13 handoff toward Qwen3.5/Gemma4 correctness,
+Lava/PyStack parity, real integration and reproducible release. The phase
+history below is retained; its old operational status is not the current
+release checklist.
+
     Document class:     living interpretation of the phase plan
     Status:             working map (subordinate to Gesso_Stack.md)
     Index:              docs/research/README.md

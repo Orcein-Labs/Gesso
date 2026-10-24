@@ -30,9 +30,9 @@ Sockets = "6462fe0b-24de-5631-8697-dd941f90decc"
 # tests are named skips when CUDA.functional() is false.
 CUDA = "052768ef-5323-5732-b1bb-66c8b64840ba"
 # Phase 8 (§LXXXI): Lava in the TEST env so `using Lava` triggers the
-# GessoLavaExt extension. Not in the General registry — installed from
-# source via [sources] below. This is the test env, not core — core [deps]
-# stays Lava-free (§VII). Device-absent machines still pass: the Lava tests
+# GessoLavaExt extension. Not in the General registry — the patched tree in
+# vendor/Lava (see vendor/README.md), via [sources] below. This is the test
+# env, not core — core [deps] stays Lava-free (§VII). Device-absent machines still pass: the Lava tests
 # are named skips when vk_context() fails.
 Lava = "3a680b1f-cb25-4bee-9cf7-bc880b76dc8c"
 # Phase 8 (§LXXXI): Vulkan.jl + VulkanCore.jl, Lava's runtime dependencies,
@@ -53,6 +53,6 @@ VulkanCore = "16167f82-ea26-5cba-b1de-ed6fd5e30a11"
 
 [sources]
 Gesso = {path = ".."}
-Lava = {url = "https://github.com/SimonDanisch/Lava.jl", rev = "11c7e31bdf62408d22bf379e9e59510f69d2103e"}
+Lava = {path = "../vendor/Lava"}
 Vulkan = {url = "https://github.com/JuliaGPU/Vulkan.jl", rev = "03b4ca2351477ccbb8ee378f512da50f7eec7bac"}
 VulkanCore = {url = "https://github.com/JuliaGPU/VulkanCore.jl", rev = "1d02829e8fa92da430d879db4dd7bf564a872035"}

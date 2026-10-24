@@ -1,0 +1,26 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Matt C <latentcollapse@gmail.com>
+Date: Thu, 15 Oct 2026 00:11:49 -0400
+Subject: [PATCH] test: gate direct GEMM store suite on device capability
+
+---
+ test/runtests.jl | 6 +++++-
+ 1 file changed, 5 insertions(+), 1 deletion(-)
+
+diff --git a/test/runtests.jl b/test/runtests.jl
+index cfffdda..7b1d4e4 100644
+--- a/test/runtests.jl
++++ b/test/runtests.jl
+@@ -215,7 +215,11 @@ end
+     end
+ 
+     @testset "cooperative-matrix GEMM accumulator store contract" begin
+-        include(joinpath(@__DIR__, "test_gemm_accumulator_store.jl"))
++        if Lava.coopmat_gemm_available()
++            include(joinpath(@__DIR__, "test_gemm_accumulator_store.jl"))
++        else
++            @test_skip Lava.coopmat_gemm_available()
++        end
+     end
+ 
+     # The scalar half of the same port: `mul!`'s fp32 path, which had no tiling

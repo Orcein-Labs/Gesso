@@ -56,6 +56,56 @@ end
     @test sort(unique(draws)) == [0, 1, 2, 3]
 end
 
+# The draw as it was with a full stable sortperm; the nucleus selection must
+# give the same id for every seed and row.
+function sortperm_sample_id(s::Sampler, logits)
+    hi = maximum(Float64, logits)
+    w = [exp((Float64(x) - hi) / s.temperature) for x in logits]
+    total = sum(w)
+    order = sortperm(w; rev=true)
+    target = s.top_p * total
+    acc = 0.0
+    keep = length(w)
+    for k in eachindex(order)
+        acc += w[order[k]]
+        if acc >= target
+            keep = k
+            break
+        end
+    end
+    cut = 0.0
+    for k in 1:keep
+        cut += w[order[k]]
+    end
+    r = Gesso.Inference._sampler_unit!(s) * cut
+    acc = 0.0
+    for k in 1:keep
+        acc += w[order[k]]
+        r < acc && return order[k] - 1
+    end
+    return order[keep] - 1
+end
+
+@testset "sampling: top-p draws the same ids as a full sort" begin
+    rows = Dict{String,Vector{Float32}}()
+    x = UInt64(12345)
+    unit() = (x = x * 0x5851f42d4c957f2d + 0x14057b7ef767814f; Float64(x >> 11) * 0x1p-53)
+    # A flat row puts most of the vocab in the sorted band; the tied rows only
+    # agree if ties still break on the lower id.
+    rows["flat"] = Float32[unit() for _ in 1:5000]
+    rows["peaked"] = Float32[unit() < 0.01 ? 12 + unit() : unit() for _ in 1:5000]
+    rows["ties"] = Float32[floor(4 * unit()) for _ in 1:3000]
+    rows["all equal"] = zeros(Float32, 2049)
+    rows["underflow"] = Float32[i <= 3 ? 0 : -2000 for i in 1:3000]
+    for (name, row) in rows, top_p in (0.05, 0.5, 0.9, 0.999), temperature in (0.3, 1.0)
+        a = Sampler(temperature=temperature, top_p=top_p, seed=31)
+        b = Sampler(temperature=temperature, top_p=top_p, seed=31)
+        same = all(_sample_id(a, row) == sortperm_sample_id(b, row) for _ in 1:40)
+        same || @info "top-p ids differ from the full sort" name top_p temperature
+        @test same
+    end
+end
+
 @testset "sampling: serve sends a sampler only when a temperature is set" begin
     seen = Any[]
     engine = ChatModel(

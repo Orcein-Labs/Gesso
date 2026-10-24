@@ -197,6 +197,8 @@ using Gesso: reference_prefill, reference_generate
     # the CPU F64 oracle at declared atol — named skip without a device. The
     # LAVA_LOADED / VULKAN_OK consts come from the seam file above.
     include("test_lava_ops.jl")
+    include("test_lava_rope_reference.jl")
+    include("test_lava_softmax_reference.jl")
 
     # Lava fused single-query decode attention (GQA read in place) vs the F64
     # oracle; named skip without a device.
@@ -214,6 +216,7 @@ using Gesso: reference_prefill, reference_generate
     # carried state, host-storage refusal) vs the F64 CPU oracle; named skip
     # without a device.
     include("test_lava_hybrid.jl")
+    include("test_lava_gdn_reference.jl")
 
     # Phase 8 (§LXXXI item C): Lava inference — prefill + greedy generate vs
     # the CPU oracle, ids EXACT, logits at declared atol; no-copy law.

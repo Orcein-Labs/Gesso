@@ -39,14 +39,9 @@ end
     @test !(:LavaBackend in string.(names(Gesso)))
 end
 
-# top-level probe-import: Lava is in the test env (declared in
-# test/Project.toml with a [sources] URL — it is not in the General
-# registry); if it is not loadable, everything below skips by name.
-# NOTE: upstream Lava (GitHub master) currently fails to PRECOMPILE under
-# Julia 1.12 (it overwrites a KernelAbstractions adapt_structure method
-# during module precompilation, which 1.12 forbids). Julia then loads it
-# from source with a warning — slow (~1 min) but functional. That warning
-# is upstream's, not Gesso's; this file's assertions do not depend on it.
+# top-level probe-import: Lava is in the test env (vendor/Lava, declared in
+# test/Project.toml [sources] — it is not in the General registry); if it is
+# not loadable, everything below skips by name.
 const LAVA_LOADED = let
     ok = true
     try

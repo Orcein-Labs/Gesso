@@ -242,10 +242,12 @@ end
 # Token by token, every token streams its selected experts' slabs from DRAM, so
 # a P-token prompt reads each active expert about P * n_used / n_exp times.
 # Here the tokens are grouped by expert first, so each weight row is read once
-# and dotted against every token that picked it while the row sits in L1. Each
-# output element is still the same `_dot_q8k` of the same row with the same
-# token's Q8_K activation, and each token's weighted sum still runs in k order,
-# so the result matches the token loop bit for bit.
+# and dotted against every token that picked it while the row sits in L1. The
+# row's tokens go through `_dot_q8k_multi!` in tiles, as dense prefill does, so
+# the row's unpacking is shared across a tile; each column of that kernel is
+# bit-equal to `_dot_q8k` on the same Q8_K activation (quant_cpu_multi.jl). Each
+# token's weighted sum still runs in k order, so the result matches the token
+# loop bit for bit. GESSO_PREFILL_MULTI=0 restores one `_dot_q8k` per pair.
 
 """
     MoePrefillScratch
@@ -265,10 +267,13 @@ mutable struct MoePrefillScratch
     pairs::Vector{Int}          # pair ids grouped by expert, token order within one
     active::Vector{Int}         # experts with at least one pair
     cost::Vector{Int}           # prefix dot count over `active` for the current pass
+    xg::Vector{Q8KVec}          # xq of each entry of `pairs`, so one expert's tokens are contiguous
+    hg::Vector{Q8KVec}          # hq of each entry of `pairs`
+    cbuf::Vector{Vector{Float32}}  # per chunk, one row's dots over an expert's pairs
 end
 
 MoePrefillScratch() = MoePrefillScratch(0, 0, Q8KVec[], Q8KVec[], zeros(Float32, 0, 2, 0),
-    zeros(Float32, 0, 0), Int[], Int[], Int[], Int[], Int[])
+    zeros(Float32, 0, 0), Int[], Int[], Int[], Int[], Int[], Q8KVec[], Q8KVec[], Vector{Float32}[])
 
 const _MOE_PREFILL_SCRATCH = Ref{MoePrefillScratch}(MoePrefillScratch())
 
@@ -283,7 +288,8 @@ function _moe_prefill_scratch(h::Int, ff::Int, seq::Int, n_used::Int, n_exp::Int
             [Q8KVec(div(h, QK_K)) for _ in 1:ntok],
             [Q8KVec(div(ff, QK_K)) for _ in 1:cap],
             zeros(Float32, ff, 2, cap), zeros(Float32, h, cap),
-            Int[], Int[], Vector{Int}(undef, cap), Int[], Int[])
+            Int[], Int[], Vector{Int}(undef, cap), Int[], Int[],
+            Vector{Q8KVec}(undef, cap), Vector{Q8KVec}(undef, cap), Vector{Float32}[])
         _MOE_PREFILL_SCRATCH[] = s
     end
     resize!(s.cnt, n_exp)
@@ -322,7 +328,36 @@ function _moe_prefill_group!(s::MoePrefillScratch, experts::AbstractMatrix{Int},
     @inbounds for e in 1:n_exp
         s.cnt[e] > 0 && push!(s.active, e)
     end
+    # hq's vectors exist before Silu fills them, so hg can point at them now.
+    @inbounds for q in 1:(s.start[n_exp + 1] - 1)
+        p = s.pairs[q]
+        s.xg[q] = s.xq[(p - 1) ÷ n_used + 1]
+        s.hg[q] = s.hq[p]
+    end
     return s
+end
+
+# Chunk c's row buffer. Two chunks can split one expert's rows, so a buffer
+# shared by expert would race.
+function _moe_prefill_bufs!(s::MoePrefillScratch, nc::Int, n::Int)
+    while length(s.cbuf) < nc
+        push!(s.cbuf, Float32[])
+    end
+    for c in 1:nc
+        length(s.cbuf[c]) < n && resize!(s.cbuf[c], n)
+    end
+    return s
+end
+
+# Raw dots of the weight row at `woff` with xv[1:n], tiled, into buf[1:n].
+@inline function _moe_prefill_row_multi!(buf::Vector{Float32}, t::Int32, w, woff::Int, xv, n::Int, simd::Bool)
+    i0 = 1
+    while i0 <= n
+        K = min(_MULTI_TILE, n - i0 + 1)
+        _dot_q8k_multi!(buf, t, w, woff, xv, i0, K, simd)
+        i0 += K
+    end
+    return buf
 end
 
 function _moe_prefill_cost!(s::MoePrefillScratch, rows::Int)
@@ -386,17 +421,20 @@ struct _MoePrefillGateUp
     s::MoePrefillScratch
     gate::GgufQuantSlice
     up::GgufQuantSlice
-    n_used::Int
     nc::Int
     simd::Bool
+    multi::Bool
 end
 
 function (g::_MoePrefillGateUp)(c::Int)
     s = g.s
     ff = s.ff
+    buf = g.multi ? s.cbuf[c] : Float32[]
     _moe_prefill_pieces(s, 2ff, g.nc, c) do e, r0, r1
         p0 = s.start[e]
-        p1 = p0 + s.cnt[e] - 1
+        n = s.cnt[e]
+        p1 = p0 + n - 1
+        xv = view(s.xg, p0:p1)
         for (sl, col, lo, hi) in ((g.gate, 1, r0, min(r1, ff)), (g.up, 2, max(r0, ff + 1) - ff, r1 - ff))
             lo <= hi || continue
             t = sl.ggml_type
@@ -404,10 +442,16 @@ function (g::_MoePrefillGateUp)(c::Int)
             off0 = _quant_expert_off0(sl, e)
             @inbounds for jj in lo:hi
                 woff = off0 + (jj - 1) * rb
-                for q in p0:p1
-                    p = s.pairs[q]
-                    tok = (p - 1) ÷ g.n_used + 1
-                    s.gu[jj, col, p] = 1.0f0 * _dot_q8k(t, sl.data, woff, s.xq[tok], g.simd) + 0.0f0
+                if g.multi
+                    _moe_prefill_row_multi!(buf, t, sl.data, woff, xv, n, g.simd)
+                    for i in 1:n
+                        # Same expression as the per-pair path, so -0.0 becomes +0.0 identically.
+                        s.gu[jj, col, s.pairs[p0 + i - 1]] = 1.0f0 * buf[i] + 0.0f0
+                    end
+                else
+                    for q in p0:p1
+                        s.gu[jj, col, s.pairs[q]] = 1.0f0 * _dot_q8k(t, sl.data, woff, s.xg[q], g.simd) + 0.0f0
+                    end
                 end
             end
         end
@@ -440,6 +484,7 @@ struct _MoePrefillDown
     down::GgufQuantSlice
     nc::Int
     simd::Bool
+    multi::Bool
 end
 
 function (g::_MoePrefillDown)(c::Int)
@@ -447,15 +492,24 @@ function (g::_MoePrefillDown)(c::Int)
     sl = g.down
     t = sl.ggml_type
     rb = _qrow_bytes(t, sl.ne0)
+    buf = g.multi ? s.cbuf[c] : Float32[]
     _moe_prefill_pieces(s, s.h, g.nc, c) do e, r0, r1
         p0 = s.start[e]
-        p1 = p0 + s.cnt[e] - 1
+        n = s.cnt[e]
+        p1 = p0 + n - 1
+        hv = view(s.hg, p0:p1)
         off0 = _quant_expert_off0(sl, e)
         @inbounds for jj in r0:r1
             woff = off0 + (jj - 1) * rb
-            for q in p0:p1
-                p = s.pairs[q]
-                s.dn[jj, p] = 1.0f0 * _dot_q8k(t, sl.data, woff, s.hq[p], g.simd) + 0.0f0
+            if g.multi
+                _moe_prefill_row_multi!(buf, t, sl.data, woff, hv, n, g.simd)
+                for i in 1:n
+                    s.dn[jj, s.pairs[p0 + i - 1]] = 1.0f0 * buf[i] + 0.0f0
+                end
+            else
+                for q in p0:p1
+                    s.dn[jj, s.pairs[q]] = 1.0f0 * _dot_q8k(t, sl.data, woff, s.hg[q], g.simd) + 0.0f0
+                end
             end
         end
     end
@@ -522,14 +576,16 @@ function _moe_host_prefill!(Y::Matrix{Float32}, X::Matrix{Float32}, experts::Mat
     _moe_prefill_group!(s, experts, live, seq, n_used, n_exp, cpu)
     np = s.start[n_exp + 1] - 1
     if np > 0
+        multi = _prefill_multi_enabled()
+        multi && _moe_prefill_bufs!(s, nt, maximum(s.cnt))
         tot = _moe_prefill_cost!(s, 2ff)
         nc = clamp(nt, 1, tot)
-        _run_row_chunks!(_MoePrefillGateUp(s, gate_s, up_s, n_used, nc, simd), nc, tot * h)
+        _run_row_chunks!(_MoePrefillGateUp(s, gate_s, up_s, nc, simd, multi), nc, tot * h)
         snc = clamp(nt, 1, np)
         _run_row_chunks!(_MoePrefillSilu(s, np, snc), snc, np * ff)
         tot = _moe_prefill_cost!(s, h)
         nc = clamp(nt, 1, tot)
-        _run_row_chunks!(_MoePrefillDown(s, down_s, nc, simd), nc, tot * ff)
+        _run_row_chunks!(_MoePrefillDown(s, down_s, nc, simd, multi), nc, tot * ff)
     end
     _run_row_chunks!(_MoePrefillCombine(s, Y, experts, weights, cpu, live, seq, n_used, tnc), tnc, seq * h)
     return Y

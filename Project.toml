@@ -22,8 +22,8 @@ license = "Apache-2.0"
 #   CUDA.jl → ext/GessoCUDAExt.jl   (Phase 4)
 #   Lava    → ext/GessoLavaExt.jl   (Phase 8)
 #
-# Lava lives at libs/Lava as a local development source; it is NOT a dependency
-# of this package. Phase 8 (§LXXXI) added it as a WEAKDEP + extension only.
+# Lava is vendored at vendor/Lava (upstream plus our patches, see
+# vendor/README.md); it is NOT a dependency of this package. Phase 8 (§LXXXI) added it as a WEAKDEP + extension only.
 Dates = "ade2ca70-3891-5945-98fb-dc099432e06a"
 # Phase 2 (§LXXV): CPU reference matmul — matmul! lowers x * transpose(W)
 # through BLAS. Stdlib, justified in the dependency-law test.
@@ -48,8 +48,8 @@ Sockets = "6462fe0b-24de-5631-8697-dd941f90decc"
 CUDA = "052768ef-5323-5732-b1bb-66c8b64840ba"
 # Phase 8 (§LXXXI): Lava (Vulkan) is a package EXTENSION, never a core dep.
 # ext/GessoLavaExt.jl is the only file allowed to `using Lava`; core compiles
-# and tests with Lava not loaded. Not in the General registry — the TEST env
-# installs it from source via [sources] (test/Project.toml).
+# and tests with Lava not loaded. Not in the General registry — the test env
+# loads vendor/Lava via [sources] (test/Project.toml).
 Lava = "3a680b1f-cb25-4bee-9cf7-bc880b76dc8c"
 
 [extensions]

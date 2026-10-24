@@ -1,0 +1,485 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Matt C <latentcollapse@gmail.com>
+Date: Wed, 21 Oct 2026 08:08:19 -0400
+Subject: [PATCH] fix: preserve scalar logical integer widths in SPIR-V
+
+
+diff --git a/src/compiler/spirv/emit.jl b/src/compiler/spirv/emit.jl
+index f1a3eca..ca12aaf 100644
+--- a/src/compiler/spirv/emit.jl
++++ b/src/compiler/spirv/emit.jl
+@@ -823,6 +823,20 @@ end
+ # ================================================================
+ 
+ function emit_instruction!(state::SPIRVEmitterState, inst::LLVM.Instruction)
++    # Scalar register legalization does not define memory layouts, vector
++    # lanes, atomics, bitcasts or intrinsic-specific arithmetic for odd widths.
++    # Reject those boundaries rather than silently apply native-bucket semantics.
++    odd(ty) = ty isa LLVM.IntegerType && !(LLVM.width(ty) in (1,8,16,32,64))
++    if odd(LLVM.value_type(inst)) || any(v -> odd(LLVM.value_type(v)), LLVM.operands(inst))
++        supported = inst isa Union{LLVM.AddInst,LLVM.SubInst,LLVM.MulInst,
++            LLVM.SDivInst,LLVM.UDivInst,LLVM.SRemInst,LLVM.URemInst,
++            LLVM.AndInst,LLVM.OrInst,LLVM.XorInst,LLVM.ShlInst,LLVM.LShrInst,
++            LLVM.AShrInst,LLVM.ICmpInst,LLVM.TruncInst,LLVM.ZExtInst,LLVM.SExtInst,
++            LLVM.SIToFPInst,LLVM.UIToFPInst,LLVM.FPToSIInst,LLVM.FPToUIInst,
++            LLVM.SelectInst,LLVM.FreezeInst}
++        supported || error("Unsupported logical-width integer boundary: $inst")
++    end
++
+     # Track SPIR-V ID before/after to record source mapping
+     id_before = state.mod.next_id
+ 
+@@ -993,14 +1007,47 @@ end
+ # Binary / Unary Operations
+ # ================================================================
+ 
++# Odd LLVM widths are represented by native SPIR-V integer buckets. Keep the
++# low logical bits for unsigned use; signed consumers must extend the logical
++# sign bit, not the bucket sign bit. These helpers are no-ops for native widths.
++function logical_integer!(state::SPIRVEmitterState, id::UInt32, ty::LLVM.LLVMType;
++                          signed::Bool=false)
++    ty isa LLVM.IntegerType || return id
++    w = LLVM.width(ty)
++    w == 1 && return id # i1 is represented by OpTypeBool.
++    physical = Int(spirv_int_width(w))
++    w == physical && return id
++    result_ty = emit_type_int!(state.mod, UInt32(physical), UInt32(0))
++    if signed
++        amount = emit_int_constant!(state, ty, UInt64(physical - w))
++        shifted = fresh_id!(state.mod)
++        result = fresh_id!(state.mod)
++        encode_instruction!(state.mod.functions, Op.OpShiftLeftLogical,
++                            result_ty, shifted, id, amount)
++        encode_instruction!(state.mod.functions, Op.OpShiftRightArithmetic,
++                            result_ty, result, shifted, amount)
++    else
++        mask = emit_int_constant!(state, ty, (UInt64(1) << w) - UInt64(1))
++        result = fresh_id!(state.mod)
++        encode_instruction!(state.mod.functions, Op.OpBitwiseAnd,
++                            result_ty, result, id, mask)
++    end
++    return result
++end
++
+ function emit_binary_op!(state::SPIRVEmitterState, inst::LLVM.Instruction, opcode::UInt16)
+     ops = LLVM.operands(inst)
+     lhs = get_value_id!(state, ops[1])
+     rhs = get_value_id!(state, ops[2])
+-    result_ty = map_type!(state.type_ctx, LLVM.value_type(inst))
++    llvm_ty = LLVM.value_type(inst)
++    signed = opcode in (Op.OpSDiv, Op.OpSRem, Op.OpShiftRightArithmetic)
++    lhs = logical_integer!(state, lhs, LLVM.value_type(ops[1]); signed)
++    rhs = logical_integer!(state, rhs, LLVM.value_type(ops[2]);
++                           signed=signed && opcode != Op.OpShiftRightArithmetic)
++    result_ty = map_type!(state.type_ctx, llvm_ty)
+     result_id = fresh_id!(state.mod)
+     encode_instruction!(state.mod.functions, opcode, result_ty, result_id, lhs, rhs)
+-    state.value_map[inst] = result_id
++    state.value_map[inst] = logical_integer!(state, result_id, llvm_ty)
+ end
+ 
+ function emit_unary_op!(state::SPIRVEmitterState, inst::LLVM.Instruction, opcode::UInt16)
+@@ -1075,6 +1122,11 @@ function emit_icmp!(state::SPIRVEmitterState, inst::LLVM.ICmpInst)
+     lhs = get_value_id!(state, lhs_val)
+     rhs = get_value_id!(state, rhs_val)
+ 
++    signed = pred in (LLVM.API.LLVMIntSGT, LLVM.API.LLVMIntSGE,
++                      LLVM.API.LLVMIntSLT, LLVM.API.LLVMIntSLE)
++    lhs = logical_integer!(state, lhs, LLVM.value_type(lhs_val); signed)
++    rhs = logical_integer!(state, rhs, LLVM.value_type(rhs_val); signed)
++
+     # SPIR-V requires both operands to have the same type.
+     # LLVM constants may be i32 when the other operand is i8/i64/etc.
+     # Insert OpUConvert or OpSConvert if widths don't match.
+@@ -5491,9 +5543,18 @@ function emit_conversion!(state::SPIRVEmitterState, inst::LLVM.Instruction, opco
+             src = bitcast_id
+         end
+     end
+-    result_id = fresh_id!(state.mod)
+-    encode_instruction!(state.mod.functions, opcode, result_ty, result_id, src)
+-    state.value_map[inst] = result_id
++    src_ty = LLVM.value_type(ops[1])
++    src = logical_integer!(state, src, src_ty;
++                           signed=opcode in (Op.OpSConvert, Op.OpConvertSToF))
++    if opcode in (Op.OpUConvert, Op.OpSConvert) &&
++       src_ty isa LLVM.IntegerType && llvm_ty isa LLVM.IntegerType &&
++       spirv_int_width(LLVM.width(src_ty)) == spirv_int_width(LLVM.width(llvm_ty))
++        state.value_map[inst] = logical_integer!(state, src, llvm_ty)
++    else
++        result_id = fresh_id!(state.mod)
++        encode_instruction!(state.mod.functions, opcode, result_ty, result_id, src)
++        state.value_map[inst] = logical_integer!(state, result_id, llvm_ty)
++    end
+ end
+ 
+ function emit_int_to_fp!(state::SPIRVEmitterState, inst::LLVM.Instruction, opcode::UInt16)
+@@ -5505,7 +5566,8 @@ function emit_int_to_fp!(state::SPIRVEmitterState, inst::LLVM.Instruction, opcod
+         # i1 → select(bool, 1, 0) → OpConvertUToF/OpConvertSToF
+         src_id = get_value_id!(state, src_val)
+         i32_ty = map_type!(state.type_ctx, LLVM.IntType(32))
+-        one_id = emit_constant_u32!(state.mod, UInt32(1))
++        true_bits = opcode == Op.OpConvertSToF ? typemax(UInt32) : UInt32(1)
++        one_id = emit_constant_u32!(state.mod, true_bits)
+         zero_id = emit_constant_u32!(state.mod, UInt32(0))
+         int_id = fresh_id!(state.mod)
+         encode_instruction!(state.mod.functions, Op.OpSelect, i32_ty, int_id, src_id, one_id, zero_id)
+@@ -5527,8 +5589,13 @@ function emit_trunc!(state::SPIRVEmitterState, inst::LLVM.TruncInst)
+     src_ty = LLVM.value_type(LLVM.operands(inst)[1])
+     dst_ty = LLVM.value_type(inst)
+     if dst_ty isa LLVM.IntegerType && LLVM.width(dst_ty) == 1
+-        # trunc to i1: compare != 0
++        # LLVM trunc keeps the low bit; nonzero even inputs become false.
+         src_id = get_value_id!(state, LLVM.operands(inst)[1])
++        lowbit = fresh_id!(state.mod)
++        int_ty = emit_type_int!(state.mod, spirv_int_width(LLVM.width(src_ty)), UInt32(0))
++        one_id = emit_int_constant!(state, src_ty, UInt64(1))
++        encode_instruction!(state.mod.functions, Op.OpBitwiseAnd, int_ty, lowbit, src_id, one_id)
++        src_id = lowbit
+         zero_id = get_zero_constant!(state, src_ty)
+         result_ty = map_type!(state.type_ctx, dst_ty)
+         result_id = fresh_id!(state.mod)
+@@ -5558,9 +5625,12 @@ function emit_trunc!(state::SPIRVEmitterState, inst::LLVM.TruncInst)
+             state.value_map[bcast_inst] = bcast_id
+         else
+             result_ty = emit_type_int!(state.mod, spirv_int_width(LLVM.width(dst_ty)), UInt32(0))
+-            result_id = fresh_id!(state.mod)
+-            encode_instruction!(state.mod.functions, Op.OpUConvert, result_ty, result_id, src_id)
+-            state.value_map[inst] = result_id
++            result_id = src_id
++            if spirv_int_width(LLVM.width(src_ty)) != spirv_int_width(LLVM.width(dst_ty))
++                result_id = fresh_id!(state.mod)
++                encode_instruction!(state.mod.functions, Op.OpUConvert, result_ty, result_id, src_id)
++            end
++            state.value_map[inst] = logical_integer!(state, result_id, dst_ty)
+         end
+     else
+         # trunc with non-IntegerType dst — shouldn't happen in valid LLVM but handle gracefully.
+diff --git a/src/compiler/spirv/types.jl b/src/compiler/spirv/types.jl
+index a000ebe..14d3df3 100644
+--- a/src/compiler/spirv/types.jl
++++ b/src/compiler/spirv/types.jl
+@@ -913,6 +913,7 @@ LLVM allows arbitrary widths (i2, i3, i7, ...) but SPIR-V only supports 8, 16, 3
+ Width 1 (i1) is NOT handled here -- callers must map it to OpTypeBool separately.
+ """
+ function spirv_int_width(w::Integer)::UInt32
++    1 <= w <= 64 || error("Unsupported LLVM integer width $w; SPIR-V buckets support at most 64 bits")
+     w <= 8  && return UInt32(8)
+     w <= 16 && return UInt32(16)
+     w <= 32 && return UInt32(32)
+@@ -972,6 +973,10 @@ function emit_llvm_type!(ctx::SPIRVTypeContext, ty::LLVM.StructType)
+ end
+ 
+ function emit_llvm_type!(ctx::SPIRVTypeContext, ty::LLVM.VectorType)
++    elem = eltype(ty)
++    if elem isa LLVM.IntegerType && !(LLVM.width(elem) in (1,8,16,32,64))
++        error("Unsupported vector of logical-width integers: $ty")
++    end
+     # <N x T> → OpTypeVector
+     elem_spirv = map_type!(ctx, eltype(ty))
+     n = length(ty)
+@@ -1610,9 +1615,10 @@ function map_constant_int!(ctx::SPIRVTypeContext, val::LLVM.ConstantInt, ty::LLV
+             encode_instruction!(ctx.mod.types_constants, Op.OpConstant, type_id, id, bits)
+             id
+         end
+-    elseif w == 64
+-        # 64-bit constant: two UInt32 words (little-endian)
+-        bits = reinterpret(UInt64, Int64(int_val))
++    elseif w <= 64
++        # Native 64-bit bucket, with zeroed padding for logical i33..i63.
++        mask = w == 64 ? typemax(UInt64) : (UInt64(1) << w) - UInt64(1)
++        bits = reinterpret(UInt64, Int64(int_val)) & mask
+         lo = UInt32(bits & 0xFFFFFFFF)
+         hi = UInt32((bits >> 32) & 0xFFFFFFFF)
+         key = (:const, type_id, bits)
+diff --git a/test/runtests.jl b/test/runtests.jl
+index f5a24d0..f1ffb9b 100644
+--- a/test/runtests.jl
++++ b/test/runtests.jl
+@@ -111,6 +111,10 @@ end
+         include(joinpath(@__DIR__, "test_float_controls.jl"))
+     end
+ 
++    @testset "logical integer-width semantics" begin
++        include(joinpath(@__DIR__, "test_integer_width_semantics.jl"))
++    end
++
+     @testset "per-kernel NoContraction" begin
+         include(joinpath(@__DIR__, "test_no_contraction.jl"))
+     end
+diff --git a/test/test_integer_width_semantics.jl b/test/test_integer_width_semantics.jl
+new file mode 100644
+index 0000000..f489cd5
+--- /dev/null
++++ b/test/test_integer_width_semantics.jl
+@@ -0,0 +1,271 @@
++module LavaIntegerWidthTests
++using Test, Lava, Random
++using Lava.KernelAbstractions: @kernel, @index, @Const
++const KA = Lava.KernelAbstractions
++const WIDTHS = (2, 3, 7, 8, 9, 11, 15, 16, 17, 23, 31, 32, 33, 53, 63, 64)
++const NOPS = 15
++
++# Native argument/result ABI; only internal register values have odd widths.
++# Do not attach nsw/nuw: wrapping operations are part of the contract.
++@generated function width_ops(::Val{W}, x::UInt64, y::UInt64) where {W}
++    narrow(v, name) = W == 64 ? "%$name = add i64 %$v, 0" : "%$name = trunc i64 %$v to i$W"
++    widen(v, name; signed=false) = W == 64 ? "%$name = add i64 %$v, 0" :
++        "%$name = $(signed ? "sext" : "zext") i$W %$v to i64"
++    ir = """
++    define [$NOPS x i64] @entry(i64 %x, i64 %y) #0 {
++      $(narrow("x", "a"))
++      $(narrow("y", "b"))
++      %d0 = and i$W %b, $((big(1) << (W-1))-1)
++      %d = or i$W %d0, 1
++      %k64 = urem i64 %y, $W
++      $(narrow("k64", "k"))
++      $(widen("a", "r0"))
++      $(widen("a", "r1"; signed=true))
++      %bit = trunc i$W %a to i1
++      %r2 = zext i1 %bit to i64
++      %sc = icmp slt i$W %a, %b
++      %r3 = zext i1 %sc to i64
++      %uc = icmp ult i$W %a, %b
++      %r4 = zext i1 %uc to i64
++      %add = add i$W %a, %b
++      $(widen("add", "r5"))
++      %sub = sub i$W %a, %b
++      $(widen("sub", "r6"))
++      %mul = mul i$W %a, %b
++      $(widen("mul", "r7"))
++      %shl = shl i$W %a, %k
++      $(widen("shl", "r8"))
++      %lsr = lshr i$W %a, %k
++      $(widen("lsr", "r9"))
++      %asr = ashr i$W %a, %k
++      $(widen("asr", "r10"))
++      %sd = sdiv i$W %a, %d
++      $(widen("sd", "r11"))
++      %sr = srem i$W %a, %d
++      $(widen("sr", "r12"))
++      %ud = udiv i$W %a, %d
++      $(widen("ud", "r13"))
++      %ur = urem i$W %a, %d
++      $(widen("ur", "r14"))
++    """
++    for j in 0:NOPS-1
++        prev = j == 0 ? "poison" : "%t$(j-1)"
++        ir *= "  %t$j = insertvalue [$NOPS x i64] $prev, i64 %r$j, $j\n"
++    end
++    ir *= "  ret [$NOPS x i64] %t$(NOPS-1)\n}\nattributes #0 = { alwaysinline }\n"
++    return :(Base.llvmcall(($ir, "entry"), NTuple{NOPS,UInt64}, Tuple{UInt64,UInt64}, x, y))
++end
++
++@kernel cpu=false function width_kernel!(out, @Const(x), @Const(y), width)
++    i = @index(Global, Linear)
++    if i <= length(x)
++        values = width_ops(width, x[i], y[i])
++        for j in 1:NOPS
++            @inbounds out[j, i] = values[j]
++        end
++    end
++end
++
++function reference(w, x, y)
++    modulus = big(1) << w
++    mask = modulus - 1
++    a, b = big(x) & mask, big(y) & mask
++    signed(v) = v >= modulus >> 1 ? v-modulus : v
++    sa, sb = signed(a), signed(b)
++    d = (b & ((modulus >> 1)-1)) | 1
++    k = Int(y % UInt64(w))
++    values = (a, sa, a & 1, sa < sb, a < b, a+b, a-b, a*b,
++              a << k, a >> k, sa >> k, div(sa,d), rem(sa,d), div(a,d), rem(a,d))
++    # Signed extension has a native 64-bit result; all arithmetic outputs zext W.
++    return UInt64[UInt64(big(v) & (j == 2 ? (big(1)<<64)-1 : mask))
++                  for (j,v) in enumerate(values)]
++end
++
++@testset "LLVM scalar integer widths" begin
++    @test_throws ErrorException Lava.spirv_int_width(65)
++    rng = MersenneTwister(0x11ba5e)
++    for w in WIDTHS
++        @testset "i$w" begin
++            mask = w == 64 ? typemax(UInt64) : (UInt64(1)<<w)-1
++            sign = UInt64(1)<<(w-1)
++            edges = UInt64[0,1,2,3,sign-1,sign,sign+1,mask-1,mask,typemax(UInt64)]
++            x = UInt64[a for a in edges for _ in edges]
++            y = UInt64[b for _ in edges for b in edges]
++            append!(x,rand(rng,UInt64,256)); append!(y,rand(rng,UInt64,256))
++            if w <= 7
++                append!(x,UInt64[a for a in 0:Int(mask) for _ in (0,1,mask)])
++                append!(y,UInt64[b for _ in 0:Int(mask) for b in (0,1,mask)])
++            end
++            expected = hcat((reference(w,a,b) for (a,b) in zip(x,y))...)
++            cpu = hcat((collect(width_ops(Val(w),a,b)) for (a,b) in zip(x,y))...)
++            @test cpu == expected
++            xd,yd = Lava.LavaArray(x),Lava.LavaArray(y)
++            for rep in 1:3
++                out = Lava.LavaArray{UInt64}(undef,NOPS,length(x))
++                width_kernel!(KA.get_backend(xd))(out,xd,yd,Val(w);ndrange=length(x),workgroupsize=64)
++                @test Array(out) == expected
++            end
++        end
++    end
++end
++end
++
++module LavaIntegerWidthBoundaryTests
++using Test,Lava
++const LLVM=Lava.LLVM
++
++@testset "unsupported logical integer boundaries fail closed" begin
++    for (name,body,decl) in (
++        ("intrinsic", "%x = call i11 @llvm.ctpop.i11(i11 3)\nret void", "declare i11 @llvm.ctpop.i11(i11)"),
++        ("load", "%x = load i11, ptr null\nret void", ""),
++        ("store", "store i11 3, ptr null\nret void", ""),
++        ("atomic", "%x = atomicrmw add ptr null, i11 3 seq_cst\nret void", ""),
++    )
++        @testset "$name" begin
++            LLVM.Context() do _
++                mod=parse(LLVM.Module,"$decl\ndefine void @entry() {\n$body\n}")
++                firstinst=first(LLVM.instructions(first(LLVM.blocks(LLVM.functions(mod)["entry"]))))
++                sm=Lava.SPIRVModule();ctx=Lava.SPIRVTypeContext(sm,Lava.build_pointee_type_map(mod));state=Lava.SPIRVEmitterState(sm,ctx)
++                @test_throws r"Unsupported logical-width integer boundary" Lava.emit_instruction!(state,firstinst)
++            end
++        end
++    end
++    LLVM.Context() do _
++        mod=parse(LLVM.Module,"define <2 x i11> @vector(<2 x i11> %a) { ret <2 x i11> %a }")
++        ty=LLVM.value_type(first(LLVM.parameters(LLVM.functions(mod)["vector"])))
++        sm=Lava.SPIRVModule();ctx=Lava.SPIRVTypeContext(sm,Lava.build_pointee_type_map(mod))
++        @test_throws r"Unsupported vector of logical-width integers" Lava.map_type!(ctx,ty)
++    end
++end
++end
++
++module LavaIntegerWidthCastTests
++using Test,Lava,Random
++using Lava.KernelAbstractions: @kernel,@index,@Const
++const KA=Lava.KernelAbstractions
++@generated function cast_pair(::Val{S},::Val{D},x::UInt64) where {S,D}
++    if S<D
++        body="%a = trunc i64 %x to i$S\n%s = sext i$S %a to i$D\n%u = zext i$S %a to i$D\n%r0 = zext i$D %s to i64\n%r1 = zext i$D %u to i64"
++    else
++        body="%a = trunc i64 %x to i$S\n%t = trunc i$S %a to i$D\n%r0 = sext i$D %t to i64\n%r1 = zext i$D %t to i64"
++    end
++    ir="define [2 x i64] @entry(i64 %x) #0 {\n$body\n%t0 = insertvalue [2 x i64] poison, i64 %r0, 0\n%t1 = insertvalue [2 x i64] %t0, i64 %r1, 1\nret [2 x i64] %t1\n}\nattributes #0 = { alwaysinline }"
++    :(Base.llvmcall(($ir,"entry"),NTuple{2,UInt64},Tuple{UInt64},x))
++end
++@kernel cpu=false function cast_kernel!(out,@Const(x),s,d)
++    i=@index(Global,Linear)
++    if i<=length(x)
++        p=cast_pair(s,d,x[i]);out[1,i]=p[1];out[2,i]=p[2]
++    end
++end
++@testset "casts sharing a physical bucket" begin
++    rng=MersenneTwister(0xca57)
++    for (s,d) in ((2,7),(7,3),(9,15),(15,11),(17,31),(31,23),(33,63),(63,53),(8,16),(16,8))
++        x=rand(rng,UInt64,512);append!(x,UInt64[0,1,2,3,typemax(UInt64),UInt64(1)<<(s-1),(UInt64(1)<<s)-1])
++        expected=Matrix{UInt64}(undef,2,length(x));sm=(big(1)<<s)-1;dm=(big(1)<<d)-1;full=(big(1)<<64)-1
++        for (i,v) in enumerate(x)
++            a=big(v)&sm
++            if s<d
++                signed=a>=(big(1)<<(s-1)) ? a-(big(1)<<s) : a
++                expected[:,i]=UInt64[UInt64(signed&dm),UInt64(a)]
++            else
++                a&=dm;signed=a>=(big(1)<<(d-1)) ? a-(big(1)<<d) : a
++                expected[:,i]=UInt64[UInt64(signed&full),UInt64(a)]
++            end
++        end
++        @test hcat((collect(cast_pair(Val(s),Val(d),v)) for v in x)...)==expected
++        xd=Lava.LavaArray(x)
++        for rep in 1:3
++            out=Lava.LavaArray{UInt64}(undef,2,length(x))
++            cast_kernel!(KA.get_backend(xd))(out,xd,Val(s),Val(d);ndrange=length(x),workgroupsize=64)
++            @test Array(out)==expected
++        end
++    end
++end
++end
++
++module LavaIntegerFloatCastTests
++using Test, Lava, Random
++using Lava.KernelAbstractions: @kernel, @index, @Const
++const KA = Lava.KernelAbstractions
++
++@generated function integer_to_float(::Val{W}, x::UInt64) where {W}
++    input = W == 64 ? "%a = add i64 %x, 0" : "%a = trunc i64 %x to i$W"
++    ir = """
++    define [4 x double] @entry(i64 %x) #0 {
++      $input
++      %s = sitofp i$W %a to double
++      %u = uitofp i$W %a to double
++      %b = trunc i64 %x to i1
++      %bs = sitofp i1 %b to double
++      %bu = uitofp i1 %b to double
++      %t0 = insertvalue [4 x double] poison, double %s, 0
++      %t1 = insertvalue [4 x double] %t0, double %u, 1
++      %t2 = insertvalue [4 x double] %t1, double %bs, 2
++      %t3 = insertvalue [4 x double] %t2, double %bu, 3
++      ret [4 x double] %t3
++    }
++    attributes #0 = { alwaysinline }
++    """
++    :(Base.llvmcall(($ir,"entry"),NTuple{4,Float64},Tuple{UInt64},x))
++end
++@generated function float_to_integer(::Val{W}, s::Float64, u::Float64) where {W}
++    signed = W == 64 ? "%sx = add i64 %a, 0" : "%sx = sext i$W %a to i64"
++    unsigned = W == 64 ? "%ux = add i64 %b, 0" : "%ux = zext i$W %b to i64"
++    ir = """
++    define [2 x i64] @entry(double %s, double %u) #0 {
++      %a = fptosi double %s to i$W
++      %b = fptoui double %u to i$W
++      $signed
++      $unsigned
++      %t0 = insertvalue [2 x i64] poison, i64 %sx, 0
++      %t1 = insertvalue [2 x i64] %t0, i64 %ux, 1
++      ret [2 x i64] %t1
++    }
++    attributes #0 = { alwaysinline }
++    """
++    :(Base.llvmcall(($ir,"entry"),NTuple{2,UInt64},Tuple{Float64,Float64},s,u))
++end
++@kernel cpu=false function to_float_kernel!(out,@Const(x),w)
++    i=@index(Global,Linear)
++    if i<=length(x)
++        p=integer_to_float(w,x[i])
++        for j in 1:4;out[j,i]=p[j];end
++    end
++end
++@kernel cpu=false function to_integer_kernel!(out,@Const(s),@Const(u),w)
++    i=@index(Global,Linear)
++    if i<=length(s)
++        p=float_to_integer(w,s[i],u[i]);out[1,i]=p[1];out[2,i]=p[2]
++    end
++end
++same_bits(a,b)=size(a)==size(b)&&reinterpret(UInt64,vec(a))==reinterpret(UInt64,vec(b))
++@testset "logical-width integer and floating casts" begin
++    rng=MersenneTwister(0xf10a7)
++    for w in (2,3,7,8,9,11,15,16,17,23,31,32,33,53,63,64)
++        mask=(big(1)<<w)-1;sign=big(1)<<(w-1)
++        x=UInt64[0,1,2,3,UInt64(sign-1),UInt64(sign),UInt64(sign+1),UInt64(mask),typemax(UInt64)]
++        append!(x,rand(rng,UInt64,32))
++        expected=Matrix{Float64}(undef,4,length(x))
++        for (i,v) in enumerate(x)
++            a=big(v)&mask;s=a>=sign ? a-(big(1)<<w) : a
++            expected[:,i]=[Float64(s),Float64(a),isodd(v) ? -1.0 : 0.0,isodd(v) ? 1.0 : 0.0]
++        end
++        @test same_bits(hcat((collect(integer_to_float(Val(w),v)) for v in x)...),expected)
++        xd=Lava.LavaArray(x)
++        s=Float64[-1.75,-1,-0.5,-0.0,0.0,0.5,1,1.75]
++        u=Float64[-0.0,0.5,1,1.75,2,2.75,3,3.75]
++        expected_int=hcat(([reinterpret(UInt64,Int64(trunc(a))),UInt64(trunc(b))] for (a,b) in zip(s,u))...)
++        @test hcat((collect(float_to_integer(Val(w),a,b)) for (a,b) in zip(s,u))...)==expected_int
++        sd,ud=Lava.LavaArray(s),Lava.LavaArray(u)
++        for rep in 1:3
++            out=Lava.LavaArray{Float64}(undef,4,length(x))
++            to_float_kernel!(KA.get_backend(xd))(out,xd,Val(w);ndrange=length(x),workgroupsize=64)
++            @test same_bits(Array(out),expected)
++            ints=Lava.LavaArray{UInt64}(undef,2,length(s))
++            to_integer_kernel!(KA.get_backend(sd))(ints,sd,ud,Val(w);ndrange=length(s),workgroupsize=64)
++            @test Array(ints)==expected_int
++        end
++    end
++end
++end
