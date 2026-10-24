@@ -1412,6 +1412,22 @@ is a fresh `Float32` copy of the final-normed row the head reads and `pos` is
 the 1-based index in the returned ids of the token that row came from, so the
 argmax of the head on `v` is `ids[pos + 1]`. It is exclusive with `draft`.
 
+`on_rows`: called as `on_rows(pos, M)` each time the target consumes input
+rows, where `M` is a fresh `(n, dim)` `Float32` matrix of the final-normed rows
+for ids `pos .. pos+n-1`: the prompt rows after prefill, one row per plain
+decode step, and the committed rows of each verify window. Every consumed
+position is delivered once, in order; rows a resumed state already held are
+not. It may be combined with `draft` (an MTP draft head reads it).
+
+`on_taps` with `taps`: `taps` lists block counts `b`, `0 <= b <= length(model.blocks)`,
+and `on_taps(pos, X)` gets a fresh `(n, dim * length(taps))` `Float32` matrix for
+ids `pos .. pos+n-1`, where row `t` is the rows of the taps in `taps` order, side
+by side. Tap `b` is the residual stream after the first `b` blocks (`b = 0` is the
+embedding output), the same as llama.cpp's input of 0-based layer `b`. The rows are
+raw, not final-normed. Delivery follows `on_rows` exactly, and it may be combined
+with `draft` and `on_rows`. Both arguments come together, and the window prefill
+path must run (CPU hybrid models).
+
 `draft`: a `Speculation.DraftSource` that proposes ids for each verify window,
 capped at `max_draft` (default 8) per window and at `max_new_tokens`. The
 target checks the proposals in one window and keeps the greedy-agreeing prefix.
@@ -1445,6 +1461,9 @@ function reference_generate(
     state::Union{Nothing,GenerateState}=nothing,
     on_token=nothing,
     on_hidden=nothing,
+    on_rows=nothing,
+    on_taps=nothing,
+    taps::AbstractVector{Int}=Int[],
     stop_ids=(),
     eos_ids=(TOY_EOS,),
     draft=nothing,
@@ -1457,6 +1476,10 @@ function reference_generate(
         "reference_generate: a sampler and a speculative draft are exclusive; speculation verifies greedily"))
     (on_hidden === nothing || draft === nothing) || throw(ArgumentError(
         "reference_generate: on_hidden and a speculative draft are exclusive; the window skips per-token hidden states"))
+    (isempty(taps) == (on_taps === nothing)) || throw(ArgumentError(
+        "reference_generate: on_taps and taps come together: pass both or neither"))
+    all(b -> 0 <= b <= length(model.blocks), taps) || throw(ArgumentError(
+        "reference_generate: taps must be block counts in 0:$(length(model.blocks))"))
     theta=_resolved_rope_theta(tensors, theta)
     _infer_device_storage!(:reference_generate, backend, tensors)
     cpu = backend
@@ -1558,6 +1581,8 @@ function reference_generate(
         t_prefill = time_ns()
         chunk = _prefill_chunk(P)
         win_ok = _prefill_window_ok(tensors, gdn_conv, gdn_rec, h, cpu_scratch)
+        on_taps === nothing || win_ok || throw(ArgumentError(
+            "reference_generate: taps need the window prefill path (CPU hybrid)"))
         s1 = n0
         while s1 < P
             s0 = s1 + 1
@@ -1574,8 +1599,10 @@ function reference_generate(
                 # prompt state is built by the arithmetic decode uses.
                 win = _decode_window!(model, tensors, kc, vc, collect(prompt[s0:s1]), s0, cpu, wd,
                     gdn_conv, gdn_rec, cpu_scratch; vocab, n_heads, n_kv_heads, d_head, group, eps,
-                    theta, inv_freq, rotary_dim, head=false)
+                    theta, inv_freq, rotary_dim, head=false, taps)
                 _commit_window!(win, n, gdn_conv, gdn_rec, h)
+                on_rows === nothing || on_rows(s0, _final_normed_rows(tensors, win.hwin, cpu, wd; eps))
+                _window_taps!(on_taps, win, s0, n)
                 at_boundary = ckpt_at > 0 && s1 == ckpt_at
                 if s1 < P && (at_boundary || (ckpt_every > 0 && s1 % ckpt_every == 0))
                     _generate_checkpoint!(st, s1, ckpt_slots; pinned=at_boundary)
@@ -1726,6 +1753,7 @@ function reference_generate(
             end
             # every pass, not only the last: a stride checkpoint copies h at its boundary
             h.storage .= @view hp.storage[n:n, :]
+            on_rows === nothing || on_rows(s0, _final_normed_rows(tensors, hp.storage, cpu, wd; eps))
             at_boundary = ckpt_at > 0 && s1 == ckpt_at
             if s1 < P && (at_boundary || (ckpt_every > 0 && s1 % ckpt_every == 0))
                 _generate_checkpoint!(st, s1, ckpt_slots; pinned=at_boundary)
@@ -1785,6 +1813,7 @@ function reference_generate(
                     steps, accepted, stopped = _verify_window_round!(
                         model, tensors, kc, vc, cpu, wd, h, gdn_conv, gdn_rec, cpu_scratch,
                         ids, st.ids, d.ids, P + steps, steps, cap, on_token, stop_ids, eos_ids;
+                        on_rows, on_taps, taps,
                         vocab, n_heads, n_kv_heads, d_head, group, eps, theta, inv_freq, rotary_dim,
                     )
                     Spec.observe!(draft, d, accepted)
@@ -1797,7 +1826,12 @@ function reference_generate(
                 end
             end
             t_dec = time_ns()
-            _decode_step!(
+            # with taps the step is a one-row window: _decode_step! keeps no per-block rows
+            tap_win = on_taps === nothing ? nothing : _decode_window!(model, tensors, kc, vc, [next],
+                P + steps, cpu, wd, gdn_conv, gdn_rec, cpu_scratch; vocab, n_heads, n_kv_heads,
+                d_head, group, eps, theta, inv_freq, rotary_dim, head=false, taps)
+            tap_win === nothing || _commit_window!(tap_win, 1, gdn_conv, gdn_rec, h)
+            tap_win === nothing && _decode_step!(
                 model,
                 tensors,
                 kc,
@@ -1823,6 +1857,8 @@ function reference_generate(
                 hrow=1,
             )
             push!(st.ids, next)
+            on_rows === nothing || on_rows(P + steps, _final_normed_rows(tensors, h.storage, cpu, wd; eps))
+            _window_taps!(on_taps, tap_win, P + steps, 1)
             _profile_token_end(tok_t0, true)
             if timing
                 println(
@@ -1888,6 +1924,25 @@ function _last_logits(model, tensors, h, cpu, wl, vocab, row::Int; eps::Real=1e-
     )
     _dec_matmul_group!(cpu, (out,), _decode_xq(buf, Val(:xq_dim)), lastrow, (tensors.lm_head,), wl)
     return vec(out.storage)
+end
+
+# Host copies of the final-normed rows of `X` (n, dim), one row at a time through
+# the same (1, dim) norm the head runs, so each row is the bits `_final_normed_host`
+# gives for it. Without a final RMSNorm the rows are copied as they are.
+function _final_normed_rows(tensors, X::AbstractMatrix, cpu, wl; eps::Real=1e-6)
+    n, dim = size(X)
+    out = Matrix{Float32}(undef, n, dim)
+    final_rms = haskey(tensors, :final_rms) ? tensors.final_rms : nothing
+    T = eltype(X)
+    row = Activation(; shape=(1, dim), storage=fill!(similar(X, T, (1, dim)), zero(T)))
+    normed = Activation(; shape=(1, dim), storage=fill!(similar(X, T, (1, dim)), zero(T)))
+    for t in 1:n
+        @views row.storage[1, :] .= X[t, :]
+        final_rms === nothing || rmsnorm!(cpu, normed, row, final_rms, wl; eps)
+        src = final_rms === nothing ? row.storage : normed.storage
+        @views out[t, :] .= Array(src)[1, :]
+    end
+    return out
 end
 
 # Host copy of the row the head reads: the residual row `h` of the current last

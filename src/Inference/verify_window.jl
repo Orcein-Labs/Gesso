@@ -99,13 +99,24 @@ end
 # greedy id of every row, and the per-block GDN records (nothing for attention).
 # `hwin` and `logits` take the element type of the state they run on (zeros_like),
 # so a Float64 model keeps the bits the baseline `h` keeps. A prefill window runs
-# without the head, so its `logits` is empty and `preds` is empty.
+# without the head, so its `logits` is empty and `preds` is empty. `tapX` holds the
+# residual rows after the requested block counts (empty without taps).
 struct _VerifyWindow{H<:AbstractMatrix}
     T::Int
     hwin::H
     logits::AbstractMatrix
     preds::Vector{Int}
     recs::Vector{Any}
+    tapX::Matrix{Float32}
+end
+
+# Copies the residual rows `hwin` into the column block of each tap that equals `b`.
+function _window_tap_copy!(tapX::Matrix{Float32}, taps, b::Int, hwin::AbstractMatrix, dim::Int)
+    for (k, tb) in enumerate(taps)
+        tb == b || continue
+        @views tapX[:, (k - 1) * dim + 1:k * dim] .= hwin
+    end
+    return tapX
 end
 
 # Row copies between the (T, n) window matrices and the one-row (1, n) buffers
@@ -315,7 +326,8 @@ end
 # logits, which is how a prompt prefill uses it.
 function _decode_window!(model, tensors, kc, vc, toks::AbstractVector{Int}, base::Int, cpu, wl,
     gdn_conv, gdn_rec, cpu_scratch; vocab::Int, n_heads::Int, n_kv_heads::Int, d_head::Int,
-    group::Int, eps, theta, inv_freq, rotary_dim::Int=0, head::Bool=true)
+    group::Int, eps, theta, inv_freq, rotary_dim::Int=0, head::Bool=true,
+    taps::AbstractVector{Int}=Int[])
     T = length(toks)
     T >= 1 || error("verify window: empty window")
     base >= 1 || error("verify window: base row $base is before the first cache row")
@@ -330,6 +342,8 @@ function _decode_window!(model, tensors, kc, vc, toks::AbstractVector{Int}, base
     conv_dim = cpu_scratch === nothing ? 0 : size(cpu_scratch.mixed, 2)
     value_dim = cpu_scratch === nothing ? 0 : cpu_scratch.nv * cpu_scratch.dv
     W = _window_buffers(zeros_like, T, dim, kdim, qdim, conv_dim, value_dim, hidden_ffn, vocab, head)
+    tapX = zeros(Float32, isempty(taps) ? 0 : T, dim * length(taps))
+    _window_tap_copy!(tapX, taps, 0, hwin, dim)
 
     recs = Vector{Any}(nothing, length(model.blocks))
     for (bi, blk) in enumerate(model.blocks)
@@ -343,6 +357,7 @@ function _decode_window!(model, tensors, kc, vc, toks::AbstractVector{Int}, base
                 cpu_scratch, base; n_heads, n_kv_heads, d_head, group, eps, theta, inv_freq, rotary_dim)
         end
         _window_ffn_block!(bt, hwin, subT, W, bufs, cpu, wl, zeros_like; eps)
+        _window_tap_copy!(tapX, taps, bi, hwin, dim)
     end
 
     if head
@@ -351,9 +366,9 @@ function _decode_window!(model, tensors, kc, vc, toks::AbstractVector{Int}, base
         for t in 1:T
             preds[t] = _greedy_id(view(logits, t, :))
         end
-        return _VerifyWindow(T, hwin, logits, preds, recs)
+        return _VerifyWindow(T, hwin, logits, preds, recs, tapX)
     end
-    return _VerifyWindow(T, hwin, W.logits, Int[], recs)
+    return _VerifyWindow(T, hwin, W.logits, Int[], recs, tapX)
 end
 
 # Rebuilds the conv state after the first `m` window inputs. The state holds the
@@ -389,6 +404,20 @@ function _commit_window!(win::_VerifyWindow, m::Int, gdn_conv, gdn_rec, h::Activ
     return h
 end
 
+# Hands the final-normed rows of the `m` committed window rows to `on_rows`.
+_window_rows!(on_rows::Nothing, tensors, win, base::Int, m::Int, cpu, wl; kw...) = nothing
+function _window_rows!(on_rows, tensors, win, base::Int, m::Int, cpu, wl; eps=1e-6, kw...)
+    on_rows(base, _final_normed_rows(tensors, view(win.hwin, 1:m, :), cpu, wl; eps))
+    return nothing
+end
+
+# Hands the raw tap rows of the `m` committed window rows to `on_taps`.
+_window_taps!(on_taps::Nothing, win, base::Int, m::Int) = nothing
+function _window_taps!(on_taps, win, base::Int, m::Int)
+    on_taps(base, win.tapX[1:m, :])
+    return nothing
+end
+
 # One window round, entered right after the anchor (`ids[end]`) was emitted and
 # before it was consumed. `dids` are the non-empty drafts. Emits the accepted
 # drafts with the baseline's emission and stop rules, commits the consumed rows,
@@ -396,13 +425,13 @@ end
 # `(steps, accepted, stopped)`.
 function _verify_window_round!(model, tensors, kc, vc, cpu, wl, h, gdn_conv, gdn_rec, cpu_scratch,
     ids::Vector{Int}, sids::Vector{Int}, dids::Vector{Int}, base::Int, steps::Int, cap::Int,
-    on_token, stop_ids, eos_ids; kw...)
+    on_token, stop_ids, eos_ids; on_rows=nothing, on_taps=nothing, taps=Int[], kw...)
     k = length(dids)
     toks = Vector{Int}(undef, k + 1)
     toks[1] = ids[end]
     toks[2:end] .= dids
     win = _decode_window!(model, tensors, kc, vc, toks, base, cpu, wl, gdn_conv, gdn_rec,
-        cpu_scratch; kw...)
+        cpu_scratch; taps, kw...)
     # row i predicts the token after toks[i], so it checks draft d_i
     n = 0
     while n < k && win.preds[n + 1] == dids[n + 1]
@@ -419,11 +448,15 @@ function _verify_window_round!(model, tensors, kc, vc, cpu, wl, h, gdn_conv, gdn
         if stop
             # the stop token is output but not consumed, as in the baseline
             _commit_window!(win, i, gdn_conv, gdn_rec, h)
+            _window_rows!(on_rows, tensors, win, base, i, cpu, wl; kw...)
+            _window_taps!(on_taps, win, base, i)
             append!(sids, @view toks[1:i])
             return (steps, i, true)
         end
     end
     _commit_window!(win, n + 1, gdn_conv, gdn_rec, h)
+    _window_rows!(on_rows, tensors, win, base, n + 1, cpu, wl; kw...)
+    _window_taps!(on_taps, win, base, n + 1)
     append!(sids, @view toks[1:(n + 1)])
     return (steps, n, false)
 end
