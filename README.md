@@ -214,13 +214,6 @@ The SmolLM2 gates need `config.json`, `model.safetensors` (or the shard index),
 `vocab.json` and `merges.txt` from
 [HuggingFaceTB/SmolLM2-135M](https://huggingface.co/HuggingFaceTB/SmolLM2-135M).
 
-## Training
-
-Gesso won't train models ([§LVIII](docs/Gesso_Stack.md)). If you want to work
-on the Julia ML ecosystem and you're after a job with real scope, build the
-training stack. [WGPU.jl](https://github.com/JuliaGPU/WGPU.jl) is a good
-place to start. Gesso will load your checkpoints like anyone else's.
-
 ## License
 
 Apache License 2.0. See [LICENSE](LICENSE).
