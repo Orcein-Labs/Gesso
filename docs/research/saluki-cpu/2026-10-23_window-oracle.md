@@ -372,3 +372,69 @@ new tokens).
   the loss but does not turn it into a gain.
 
 Log (local only): `.local/2026-10-24_saluki-mtp-bench.log`.
+
+## DFlash2 in Gesso (2026-10-24)
+
+Script: `scripts/saluki_dflash_bench.jl`. z-lab's DFlash2 block drafter
+(`dflash-Qwen3.8-27B-Q4_0.gguf`) now drafts inside Gesso's verify window
+(`Gesso.Inference.DFlashDraft`). It reads Saluki's residual rows after blocks 6, 20, 34, 48
+and 62 through the new `on_taps` hook, keeps its own K/V caches, drafts one non-causal block of
+8 (k=7), and uses Saluki's embedding and lm_head. `p_min` gates the selector walk on top-1
+probability. Same box, 16 threads, same prompts, greedy, up to 96 new tokens. Every drafted run
+gave exactly the plain run's ids, so all five texts match plain decode.
+
+The first port spent most of each window in block attention. That was a single-threaded scalar
+loop that read strided rows from caches laid out (ctx, n_kv, d_head), so it grew with context.
+313f4b0 stores the caches as (d_head, n_kv, ctx), takes Float32 SIMD dots and threads the
+(row, head) jobs. Acceptance at p0.7 is within 0.02 of the first version on every prompt. Stage times
+for one 7-token draft:
+
+| Stage | Before, P=30 | Before, P=130 | After, P=30 | After, P=130 |
+|---|---|---|---|---|
+| prompt-row encode | 86 ms | 291 ms | 78 ms | 204 ms |
+| one draft | 367 ms | 708 ms | 221 ms | 214 ms |
+| attention per layer | 19.8 ms | 86.3 ms | 0.3 ms | 0.5 ms |
+| lm_head (7 rows, IQ3_S) | 59 ms | 55 ms | 55 ms | 55 ms |
+
+The remaining block time is the matmuls (about 18 ms per layer for 5 layers), the lm_head, and
+about 55 ms of scalar rope, norms and allocation.
+
+Speedup over Gesso plain decode, k=7 (plain 592–696 ms per token):
+
+| Prompt | Before, p0 | Before, p0.7 | After, p0 | After, p0.7 | Acceptance p0.7 | Draft ms/window, before → after (p0.7) |
+|---|---|---|---|---|---|---|
+| json | 1.27 | 1.67 | 1.33 | **1.83** | 0.96 | 460 → 228 |
+| code | 1.32 | 1.36 | 1.55 | **1.69** | 0.99 | 783 → 211 |
+| shell | 0.58 | 0.76 | 0.65 | **0.94** | 0.71 | 848 → 243 |
+| math | 1.45 | 1.56 | 1.66 | **1.79** | 0.92 | 565 → 213 |
+| prose | 0.45 | 0.73 | 0.51 | **0.90** | 0.58 | 512 → 214 |
+| mean without json | 0.95 | 1.10 | 1.09 | **1.33** | | |
+
+- **Acceptance matches llama.cpp** (DFlash 7 p70 there: 0.92, 0.93, 0.68, 0.90, 0.67). The
+  drafter port is right. The remaining gap to llama.cpp's 1.70x is Gesso's window cost.
+- **The verify window is now the limit, not the drafter.** Drafting is 8–17% of decode time. On
+  math at p0.7, 14 windows cover 95 decode steps (6.8 ids per window). Each window costs about
+  2.4 s, which is 3.5 plain steps. That matches W(8) = 3.5–4.1 from the oracle above, so cheaper
+  multi-row matmuls would speed up every drafter, not just this one.
+- **DFlash2 is the best Gesso drafter on math and json** (1.79 and 1.83, against 1.51 and 1.34
+  for MTP own 3 p50). MTP wins on code (1.96 against 1.69), shell (1.11 against 0.94) and prose
+  (0.95 against 0.90), and on the mean without json (1.38 against 1.33).
+- **The gate helps on every prompt.** It cuts prose drafts from 322 to 64 ids and shell from 154
+  to 59.
+
+Notes on the numbers:
+
+- Before: the first full run's plain shell step was 1654 ms, so its shell speedups were
+  inflated. The before row uses a shell-only rerun (plain 693 ms).
+- After: the full run gave code p0 0.74, with only 4% of the time spent drafting. A code-only
+  rerun gave 1.55 (p0) and 1.68 (p0.7, the same as the full run's 1.69), so the row uses the
+  rerun's p0. The full run's plain shell step was 592 ms, faster than other runs, so shell's
+  after speedups are, if anything, low.
+- Draft ms counts only `dflash_draft!`. The `dflash_rows!` hook, including the prompt-row
+  encode during prefill (about 1.6 ms per row), is counted in decode time.
+
+Logs (local only): before `.local/2026-10-24_saluki-dflash-bench.log`,
+`.local/2026-10-24_saluki-dflash-bench-shell.log`; after
+`.local/2026-10-24_saluki-dflash-bench-fastattn.log`,
+`.local/2026-10-24_saluki-dflash-bench-fastattn-code.log`; profiles
+`.local/2026-10-24_dflash-profile.log`, `.local/2026-10-24_dflash-profile-after.log`.

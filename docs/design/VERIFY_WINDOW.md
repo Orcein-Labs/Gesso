@@ -112,7 +112,8 @@ never constrained to resident experts in the exact arm: that would change the mo
      without json at k = 3, p_min 0.5, ids equal to plain on every prompt. See
      `docs/research/saluki-cpu/2026-10-23_window-oracle.md`.
    - The DFlash2 block drafter (`Inference.DFlashDraft`, fed by `on_taps`) follows the same
-     pattern.
+     pattern: 1.33x without json at k = 7, p_min 0.7, ids equal to plain. Its acceptance matches
+     llama.cpp's, and the 8-row verify window (about 3.5 plain steps) is now the limit.
 4. **P4 — GPU multi-column kernels** (dp4a, F16 split-K, fused GDN, attention).
 5. **P5 — policy.** Source arbitration, per-origin receipts, T chosen by measured acceptance.
 
