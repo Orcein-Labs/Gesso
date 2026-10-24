@@ -15,6 +15,7 @@
 # GESSO_BEAN_BACKOFF (comma list of after:skip pairs, default "0:0,2:4,3:8"). After
 # `after` consecutive bean proposals that drafted nothing, the next `skip` proposals
 # are answered empty, so those steps run plain. after = 0 never backs off.
+# GESSO_BENCH_ONLY (comma list of prompt tags, default all) reruns a subset.
 
 using Gesso
 using Printf
@@ -28,6 +29,7 @@ const KS = [parse(Int, s) for s in split(get(ENV, "GESSO_BENCH_DRAFT", "3,4"), '
 const TAUS = [parse(Float64, strip(s)) for s in split(get(ENV, "GESSO_BEAN_TAU", "0.5"), ',')]
 const SUFFIX_MIN = parse(Int, get(ENV, "GESSO_SUFFIX_MIN", "3"))
 const BACKOFFS = [Tuple(parse.(Int, split(strip(s), ':'))) for s in split(get(ENV, "GESSO_BEAN_BACKOFF", "0:0,2:4,3:8"), ',')]
+const ONLY = Set(filter(!isempty, strip.(split(get(ENV, "GESSO_BENCH_ONLY", ""), ','))))
 const IM_END = 248046
 
 include(joinpath(@__DIR__, "saluki_prompts.jl"))
@@ -106,6 +108,7 @@ let p = Gesso.Inference.encode(tk, chat("Hi"))
 end
 
 for (tag, msg) in PROMPTS
+    isempty(ONLY) || tag in ONLY || continue
     prompt = Gesso.Inference.encode(tk, chat(msg))
     P = length(prompt)
     # Prefill and the first token are shared by every run: time them once and
