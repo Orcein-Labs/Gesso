@@ -24,11 +24,10 @@ Known debt, newest first. Each entry names its cause and how it gets paid off. S
   Pay off: per-session workspaces before any multi-session serving.
 - **`QuantMatrix` allocates a Q8_K activation buffer per matmul.** Pay off: reuse buffers from
   a session workspace.
-- **Lava pirates `KernelAbstractions.adapt_structure`** (upstream `Lava/src/array/ka_backend.jl`).
-  KernelAbstractions 0.9.43 defines the same method, and Julia 1.12 refuses the overwrite at
-  precompile, which broke CI. Stopgap: the test and benchmark envs cap KernelAbstractions at
-  0.9.42, and the benchmark env pins Lava to the same revision as the test env. Pay off: drop
-  the method from Lava upstream, then lift the cap.
+- **Gesso builds against a vendored, patched Lava** (`vendor/Lava`, patches in
+  `vendor/patches/lava/`). Patch 0001 drops the `ConstAdaptor` `ReshapedArray` override that
+  KernelAbstractions 0.9.43+ also defines; Julia 1.12 refused the overwrite at precompile, which
+  broke CI. Pay off: land the patches upstream, then go back to a pinned upstream revision.
 - **Lava imports GLFW, and GLFW's `__init__` needs a display.** Every env that loads Lava fails
   to precompile on a headless box. CI and `make test` run under `xvfb-run` to get around it.
   Pay off: make the windowing import lazy in Lava (a weakdep or extension).
