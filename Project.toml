@@ -5,7 +5,7 @@ authors = ["Matt <liravossai@gmail.com>"]
 license = "Apache-2.0"
 
 [deps]
-# Intentionally minimal (Phase 0, Gesso_Stack.md §LXXIII).
+# Intentionally minimal.
 #
 # Gesso earns every hard dependency (§VII). The only allowed entries are
 # Julia stdlibs, and each one must be added together with an entry in the

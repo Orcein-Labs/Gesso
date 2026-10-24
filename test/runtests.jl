@@ -1,4 +1,4 @@
-# Gesso test harness (Gesso_Stack.md §LXXIII).
+# Gesso test harness.
 #
 # Structure: this file owns the package-level laws (dependency law, load,
 # foundation contracts) and includes per-area test files. Tests are cheap,
@@ -273,7 +273,7 @@ using Gesso: reference_prefill, reference_generate
     # torch, a snapshot, or a device (CI never requires any of them).
     include("test_speed_floor_harness.jl")
 
-    # Phase 20 (§XCIII; docs/design/SPECULATION_SEAM.md): the host-side draft
+    # Phase 20: the host-side draft
     # seam and its sources, ported from GessoSymbolicDrafts 59553aa. No verifier.
     include("test_speculation.jl")
 

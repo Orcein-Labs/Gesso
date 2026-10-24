@@ -1,4 +1,4 @@
-# Speculative verify window, CPU correctness path (docs/design/VERIFY_WINDOW.md).
+# Speculative verify window, CPU correctness path.
 #
 # A window runs `[anchor, d_1 .. d_k]` through the model at consecutive cache rows
 # in one pass, then the caller accepts a prefix of the drafts and commits. Every

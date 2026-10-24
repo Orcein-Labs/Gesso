@@ -3,7 +3,7 @@
 # the same checkpoint / prompt / max_new_tokens the Gesso CUDA Session rows
 # measure (benchmark/runbenchmarks.jl, G2 block).
 #
-# Contract (docs/goals/PHASE10_SPEED_FLOOR.md, G2):
+# Contract (G2):
 #   * eager only — transformers LlamaForCausalLM.generate, greedy
 #     (do_sample=False), batch 1, NO torch.compile. torch.compile / vLLM
 #     are later additional rows, not the G2 gate.

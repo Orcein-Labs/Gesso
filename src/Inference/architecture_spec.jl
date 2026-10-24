@@ -1,5 +1,5 @@
 # ArchitectureSpec — the canonical architecture-description boundary
-# (BREADTH-0 Pass A; Gesso_Stack.md §VIII).
+# (BREADTH-0 Pass A).
 #
 # BEFORE: `load_llama_config` answered "is this Llama-shaped?" by string
 # equality on `model_type` plus a closed key list, and every refusal named the

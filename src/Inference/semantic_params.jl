@@ -1,5 +1,5 @@
 # Semantic parameter identity + the family parameter-map boundary
-# (BREADTH-0 Passes B and E; Gesso_Stack.md §VIII, §XI).
+# (BREADTH-0 Passes B and E).
 #
 # BEFORE: `llama_import.jl` carried `_LAYER_TENSOR_NAMES`, a hardcoded tuple
 # of Llama tensor spellings bound to interpreter fields, plus string surgery on

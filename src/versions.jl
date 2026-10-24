@@ -1,4 +1,4 @@
-# Schema versioning (Gesso_Stack.md §LXIX determinism; North Star §34).
+# Schema versioning.
 #
 # Law: internal schemas carry versions. If cache semantics change, bump the
 # relevant version. Do not silently reinterpret old records.

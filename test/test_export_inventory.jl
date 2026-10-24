@@ -219,7 +219,7 @@ const INVENTORY = Dict{Symbol, Tuple{Symbol, Vector{String}}}(
     :compatibility_table => (:live, ["test_breadth0.jl"]),
     :vocab_size => (:live, ["test_tokenizer_protocol.jl"]),
 
-    # --- Phase 20 speculation seam (§XCIII; SPECULATION_SEAM.md) ------------
+    # --- Phase 20 speculation seam ------------------------------------------
     :DraftSource => (:live, ["test_speculation.jl"]),
     :DraftContext => (:live, ["test_speculation.jl"]),
     :Draft => (:live, ["test_speculation.jl"]),

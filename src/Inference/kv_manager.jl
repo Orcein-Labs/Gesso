@@ -1,5 +1,5 @@
 # Phase 5 (§LXXVIII item A): paged KV manager — Magenta §9.5 step 1, nothing
-# further (docs/research/KV_MEMORY_PROGRAM.md; §XXXI: KV is a semantic object).
+# further (§XXXI: KV is a semantic object).
 #
 # Physical unit: a PAGE of `page_size` token-rows, shape
 # (page_size, n_kv_heads, d_head), allocated with `similar` off the session's

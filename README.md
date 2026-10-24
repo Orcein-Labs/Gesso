@@ -81,10 +81,6 @@ Some caveats:
 - These numbers are CUDA. Lava support for this model is newer, and we
   haven't published its speed yet.
 
-The whole campaign, with every commit, number and dead end, is in
-[`docs/research/grok-wip/2026-10-09_35b-cuda-decode-parity.md`](docs/research/grok-wip/2026-10-09_35b-cuda-decode-parity.md).
-KV reuse is §14 of [`KV_MEMORY_PROGRAM.md`](docs/research/KV_MEMORY_PROGRAM.md).
-
 ### SmolLM2-135M (2026-10-03 and 2026-10-08)
 
 Greedy, 8 new tokens, compile time excluded. All 27 IDs match the Hugging
@@ -99,11 +95,7 @@ Lava against CUDA, warmed decode tok/s, both taken the same night:
 | The quick brown fox | **36.94** | 28.44 | 1.30 |
 | Julia is a programming language. | **36.78** | 30.10 | 1.22 |
 
-Lava started this work at 2.4 tok/s
-([arm 11](docs/archive/2026-10_regime-i/receipts/arm11-lava-after.json)).
-The receipts are
-[`s4-lava-three.json`](docs/archive/2026-10_regime-ii/s4-lava-three.json) and
-[`s4-cuda-three.json`](docs/archive/2026-10_regime-ii/s4-cuda-three.json).
+Lava started this work at 2.4 tok/s.
 
 Gesso CUDA against eager PyTorch, prompt `"Hello"`, batch 1, no
 `torch.compile`: a warmed generate takes 240 ms in Gesso and 348 ms in
@@ -155,7 +147,7 @@ The SmolLM2 tables:
 
 ```bash
 GESSO_SMOLLM2_DIR=/path/to/SmolLM2-135M \
-GESSO_HF_REFERENCE=docs/archive/2026-10_regime-i/receipts/hf-reference.json \
+GESSO_HF_REFERENCE=test/fixtures/smollm2/hf-reference.json \
 julia --project=test --startup-file=no test/regime_i_performance.jl lava out-lava.json
 ```
 
@@ -185,13 +177,14 @@ ext/           CUDA and Lava package extensions
 scripts/       gates, benchmarks and the chat server
 test/          test harness
 benchmark/     benchmark harness (results/ accrues)
-docs/          Gesso_Stack.md is the design canon; ARCHITECTURE.md is the map
+vendor/        patched upstream packages (Lava)
+docs/          reference (environment variables)
 libs/          local dev sources (gitignored)
 ```
 
-`AGENTS.md` covers how we work in this repo. Read it before your first edit.
-Open design questions are in [`docs/DECISION_PACKETS.md`](docs/DECISION_PACKETS.md).
 Every `GESSO_*` environment variable is indexed in [`docs/env-vars.md`](docs/env-vars.md).
+The long-prompt benchmarks read `benchmark/corpus-pride-and-prejudice.txt`, the
+opening chapters of Jane Austen's novel (public domain, from Project Gutenberg).
 
 ## Commands
 
@@ -201,7 +194,6 @@ make bench         # benchmarks (append to benchmark/results/)
 make format        # format the repo
 make format-check  # CI's formatting gate
 make env-vars      # regenerate docs/env-vars.md
-make freeze        # curated context-freeze bundle
 ```
 
 This is a Julia 1.12 workspace. Activate the root and let Pkg find the

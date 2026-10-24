@@ -53,11 +53,9 @@ jobs:
       - name: No machine paths in code
         # The repo is public. Code, tests, scripts and config read paths from
         # the environment; a home directory or drive mount here is a leak.
-        # docs/ is not checked yet: it still holds old receipts with paths
-        # (see DEBT.md), and joins this check once they are swept.
         run: |
           if git grep -nE '/home/[a-z_][a-z0-9_-]*/|/mnt/[a-z]/|/Users/[A-Za-z]+/' -- \
-              src ext scripts test benchmark .github Makefile '*.toml'; then
+              src ext scripts test benchmark docs .github Makefile '*.toml'; then
             echo "FAIL: machine-specific paths above; read them from the environment instead"
             exit 1
           fi

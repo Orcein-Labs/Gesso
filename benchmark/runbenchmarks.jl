@@ -1,4 +1,4 @@
-# Gesso benchmark harness (Gesso_Stack.md §LXXIII; §XXXIII integrity rules).
+# Gesso benchmark harness.
 #
 # Conventions:
 #

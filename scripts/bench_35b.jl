@@ -4,7 +4,7 @@
 #   GESSO_GGML_DIR=/path/to/llama.cpp/build/bin \
 #   GESSO_BACKEND=lava|cuda|cpu \
 #   [GESSO_BENCH_CONTEXTS=512,8192,16384,32768] [GESSO_BENCH_NEW=65] \
-#   [GESSO_BENCH_TEXT=docs/Gesso_Stack.md] [GESSO_BENCH_IDS=out.tsv] [GESSO_BENCH_REPS=2] \
+#   [GESSO_BENCH_TEXT=benchmark/corpus-pride-and-prejudice.txt] [GESSO_BENCH_IDS=out.tsv] [GESSO_BENCH_REPS=2] \
 #   julia --project=benchmark -t 16 scripts/bench_35b.jl
 #
 # Each context is one greedy generation on a fresh state, timed from the call
@@ -31,8 +31,11 @@ isfile(GGUF) || error("bench_35b: set GESSO_ORNITH35_GGUF to the Ornith 35B GGUF
 const CONTEXTS =
     parse.(Int, split(get(ENV, "GESSO_BENCH_CONTEXTS", "512,8192,16384,32768"), ','))
 const NEW = parse(Int, get(ENV, "GESSO_BENCH_NEW", "65"))
-const TEXT =
-    get(ENV, "GESSO_BENCH_TEXT", joinpath(@__DIR__, "..", "docs", "Gesso_Stack.md"))
+const TEXT = get(
+    ENV,
+    "GESSO_BENCH_TEXT",
+    joinpath(@__DIR__, "..", "benchmark", "corpus-pride-and-prejudice.txt"),
+)
 const IDS_OUT = get(ENV, "GESSO_BENCH_IDS", "")
 const REPS = parse(Int, get(ENV, "GESSO_BENCH_REPS", "2"))
 NEW >= 3 || error("bench_35b: GESSO_BENCH_NEW must be at least 3 to have inter-token gaps")
