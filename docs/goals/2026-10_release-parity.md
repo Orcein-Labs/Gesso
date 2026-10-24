@@ -303,9 +303,9 @@ plain messages without coauthor trailers or developer machine paths.
 
 ## Next executable step
 
-Active work item: [Campaign 1 correctness and stress](CAMPAIGN1_LAVA_CORRECTNESS.md).
+Active work item: [Campaign 1 correctness and stress](2026-10-14_campaign1-lava-correctness.md).
 
-Continue from the [current Campaign 1 checkpoint](CAMPAIGN1_STATUS_2026-10-14.md),
+Continue from the [current Campaign 1 checkpoint](2026-10-14_campaign1-status.md),
 which supersedes the handoff's initial thread-race hypothesis and probe order.
 The selected shared-store source candidate still needs the fresh-process,
 recovery, boundary, integration and measurement gates in the active work item.

@@ -34,7 +34,7 @@ QUALIFIED FOR THE TESTED FINITE OPERATOR CORPUS. The integer-rounded provider ma
 - v3 pair keeps intermediate Float32 values as integer bits between wide operations. It uses separately qualified isolated Lava 388e6f9; frozen Gesso ad47 and its vendor remained unchanged. The first `shared-gate-rounded-3` launch failed helper parsing before numeric results. The corrected immutable probe completed in `shared-gate-rounded-4`: both full variants are exact on all 576 outputs; the epilogue-only sibling is exact555/576 and retains the seven intended adversarial dot fixtures177–183 failures across three repeats.
 - Cost attempts v1/v2 completed their samples but were not admitted because their audit required raw shader equality. Cost capture v3 now qualifies after `spirv-opt --compact-ids`-only equality. It is a capture qualification, not a cost or speed admission; details and effective mutations are recorded below.
 
-The earlier next checkpoint is fulfilled: v3 qualified the same 192-fixture/576-output corpus. Maintained integration and the unchanged original model gate are recorded in `CAMPAIGN1_SHARED_GATE_INTEGRATION_2026-10-21.md`.
+The earlier next checkpoint is fulfilled: v3 qualified the same 192-fixture/576-output corpus. Maintained integration and the unchanged original model gate are recorded in `2026-10-21_shared-gate-integration.md`.
 
 
 ## Qualified result and maintained transition
@@ -86,6 +86,6 @@ wrong on three fixtures. They do not establish end-to-end throughput or cost
 admission.
 
 Maintained integration now belongs to
-`CAMPAIGN1_SHARED_GATE_INTEGRATION_2026-10-21.md`. The maintained candidate
+`2026-10-21_shared-gate-integration.md`. The maintained candidate
 is independently audited there; the original13 model gate remains 9/13. Full
 Campaign1 remains open, and no inference-throughput claim is admitted.

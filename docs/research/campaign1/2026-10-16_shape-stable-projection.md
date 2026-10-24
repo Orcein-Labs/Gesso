@@ -1,7 +1,7 @@
 # Campaign 1: shape-stable projection accumulation discriminator
 
 Status: rejected as a sufficient repair; no production source change or admission.
-Parent: CAMPAIGN1_LAVA_CORRECTNESS.md. Preserve all previous candidates.
+Parent: 2026-10-14_campaign1-lava-correctness.md. Preserve all previous candidates.
 
 ## Evidence and question
 

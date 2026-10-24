@@ -2,8 +2,8 @@
 
 Opened 2026-10-16. Qualified 2026-10-18 as standalone supplier commit
 `289d0693e84a3ad6ae6869cbf81b47dd4bc20ba7`; not Gesso model admission.
-See CAMPAIGN1_NO_CONTRACTION_RECEIPT_2026-10-18.md for exact scopes and limits.
-Parent: CAMPAIGN1_LAVA_CORRECTNESS.md and OUTPUT_HEAD_CONTRACT.md.
+See 2026-10-18_no-contraction-receipt.md for exact scopes and limits.
+Parent: 2026-10-14_campaign1-lava-correctness.md and OUTPUT_HEAD_CONTRACT.md.
 
 ## Objective
 

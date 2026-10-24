@@ -1,7 +1,7 @@
 # Campaign 1: matched-input dense activation-quantization contract
 
 Status: external diagnostic only; preserve all existing model gates and oracles.
-Parent: CAMPAIGN1_LAVA_CORRECTNESS.md.
+Parent: 2026-10-14_campaign1-lava-correctness.md.
 
 ## Objective and evidence
 

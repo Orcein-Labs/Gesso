@@ -6,7 +6,7 @@ passes only 33/41: repeated p127/p256 and fresh p64/recovery mismatches remain.
 All 24 repeat-ID comparisons are stable. No production source candidate was
 created or admitted. Preserve the experiment, receipts and unrun regression/
 cost recipes; further diagnosis compares identical cold p64 operands/paths.
-Parent: CAMPAIGN1_LAVA_CORRECTNESS.md. This is a separate work item from the
+Parent: 2026-10-14_campaign1-lava-correctness.md. This is a separate work item from the
 RMS preservation experiment and explicitly evaluates the prefill precision policy.
 
 ## Evidence and objective

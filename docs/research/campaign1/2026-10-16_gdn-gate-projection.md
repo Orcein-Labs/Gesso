@@ -1,7 +1,7 @@
 # Campaign 1: matched GDN gate projection diagnostic
 
 Opened 2026-10-16. Status: active external diagnostic; no source repair selected.
-Parent: `CAMPAIGN1_LAVA_CORRECTNESS.md` and the unchanged Campaign 1 gates.
+Parent: `2026-10-14_campaign1-lava-correctness.md` and the unchanged Campaign 1 gates.
 
 ## Objective
 
@@ -147,7 +147,7 @@ Receipts: `gdn-first-block-replay-validation-2.json` and
 `gdn-first-block-shader-validation-1.json` (14 emitted modules, two actual linked
 Q8_0 modules, inverse word recovery exact).
 
-Next prediction-level discriminator: `CAMPAIGN1_OUTPUT_HEAD_CONTRACT.md`.
+Next prediction-level discriminator: `2026-10-16_output-head-contract.md`.
 Q4_K output-head execution was excluded from the Q8_0 contract arm; compare
 its two activation contracts on an identical actual final hidden row before
 committing to broader GDN precision changes.

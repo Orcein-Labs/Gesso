@@ -32,14 +32,14 @@ profile. A separate auditor review also caught a consumer schema error:
 auditor_v2 requires `expected_workgroup`, absent from real producer rows, while
 its synthetic preflight inserted it. The successor will test actual V3 rows and
 compare actual workgroup to the admitted reference. See
-`CAMPAIGN1_GNORM_CALLABLE_IDENTITY_2026-10-23.md` and
-`CAMPAIGN1_GNORM_MODEL_PROGRAM_IDENTITY_2026-10-23.md`.
+`2026-10-23_gnorm-callable-identity.md` and
+`2026-10-23_gnorm-model-program-identity.md`.
 
 No root GPU job is live; V4 GPU/model launch requires new frozen independent
 review and fresh resource admission. The last qualified model gate stays9/13,
 and the full Campaign1 source, stress, make/test/format and cost gates stay open. See
-`CAMPAIGN1_BLOCK22_GNORM_CPU_SEMANTICS_2026-10-23.md` and
-`CAMPAIGN1_GNORM_CPU_SEMANTICS_MODEL_CONTROL_2026-10-23.md`.
+`2026-10-23_block22-gnorm-cpu-semantics.md` and
+`2026-10-23_gnorm-cpu-semantics-model-control.md`.
 
 ## Earlier 2026-10-23 checkpoint — GN factors qualified; allocation fix passes device tests
 
@@ -65,9 +65,9 @@ The earlier resource block was lifted for these small fixtures when more than
 1GiB became available; foreign perplexity work was left untouched. All local
 GPU jobs are terminal. Next is CPU-fast GN semantics operator preparation by
 Luna, with root review/admission before any fixture or model intervention.
-Model gate remains9/13. See `CAMPAIGN1_BLOCK22_GNORM_FACTORS_2026-10-22.md`,
-`CAMPAIGN1_SHARED_GATE_DEVICE_ALLOCATION_2026-10-23.md`, and
-`CAMPAIGN1_BLOCK22_GNORM_CPU_SEMANTICS_2026-10-23.md` for exact receipts and scope.
+Model gate remains9/13. See `2026-10-22_block22-gnorm-factors.md`,
+`2026-10-23_shared-gate-device-allocation.md`, and
+`2026-10-23_block22-gnorm-cpu-semantics.md` for exact receipts and scope.
 
 ## Earlier 2026-10-23 checkpoint — GN observer ready; scratch-allocation candidate staged
 
@@ -116,7 +116,7 @@ qk/decay/recur programs and zero fused conv/delta/gated-norm programs. This does
 not justify a fusion-disable source fix. The v2 auditor verifies the exact five
 program/workgroup inventory; its omission control reproduces v1's acceptance
 of a four-program sidecar and v2's explicit rejection. See
-`CAMPAIGN1_GDN_ROUTE_MODEL_DISCRIMINATOR_2026-10-21.md`,
+`2026-10-21_gdn-route-model-discriminator.md`,
 `gdn-route-model-1-validation-v2.json`, and
 `gdn-route-model-1-mutation-omit-qk-wg32-receipt-v1.json`. No source/model
 admission, full stress, cost, or throughput claim follows; documented
@@ -134,7 +134,7 @@ and exit-handling failures, and v3's duplicate-field lowering failure remain
 preserved and unadmitted. This isolates the complete GN stage from upstream
 core differences; replacing all GN arithmetic cannot distinguish reduction,
 quotient, scale, SiLU, or final-multiply effects and does not justify a
-quotient-only intervention. See `CAMPAIGN1_BLOCK22_GNORM_CPU_CROSSCHECK_2026-10-21.md`,
+quotient-only intervention. See `2026-10-21_block22-gnorm-cpu-crosscheck.md`,
 `block22_gnorm_cpu_v4/audit.json`, and `block22_gnorm_cpu_manager_qa_v4.json`.
 CPU factor reference v3 and independent audit v7 pass: three exact
 recombinations to the actual CPU entry and clean CPU-v4 Lava-input target,
@@ -146,7 +146,7 @@ recorder rejected Lava's [64,1,1] workgroup representation against [64]. Root
 independently compared those raw outputs. No observer cases or program records
 were produced; no factor interpretation is admitted. Immutable v3 preparation
 and independent verifier repairs are next. See
-`CAMPAIGN1_BLOCK22_GNORM_FACTORS_2026-10-22.md`,
+`2026-10-22_block22-gnorm-factors.md`,
 `block22-gnorm-factor-cpu-reference-v3/audit-v7.json`, and
 `block22_gnorm_factor_gpu_launch_v2.json`. No model run, source/model admission,
 or performance claim follows; CPU training makes timing unsuitable for benchmarks.
@@ -161,7 +161,7 @@ float-controls mask 0. No observer factors or factor attribution are admitted.
 See `block22_gnorm_factor_gpu_v3_partial_manager_qa.json` and
 `block22_gnorm_factor_prelaunch-qa-v4.json`. The separate input-device scratch
 allocation gap is being repaired in an isolated, unadmitted candidate under
-`CAMPAIGN1_SHARED_GATE_DEVICE_ALLOCATION_2026-10-23.md`; consumed sources remain
+`2026-10-23_shared-gate-device-allocation.md`; consumed sources remain
 immutable. Campaign 1 is still active with the model gate at 9/13.
 
 CPU preparation has since completed: auditor v5 passes independent review
@@ -186,7 +186,7 @@ external-resource block, not a completed campaign.
 
 Independent receipt shared-gate-subnormal-2-validation.json confirms the earlier provider negative is caused after the cast: the physicalFloat64 reciprocal, nativeFloat32cast/bitcast and plain copy preserve CPU0x007fffe6, while Float32multiply by1 and independent Float32add of0 flush it tozero. The original provider, direct unchanged kernels and observed endpoint agree in all6repeated requests across single-row and16-row geometries. All9actual shaders validate and prove the stated physical operations under WG64/NoContraction/preservation32+64. Wide arithmetic control preserves all17values across3repeats, including24subnormal observations across the two geometries. Effective repaired-digest reciprocal and structurally valid mul-to-add shader mutations are rejected. Original source912 and supplier388e6f9 remain unchanged.
 
-At that checkpoint, all jobs were terminal. First small-profile launch was canceled before numerical evidence because it lacked the GPU lock; corrected run held both locks and actual6GiB RAM/1GiBswap caps. The subsequent paired provider experiment was required to preserve explicit Float32 rounding around physicalFloat64 arithmetic and include subnormal dot-input/product cases, signedzero and cancellation; epilogue-only success is insufficient. Gesso original two-token gate remains9/13; no source/model/stress admission or throughput claim. Details: CAMPAIGN1_SHARED_GATE_SUBNORMAL_2026-10-21.md.
+At that checkpoint, all jobs were terminal. First small-profile launch was canceled before numerical evidence because it lacked the GPU lock; corrected run held both locks and actual6GiB RAM/1GiBswap caps. The subsequent paired provider experiment was required to preserve explicit Float32 rounding around physicalFloat64 arithmetic and include subnormal dot-input/product cases, signedzero and cancellation; epilogue-only success is insufficient. Gesso original two-token gate remains9/13; no source/model/stress admission or throughput claim. Details: 2026-10-21_shared-gate-subnormal.md.
 
 ## Historical prerequisite — 2026-10-21: isolated Lava integer-width repair qualified
 
@@ -202,7 +202,7 @@ Frozen Gesso ad47 and 912 tracked files remained unchanged at this supplier-only
 checkpoint. Its planned followups were subsequently advanced by the finite
 rounding-provider and maintained-integration work recorded above. The historical
 9/13 model result did not admit source, production behavior or throughput. See
-`CAMPAIGN1_LAVA_INTEGER_WIDTHS_2026-10-21.md` for the supplier qualification.
+`2026-10-21_lava-integer-widths.md` for the supplier qualification.
 
 ## Earlier checkpoint — 2026-10-21, pre-integration two-token numerical diagnosis
 
@@ -227,7 +227,7 @@ The final model and units controllers are terminal after the failed two-token pr
 
 Matched-input FFN replay qualifies6/6 endpoints and locates its first difference in shared gated add; normalization and routed/shared expert arrays are exact. The physical-F64-reciprocal gate prototype qualifies16fixtures/48CPU-exact outputs, but the unchanged original13 model profile with that process-local override still passes only9/13. Independent audit binds actual shaders exactly after SPIR-V ID compaction and confirms four hello failures with zero integrity/source errors. Further edge qualification finds CPU subnormal0x007fffe6 versus GPUzero at fixture19, after54exact outputs. This prototype is not generally qualified or integrated. Reported device Float32 denormal preservation is unsupported. Effective raw output, shader constant and model-token mutations are rejected; original artifacts remain unchanged.
 
-The first corrected-gate trace stopped before inference due to insufficient GPU memory. Fresh trace2 then passed under-lock memory admission and is now terminal independently qualified: two requests/120stages/203126364rawbytes,81working-state arrays and logits exact observed/control, effective repaired-digest hidden mutation rejected. Paired analysis finds all captured decode values through block21 exact, then block22 mixer output2039scalars/max6.868503987789154e-6 after identical entering hidden. Prefill conv22 is exact but rec22 differs435945scalars/max7.152557373046875e-7. Next work crosses those two recurrent states over both backends in a matched block22 mixer replay, first requiring own-state outputs/poststates to reproduce actual archived endpoints. Matched replay is terminal independently qualified12/12 with six native endpoint/poststate controls and exact repeats. Same-state CPU/GPU mixer sub differs2039scalars/max6.8685e-6, but swapping initial recurrent state leaves each backend sub output exact for this fixture. Snapshot replayv2 is terminal independently qualified by corrected auditorv3: all original model and prior replay outputs/states remain exact; all intermediates repeat. First CPU/GPU differences are a/b gate projections(31/32 and30/32 outputs), while normed/mixed/z are exact. Convolution independently differs too. Tiny CPU fixture now independently qualifies actual Q8_0 materialization, BaseBLAS model endpoints and24arithmetic outputs. SerialFMA32 matches capturedGPU outputs exactly; serial64 is closer to CPU but not exact. Actual GPU stock plus three variants now qualify24/24 with typed shader proof. Serial64 equals exact-sum nearest-F32 targets for all64gate values, though CPU BLAS bits still differ. Convolution control now qualifies15results and actualsixshaders; CPU-order/Baseexp32/physicalF64division matches all8192capturedCPU outputs. Known subnormal loss remains; next small integer rounding primitive addresses that gap before broad provider/model qualification. No jobs live. No source change or source admission. Exact receipts and bounded next item are in `CAMPAIGN1_HELLO_DECODE_DIAGNOSIS_2026-10-19.md`. Appended dated entries below are historical observations, not current process ownership.
+The first corrected-gate trace stopped before inference due to insufficient GPU memory. Fresh trace2 then passed under-lock memory admission and is now terminal independently qualified: two requests/120stages/203126364rawbytes,81working-state arrays and logits exact observed/control, effective repaired-digest hidden mutation rejected. Paired analysis finds all captured decode values through block21 exact, then block22 mixer output2039scalars/max6.868503987789154e-6 after identical entering hidden. Prefill conv22 is exact but rec22 differs435945scalars/max7.152557373046875e-7. Next work crosses those two recurrent states over both backends in a matched block22 mixer replay, first requiring own-state outputs/poststates to reproduce actual archived endpoints. Matched replay is terminal independently qualified12/12 with six native endpoint/poststate controls and exact repeats. Same-state CPU/GPU mixer sub differs2039scalars/max6.8685e-6, but swapping initial recurrent state leaves each backend sub output exact for this fixture. Snapshot replayv2 is terminal independently qualified by corrected auditorv3: all original model and prior replay outputs/states remain exact; all intermediates repeat. First CPU/GPU differences are a/b gate projections(31/32 and30/32 outputs), while normed/mixed/z are exact. Convolution independently differs too. Tiny CPU fixture now independently qualifies actual Q8_0 materialization, BaseBLAS model endpoints and24arithmetic outputs. SerialFMA32 matches capturedGPU outputs exactly; serial64 is closer to CPU but not exact. Actual GPU stock plus three variants now qualify24/24 with typed shader proof. Serial64 equals exact-sum nearest-F32 targets for all64gate values, though CPU BLAS bits still differ. Convolution control now qualifies15results and actualsixshaders; CPU-order/Baseexp32/physicalF64division matches all8192capturedCPU outputs. Known subnormal loss remains; next small integer rounding primitive addresses that gap before broad provider/model qualification. No jobs live. No source change or source admission. Exact receipts and bounded next item are in `2026-10-19_hello-decode-diagnosis.md`. Appended dated entries below are historical observations, not current process ownership.
 
 Remaining original gates include two-token recovery and its mutation, actual Lava/Session integration, GEMM capability/registration routes, W3/S1 and their mutations/vocabulary stress, scalar/RMS regressions, documented make test, formatting and the complete engineering/resource/cost receipt. Standalone/preflight and earlier-candidate results do not transfer automatically. Full inference throughput remains deferred.
 
@@ -235,7 +235,7 @@ Remaining original gates include two-token recovery and its mutation, actual Lav
 
 Ordinary CPU chunk/history controls9/9match the frozenoracle: p127=1503atboth64and128. OrdinaryGPUcontrols reproduce668at128three times,1503at64twice,includingisolatedcalls;source910files unchanged. Qualified read-only modeltrace captures600stages/all127rows:layers1–3arebitwiseidentical;firstdifference is attentionblock4mixer,token116only,maxabs3.6135315895080566e-6. Layer4FFN amplifies it and layer5GDN carries differences through127. Observed/controlrawlogits/hidden/fullIDs/reportedlive-state digests match exactly;repaired-digest numericmutation rejected. Firstdifference is supported by complete rawmatrices,not only reported hashes.
 
-New focused attentiontrace is running(session45712),capturingnormalizedinput,Q/K/Vprojections,headsplit/QKnorm/RoPE/caches,actualcoreinputs,knownbadquery116scores/probs/valuesfor16heads,andmerge/gate/outputprojection. Two private read-only clones invert exactly tosource;ordinarycontrols remain mandatory. Workitem:`CAMPAIGN1_P127_ATTENTION_TRACE_2026-10-18.md`. Frozen6d3683c retains41/41andforward53/53butreverse49/53;Campaign1andallfinaladmissionstayopen. No16freshmatrixwhile reverse fails,no target/tolerance/oracle/source changes,no throughput claim.
+New focused attentiontrace is running(session45712),capturingnormalizedinput,Q/K/Vprojections,headsplit/QKnorm/RoPE/caches,actualcoreinputs,knownbadquery116scores/probs/valuesfor16heads,andmerge/gate/outputprojection. Two private read-only clones invert exactly tosource;ordinarycontrols remain mandatory. Workitem:`2026-10-18_p127-attention-trace.md`. Frozen6d3683c retains41/41andforward53/53butreverse49/53;Campaign1andallfinaladmissionstayopen. No16freshmatrixwhile reverse fails,no target/tolerance/oracle/source changes,no throughput claim.
 
 ## Previous experiment — 2026-10-18, reverse128 p127 discriminator
 
@@ -243,26 +243,26 @@ Frozen candidate6d3683c passes maintained191/191 (parent108numericfailures), ord
 
 The boundary auditorv1 wrongly assumed callbackp1forreverse order and overcountedthreefailures. V2 follows the unchangeddriver's first-case rule(hello forreverse),retains allv3numericalrules,passes corrected53positive controls in both directions and rejects raw-IDmutations with green flags retained. V2 confirmsforward53/53andreversenumeric49/53withzero integrity/source errors. V1and its flawed synthetic reverse fixture remain preserved as a reporting/harness defect.
 
-CPU-only ordinary-public p127chunk/history control is now running(session77305),without importingLava or claimingGPUevidence. It compares128/64/128,then exact reverseprefix hello/p256/p129/p128/p127 at128,andp127at64. SeparateGPUcontrol/localization remains unrun. Work item:`CAMPAIGN1_P127_CHUNK_CONTROL_2026-10-18.md`. Source6d3683c and all consumed helpers/environments/originaloracle stay frozen. Campaign1 remains active; full inference throughput testing remains deferred.
+CPU-only ordinary-public p127chunk/history control is now running(session77305),without importingLava or claimingGPUevidence. It compares128/64/128,then exact reverseprefix hello/p256/p129/p128/p127 at128,andp127at64. SeparateGPUcontrol/localization remains unrun. Work item:`2026-10-18_p127-chunk-control.md`. Source6d3683c and all consumed helpers/environments/originaloracle stay frozen. Campaign1 remains active; full inference throughput testing remains deferred.
 
 ## Previous experiment — 2026-10-18, RoPE diagnostic41/41; source regression qualification
 
 Actual-model trace independently validates token64 first visible divergence at layer9 mixer; this does not locate the first difference among all earlier token rows. Attention K-cache hashes differ at4/8 while V matches there. The RoPE operator probe validates54repetitions: all9stock partition comparisons differ; Float64 metadata rotation is partition invariant and CPU bit-exact. An external process-local model intervention now independently passes unchanged41/41, including24repeat comparisons and cancellation/recovery. Separate diagnostic integrity checks440calls,13cacheentries,20480Base coefficients,four actual shader plans and908unchanged source files. Repaired-digest coefficient mutation is rejected. This remains diagnostic only: maintained source/model/full-stress admission is open.
 
-New isolated source73a0dc1 uses exact qualified kernel arithmetic and per-call buffers instead of the diagnostic cache. The initial maintained-test run errored before numerics because the workload argument was omitted. A new isolated regression correction keeps runtime bytes identical and fixes that test call only. Parent/new numeric qualification now passes:parent83pass/108numericfail/0errors,new191/191. All910source hashes unchanged. Final isolated candidate6d3683c preserves73a0dc1runtime and corrects only test invocation. Unchanged41-case ordinary-source model gate now independently passes41/41 with24repeat comparisons and910unchanged tracked files. Source provenance confirms no process-local intervention. Original forward53/chunk64 is running(session7268);reverse53/chunk128 and full16fresh-process matrix remain next. Campaign1 remains open; this internal CPU-oracle gate is not independent HF/PyStack parity. Work item: `CAMPAIGN1_ROPE64_SOURCE_2026-10-18.md`. GPU available; jobs use shared locks. Full inference throughput remains deferred.
+New isolated source73a0dc1 uses exact qualified kernel arithmetic and per-call buffers instead of the diagnostic cache. The initial maintained-test run errored before numerics because the workload argument was omitted. A new isolated regression correction keeps runtime bytes identical and fixes that test call only. Parent/new numeric qualification now passes:parent83pass/108numericfail/0errors,new191/191. All910source hashes unchanged. Final isolated candidate6d3683c preserves73a0dc1runtime and corrects only test invocation. Unchanged41-case ordinary-source model gate now independently passes41/41 with24repeat comparisons and910unchanged tracked files. Source provenance confirms no process-local intervention. Original forward53/chunk64 is running(session7268);reverse53/chunk128 and full16fresh-process matrix remain next. Campaign1 remains open; this internal CPU-oracle gate is not independent HF/PyStack parity. Work item: `2026-10-18_rope64-source.md`. GPU available; jobs use shared locks. Full inference throughput remains deferred.
 
 ## Earlier experiment — 2026-10-18, GDN recurrence source
 
-External public-supplier discriminator independently confirms stock65017, recurrence-only82202, and combined gatednorm7439 twice. Nine actual shaders validate; repaired-hash numeric mutation rejected. New isolated Gesso480b5a4 integrates recurrence-only. Three kernel ASTs and complete exp32 match qualified arithmetic; scoped new-file format ASTs unchanged. Maintained actual Vulkan tests pass418/418, versus126 old numeric failures plus one absent-helper check. Unchanged41-case model gate finished35/41: freshcancel82202/recovery3927 now pass; reusedp64=46108/p127=668 fail in each of three repetitions. Independent audit confirms stable IDs and908unchanged source files. No model/stress admission claimed. An explicitly labelled external unfused single-token GPU control is running to test the separate-path hypothesis. Source work item: `CAMPAIGN1_GDN_RECURRENCE_SOURCE_2026-10-18.md`.
+External public-supplier discriminator independently confirms stock65017, recurrence-only82202, and combined gatednorm7439 twice. Nine actual shaders validate; repaired-hash numeric mutation rejected. New isolated Gesso480b5a4 integrates recurrence-only. Three kernel ASTs and complete exp32 match qualified arithmetic; scoped new-file format ASTs unchanged. Maintained actual Vulkan tests pass418/418, versus126 old numeric failures plus one absent-helper check. Unchanged41-case model gate finished35/41: freshcancel82202/recovery3927 now pass; reusedp64=46108/p127=668 fail in each of three repetitions. Independent audit confirms stable IDs and908unchanged source files. No model/stress admission claimed. An explicitly labelled external unfused single-token GPU control is running to test the separate-path hypothesis. Source work item: `2026-10-18_gdn-recurrence-source.md`.
 
 ## Earlier experiment — 2026-10-18, combined quant supplier source
 
-New isolated Gesso commit `9335b649fad4b896393b5e8bea6dc4db748265d6` integrates the qualified Lava supplier and both tested CPU-order Q8_0/Q4_K arithmetic blocks. Exact offline vendor replay and source/path import checks pass. Unchanged 41-case model gate finished39/41; independent validation confirms the same fresh-state cancel65017/recovery71198 failures. All36 normal requests and three callback controls pass, with24 repeat-ID comparisons stable. No model pass is claimed. Frozen baseline ef086ef remains 39/41. Work item: `CAMPAIGN1_QUANT_SUPPLIER_INTEGRATION_2026-10-18.md`. Campaign remains active, all final-source stress gates open.
+New isolated Gesso commit `9335b649fad4b896393b5e8bea6dc4db748265d6` integrates the qualified Lava supplier and both tested CPU-order Q8_0/Q4_K arithmetic blocks. Exact offline vendor replay and source/path import checks pass. Unchanged 41-case model gate finished39/41; independent validation confirms the same fresh-state cancel65017/recovery71198 failures. All36 normal requests and three callback controls pass, with24 repeat-ID comparisons stable. No model pass is claimed. Frozen baseline ef086ef remains 39/41. Work item: `2026-10-18_quant-supplier-integration.md`. Campaign remains active, all final-source stress gates open.
 
 ## Earlier checkpoint — 2026-10-18, standalone compiler supplier qualified
 
 Lava commit `289d0693e84a3ad6ae6869cbf81b47dd4bc20ba7` is clean and local.
-See `CAMPAIGN1_NO_CONTRACTION_RECEIPT_2026-10-18.md` for exact proof scopes.
+See `2026-10-18_no-contraction-receipt.md` for exact proof scopes.
 The formatted source passes 141/141 GPU assertions and retains parent-default
 shader bytes. Its eight complete code ASTs match the structural predecessor,
 which additionally passed 116 FloatControls assertions, 11 direct compiler
@@ -279,7 +279,7 @@ throughput testing remains deferred as requested.
 
 ## Earlier checkpoint — 2026-10-18, device operator proofs and source qualification
 
-See `CAMPAIGN1_CHECKPOINT_2026-10-18_AUDITORS.md`. After the user released the
+See `2026-10-18_checkpoint-auditors.md`. After the user released the
 GPU, the new exp32 recurrence matches CPU in all twelve repetitions, with
 independent raw/Base/shader proof and effective numeric mutation. Gate replay
 isolates another seam: exp/denominator exact, F32 division wrong. A subsequent
@@ -300,7 +300,7 @@ final-source stress and release gates open.
 
 ## Previous checkpoint — 2026-10-16, GPU exponential verified
 
-See `CAMPAIGN1_CHECKPOINT_2026-10-16_EXP32.md` for the authoritative compact
+See `2026-10-16_checkpoint-exp32.md` for the authoritative compact
 handoff. The external GPU exp32 primitive passes all 464,446 inputs in three
 repetitions, with independent raw/Julia/source/SPIR-V audits and effective
 copied numeric mutation rejection. Version1's compile failure is preserved.
@@ -387,7 +387,7 @@ Float32 activations with Float32 weight decode. The earlier Q8_0 arm covered
 neither the Q4_K head nor this activation-contract difference. A bounded
 identical-input head comparison is queued under the shared GPU lock, retaining
 the original stock p64 control and all source/CPU expectations. See
-`CAMPAIGN1_OUTPUT_HEAD_CONTRACT.md`; do not infer sufficiency before its result.
+`2026-10-16_output-head-contract.md`; do not infer sufficiency before its result.
 
 The identical-input head comparison is now terminal and insufficient. Stock
 and both CPU-head-selected requests all return 65017. All three normalized
@@ -405,7 +405,7 @@ A bounded complete CPU-reference GDN control is now running, preserving
 Lava attention and host-expert execution. Its stock control reproduces 65017;
 subsequent arms select all 30 GDN mixers, then additionally the CPU head, with
 fresh states and per-layer state/output hashes. This explicit host-copy control
-is external diagnosis only. See `CAMPAIGN1_GDN_REFERENCE_CONTROL.md`.
+is external diagnosis only. See `2026-10-16_gdn-reference-control.md`.
 
 That control is now terminal and audited. Both CPU-GDN-only requests choose
 GPU-head 3476 while their same-input CPU head chooses 82202. Both combined
@@ -420,7 +420,7 @@ gate projection with CPU head selection. It tests whether the narrower gate
 intervention can reproduce the complete-GDN combined result before broader
 device GDN changes. Only registered gate weights are substituted; all original
 CPU expectations remain unchanged. Q4_K x Q8_K GPU operator fixtures are being
-prepared separately under `CAMPAIGN1_OUTPUT_HEAD_CONTRACT.md`. The candidate
+prepared separately under `2026-10-16_output-head-contract.md`. The candidate
 remains 39/41; no new source repair, precision policy or model admission follows
 from these diagnostics.
 
@@ -437,7 +437,7 @@ repetitions: 13 sampled cases and the full 248,320-row output head, each three
 times. Codes/scales/block sums match CPU/native packing, and all complete GPU
 outputs match frozen executed Gesso CPU bits. A metadata-updated copied numeric
 mutation is rejected. All ten emitted and seven actual linked shader records
-validate. See `CAMPAIGN1_OUTPUT_HEAD_CONTRACT.md` for receipts and preserved
+validate. See `2026-10-16_output-head-contract.md` for receipts and preserved
 compile/auditor failures. This is a verified operator prototype, not a new
 release candidate. Per-kernel NoContraction source integration and broader
 GDN arithmetic work remain outstanding; the current source stays 39/41.
@@ -458,7 +458,7 @@ helper matches executed Julia Base.exp over 200,001 preliminary CPU inputs;
 GPU proof remains pending. The experiment includes actual Ornith g/negative-z,
 range-reduction ties, boundary cases and random Float32 bits. It uses explicit
 integer IEEE scaling rather than requesting an unsupported DenormPreserve32
-mode. See `CAMPAIGN1_GDN_REFERENCE_CONTROL.md`. No broader math rewrite,
+mode. See `2026-10-16_gdn-reference-control.md`. No broader math rewrite,
 production precision/fallback policy or final model gate change is admitted.
 
 ## Latest checkpoint — 2026-10-15
@@ -916,11 +916,11 @@ failure is retained and the revised complete transform preflight passes.
 The precision-sensitive Q8 regression fragment and cost-helper recipes exist
 externally but have not been run or integrated; no cost or source acceptance
 claim follows. The work item is
-[CAMPAIGN1_QUANT_PREFILL_PRECISION.md](CAMPAIGN1_QUANT_PREFILL_PRECISION.md).
+[2026-10-15_quant-prefill-precision.md](../research/campaign1/2026-10-15_quant-prefill-precision.md).
 Preserve all candidates and failures. Broader boundaries, fresh processes,
 affected integration/full-suite checks, formatting and operator cost receipts
 remain required after a sufficient repair. The bounded source work item is
-[CAMPAIGN1_RMS_FLOAT_CONTROLS.md](CAMPAIGN1_RMS_FLOAT_CONTROLS.md).
+[2026-10-15_rms-float-controls.md](../research/campaign1/2026-10-15_rms-float-controls.md).
 
 ### Fixed-order projection precision discriminator
 
@@ -930,7 +930,7 @@ All positive dense-quant token counts use canonical Float32 decoded weights
 and the same dot-product route. This changes accumulation and diagnostic
 dispatch explicitly; it does not change package source or select a release
 precision policy. The work item is
-[CAMPAIGN1_SHAPE_STABLE_PROJECTION.md](CAMPAIGN1_SHAPE_STABLE_PROJECTION.md).
+[2026-10-16_shape-stable-projection.md](../research/campaign1/2026-10-16_shape-stable-projection.md).
 
 The ordinary actual-device suite passed **701/701** with exit 0. Six ordinary
 products agree with rounded host Float64 references at zero ULP and have
@@ -979,7 +979,7 @@ Run the public CPU operator on the same three Q8_0 sampled tensors and 15 saved
 inputs, then independently replay native Q8_0 activation packing and the CPU
 block-dot arithmetic. This is a matched-input measurement, not a model-causality
 claim or oracle/precision-policy change. See
-[CAMPAIGN1_DENSE_QUANT_ACTIVATION_CONTRACT.md](CAMPAIGN1_DENSE_QUANT_ACTIVATION_CONTRACT.md).
+[2026-10-16_dense-quant-activation-contract.md](../research/campaign1/2026-10-16_dense-quant-activation-contract.md).
 Model correctness, final-source stress, cost and portability remain unproven.
 
 The matched-input CPU measurement is now terminal, exit 0, with **15/15**
@@ -1223,7 +1223,7 @@ Raw logs, source metadata, captures and helpers are under
 | Numerical source contract | `accumulator-contract-{old,source}-1.log` | Each passed 441 assertions / 60 actual-device cases; old small cases do not reproduce the model fault. Source test predates capability-gate additions |
 | Source numerical/capability contract | `accumulator-contract-source-2.log` | 460 assertions passed, including exact no-feature strided GEMM and emitted shader capability absence |
 | Source subgroup regression | `accumulator-subgroup-source-2.log` | 12 assertions passed; first launch failed on an undeclared test import, corrected to use Lava's existing KernelAbstractions binding |
-| Published strict stress driver | `shipping-stress-selfcheck-1.jsonl` | Positive/negative ID and callback gates passed; model, boundary and recovery roles still pending. Usage is in `CAMPAIGN1_STRESS_USAGE.md` |
+| Published strict stress driver | `shipping-stress-selfcheck-1.jsonl` | Positive/negative ID and callback gates passed; model, boundary and recovery roles still pending. Usage is in `2026-10-14_campaign1-stress-usage.md` |
 | Five fresh source processes | `source-default-01..05.log`, `source-five-fresh-gate.json` | 20/20 p64 results were 82202; 5/5 hello results were 11; no priming or method overrides, all exits zero |
 | Actual source shader audit | `source-default-01.source-shaders/audit.json` | Five stock compiler outputs archived after terminal process; Workgroup cooperative stores, scalar global copies, two barriers per tile, all validate |
 | Matched original-source control | `baseline-source-default-1.log` | Three p64 calls failed with nonfinite normalization, fourth returned 82202, hello returned 11; strict nonzero exit. Original two finite probes explicitly identified; separate alignment-only combined red remains probe-free evidence |
@@ -1342,7 +1342,7 @@ GPU replay 1/session19268 exits 1 before numeric output: Lava lowers the
 constant-tuple polynomial call with incompatible pointer storage classes.
 Preserve that failure. New immutable v2 scalar/consumer express the identical
 Horner Fmas explicitly; CPU full-set comparison stays exact. The bounded
-next-operator envelope is in `CAMPAIGN1_GDN_REFERENCE_CONTROL.md`.
+next-operator envelope is in `2026-10-16_gdn-reference-control.md`.
 Current source remains ef086ef, 39/41; Campaign 1 remains active.
 
 
