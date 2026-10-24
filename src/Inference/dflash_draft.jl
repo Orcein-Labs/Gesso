@@ -4,7 +4,7 @@
 # Context: the target's hidden rows at the drafter's `target_layers` arrive as
 # one (n, n_target*dim) matrix per id. `fc` projects them to the model width and
 # `enc.output_norm` norms the result into g. Every draft layer keeps K and V
-# caches of g: row p holds rope(k_norm(wk·g)) and wv·g. `dflash_rows!` writes
+# caches of g: slot p holds rope(k_norm(wk·g)) and wv·g. `dflash_rows!` writes
 # them as the target consumes ids. They are the drafter's only persistent state.
 #
 # A draft is one non-causal block [ids[L], mask, ..., mask]. Each layer runs an
@@ -23,7 +23,7 @@ mutable struct DFlashDraft
     sel_hidden          # ProjectionWeight (rank, dim): selector gate
     sel_pred            # EmbeddingTable (vocab_d, rank): predecessor rows
     sel_succ            # EmbeddingTable (vocab_d, rank): successor rows
-    kc::Vector{Array{Float32,3}}   # per layer (ctx, n_kv, d_head)
+    kc::Vector{Array{Float32,3}}   # per layer (d_head, n_kv, ctx): a cached head vector is contiguous
     vc::Vector{Array{Float32,3}}
     ctx::Int
     have::Int           # context rows 1..have are injected
@@ -89,8 +89,8 @@ function DFlashDraft(target, layers, fc, enc_norm, output_norm, sel_hidden, sel_
     end
     # the activation prototype walks `blocks` when the embedding is quantized
     zl = _decode_zeros_like(cpu, hasproperty(target, :blocks) ? target : merge(target, (; blocks=())))
-    kc = [zeros(Float32, ctx, n_kv_heads, d_head) for _ in layers]
-    vc = [zeros(Float32, ctx, n_kv_heads, d_head) for _ in layers]
+    kc = [zeros(Float32, d_head, n_kv_heads, ctx) for _ in layers]
+    vc = [zeros(Float32, d_head, n_kv_heads, ctx) for _ in layers]
     return DFlashDraft(target, collect(Any, layers), fc, enc_norm, output_norm, sel_hidden,
         sel_pred, sel_succ, kc, vc, ctx, 0, block_size, mask_token, conv_kernel, conv_group,
         top_k, rank, window, Float64(eps), Float64(theta), n_heads, n_kv_heads, d_head, cpu, zl,
@@ -216,14 +216,6 @@ function _df_rmsnorm_rows(X::AbstractMatrix, w::FrozenParameter, eps::Real)
         _df_rmsnorm!(view(Y, r, :), view(X, r, :), w.storage, eps)
     end
     return Y
-end
-
-function _df_dot(a, b)
-    s = 0.0
-    for e in eachindex(a)
-        s += Float64(a[e]) * Float64(b[e])
-    end
-    return s
 end
 
 # NeoX (half-split) rotary embedding of one head vector at position `pos`.
@@ -399,31 +391,49 @@ end
 # Attention for the block's B query rows over the context rows 1..L-1 and all B
 # block rows. Block row i sits at rope position L+i-2, and a context row r at
 # r-1. A context row is kept while its distance to the query is below the
-# sliding window. The block is not causal.
+# sliding window. The block is not causal. Each (row, head) pair is one job;
+# large calls split the jobs across threads.
 function _dflash_block_attn(m::DFlashDraft, l::Int, q::AbstractMatrix, kb::AbstractMatrix,
-    vb::AbstractMatrix, L::Int)
+    vb::AbstractMatrix, L::Int; threaded::Union{Nothing,Bool}=nothing)
     B = size(q, 1)
     d = m.d_head
-    group = div(m.n_heads, m.n_kv_heads)
+    nh = m.n_heads
+    nkv = m.n_kv_heads
+    group = div(nh, nkv)
     scale = 1 / sqrt(d)
     kc = m.kc[l]
     vc = m.vc[l]
-    out = zeros(Float32, B, m.n_heads * d)
-    sc = Vector{Float64}(undef, max(L - 1, 0) + B)
-    for i in 1:B
-        qp = L + i - 2
-        r_lo = max(1, qp - m.window + 2)
-        for hd in 1:m.n_heads
+    # head vectors as contiguous columns, (d_head, heads, B)
+    qt = reshape(permutedims(Float32.(q)), d, nh, B)
+    kt = reshape(permutedims(Float32.(kb)), d, nkv, B)
+    vt = reshape(permutedims(Float32.(vb)), d, nkv, B)
+    outt = zeros(Float32, d, nh, B)
+    nmax = max(L - 1, 0) + B
+    jobs = B * nh
+    function run(js)
+        sc = Vector{Float64}(undef, nmax)
+        @inbounds for job in js
+            i = div(job - 1, nh) + 1
+            hd = mod(job - 1, nh) + 1
             kvh = div(hd - 1, group) + 1
-            qv = view(q, i, ((hd - 1) * d + 1):(hd * d))
+            qp = L + i - 2
+            r_lo = max(1, qp - m.window + 2)
             nk = 0
             for r in r_lo:(L - 1)
                 nk += 1
-                sc[nk] = _df_dot(qv, view(kc, r, kvh, :)) * scale
+                s = 0.0f0
+                @simd for e in 1:d
+                    s += qt[e, hd, i] * kc[e, kvh, r]
+                end
+                sc[nk] = s * scale
             end
             for j in 1:B
                 nk += 1
-                sc[nk] = _df_dot(qv, view(kb, j, ((kvh - 1) * d + 1):(kvh * d))) * scale
+                s = 0.0f0
+                @simd for e in 1:d
+                    s += qt[e, hd, i] * kt[e, kvh, j]
+                end
+                sc[nk] = s * scale
             end
             mx = maximum(view(sc, 1:nk))
             tot = 0.0
@@ -434,21 +444,27 @@ function _dflash_block_attn(m::DFlashDraft, l::Int, q::AbstractMatrix, kb::Abstr
             z = 0
             for r in r_lo:(L - 1)
                 z += 1
-                w = sc[z] / tot
-                for e in 1:d
-                    out[i, (hd - 1) * d + e] += w * vc[r, kvh, e]
+                w = Float32(sc[z] / tot)
+                @simd for e in 1:d
+                    outt[e, hd, i] += w * vc[e, kvh, r]
                 end
             end
             for j in 1:B
                 z += 1
-                w = sc[z] / tot
-                for e in 1:d
-                    out[i, (hd - 1) * d + e] += w * vb[j, (kvh - 1) * d + e]
+                w = Float32(sc[z] / tot)
+                @simd for e in 1:d
+                    outt[e, hd, i] += w * vt[e, kvh, j]
                 end
             end
         end
+        return nothing
     end
-    return out
+    if something(threaded, _attention_rows_threaded(jobs, nmax * d))
+        _attention_rows!(run, jobs)
+    else
+        run(1:jobs)
+    end
+    return permutedims(reshape(outt, nh * d, B))
 end
 
 """
@@ -476,8 +492,8 @@ function dflash_rows!(m::DFlashDraft, pos::Int, X::AbstractMatrix)
             p = pos + r - 1
             for h in 1:m.n_kv_heads
                 seg = ((h - 1) * d + 1):(h * d)
-                m.kc[l][p, h, :] .= view(K, r, seg)
-                m.vc[l][p, h, :] .= view(V, r, seg)
+                m.kc[l][:, h, p] .= view(K, r, seg)
+                m.vc[l][:, h, p] .= view(V, r, seg)
             end
         end
     end
