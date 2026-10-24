@@ -67,7 +67,7 @@ an arm.
 | `docs/research/EXOTIC_CAPABILITY_MASTER_LEDGER.md` | Capability mine (meta-primitives, meta-tools). Parked. Not a /goal. |
 | `docs/Gesso_musings.md` | The dangerous notebook. Parking lot — promote deliberately, never wholesale. |
 | `docs/DECISION_PACKETS.md` | Architecture escalations (decision-packet format). Packets 1–2 resolved into §CIX; remaining packets follow the same rule: resolved INTO canon, never in code. |
-| `docs/Harpe_Stack_old.md` | Predecessor vision (Harpe-era), archived. Superseded where they disagree. |
+| `docs/archive/2026-10_harpe-stack/harpe-stack.md` | Predecessor vision (Harpe-era), archived. Superseded where they disagree. |
 | `docs/Native_Julia_Kernel_Autotuning_North_Star_README.md` | Companion project spec (standalone autotuner). Gesso's Phase 9 consumes it. |
 
 ## Process surface

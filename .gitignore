@@ -25,3 +25,8 @@ outputs(from chatgpt)/
 
 # Local scratch and handoff notes (repo-hygiene standard): never pushed
 /.local/
+
+# Local Performant Julia R&D tray (Matt; spaces; never pushed).
+# Nested shadow must stay a symlink to the git worktree *outside* this
+# checkout — git will not register a worktree inside master.
+/Performant Julia toolchain/

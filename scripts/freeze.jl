@@ -69,7 +69,7 @@ curated = String[
     ".JuliaFormatter.toml",
     "RPD_SOP.md",
     "docs/Gesso_Stack.md",
-    "docs/Harpe_Stack_old.md",
+    "docs/archive/2026-10_harpe-stack/harpe-stack.md",
     "docs/Native_Julia_Kernel_Autotuning_North_Star_README.md",
     "docs/ARCHITECTURE.md",
     "docs/DECISION_PACKETS.md",
