@@ -85,5 +85,5 @@ jobs:
         run: |
           set -o pipefail
           xvfb-run -a julia --project=benchmark benchmark/runbenchmarks.jl | tee bench_out.txt
-          test -f benchmark/results/*.tsv || (echo "FAIL: no results file persisted" && exit 1)
+          compgen -G "benchmark/results/*.tsv" >/dev/null || (echo "FAIL: no results file persisted" && exit 1)
           grep -q "benchmarks recorded" bench_out.txt || (echo "FAIL: suite did not complete" && exit 1)
