@@ -64,6 +64,11 @@ end
     @test propose(suffix, context("abcdef"); max_tokens=8).ids == Int[]
     @test propose(SuffixSource(max_history=2), context("abcabc"); max_tokens=8).ids == Int[]
     @test propose(suffix, context("abXabYab"); max_tokens=1).ids == bytes("Y")
+    # min_match: a one-token match no longer drafts, a long enough one still does
+    @test propose(SuffixSource(min_match=2), context("aXba"); max_tokens=2).ids == Int[]
+    @test propose(SuffixSource(min_match=2), context("abXab"); max_tokens=1).ids == bytes("X")
+    @test_throws ArgumentError SuffixSource(min_match=0)
+    @test_throws ArgumentError SuffixSource(min_match=5, max_match=4)
 end
 
 @testset "Templates: partial re-entry and specificity" begin
