@@ -61,27 +61,30 @@ end
 
 struct SuffixSource <: HostDraftSource
     max_history::Int
+    min_match::Int
     max_match::Int
     max_draft::Int
     origin::Symbol
     feedback::DraftFeedback
-    function SuffixSource(; max_history::Int=4096, max_match::Int=16, max_draft::Int=8)
-        1 <= max_history <= 65536 && 1 <= max_match <= 128 && 1 <= max_draft <= 64 ||
+    # A suffix shorter than `min_match` proposes nothing: one shared token is
+    # weak evidence, and a rejected draft still costs a full verify window.
+    function SuffixSource(; max_history::Int=4096, min_match::Int=1, max_match::Int=16, max_draft::Int=8)
+        1 <= max_history <= 65536 && 1 <= min_match <= max_match <= 128 && 1 <= max_draft <= 64 ||
             throw(ArgumentError("suffix budget outside bounds"))
-        new(max_history, max_match, max_draft, :suffix, DraftFeedback())
+        new(max_history, min_match, max_match, max_draft, :suffix, DraftFeedback())
     end
 end
 function propose(src::SuffixSource, ctx::DraftContext; max_tokens::Int)::Draft
     k = _budget(max_tokens, src.max_draft)
     k == 0 && return Draft(Int[], src.origin)
     ids = _tail(ctx, src.max_history)
-    _suffix_proposal(ids, src.max_match, k, src.origin)
+    _suffix_proposal(ids, src.min_match, src.max_match, k, src.origin)
 end
 # Concrete host buffer forms a specialization boundary for the hot scan.
-function _suffix_proposal(ids::Vector{Int}, max_match::Int, k::Int, origin::Symbol)::Draft
+function _suffix_proposal(ids::Vector{Int}, min_match::Int, max_match::Int, k::Int, origin::Symbol)::Draft
     n = length(ids)
     # Longest suffix first; most recent earlier occurrence breaks ties.
-    for width in min(max_match, n-1):-1:1
+    for width in min(max_match, n-1):-1:min_match
         start = n-width+1
         for j in (n-width):-1:1
             # A direct loop avoids per-candidate closure allocations on a
