@@ -1,0 +1,96 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Matt C <latentcollapse@gmail.com>
+Date: Wed, 14 Oct 2026 10:15:03 -0400
+Subject: [PATCH] Emit required alignment for physical cooperative matrix
+ accesses
+
+---
+ src/compiler/spirv/coopmat.jl  | 10 ++++++++--
+ test/runtests.jl               |  4 ++++
+ test/test_coopmat_alignment.jl | 33 +++++++++++++++++++++++++++++++++
+ 3 files changed, 45 insertions(+), 2 deletions(-)
+ create mode 100644 test/test_coopmat_alignment.jl
+
+diff --git a/src/compiler/spirv/coopmat.jl b/src/compiler/spirv/coopmat.jl
+index 4ddb7d4..d4c3be9 100644
+--- a/src/compiler/spirv/coopmat.jl
++++ b/src/compiler/spirv/coopmat.jl
+@@ -284,8 +284,13 @@ function emit_coopmat_call!(state::SPIRVEmitterState, inst::LLVM.CallInst,
+                                 mat_ty, id, ptr_id, layout_id, stride_id,
+                                 MemOp.NonPrivatePointer)
+         else
++            # PhysicalStorageBuffer64 requires Aligned on every physical
++            # memory access (Vulkan VUID 04708/06314), including cooperative
++            # matrices. The pointer addresses a scalar component; promise only
++            # its alignment, independently of the tile's runtime requirements.
+             encode_instruction!(mod.functions, Op.OpCooperativeMatrixLoadKHR,
+-                                mat_ty, id, ptr_id, layout_id, stride_id)
++                                mat_ty, id, ptr_id, layout_id, stride_id,
++                                MemOp.Aligned, UInt32(parse(Int, dtype[2:end]) ÷ 8))
+         end
+         state.value_map[inst] = id
+         state.coopmat_value_types[inst] = mat_ty
+@@ -304,7 +309,8 @@ function emit_coopmat_call!(state::SPIRVEmitterState, inst::LLVM.CallInst,
+                                 MemOp.NonPrivatePointer)
+         else
+             encode_instruction!(mod.functions, Op.OpCooperativeMatrixStoreKHR,
+-                                ptr_id, obj_id, layout_id, stride_id)
++                                ptr_id, obj_id, layout_id, stride_id,
++                                MemOp.Aligned, UInt32(parse(Int, dtype[2:end]) ÷ 8))
+         end
+ 
+     elseif op == "zero"
+diff --git a/test/runtests.jl b/test/runtests.jl
+index b8779cc..ac9c414 100644
+--- a/test/runtests.jl
++++ b/test/runtests.jl
+@@ -103,6 +103,10 @@ end
+         end
+     end
+ 
++    @testset "physical cooperative-matrix alignment (no GPU)" begin
++        include(joinpath(@__DIR__, "test_coopmat_alignment.jl"))
++    end
++
+     # ── Tier 1b: Compiler IR passes (no GPU) ──
+     @testset "Tier 1b: Compiler IR passes" begin
+         include(joinpath(@__DIR__, "test_replace_unreachable.jl"))
+diff --git a/test/test_coopmat_alignment.jl b/test/test_coopmat_alignment.jl
+new file mode 100644
+index 0000000..9544506
+--- /dev/null
++++ b/test/test_coopmat_alignment.jl
+@@ -0,0 +1,33 @@
++using Lava, Test
++
++# Compile real physical-pointer cooperative loads/stores without device dispatch.
++# Vulkan VUID 04708 requires the Aligned operand; 06314 requires scalar-size
++# multiples. This checks the emitted contract directly because spirv-val v2026.4
++# misses the absent optional memory-operand branch for cooperative instructions.
++function coop_physical_alignment_roundtrip(out::UInt64, inp::UInt64, ::Val{T}) where T
++    tile = Lava.AcceleratedMatrix{T,16,16,Lava.MatrixA}(Ptr{T}(inp), 1, 16)
++    copyto!(Ptr{T}(out), 1, 16, tile)
++    return nothing
++end
++
++@testset "physical cooperative matrix memory alignment" begin
++    for T in (Float16, Float32)
++        compiled = Lava.lava_compile_gpu(coop_physical_alignment_roundtrip,
++            Tuple{UInt64,UInt64,Val{T}}; workgroup_size=(32,1,1), validate=true)
++        dis = Lava.disassemble_spirv(compiled.spirv_bytes)
++        @test occursin("PhysicalStorageBuffer", dis)
++        for opname in ("OpCooperativeMatrixLoadKHR", "OpCooperativeMatrixStoreKHR")
++            ops = filter(line -> occursin(opname,line), split(dis,'\n'))
++            @test length(ops) == 1
++            for line in ops
++                aligned = match(r"\bAligned (\d+)",line)
++                @test aligned !== nothing
++                if aligned !== nothing
++                    bytes = parse(Int,aligned.captures[1])
++                    @test bytes >= sizeof(T) && bytes % sizeof(T) == 0
++                    @test ispow2(bytes)
++                end
++            end
++        end
++    end
++end

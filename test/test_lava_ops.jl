@@ -86,6 +86,219 @@ else
         @test maximum(abs, Array(gpu_d5.storage) .- Array(gpu_d.storage)) > 0
     end
 
+    @testset "lava rmsnorm!: Float32 squares, Float64 row accumulation" begin
+        max_ulp_distance = function (a, b)
+            size(a) == size(b) || return typemax(Int64)
+            all(isfinite, a) && all(isfinite, b) || return typemax(Int64)
+            largest = Int64(0)
+            for i in eachindex(a, b)
+                a_bits = reinterpret(UInt32, a[i])
+                b_bits = reinterpret(UInt32, b[i])
+                a_key = (a_bits & 0x80000000) == 0 ?
+                    (a_bits | 0x80000000) : ~a_bits
+                b_key = (b_bits & 0x80000000) == 0 ?
+                    (b_bits | 0x80000000) : ~b_bits
+                largest = max(largest, abs(Int64(a_key) - Int64(b_key)))
+            end
+            return largest
+        end
+
+        cpu_reference = function (xhost, scalehost; eps = 1e-6)
+            xcpu = copy(xhost)
+            scpu = copy(scalehost)
+            dst_cpu = mat(Gesso.Activation, zeros(Float32, size(xhost)))
+            Gesso.rmsnorm!(Gesso.CPUBackend(), dst_cpu,
+                mat(Gesso.Activation, xcpu), mat(Gesso.FrozenParameter, scpu), wl;
+                eps)
+            @test isequal(xcpu, xhost)
+            @test isequal(scpu, scalehost)
+            return copy(dst_cpu.storage)
+        end
+
+        lava_run = function (xhost, scalehost; eps = 1e-6)
+            xdev = Lava.LavaArray{Float32}(xhost)
+            sdev = Lava.LavaArray{Float32}(scalehost)
+            dst = mat(Gesso.Activation, lz(size(xhost)...))
+            Gesso.rmsnorm!(lava, dst, mat(Gesso.Activation, xdev),
+                mat(Gesso.FrozenParameter, sdev), wl; eps)
+            return Array(dst.storage), xdev, sdev, dst
+        end
+
+        make_input = function (dims)
+            n = prod(dims)
+            vals = Float32.(mod.(collect(1:n), 37) .- 18) ./ 13.0f0
+            return reshape(vals, dims)
+        end
+        make_scale = d -> collect(range(0.5f0, 1.5f0; length = d))
+
+        # Widths below 64, ragged widths above 64, more than 64 leading rows,
+        # and flattened token/head axes all take the same one-workgroup-per-row
+        # path. CPU is run with Float32 storage so its Float64 sum is the oracle.
+        cases = (
+            (make_input((1, 17)), make_scale(17), 1e-6),
+            (make_input((3, 17)), make_scale(17), 1e-5),
+            (make_input((65, 67)), make_scale(67), 1e-6),
+            (make_input((1, 3, 17)), make_scale(17), 1e-5),
+            (make_input((2, 3, 70)), make_scale(70), 1e-6),
+        )
+        first_head_ulp = typemax(Int64)
+        for (xhost, scalehost, eps) in cases
+            expected = cpu_reference(xhost, scalehost; eps)
+            got, xdev, sdev, _ = lava_run(xhost, scalehost; eps)
+            @test size(got) == size(xhost)
+            @test all(isfinite, got)
+            @test max_ulp_distance(got, expected) <= 1
+            @test isequal(Array(xdev), xhost)
+            @test isequal(Array(sdev), scalehost)
+            if size(xhost) == (1, 3, 17)
+                first_head_ulp = max_ulp_distance(got[1, 1, :], expected[1, 1, :])
+            end
+        end
+        @test first_head_ulp <= 1
+
+        # Repeated first rows remain bit-identical as the leading extent crosses
+        # one workgroup and then 64 workgroups.
+        base = make_input((1, 67))
+        base_scale = make_scale(67)
+        base_out, _, _, _ = lava_run(base, base_scale)
+        for rows in (2, 65)
+            repeated = repeat(base, rows, 1)
+            repeated_out, _, _, _ = lava_run(repeated, base_scale)
+            @test isequal(vec(repeated_out[1, :]), vec(base_out[1, :]))
+        end
+
+        # The four large squares are finite Float32 values, while their
+        # Float32 sum overflows. Float64 accumulation keeps the row valid.
+        wide = zeros(Float32, 3, 65)
+        high = ldexp(1.0f0, 63)
+        low = ldexp(1.0f0, -60)
+        wide[1, 1:4] .= Float32[high, -high, low, -low]
+        wide[2, 1:4] .= high
+        wide[3, 1:5] .= Float32[low, -ldexp(1.0f0, -30), 1.0f0,
+            -ldexp(1.0f0, 30), low]
+        @test isfinite(abs2(high))
+        f32_sum = Float32(0)
+        for value in wide[2, 1:4]
+            f32_sum += abs2(value)
+        end
+        @test !isfinite(f32_sum)
+        wide_scale = ones(Float32, 65)
+        expected_wide = cpu_reference(wide, wide_scale)
+        wide_out, _, _, _ = lava_run(wide, wide_scale)
+        @test all(isfinite, expected_wide)
+        @test all(isfinite, wide_out)
+        @test max_ulp_distance(wide_out, expected_wide) <= 1
+
+        # A normal F32 input produces a subnormal F32 square. The row's unit
+        # component keeps its denominator well-conditioned; this checks the
+        # declared square precision without assuming arbitrary denormal output
+        # behavior across Vulkan devices.
+        subnormal_square_input = ldexp(1.0f0, -70)
+        subnormal_square = abs2(subnormal_square_input)
+        @test subnormal_square > 0.0f0 && subnormal_square < floatmin(Float32)
+        subnormal_x = zeros(Float32, 2, 65)
+        subnormal_x[:, 1] .= 1.0f0
+        subnormal_x[:, 2] .= subnormal_square_input
+        subnormal_scale = ones(Float32, 65)
+        subnormal_expected = cpu_reference(subnormal_x, subnormal_scale)
+        subnormal_out, _, _, _ = lava_run(subnormal_x, subnormal_scale)
+        @test max_ulp_distance(subnormal_out, subnormal_expected) <= 1
+
+        # Public in-place operation aliases the destination safely and leaves
+        # the scale intact; its values equal the out-of-place CPU reference.
+        alias_input = make_input((2, 67))
+        alias_scale_host = make_scale(67)
+        alias_expected = cpu_reference(alias_input, alias_scale_host)
+        out_of_place, _, _, _ = lava_run(alias_input, alias_scale_host)
+        alias_storage = Lava.LavaArray{Float32}(alias_input)
+        alias_scale = Lava.LavaArray{Float32}(alias_scale_host)
+        alias = mat(Gesso.Activation, alias_storage)
+        returned = Gesso.rmsnorm!(lava, alias, alias,
+            mat(Gesso.FrozenParameter, alias_scale), wl)
+        @test returned === alias
+        @test isequal(Array(alias.storage), out_of_place)
+        @test max_ulp_distance(Array(alias.storage), alias_expected) <= 1
+        @test isequal(Array(alias_scale), alias_scale_host)
+    end
+
+    @testset "lava rmsnorm!: invalid dimensions and prefill errors stay typed" begin
+        capture_error = f -> try
+            f()
+            nothing
+        catch err
+            err
+        end
+
+        xhost = reshape(Float32.(1:34) ./ 11.0f0, 2, 17)
+        scalehost = ones(Float32, 17)
+        for eps in (0.0, -1.0, NaN, Inf, 1e-100)
+            xdev = Lava.LavaArray{Float32}(xhost)
+            dst = mat(Gesso.Activation, lz(2, 17))
+            err = capture_error(() -> Gesso.rmsnorm!(lava, dst,
+                mat(Gesso.Activation, xdev),
+                mat(Gesso.FrozenParameter, Lava.LavaArray{Float32}(scalehost)), wl;
+                eps))
+            @test err isa Gesso.GessoError && err.code == Gesso.ERR_INVALID_PLAN
+        end
+
+        wrong_scale = Lava.LavaArray{Float32}(ones(Float32, 16))
+        scale_dst = mat(Gesso.Activation, lz(2, 17))
+        scale_err = capture_error(() -> Gesso.rmsnorm!(lava, scale_dst,
+            mat(Gesso.Activation, Lava.LavaArray{Float32}(xhost)),
+            mat(Gesso.FrozenParameter, wrong_scale), wl))
+        @test scale_err isa Gesso.GessoError && scale_err.code == Gesso.ERR_INVALID_PLAN
+
+        mismatched_dst = mat(Gesso.Activation, Lava.LavaArray{Float32}(undef, 2, 16))
+        shape_err = capture_error(() -> Gesso.rmsnorm!(lava, mismatched_dst,
+            mat(Gesso.Activation, Lava.LavaArray{Float32}(xhost)),
+            mat(Gesso.FrozenParameter, Lava.LavaArray{Float32}(scalehost)), wl))
+        @test shape_err isa Gesso.GessoError && shape_err.code == Gesso.ERR_INVALID_PLAN
+
+        for dims in ((0, 17), (2, 0))
+            xdev = Lava.LavaArray{Float32}(undef, dims...)
+            dst = mat(Gesso.Activation, Lava.LavaArray{Float32}(undef, dims...))
+            sdev = Lava.LavaArray{Float32}(undef, dims[end])
+            err = capture_error(() -> Gesso.rmsnorm!(lava, dst,
+                mat(Gesso.Activation, xdev), mat(Gesso.FrozenParameter, sdev), wl))
+            @test err isa Gesso.GessoError && err.code == Gesso.ERR_INVALID_PLAN
+        end
+
+        for bad_value in (Float32(NaN), Float32(Inf), 1.0f20)
+            bad = fill(bad_value, 2, 65)
+            dst = mat(Gesso.Activation, lz(2, 65))
+            err = capture_error(() -> Gesso.rmsnorm!(lava, dst,
+                mat(Gesso.Activation, Lava.LavaArray{Float32}(bad)),
+                mat(Gesso.FrozenParameter, Lava.LavaArray{Float32}(ones(Float32, 65))), wl))
+            @test err isa Gesso.GessoError && err.code == Gesso.ERR_NUMERICAL_INSTABILITY
+        end
+
+        bad_scale = ones(Float32, 65)
+        bad_scale[1] = Float32(Inf)
+        scale_value_err = capture_error(() -> Gesso.rmsnorm!(lava,
+            mat(Gesso.Activation, lz(2, 65)),
+            mat(Gesso.Activation, Lava.LavaArray{Float32}(ones(Float32, 2, 65))),
+            mat(Gesso.FrozenParameter, Lava.LavaArray{Float32}(bad_scale)), wl))
+        @test scale_value_err isa Gesso.GessoError &&
+            scale_value_err.code == Gesso.ERR_NUMERICAL_INSTABILITY
+
+        # Decode deliberately retains its existing unchecked asynchronous
+        # policy: the kernel leaves a NaN marker and the public call returns.
+        decode_dst = mat(Gesso.Activation, lz(2, 65))
+        decode_result = Gesso.rmsnorm!(lava, decode_dst,
+            mat(Gesso.Activation, Lava.LavaArray{Float32}(fill(Float32(Inf), 2, 65))),
+            mat(Gesso.FrozenParameter, Lava.LavaArray{Float32}(ones(Float32, 65))),
+            Gesso.DecodeWorkload())
+        @test decode_result === decode_dst
+        @test all(isnan, Array(decode_dst.storage))
+
+        # Float64 device storage remains outside Lava's public arithmetic route.
+        f64_dst = mat(Gesso.Activation, Lava.LavaArray{Float64}(undef, 2, 17))
+        f64_err = capture_error(() -> Gesso.rmsnorm!(lava, f64_dst,
+            mat(Gesso.Activation, Lava.LavaArray{Float64}(ones(2, 17))),
+            mat(Gesso.FrozenParameter, Lava.LavaArray{Float64}(ones(17))), wl))
+        @test f64_err isa Gesso.GessoError && f64_err.code == Gesso.ERR_INVALID_PLAN
+    end
+
     @testset "lava rope!: pairwise rotate on device (position 0 = identity)" begin
         q0 = reshape(Float64[i for i in 1:16], (2, 2, 4))
         k0 = reshape(Float64[i for i in 17:32], (2, 2, 4))
@@ -129,6 +342,50 @@ else
         ob = mat(Gesso.TemporaryWorkspace, lz(3, 3))
         Gesso.softmax!(lava, ob, big, wl)
         @test all(isfinite, Array(ob.storage))
+    end
+
+    @testset "lava scalar attention sums: repeatable across subgroup boundaries" begin
+        ext = Base.get_extension(Gesso, :GessoLavaExt)
+        for n in (63, 64, 65, 127, 128, 129)
+            x = zeros(Float32, 1, n)
+            x[1] = 1.0f0
+            x[33] = ldexp(1.0f0, -24)
+            n >= 65 && (x[65] = ldexp(1.0f0, -24))
+            device_x = Lava.LavaArray(x)
+            # The fixed tree rounds each half-ULP addition to one. An atomic
+            # sum can add the two small subgroup partials first instead.
+            for _ in 1:64
+                got = ext._lava_dimreduce(identity, +, device_x, 2, 0.0f0)
+                @test only(Array(got)) === 1.0f0
+            end
+        end
+
+        for n in (65, 127, 128)
+            sc = fill(-50.0f0, 1, n)
+            sc[1] = 0.0f0
+            sc[33] = sc[65] = log(ldexp(1.0f0, -24))
+            scores = mat(Gesso.TemporaryWorkspace, Lava.LavaArray(sc))
+            out = mat(Gesso.TemporaryWorkspace, lz(1, n))
+            reference = exp.(Float64.(sc))
+            reference ./= sum(reference)
+            Gesso.softmax!(lava, out, scores, wl)
+            first_result = Array(out.storage)
+            @test approx_eq(Float64.(first_result), reference; atol=1e-6)
+            for _ in 1:32
+                Gesso.softmax!(lava, out, scores, wl)
+                @test isequal(Array(out.storage), first_result)
+            end
+        end
+
+        bad = mat(Gesso.TemporaryWorkspace, Lava.LavaArray(fill(-Inf32, 1, 65)))
+        out = mat(Gesso.TemporaryWorkspace, lz(1, 65))
+        err = try
+            Gesso.softmax!(lava, out, bad, wl)
+            nothing
+        catch e
+            e
+        end
+        @test err isa Gesso.GessoError && err.code == Gesso.ERR_NUMERICAL_INSTABILITY
     end
 
     @testset "lava swiglu! + matmul!: match CPU within atol=1e-3" begin

@@ -1,0 +1,30 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Matt C <latentcollapse@gmail.com>
+Date: Tue, 13 Oct 2026 21:15:10 -0400
+Subject: [PATCH] ka_backend: drop the ConstAdaptor ReshapedArray override
+
+It overwrote KernelAbstractions' own method for the same signature, and
+Julia refuses method overwrites during precompilation, so Lava never
+precompiled (about 9 s per process, plus a missing-from-cache warning in
+every package that imports it). KA 0.9.45 rebuilds the wrapper around the
+adapted parent, and adapt_storage(::ConstAdaptor, ::LavaDeviceArray) is
+the identity, so the result is the same ReshapedArray.
+---
+ src/array/ka_backend.jl | 4 ----
+ 1 file changed, 4 deletions(-)
+
+diff --git a/src/array/ka_backend.jl b/src/array/ka_backend.jl
+index 5b05b33..76cc709 100644
+--- a/src/array/ka_backend.jl
++++ b/src/array/ka_backend.jl
+@@ -177,10 +177,6 @@ Adapt.adapt_storage(::KA.CPU, a::LavaArray) = Array(a)
+ # AMDGPU handles this by casting the pointer to constant address space; we just return
+ # the device array as-is since Vulkan BDA pointers are already readonly-capable.
+ Adapt.adapt_storage(::KA.ConstAdaptor, a::LavaDeviceArray) = a
+-# Prevent ReshapedArray reconstruction during constify — @Const marks readonly,
+-# it should not reconstruct wrapper arrays (which triggers SignedMultiplicativeInverse
+-# constructor with its throwing string interpolation path on GPU).
+-Adapt.adapt_structure(::KA.ConstAdaptor, A::Base.ReshapedArray) = A
+ 
+ # Type-based adapt_storage for Adapt.adapt(LavaArray, x) dispatch
+ Adapt.adapt_storage(::Type{<:LavaArray}, a::Array) = LavaArray(a)

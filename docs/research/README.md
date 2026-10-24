@@ -1,5 +1,9 @@
 # Gesso research parking lot
 
+Current release campaigns:
+[`Qwen3.5 and Gemma4 release plan`](../goals/RELEASE_PARITY_2026-10.md)
+(2026-10-14). Follow its evidence gates before opening exotic research.
+
     Document class:     index (this folder)
     Status:             programs parked until a phase owns them
     Canon:              docs/Gesso_Stack.md

@@ -438,6 +438,8 @@ function _lq_matmul!(Y, X, q::LavaDenseQuant)
     ntok = size(X, 1)
     size(X, 2) == q.ne0 || throw(DimensionMismatch("lava quant GEMV: x has $(size(X, 2)) columns, weight has $(q.ne0)"))
     size(Y) == (ntok, q.nrows) || throw(DimensionMismatch("lava quant GEMV: dst is $(size(Y)), want $((ntok, q.nrows))"))
+    ntok > 0 && q isa LavaQ8Quant && return _c1_cpu_q80_matmul!(Y, X, q)
+    ntok > 0 && q isa LavaBlockQuant && q.kind == _LQ_KIND_Q4_K && return _c1_cpu_q4k_matmul!(Y, X, q)
     ntok >= _lq_gemm_min() && return _lq_gemm_prefill!(Y, X, q)
     return _lq_gemv!(Y, X, q)
 end
@@ -565,3 +567,5 @@ function Gesso.Inference._qgemv_expert!(
     _lq_launch!(y, x, bank.data, base, kind, 1, bank.ne0, bank.ne1, row_bytes, alpha, beta)
     return y
 end
+
+include("lava_quant_cpu_order.jl")

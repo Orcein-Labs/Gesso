@@ -1,0 +1,7 @@
+[root]
+# vendored upstream packages we patch; see vendor/README.md
+allow = ["vendor"]
+
+[names]
+# upstream file names inside a vendored tree are not ours to rename
+allow = ["vendor/Lava/*"]

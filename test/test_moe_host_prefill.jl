@@ -2,7 +2,9 @@
 # against the token loop over _moe_host_experts_auto! it replaces. Reuses the
 # slab helpers from test_moe_kquant_experts.jl.
 #   * every row must match the token loop bit for bit: both run the same
-#     _dot_q8k on the same Q8_K activations and sum each token's experts in k order
+#     _dot_q8k (or its bit-equal multi-column form) on the same Q8_K activations
+#     and sum each token's experts in k order; checked with the multi-column
+#     kernel on and off
 #   * the chunk splitter must hand every (expert, row) to exactly one chunk for
 #     any chunk count, including more chunks than rows
 #   * dead tokens (zero router mass) get a zero row
@@ -79,12 +81,20 @@ end
             live = trues(seq) |> collect
             seq >= 5 && (live[3] = false)
             Yref = _mhp_token_loop(X, E, W, live, gate_s, up_s, down_s)
-            Y = fill(NaN32, seq, h)
-            _MKE._moe_host_prefill!(Y, X, E, W, live, nexp, gate_s, up_s, down_s)
-            println("moe prefill ", label, " seq=", seq, " bitwise=", Y == Yref,
-                " max_abs=", maximum(abs.(Y .- Yref)))
-            @test Y == Yref
-            seq >= 5 && @test all(iszero, Y[3, :])
+            saved = _MKE._PREFILL_MULTI[]
+            try
+                for multi in (Int8(1), Int8(0))
+                    _MKE._PREFILL_MULTI[] = multi
+                    Y = fill(NaN32, seq, h)
+                    _MKE._moe_host_prefill!(Y, X, E, W, live, nexp, gate_s, up_s, down_s)
+                    println("moe prefill ", label, " seq=", seq, " multi=", multi, " bitwise=", Y == Yref,
+                        " max_abs=", maximum(abs.(Y .- Yref)))
+                    @test Y == Yref
+                    seq >= 5 && @test all(iszero, Y[3, :])
+                end
+            finally
+                _MKE._PREFILL_MULTI[] = saved
+            end
         end
 
         seq = 9

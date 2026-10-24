@@ -244,6 +244,9 @@ function Gesso.Inference._gdn_gate_params!(::LavaBackend, g, beta, a, b, A_log, 
     return g, beta
 end
 
+include("lava_exp32.jl")
+include("lava_gdn_reference.jl")
+
 function Gesso.Inference._gated_delta_rule!(
     ::LavaBackend,
     out,
@@ -271,17 +274,7 @@ function Gesso.Inference._gated_delta_rule!(
     bs = _lh_device(beta, :gated_delta_rule)
     st = _lh_device(state, :gated_delta_rule)
     seq == 0 && return out
-    qn = Lava.LavaArray{Float32}(undef, (seq, nv, dk))
-    kn = Lava.LavaArray{Float32}(undef, (seq, nv, dk))
-    scale = 1.0f0 / sqrt(Float32(dk))
-    n_qk = seq * nv
-    kqk = _lava_gdn_qk_kernel!(KA.get_backend(qs))
-    kqk(qn, kn, qs, ks, Int(nk), Int(group), v_head_tiled, l2norm, scale, 1.0f-6,
-        Int(nv), Int(dk), Int(n_qk); ndrange=n_qk, workgroupsize=_LH_WG)
-    n_rec = nv * dv
-    krec = _lava_gdn_recur_kernel!(KA.get_backend(qs))
-    krec(o, qn, kn, vs, gs, bs, st, Int(nv), Int(dk), Int(dv), Int(seq), Int(n_rec);
-        ndrange=n_rec, workgroupsize=_LH_WG)
+    _lava_gdn_reference!(o, qs, ks, vs, gs, bs, st; l2norm, v_head_tiled)
     return out
 end
 
@@ -529,37 +522,98 @@ function Gesso.Inference._moe_topk_swiglu!(
     return y
 end
 
-# Shared-expert sigmoid gate, y += sigmoid(x . g) * sd, one workgroup per
-# token. The host version paid four transfers per layer.
-@kernel cpu=false function _lava_shared_gate_kernel!(y, x, sd, g, h::Int)
-    tl = @index(Local, Linear)
-    t = @index(Group, Linear)
-    part = @localmem Float32 (_LH_RED_LANES,)
-    acc = 0.0f0
-    for i in tl:_LH_RED_LANES:h
-        acc += x[t, i] * g[i]
-    end
-    part[tl] = acc
-    # every lane reads all partials after this barrier
-    @synchronize
-    s = 0.0f0
-    for i in 1:_LH_RED_LANES
-        s += part[i]
-    end
-    s = 1.0f0 / (1.0f0 + exp(-s))
-    for i in tl:_LH_RED_LANES:h
-        y[t, i] += s * sd[t, i]
+# Shared-expert sigmoid gate. Match the CPU's sequential Float32 dot and
+# Float32 multiply/add rounding. Integer encodings prevent device denormal
+# flushing between the physical Float64 operations; this is not wide summation.
+include("lava_float32_bits.jl")
+
+Base.@noinline _lh_shared_gate_f64_mul(a::Float64, b::Float64) = a*b
+Base.@noinline _lh_shared_gate_f64_add(a::Float64, b::Float64) = a+b
+@kernel cpu=false function _lava_shared_gate_den_kernel!(den64, x, g, h::Int, n::Int)
+    row=@index(Global, Linear)
+    if row<=n
+        acc_bits=UInt32(0)
+        for i = 1:h
+            term=LavaFloat32Bits.rounded32_wide(
+                _lh_shared_gate_f64_mul(
+                    LavaFloat32Bits.widen32(x[row, i]),
+                    LavaFloat32Bits.widen32(g[i]),
+                ),
+            )
+            acc64=reinterpret(Float64, LavaFloat32Bits.f32_to_f64_bits(acc_bits))
+            acc_bits=LavaFloat32Bits.round32_bits(_lh_shared_gate_f64_add(acc64, term))
+        end
+        acc=reinterpret(Float32, acc_bits)
+        den64[row]=Float64(1.0f0+_lava_gdn_exp32(-acc))
     end
 end
+@kernel cpu=false function _lava_shared_gate_recip_kernel!(sig64, den64, n::Int)
+    row=@index(Global, Linear)
+    if row<=n
+        sig64[row]=1.0/den64[row]
+    end
+end
+@kernel cpu=false function _lava_shared_gate_apply_kernel!(y, sd, sig64, h::Int)
+    lane=@index(Local, Linear)
+    row=@index(Group, Linear)
+    # Carry Float32 rounding through integer encodings so tiny values are not
+    # flushed by native Float32 conversion/arithmetic instructions.
+    s=LavaFloat32Bits.rounded32_wide(sig64[row])
+    for i = lane:64:h
+        term=LavaFloat32Bits.rounded32_wide(
+            _lh_shared_gate_f64_mul(s, LavaFloat32Bits.widen32(sd[row, i])),
+        )
+        out_bits=LavaFloat32Bits.round32_bits(
+            _lh_shared_gate_f64_add(LavaFloat32Bits.widen32(y[row, i]), term),
+        )
+        y[row, i]=reinterpret(Float32, out_bits)
+    end
+end
+
+_lh_shared_gate_contract(f, kb) =
+    Lava.with_no_contraction(Lava.with_float_controls(f(kb), (32, 64)))
 
 function Gesso.Inference._shared_gate_add!(::LavaBackend, y, x, sd, gvec)
     yd = _lh_device(y, :shared_gate_add)
     xd = _lh_device(x, :shared_gate_add)
     sdd = _lh_device(sd, :shared_gate_add)
     gd = _lh_device(gvec, :shared_gate_add)
+    if !(eltype(yd) === eltype(xd) === eltype(sdd) === eltype(gd) === Float32)
+        throw(gesso_error(ERR_INVALID_PLAN, "shared_gate_add requires Float32 device storage"))
+    end
+    if !(ndims(xd) == 2 && size(yd) == size(xd) == size(sdd) && length(gd) == size(xd, 2))
+        throw(gesso_error(ERR_INVALID_PLAN, "shared_gate_add storage dimensions disagree"))
+    end
     seq, h = size(xd)
     seq == 0 && return y
-    kern = _lava_shared_gate_kernel!(KA.get_backend(xd))
-    kern(yd, xd, sdd, gd, Int(h); ndrange=seq * _LH_RED_LANES, workgroupsize=(_LH_RED_LANES,))
+    kb = KA.get_backend(xd)
+    # Keep scratch allocation on the input arrays' backend queue.
+    bq = kb.dispatch_bq
+    den64 = Lava.LavaArray{Float64}(undef, seq; bq=bq)
+    sig64 = Lava.LavaArray{Float64}(undef, seq; bq=bq)
+    _lh_shared_gate_contract(_lava_shared_gate_den_kernel!, kb)(
+        den64,
+        xd,
+        gd,
+        h,
+        seq;
+        ndrange = seq,
+        workgroupsize = 64,
+    )
+    _lh_shared_gate_contract(_lava_shared_gate_recip_kernel!, kb)(
+        sig64,
+        den64,
+        seq;
+        ndrange = seq,
+        workgroupsize = 64,
+    )
+    _lh_shared_gate_contract(_lava_shared_gate_apply_kernel!, kb)(
+        yd,
+        sdd,
+        sig64,
+        h;
+        ndrange = 64seq,
+        workgroupsize = 64,
+    )
     return y
 end

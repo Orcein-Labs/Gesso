@@ -56,17 +56,7 @@ function _sample_id(s::Sampler, logits_row)
         end
         return n - 1
     end
-    order = sortperm(w; rev=true)
-    target = s.top_p * total
-    acc = 0.0
-    keep = n
-    for k in 1:n
-        acc += w[order[k]]
-        if acc >= target
-            keep = k
-            break
-        end
-    end
+    order, keep = _nucleus_order(w, s.top_p * total)
     cut = 0.0
     for k in 1:keep
         cut += w[order[k]]
@@ -78,4 +68,65 @@ function _sample_id(s::Sampler, logits_row)
         r < acc && return order[k] - 1
     end
     return order[keep] - 1
+end
+
+# The head of the descending order, long enough to hold the nucleus, and the
+# nucleus size. A full sortperm of a 248k vocab costs 25-40 ms per token, and
+# the nucleus is usually a few hundred ids. One histogram pass finds the
+# smallest band of top weights whose mass reaches the target, and only that
+# band is sorted. Positive Float64 bit patterns order like their values, so the
+# band is every id above a weight threshold, ties included, and its stable sort
+# is the prefix the full stable sortperm(w; rev=true) gave: acc, keep and the
+# draw are unchanged.
+const _NUCLEUS_BUCKETS = 1 << 15   # exponent and top 5 mantissa bits of a weight in [0, 1]
+
+_nucleus_bucket(x::Float64) = Int(reinterpret(UInt64, x) >> 47) + 1
+
+function _nucleus_order(w::Vector{Float64}, target::Float64)
+    n = length(w)
+    mass = zeros(Float64, _NUCLEUS_BUCKETS)
+    count = zeros(Int, _NUCLEUS_BUCKETS)
+    @inbounds for x in w
+        b = _nucleus_bucket(x)
+        mass[b] += x
+        count[b] += 1
+    end
+    band = _NUCLEUS_BUCKETS
+    acc = 0.0
+    m = 0
+    @inbounds while band > 1
+        acc += mass[band]
+        m += count[band]
+        acc >= target && break
+        band -= 1
+    end
+    band == 1 && (m = n)
+    # Gathered into dense vectors: sorting through a view of w cost more than
+    # the full sortperm on flat rows where the band is most of the vocab.
+    ids = Vector{Int}(undef, m)
+    wb = Vector{Float64}(undef, m)
+    j = 0
+    @inbounds for i in 1:n
+        if _nucleus_bucket(w[i]) >= band
+            j += 1
+            ids[j] = i
+            wb[j] = w[i]
+        end
+    end
+    head = ids[sortperm(wb; rev=true)]
+    acc = 0.0
+    for j in eachindex(head)
+        acc += @inbounds w[head[j]]
+        acc >= target && return head, j
+    end
+    length(head) == n && return head, n
+    # The histogram sums in another order, so rounding can stop it one band
+    # short of the true boundary; the full order is then the only safe answer.
+    order = sortperm(w; rev=true)
+    acc = 0.0
+    for k in 1:n
+        acc += @inbounds w[order[k]]
+        acc >= target && return order, k
+    end
+    return order, n
 end

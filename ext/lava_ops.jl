@@ -224,8 +224,9 @@ end
 function _lava_dimreduce(f,op,a,dim,init)
     shape=ntuple(i -> i==dim ? 1 : size(a,i),ndims(a))
     prod(shape)>1 && return mapreduce(f,op,a;dims=dim)
-    # Preserve Lava's native scalar Float32 sum and the legacy 1D tree.
-    f===identity && op===(+) && eltype(a)===Float32 && return sum(a;dims=dim)
+    # Keep scalar reductions on the fixed tree too. Lava's native Float32
+    # sum combines subgroup partials with atomic adds: their arrival order
+    # can change a one-row attention denominator between identical calls.
     result=Lava.LavaArray{typeof(init)}(undef,shape)
     temp=Lava.LavaArray{typeof(init)}(undef,(max(2,2*cld(length(a),128)),))
     value=Lava.AK.mapreduce(f,op,a,KA.get_backend(a);init,neutral=init,temp,block_size=64,switch_below=0)
@@ -248,11 +249,13 @@ function _lava_embedding_lookup!(dst, table, tokens)
     return dst
 end
 
-# Single-row decode normalization. Matches `_cuda_rmsnorm_row_kernel!` in
-# arithmetic: F32 accumulate, F64 rms, F32 write. The sum is split across one
-# workgroup so a feature dim of several thousand is not walked by one lane.
+# Float32 RMS rows use the CPU contract: round each square in Float32, sum
+# lane-local partials and their workgroup fold in Float64, finish in Float64,
+# then store Float32. A workgroup owns one flattened leading-axis row, so this
+# covers both ordinary 2D rows and 3D token/head rows without a host loop.
 const _LAVA_RMS_LANES = 64
 
+# Retain the existing internal non-Float32 row/head routes.
 @kernel cpu=false function _lava_rmsnorm_row_kernel!(dst, xs, scales, eps, d::Int)
     tl = @index(Local, Linear)
     part = @localmem Float32 (_LAVA_RMS_LANES,)
@@ -296,6 +299,32 @@ end
     end
 end
 
+@kernel cpu=false function _lava_rmsnorm_f32_rows_kernel!(dst, xs, scales,
+        eps64::Float64, d::Int, lead::Int)
+    g = @index(Group, Linear)
+    lane = @index(Local, Linear)
+    partials = @localmem Float64 (_LAVA_RMS_LANES,)
+    acc = 0.0
+    for j in lane:_LAVA_RMS_LANES:d
+        idx = g + (j - 1) * lead
+        square::Float32 = abs2(xs[idx])
+        acc += Float64(square)
+    end
+    partials[lane] = acc
+    @synchronize
+    total = 0.0
+    for i in 1:_LAVA_RMS_LANES
+        total += partials[i]
+    end
+    invalid = _lava_nonfinite_flag(total) != UInt32(0) || total < 0.0
+    rms = sqrt(total / Float64(d) + eps64)
+    for j in lane:_LAVA_RMS_LANES:d
+        idx = g + (j - 1) * lead
+        normalized = Float32((Float64(xs[idx]) / rms) * Float64(scales[j]))
+        dst[idx] = ifelse(invalid, Float32(NaN), normalized)
+    end
+end
+
 function _lava_rmsnorm!(dst, x, scale; eps = 1e-6, check_finite = true)
     a = _LAVA_DECODE_AUDIT
     t0 = a.enabled ? time_ns() : UInt64(0)
@@ -305,9 +334,31 @@ function _lava_rmsnorm!(dst, x, scale; eps = 1e-6, check_finite = true)
     native_eps=eltype(xs)(eps)
     isfinite(native_eps) && native_eps>0 || throw(gesso_error(ERR_INVALID_PLAN,
         "rmsnorm!: eps must be representable, finite and positive in storage dtype"))
-    d = size(xs, ndims(xs))                       # last dim is the feature dim
+    nd = ndims(xs)
+    nd > 0 || throw(gesso_error(ERR_INVALID_PLAN,
+        "rmsnorm!: input must have a nonempty feature dimension"; op = :rmsnorm!))
+    all(n -> n > 0, size(xs)) || throw(gesso_error(ERR_INVALID_PLAN,
+        "rmsnorm!: input dimensions must be positive"; op = :rmsnorm!))
+    size(dst.storage) == size(xs) || throw(gesso_error(ERR_INVALID_PLAN,
+        "rmsnorm!: destination and input shapes must match"; op = :rmsnorm!))
+    d = size(xs, nd)                               # last dim is the feature dim
     length(scale.storage) == d ||
         throw(gesso_error(ERR_INVALID_PLAN, "rmsnorm!: scale length $(length(scale.storage)) ≠ feature dim $d"; op = :rmsnorm!))
+    if eltype(xs) === Float32 && nd in (2, 3)
+        lead = div(length(xs), d)
+        kern = _lava_rmsnorm_f32_rows_kernel!(KA.get_backend(xs))
+        # IEEE total classification and the invalid-row NaN marker require
+        # preservation here; unrelated Lava kernels keep their default modes.
+        kern = Lava.with_float_controls(kern, (32, 64))
+        kern(dst.storage, xs, scale.storage, Float64(eps), Int(d), Int(lead);
+            ndrange=_LAVA_RMS_LANES * lead, workgroupsize=(_LAVA_RMS_LANES,))
+        if check_finite
+            Gesso.Inference._all_finite(dst.storage) || throw(gesso_error(ERR_NUMERICAL_INSTABILITY,
+                "rmsnorm!: nonfinite normalization denominator"))
+        end
+        a.enabled && _lava_note_op!(:rmsnorm, time_ns() - t0)
+        return dst
+    end
     if ndims(xs) == 2 && size(xs, 1) == 1
         kern = _lava_rmsnorm_row_kernel!(KA.get_backend(xs))
         kern(dst.storage, xs, scale.storage, Float64(eps), Int(d);
@@ -401,6 +452,9 @@ end
     end
 end
 
+include("lava_rope_reference.jl")
+include("lava_softmax_reference.jl")
+
 function _lava_rope!(q, k, positions; theta = 10000.0, inv_freq = nothing, interleaved = true, rotary_dim = 0)
     a = _LAVA_DECODE_AUDIT
     t0 = a.enabled ? time_ns() : UInt64(0)
@@ -410,6 +464,12 @@ function _lava_rope!(q, k, positions; theta = 10000.0, inv_freq = nothing, inter
     tθ = Float64(theta)
     d = size(q.storage, 3)
     rd = rotary_dim == 0 ? d : Int(rotary_dim)
+    if inv_freq !== nothing && eltype(inv_freq) === Float64 &&
+       eltype(q.storage) === Float32 && eltype(k.storage) === Float32
+        _lava_rope_reference!(q.storage, k.storage, positions, inv_freq, rd, interleaved)
+        a.enabled && _lava_note_op!(:rope, time_ns() - t0)
+        return q
+    end
     if inv_freq === nothing && length(positions) == 1 && size(q.storage, 1) == 1
         pos = Int32(positions[1])
         for x in (q.storage, k.storage)
@@ -573,7 +633,8 @@ function _lava_softmax!(dst, scores; check_finite = true)
     Gesso.Inference._all_finite(rowmax) || throw(gesso_error(ERR_NUMERICAL_INSTABILITY,
         "softmax!: no finite unmasked maximum"))
     e = exp.(masked .- rowmax)
-    den = _lava_dimreduce(identity,+,e,2,0f0)
+    den = eltype(e) === Float32 ? _lava_softmax_rowsum64(e) :
+          _lava_dimreduce(identity,+,e,2,0f0)
     dst.storage .= e ./ den
     a.enabled && _lava_note_op!(:softmax, time_ns() - t0)
     return dst

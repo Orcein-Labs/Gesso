@@ -120,9 +120,11 @@ tokenizer IDs are unique and contiguous. No additional package dependency.
 Regime I positional contract: omitted theta uses imported RoPE metadata; an
 explicit positive finite theta overrides its base. Linear scaling divides
 inverse frequencies by its factor. CPU and primary Lava honor default, linear
-and Llama3 frequency tables. Lava reduces the same Float32 phase constants
-from host position metadata before device trig/rotation; tensor execution stays
-on Vulkan. Independent HF gates cover real-model prefixes 17/33/65/129 and
+and Llama3 frequency tables. Native Float32 Lava tensors with imported Float64 frequency tables use CPU-order
+Float64 coefficients and a NoContraction Float64 GPU rotation. Coefficients are
+per-call host position metadata; Q/K stay on Vulkan. No persistent coefficient
+cache is retained for that path. Other frequency/storage routes keep their
+existing implementations. Independent HF gates cover real-model prefixes 17/33/65/129 and
 rotary positions through 32768; these are not full-model 8k context certification.
 
 Runtime now owns fixed round-robin request scheduling over separate Sessions.
@@ -167,3 +169,25 @@ and the verified host report live in `docs/archive/2026-10_regime-i/`.
 Fresh source-only Lava execution requires locally precompiled LLVM/GPUCompiler
 prerequisites. scripts/prepare_lava_compiler.jl prepares them from the exact
 workspace lock in a temporary project, without a core dependency or upgrade.
+
+Campaign 1 isolated candidate: `ext/lava_quant_cpu_order.jl` supplies CPU-order Q8_0/Q4_K GPU kernels, selected by dense quant dispatch after shape validation. Per-kernel NoContraction and float controls remain opt-in. This candidate is not yet model/stress admitted.
+
+Campaign 1 recurrence candidate: `ext/lava_gdn_reference.jl` executes unfused GDN recurrence with physical Float64 q/k normalization and reductions, Float32 state/decay round points, and opt-in Lava arithmetic contracts. `ext/lava_exp32.jl` preserves Julia1.12.6 Float32 exponential arithmetic for that decay, including intentional polynomial Fmas. Gated normalization and fused single-token decode keep their existing implementations. Full model/stress admission remains pending.
+
+Checked Lava Float32 softmax uses a fixed64-lane tree per row in
+`ext/lava_softmax_reference.jl`. This prevents query partition sizes from
+selecting different denominator accumulation orders. The existing causal mask,
+maximum, exponentials, division and unchecked fused path remain unchanged.
+The kernel requests public Lava FloatControls32 and NoContraction; denominator
+buffers are allocated per call, with no retained cache.
+
+
+Campaign 1 shared-gate candidate (2026-10-21, admission pending):
+`ext/lava_hybrid.jl` uses internal pure-scalar `ext/lava_float32_bits.jl` to
+preserve CPU Float32 rounding, signed zero and subnormals through physical F64
+operations. Three explicitly controlled kernels retain the sequential dot,
+reciprocal and rounded epilogue. Two F64 row buffers cost 16 bytes/token;
+no tensor moves to the host. Requires the existing Lava Float64/Int64 and
+float-control contracts; unsupported devices fail explicitly. Exact public-entry
+regressions live in `test/test_lava_shared_gate_bits.jl`, included by the hybrid
+suite. Full model and Campaign 1 stress acceptance remain separate and open.
