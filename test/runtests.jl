@@ -156,6 +156,11 @@ using Gesso: reference_prefill, reference_generate
     # RoPE lookups; the GGUF spec check is gated on GESSO_SPARK25_GGUF
     include("test_spark25.jl")
 
+    # qwen4exp (Flash-Next): metadata reader, chunked prefill against one call on a
+    # random toy model, the QSA context refusal; the real-GGUF run against the
+    # llama.cpp dump is gated on GESSO_QWEN4EXP_GGUF (skips without it)
+    include("test_qwen4exp.jl")
+
     # Phase 3 (§LXXVI item D): the REAL-model gate — one named skip unless
     # GESSO_SMOLLM2_DIR points at a local snapshot; it never downloads
     include("test_smollm2.jl")

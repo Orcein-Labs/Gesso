@@ -2837,6 +2837,7 @@ include("dflash_draft.jl")        # DFlash2 block drafter over the target's tapp
 include("tokenizer_protocol.jl")   # Pass C: the tokenizer PROTOCOL
 include("gguf_tokenizer.jl")       # GGUF tokenizer section: qwen35 BPE, streaming decode
 include("chat_template.jl")         # Qwen3.5 XML chat template renderer (no Jinja)
+include("qwen4exp.jl")              # Flash-Next (qwen4exp) CPU forward
 include("import_report.jl")      # Passes I/J: report + generated matrix
 
 end # module Inference
