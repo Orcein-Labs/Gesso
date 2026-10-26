@@ -110,6 +110,10 @@ using Gesso: reference_prefill, reference_generate
     # AVX2 bit-exact vs scalar, real Qwen3.8-27B UD-IQ2_M rows (env-gated)
     include("test_quant_cpu_iq_s.jl")
 
+    # IQ4_NL and Q2_0 block layouts, dequant against ggml to_float (env-gated),
+    # CPU and CUDA expert GEMV against an F32 reference
+    include("test_quant_flash_next_types.jl")
+
     # Multi-column Q8_K dots (K = 1..8 activation tiles) bit-equal to the
     # single-column kernel for every type; prefill on/off through _quant_matmul!;
     # real Saluki rows (env-gated)
