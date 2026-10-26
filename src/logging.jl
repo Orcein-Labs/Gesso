@@ -120,7 +120,7 @@ this macro is a law violation waiting to be found. Emits a `LOG_WARN` event
 evaluates to the fallback value so call sites can write:
 
 ```julia
-dev = lava_device_or_nothing() === nothing ? @gfallback(:lava, :cuda) : lava_device()
+dev = lava_device_or_nothing() === nothing ? @gfallback(:lava, :cpu) : lava_device()
 ```
 """
 macro gfallback(requested, actual)

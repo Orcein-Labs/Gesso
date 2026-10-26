@@ -1,6 +1,8 @@
 # GessoLavaExt — the Lava.jl (Vulkan) backend as a package extension
 # (§LXXXI, §VII, §XXIII).
 #
+# The default GPU backend. New GPU kernels and model paths land here first.
+#
 # This file is the ONLY place in Gesso allowed to `using Lava`. Core Gesso
 # compiles and tests with Lava not loaded; `LavaBackend` lives HERE, never in
 # `src/backends.jl` (§VII: backends are extensions, not dependencies).

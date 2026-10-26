@@ -91,8 +91,9 @@ end
 
 The Phase 5 engine surface (§LXVII): `prefill!` / `decode!` / `generate`.
 
-`backend=CUDABackend()` requires tensors already on device (`to_device`) —
-the engine never copies host memory (§LXXVII). Pages allocate via `similar`
+A GPU backend (`LavaBackend()`, or the optional `CUDABackend()`) requires
+tensors already on device (`to_device`). The
+engine never copies host memory (§LXXVII). Pages allocate via `similar`
 off the tensor storage (CPU `Array{Float64}`, CUDA `CuArray{Float32}`).
 `eos_token_id` is REQUIRED: the engine never hardcodes a model's EOS
 (toy2 uses 2; SmolLM2 uses 0). `eps`/`theta` thread to `rmsnorm!`/`rope!`

@@ -31,8 +31,8 @@ export backend_name, execution_tier, supports
 Supertype of Gesso backend tags. A backend instance is an *intent* — the
 concrete device is resolved from it at lowering time.
 
-Concrete implementations live in package extensions (`GessoCUDAExt`,
-`GessoLavaExt`) or in core for the CPU reference path. Core Gesso defines only
+Concrete implementations live in package extensions (`GessoLavaExt`, the GPU
+default, and `GessoCUDAExt`, optional) or in core for the CPU reference path. Core Gesso defines only
 [`CPUBackend`](@ref) and knows nothing else about specific vendors (§I).
 """
 abstract type AbstractGessoBackend end

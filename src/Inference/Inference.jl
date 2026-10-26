@@ -23,7 +23,8 @@
 #
 # Phase 4 slice (§LXXVII items B/C): the interpreter is backend-generic.
 # `backend` defaults to CPUBackend so every CPU path is bit-identical; with
-# `backend=CUDABackend()` the tensors MUST already be on device (to_device
+# a GPU backend (`LavaBackend()`, or the optional `CUDABackend()`) the tensors
+# MUST already be on device (to_device
 # is the explicit transfer — the interpreter never copies, and host Array
 # storage under a non-CPU backend is ERR_INVALID_PLAN). All buffers are
 # allocated with `similar` off the tensors' storage, so device memory lands
@@ -102,7 +103,8 @@ RMSNorm is applied after the last block, before the tied head (Llama's
 `model.norm`; toy2 omits it). `hidden=true` returns those final-normed states, `(dim, seq_len)`, and skips the head.GQA supported (`n_kv_heads < n_heads`): K/V cached at `n_kv_heads` and
 repeated per query head only inside the attention contraction.
 
-Pass `backend=CUDABackend()` (Phase 4, §LXXVII) to run on an NVIDIA GPU —
+Pass `backend=LavaBackend()` (the GPU default) to run on any Vulkan GPU, or
+`backend=CUDABackend()` for the optional NVIDIA path (§LXXVII). The
 `tensors` must already be on device (`to_device`); the interpreter never
 copies host memory, and host Array storage under a non-CPU backend is
 `ERR_INVALID_PLAN`.
@@ -1599,8 +1601,9 @@ Phase 3 (§LXXVI item A): `eps` / `theta` thread through as in
 the tied head on every argmax step; GQA models cache K/V at `n_kv_heads`
 and repeat per query head only inside the attention contraction.
 
-Pass `backend=CUDABackend()` for device execution (§LXXVII): `tensors` on
-device via `to_device`, argmax computed per step (device-safe), ids on host.
+Pass `backend=LavaBackend()` (the GPU default) or `backend=CUDABackend()`
+(optional) for device execution (§LXXVII): `tensors` on device via
+`to_device`, argmax computed per step (device-safe), ids on host.
 """
 function reference_generate(
     model,

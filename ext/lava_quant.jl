@@ -549,7 +549,7 @@ end
 
 # --- prefill GEMM ----------------------------------------------------------------
 # The GEMV decodes each weight once per token, so a 256-token prefill decodes
-# every weight 256 times. From GESSO_DQ_GEMM_MIN tokens on (the CUDA default),
+# every weight 256 times. From GESSO_DQ_GEMM_MIN tokens on (the same default as the CUDA path),
 # W is dequantized to F16 in row chunks, capped by GESSO_DQ_GEMM_SCRATCH_MIB,
 # and Lava's mul! multiplies it with an F16 copy of X into an F32 result. That
 # is the cooperative-matrix path when the shape tiles, and the staged GEMM
