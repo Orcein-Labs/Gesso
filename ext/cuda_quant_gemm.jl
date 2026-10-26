@@ -13,13 +13,16 @@
 # The caches are concretely typed: a `Ref{Any}` here made every launch site
 # that reads them dispatch at run time, a few microseconds per op.
 const _QTables = NamedTuple{
-    (:iq2grid, :ksigns, :kmask, :iq3grid, :kv4),
+    (:iq2grid, :ksigns, :kmask, :iq3grid, :kv4, :iq2xxsgrid, :iq2sgrid, :iq3sgrid),
     Tuple{
         _CuVec{eltype(Gesso.Inference.IQ2XS_GRID)},
         _CuVec{eltype(Gesso.Inference.KSIGNS_IQ2XS)},
         _CuVec{eltype(Gesso.Inference.KMASK_IQ2XS)},
         _CuVec{eltype(Gesso.Inference.IQ3XXS_GRID)},
         _CuVec{eltype(Gesso.Inference.KVALUES_IQ4NL)},
+        _CuVec{eltype(Gesso.Inference.IQ2XXS_GRID)},
+        _CuVec{eltype(Gesso.Inference.IQ2S_GRID)},
+        _CuVec{eltype(Gesso.Inference.IQ3S_GRID)},
     },
 }
 const _Q8Bufs = Tuple{_CuVec{Int32}, _CuVec{Float32}, _CuVec{Int32}}
@@ -49,6 +52,18 @@ function _cuda_q_tables()::_QTables
         ((g >> (8 * tt)) & 0xff) <= 0x7f ||
             error("IQ3_XXS grid byte above 127 breaks the int8 lane")
     end
+    for g in Inf_.IQ2XXS_GRID, tt in 0:7
+        ((g >> (8 * tt)) & 0xff) <= 0x7f ||
+            error("IQ2_XXS grid byte above 127 breaks the int8 lane")
+    end
+    for g in Inf_.IQ2S_GRID, tt in 0:7
+        ((g >> (8 * tt)) & 0xff) <= 0x7f ||
+            error("IQ2_S grid byte above 127 breaks the int8 lane")
+    end
+    for g in Inf_.IQ3S_GRID, tt in 0:3
+        ((g >> (8 * tt)) & 0xff) <= 0x7f ||
+            error("IQ3_S grid byte above 127 breaks the int8 lane")
+    end
     for i in 0:127
         Inf_.KSIGNS_IQ2XS[i+1] == UInt8(i | ((count_ones(i) & 1) << 7)) ||
             error("ksigns no longer the parity expansion the IQ decoders compute")
@@ -59,6 +74,9 @@ function _cuda_q_tables()::_QTables
         kmask=CuArray(Inf_.KMASK_IQ2XS),
         iq3grid=CuArray(Inf_.IQ3XXS_GRID),
         kv4=CuArray(Inf_.KVALUES_IQ4NL),
+        iq2xxsgrid=CuArray(Inf_.IQ2XXS_GRID),
+        iq2sgrid=CuArray(Inf_.IQ2S_GRID),
+        iq3sgrid=CuArray(Inf_.IQ3S_GRID),
     )
     _CUDA_Q_TABLES[] = t
     return t
@@ -214,6 +232,78 @@ end
                 gv = grid[Int((qq>>(8*h))&0x00ff)+1]
                 isum = _iq_signed_dp4a(gv, sg >> (4 * h), qx[gb*8+2*l+h+1], isum)
             end
+        end
+        return dx[gb+1] * db * Float32(isum)
+    end
+end
+
+# IQ2_XXS (66 B): f16 d, then 8 x (4 grid bytes, u32 aux). The scale nibble sits
+# in aux bits 28..31 and four 7-bit sign indices in bits 7l. Each grid byte
+# indexes an 8-byte entry, laid out as in IQ2_XS.
+@inline function _eq_iq2xxs(Q, boff::Int, b::Int, gb::Int, qx, dx, grid)
+    @inbounds begin
+        ib32 = b & 7
+        d = _cu_f16a(Q, boff)
+        qbase = boff + 2 + 8 * ib32
+        aux32 = _cu_u32h(Q, qbase + 4)
+        db = d * (0.5f0 + Float32(aux32 >> 28)) * 0.25f0
+        isum = Int32(0)
+        for l in 0:3
+            sg = _iq_signs8(aux32 >> (7 * l))
+            g64 = grid[Int(Q[qbase+l+1])+1]
+            isum = _iq_signed_dp4a(g64 % UInt32, sg, qx[gb*8+2*l+1], isum)
+            isum = _iq_signed_dp4a(UInt32(g64 >> 32), sg >> 4, qx[gb*8+2*l+2], isum)
+        end
+        return dx[gb+1] * db * Float32(isum)
+    end
+end
+
+# IQ2_S (82 B): f16 d, 32 qs bytes (low 8 grid index bits), 8 sign bytes at 34,
+# 8 qh bytes at 66, 8 scale bytes at 74. The two-scale layout is IQ2_XS's, and
+# the sign bytes hold the eight sign bits directly.
+@inline function _eq_iq2s(Q, boff::Int, b::Int, gb::Int, qx, dx, grid)
+    @inbounds begin
+        ib32 = b & 7
+        d = _cu_f16a(Q, boff)
+        sc = Q[boff+74+ib32+1]
+        qh = Int(Q[boff+66+ib32+1])
+        db0 = d * (0.5f0 + Float32(sc & 0x0f)) * 0.25f0
+        db1 = d * (0.5f0 + Float32(sc >> 4)) * 0.25f0
+        s_lo = Int32(0)
+        s_hi = Int32(0)
+        for l in 0:3
+            gi = Int(Q[boff+2+4*ib32+l+1]) | ((qh << (8 - 2 * l)) & 0x300)
+            g64 = grid[gi+1]
+            sb = UInt32(Q[boff+34+4*ib32+l+1])
+            p = _iq_signed_dp4a(g64 % UInt32, sb, qx[gb*8+2*l+1], Int32(0))
+            p = _iq_signed_dp4a(UInt32(g64 >> 32), sb >> 4, qx[gb*8+2*l+2], p)
+            if l < 2
+                s_lo += p
+            else
+                s_hi += p
+            end
+        end
+        return dx[gb+1] * (db0 * Float32(s_lo) + db1 * Float32(s_hi))
+    end
+end
+
+# IQ3_S (110 B): f16 d, 64 qs bytes (two grid indices per 8 values), 8 qh bytes
+# (grid index bit 8), 32 sign bytes at 74, 4 scale bytes at 106 (one nibble per
+# half block). Block k = b & 7 takes scale nibble k & 1 of byte k >> 1.
+@inline function _eq_iq3s(Q, boff::Int, b::Int, gb::Int, qx, dx, grid)
+    @inbounds begin
+        k = b & 7
+        d = _cu_f16a(Q, boff)
+        scb = Q[boff+106+(k>>1)+1]
+        db = d * Float32(1 + 2 * ((scb >> (4 * (k & 1))) & 0x0f))
+        qh = Int(Q[boff+66+k+1])
+        isum = Int32(0)
+        for l in 0:3
+            i1 = Int(Q[boff+2+8*k+2*l+1]) | ((qh << (8 - 2 * l)) & 256)
+            i2 = Int(Q[boff+2+8*k+2*l+2]) | ((qh << (7 - 2 * l)) & 256)
+            sb = UInt32(Q[boff+74+4*k+l+1])
+            isum = _iq_signed_dp4a(grid[i1+1], sb, qx[gb*8+2*l+1], isum)
+            isum = _iq_signed_dp4a(grid[i2+1], sb >> 4, qx[gb*8+2*l+2], isum)
         end
         return dx[gb+1] * db * Float32(isum)
     end
@@ -504,6 +594,54 @@ end
     return _eq_q20(Q, boff, b, gb, qx, dx)
 end
 
+@inline function _eq_block(
+    ::Val{:iq2_xxs},
+    Q,
+    boff::Int,
+    b::Int,
+    gb::Int,
+    qx,
+    dx,
+    grid,
+    kv,
+    ksigns,
+    kmask,
+)
+    return _eq_iq2xxs(Q, boff, b, gb, qx, dx, grid)
+end
+
+@inline function _eq_block(
+    ::Val{:iq2_s},
+    Q,
+    boff::Int,
+    b::Int,
+    gb::Int,
+    qx,
+    dx,
+    grid,
+    kv,
+    ksigns,
+    kmask,
+)
+    return _eq_iq2s(Q, boff, b, gb, qx, dx, grid)
+end
+
+@inline function _eq_block(
+    ::Val{:iq3_s},
+    Q,
+    boff::Int,
+    b::Int,
+    gb::Int,
+    qx,
+    dx,
+    grid,
+    kv,
+    ksigns,
+    kmask,
+)
+    return _eq_iq3s(Q, boff, b, gb, qx, dx, grid)
+end
+
 # --- expert MMVQ kernel: one warp per output row, four rows per block --------
 # grid = (rows/4, n_used). Launch i reads expert slab meta[i] and writes column
 # meta[coloff + i] of y. It reads the same column of x, or column
@@ -642,6 +780,9 @@ const _CUDA_QGEMV_TYPES = (
     Gesso.Inference.GGML_TYPE_Q4_K,
     Gesso.Inference.GGML_TYPE_IQ4_NL,
     Gesso.Inference.GGML_TYPE_Q2_0,
+    Gesso.Inference.GGML_TYPE_IQ2_XXS,
+    Gesso.Inference.GGML_TYPE_IQ2_S,
+    Gesso.Inference.GGML_TYPE_IQ3_S,
 )
 
 function _cuda_launch_qgemv!(
@@ -726,6 +867,15 @@ function _cuda_launch_qgemv!(
     elseif ggml_type == I.GGML_TYPE_Q2_0
         ne0 % 64 == 0 || error("cuda qgemv: Q2_0 rows need a multiple of 64 values")
         _cuda_eqgemv_launch!(Val(:q2_0), 18, tables.kv4, args...)
+    elseif ggml_type == I.GGML_TYPE_IQ2_XXS
+        ne0 % 256 == 0 || error("cuda qgemv: IQ2_XXS rows need a multiple of 256 values")
+        _cuda_eqgemv_launch!(Val(:iq2_xxs), 66, tables.iq2xxsgrid, args...)
+    elseif ggml_type == I.GGML_TYPE_IQ2_S
+        ne0 % 256 == 0 || error("cuda qgemv: IQ2_S rows need a multiple of 256 values")
+        _cuda_eqgemv_launch!(Val(:iq2_s), 82, tables.iq2sgrid, args...)
+    elseif ggml_type == I.GGML_TYPE_IQ3_S
+        ne0 % 256 == 0 || error("cuda qgemv: IQ3_S rows need a multiple of 256 values")
+        _cuda_eqgemv_launch!(Val(:iq3_s), 110, tables.iq3sgrid, args...)
     else
         _cuda_eqgemv_launch!(Val(:iq4_xs), 136, tables.kv4, args...)
     end

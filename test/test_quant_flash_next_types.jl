@@ -1,4 +1,5 @@
-# Flash-Next quant types: IQ4_NL (ggml 20) and Q2_0 (ggml 42).
+# Flash-Next quant types: IQ4_NL (ggml 20), Q2_0 (ggml 42), and the CUDA
+# GEMV additions IQ2_XXS (16), IQ2_S (22) and IQ3_S (21).
 #   * random valid blocks (f16 scale at byte 0, random code bytes)
 #   * dequant bit-equal to ggml's to_float, row by row (env GESSO_GGML_DIR;
 #     skipped if libggml-base.so is absent)
@@ -18,7 +19,13 @@ if !isdefined(@__MODULE__, :_skip)
 end
 
 const _FN = Gesso.Inference
-const _FN_TYPES = (("IQ4_NL", _FN.GGML_TYPE_IQ4_NL, 32), ("Q2_0", _FN.GGML_TYPE_Q2_0, 64))
+const _FN_TYPES = (
+    ("IQ4_NL", _FN.GGML_TYPE_IQ4_NL, 32),
+    ("Q2_0", _FN.GGML_TYPE_Q2_0, 64),
+    ("IQ2_XXS", _FN.GGML_TYPE_IQ2_XXS, 256),
+    ("IQ2_S", _FN.GGML_TYPE_IQ2_S, 256),
+    ("IQ3_S", _FN.GGML_TYPE_IQ3_S, 256),
+)
 const _FN_TOL = 2.0e-3
 
 # Random valid rows: d is a small finite f16 at byte 0 of every block, every
@@ -48,6 +55,22 @@ function _fn_gesso_dequant(data::Vector{UInt8}, ty::Int32, nrows::Int, ne0::Int)
     return W
 end
 
+# The IQ2_XXS/IQ2_S/IQ3_S CPU kernels run on Q8_K activations, so a unit-vector
+# product is not an exact dequant for them; their F32 reference row dequant is.
+const _FN_IQS = (_FN.GGML_TYPE_IQ2_XXS, _FN.GGML_TYPE_IQ2_S, _FN.GGML_TYPE_IQ3_S)
+
+function _fn_dequant(data::Vector{UInt8}, ty::Int32, nrows::Int, ne0::Int)
+    ty in _FN_IQS || return _fn_gesso_dequant(data, ty, nrows, ne0)
+    rb = _FN._qrow_bytes(ty, ne0)
+    W = zeros(Float32, nrows, ne0)
+    row = Vector{Float32}(undef, ne0)
+    for j in 1:nrows
+        _FN._iqs_dequant_row!(row, data, (j - 1) * rb, ty, ne0)
+        W[j, :] = row
+    end
+    return W
+end
+
 function _fn_matrix(data::Vector{UInt8}, ty::Int32, nrows::Int, ne0::Int, blck::Int)
     rb = _FN._qrow_bytes(ty, ne0)
     return _FN.QuantMatrix(data, 0, ty, ne0, nrows, rb, C_NULL, Int64(blck))
@@ -68,16 +91,22 @@ function _fn_q8_round(x::Vector{Float32})
     return y
 end
 
+# Activations rounded through Q8_K (256-value blocks), as the CPU IQ2/IQ3 kernels see them.
+function _fn_q8k_round(x::Vector{Float32})
+    xq = _FN.quantize_q8_K!(_FN.Q8KVec(div(length(x), 256)), x)
+    return Float32.(_FN.dequantize_q8_K(xq))
+end
+
 const _FN_ggml_ok = isfile(joinpath(get(ENV, "GESSO_GGML_DIR", ""), "libggml-base.so"))
 
-@testset "IQ4_NL and Q2_0: block sizes match ggml traits" begin
+@testset "Flash-Next types: block sizes match ggml traits" begin
     @test _FN._iq_block_bytes(_FN.GGML_TYPE_IQ4_NL) == 18
     @test _FN._iq_block_bytes(_FN.GGML_TYPE_Q2_0) == 18
     @test _FN._qrow_bytes(_FN.GGML_TYPE_IQ4_NL, 256) == 8 * 18
     @test _FN._qrow_bytes(_FN.GGML_TYPE_Q2_0, 256) == 4 * 18
 end
 
-@testset "IQ4_NL and Q2_0: dequant bit-equal to ggml to_float" begin
+@testset "Flash-Next types: dequant bit-equal to ggml to_float" begin
     if !_FN_ggml_ok
         _skip(
             "set GESSO_GGML_DIR to a directory with libggml-base.so — IQ4_NL/Q2_0 dequant vs ggml to_float skipped",
@@ -89,7 +118,7 @@ end
             data = _fn_random_rows(rng, ty, nrows, div(ne0, blck))
             qm = _fn_matrix(data, ty, nrows, ne0, blck)
             ggml = Float32.(_FN._quant_host_f32(qm))
-            mine = _fn_gesso_dequant(data, ty, nrows, ne0)
+            mine = _fn_dequant(data, ty, nrows, ne0)
             # The accumulator never yields -0.0, so zeros are compared as +0.0.
             # Every nonzero value is compared bit for bit.
             @testset "$name random rows" begin
@@ -100,18 +129,22 @@ end
     end
 end
 
-@testset "IQ4_NL and Q2_0: CPU GEMV vs F32 reference" begin
+@testset "Flash-Next types: CPU GEMV vs F32 reference" begin
     rng = MersenneTwister(7)
     for (name, ty, blck) in _FN_TYPES
         nrows, ne0 = 37, 512
         data = _fn_random_rows(rng, ty, nrows, div(ne0, blck))
-        W = _fn_gesso_dequant(data, ty, nrows, ne0)
+        W = _fn_dequant(data, ty, nrows, ne0)
         x = randn(rng, Float32, ne0)
-        ref = Float64.(W) * Float64.(x)
         y = zeros(Float32, nrows)
         _FN._qgemv_bytes!(y, x, data, ty, ne0, nrows, 1.0f0, 0.0f0)
+        # The IQ2/IQ3 CPU kernels quantize activations to Q8_K, so their
+        # reference uses the same rounded activations; the F32 gap is reported.
+        xr = ty in _FN_IQS ? _fn_q8k_round(x) : x
+        ref = Float64.(W) * Float64.(xr)
         rel = _fn_relerr(y, ref)
-        @info "CPU GEMV" type = name max_rel_err = rel
+        rel_f32 = _fn_relerr(y, Float64.(W) * Float64.(x))
+        @info "CPU GEMV" type = name max_rel_err = rel max_rel_err_vs_f32 = rel_f32
         @testset "$name" begin
             @test rel <= _FN_TOL
         end
@@ -134,12 +167,12 @@ if !_FN_CUDA_OK || !Main.CUDA.functional()
     _skip("no NVIDIA device — CUDA IQ4_NL/Q2_0 GEMV skipped")
 else
     _fn_ext = Base.get_extension(Gesso, :GessoCUDAExt)
-    @testset "IQ4_NL and Q2_0: CUDA expert GEMV vs F32 reference" begin
+    @testset "Flash-Next types: CUDA expert GEMV vs F32 reference" begin
         rng = MersenneTwister(8)
         for (name, ty, blck) in _FN_TYPES
             nrows, ne0 = 37, 512
             data = _fn_random_rows(rng, ty, nrows, div(ne0, blck))
-            W = _fn_gesso_dequant(data, ty, nrows, ne0)
+            W = _fn_dequant(data, ty, nrows, ne0)
             x = randn(rng, Float32, ne0)
             # The CUDA expert kernel quantizes activations to int8 per 32 values,
             # so the reference uses the same rounded activations.
