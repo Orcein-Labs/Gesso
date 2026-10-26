@@ -1,5 +1,8 @@
 # GessoCUDAExt — the CUDA.jl backend as a package extension (§LXXVII, §VII).
 #
+# Optional. The GPU default is Lava (GessoLavaExt). This is the NVIDIA
+# comparator path, opt-in only.
+#
 # This file is the ONLY place in Gesso allowed to `using CUDA`. Core Gesso
 # compiles and tests with CUDA not loaded; `CUDABackend` lives HERE, never
 # in `src/backends.jl` (§VII: backends are extensions, not dependencies).

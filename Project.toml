@@ -19,8 +19,8 @@ license = "Apache-2.0"
 #
 # Backend lowering arrives as package extensions when their phases call for
 # it — never as core dependencies:
-#   CUDA.jl → ext/GessoCUDAExt.jl   (Phase 4)
-#   Lava    → ext/GessoLavaExt.jl   (Phase 8)
+#   Lava    → ext/GessoLavaExt.jl   (Phase 8; the default GPU backend)
+#   CUDA.jl → ext/GessoCUDAExt.jl   (Phase 4; optional comparator)
 #
 # Lava is vendored at vendor/Lava (upstream plus our patches, see
 # vendor/README.md); it is NOT a dependency of this package. Phase 8 (§LXXXI) added it as a WEAKDEP + extension only.
