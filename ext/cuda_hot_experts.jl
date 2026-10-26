@@ -141,8 +141,13 @@ end
 # q8_1 for every type, so gate, up and down need not share one.
 const _HOT_TYPES = (
     Gesso.Inference.GGML_TYPE_IQ2_XS,
+    Gesso.Inference.GGML_TYPE_IQ2_XXS,
+    Gesso.Inference.GGML_TYPE_IQ2_S,
     Gesso.Inference.GGML_TYPE_IQ3_XXS,
+    Gesso.Inference.GGML_TYPE_IQ3_S,
     Gesso.Inference.GGML_TYPE_IQ4_XS,
+    Gesso.Inference.GGML_TYPE_IQ4_NL,
+    Gesso.Inference.GGML_TYPE_Q2_0,
     Gesso.Inference.GGML_TYPE_Q2_K,
     Gesso.Inference.GGML_TYPE_Q3_K,
     Gesso.Inference.GGML_TYPE_Q4_K,
