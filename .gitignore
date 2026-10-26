@@ -24,3 +24,7 @@ outputs(from chatgpt)/
 
 # Local scratch and handoff notes, never pushed
 /.local/
+
+# Local agent instruction files, never part of the repo
+/CLAUDE.md
+/AGENTS.md
