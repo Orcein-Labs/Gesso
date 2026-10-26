@@ -345,12 +345,13 @@ defaults to a particular checkpoint's shape, except `full_attention_interval`
 """
 function spec_from_gguf_kv(kv::AbstractDict; tensor_names=nothing)
     arch = String(get(kv, "general.architecture", "qwen35moe"))
-    arch in ("qwen35", "qwen35moe", "llama", "spark2_5") || error(
+    arch in ("qwen35", "qwen35moe", "llama", "spark2_5", "qwen4exp") || error(
         "spec_from_gguf_kv: unsupported general.architecture $(repr(arch)) " *
-        "(supported: qwen35 dense, qwen35moe, llama, spark2_5)",
+        "(supported: qwen35 dense, qwen35moe, llama, spark2_5, qwen4exp)",
     )
     arch == "llama" && return _spec_from_gguf_llama(kv, tensor_names)
     arch == "spark2_5" && return _spec_from_gguf_spark(kv, tensor_names)
+    arch == "qwen4exp" && return _spec_from_gguf_qwen4exp(kv, tensor_names)
     p(key, default=nothing) = get(kv, "$arch.$key", default)
     req(key) =
         (v=p(key); v === nothing ? error("spec_from_gguf_kv: missing $arch.$key") : v)
@@ -439,6 +440,54 @@ function spec_from_gguf_kv(kv::AbstractDict; tensor_names=nothing)
         features=feats,
         mixer,
         rms_norm_eps=Float64(p("attention.layer_norm_rms_epsilon", 1e-6)),
+        moe,
+    )
+end
+
+"""
+`qwen4exp` (Flash-Next) GGUF spec. The spec records the shape and the
+features (hyper-connection streams, per-layer embeddings) so the import report
+can describe the file; the forward is `qwen4exp_forward!`, not the generic
+block runner. MTP layers are excluded from `num_layers`.
+"""
+function _spec_from_gguf_qwen4exp(kv::AbstractDict, tensor_names)
+    cfg = qwen4exp_config(kv)
+    cfg.vocab > 0 || error("spec_from_gguf_kv: no vocabulary size in GGUF metadata")
+    p(key) = kv["qwen4exp.$key"]
+    layer_types = [a ? :full_attention : :linear_attention for a in cfg.attn_layer]
+    mixer = LinearMixerSpec(;
+        layer_types,
+        num_key_heads=cfg.ssm_nk,
+        key_head_dim=cfg.ssm_dk,
+        num_value_heads=cfg.ssm_nv,
+        value_head_dim=cfg.ssm_dv,
+        conv_kernel_dim=cfg.conv_kernel,
+        v_head_tiled=true,
+    )
+    expert_ff = Int(p("expert_feed_forward_length"))
+    moe = MoeSpec(;
+        n_experts=cfg.n_exp,
+        n_expert_used=cfg.n_used,
+        expert_ff,
+        shared_ff=Int(p("expert_shared_feed_forward_length")),
+    )
+    section = filter(>(0), Int[Int(x) for x in p("rope.dimension_sections")])
+    return ArchitectureSpec(;
+        family=:qwen4exp,
+        hidden_size=cfg.n_embd,
+        num_layers=cfg.n_layer,
+        n_heads=cfg.n_head,
+        n_kv_heads=cfg.n_head_kv,
+        vocab_size=cfg.vocab,
+        intermediate_size=expert_ff,
+        head_dim=cfg.head_dim,
+        rope=RoPEPolicy(;
+            theta=cfg.rope_base, rotary_dim=cfg.n_rot, interleaved=false, mrope_section=section),
+        tie_word_embeddings=tensor_names !== nothing && !("output.weight" in tensor_names),
+        features=Set{Symbol}([:qk_norm, :attn_output_gate, :mrope, :linear_attention,
+            :hyper_connections, :ple]),
+        mixer,
+        rms_norm_eps=cfg.eps,
         moe,
     )
 end
@@ -839,6 +888,8 @@ function _materialize_gguf_tensor(
 end
 
 _gguf_param_map(spec::ArchitectureSpec) =
+    spec.family === :qwen4exp ?
+    error("qwen4exp GGUFs do not load through the generic block runner; use load_qwen4exp") :
     spec.family === :llama ? gguf_param_map(LlamaAdapter(), spec) :
     spec.family === :spark2_5 ? _gguf_spark_param_map(spec) :
     spec.moe === nothing ? gguf_param_map(Qwen35Adapter(), spec) :
