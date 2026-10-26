@@ -435,11 +435,87 @@ end
     return _dq_iq4xs(Q, boff, b, gb, qx, dx, kv)
 end
 
+# IQ4_NL (18 B): f16 d, then 16 bytes of nibbles. One 32-value block per row
+# block: the low nibbles are values 0..15, the high nibbles values 16..31.
+@inline function _eq_iq4nl(Q, boff::Int, gb::Int, qx, dx, kv)
+    @inbounds begin
+        d = _cu_f16a(Q, boff)
+        isum = Int32(0)
+        for w in 0:3
+            qw = _cu_u32h(Q, boff + 2 + 4 * w)
+            isum = CUDA.dp4a(_kv4_word(kv, qw), qx[gb*8+w+1], isum)
+            isum = CUDA.dp4a(_kv4_word(kv, qw >> 4), qx[gb*8+w+5], isum)
+        end
+        return dx[gb+1] * d * Float32(isum)
+    end
+end
+
+# Q2_0 (18 B): f16 d, then 16 bytes of 2-bit codes for 64 values. A 32-value
+# block is half of one row block (h = b & 1) and owns code bytes 8h .. 8h+7.
+# Code c stands for (c - 1) * d, so the sum is d * (sum of c*x - sum of x).
+@inline function _eq_q20(Q, boff::Int, b::Int, gb::Int, qx, dx)
+    @inbounds begin
+        h = b & 1
+        d = _cu_f16a(Q, boff)
+        isum = Int32(0)
+        xs = Int32(0)
+        for w in 0:7
+            c = UInt32(Q[boff+3+8*h+w])
+            lanes =
+                (c & 0x03) | (((c >> 2) & 0x03) << 8) | (((c >> 4) & 0x03) << 16) |
+                (((c >> 6) & 0x03) << 24)
+            xw = qx[gb*8+w+1]
+            isum = CUDA.dp4a(reinterpret(Int32, lanes), xw, isum)
+            xs = _eq_asum(xs, xw)
+        end
+        return dx[gb+1] * d * (Float32(isum) - Float32(xs))
+    end
+end
+
+@inline function _eq_block(
+    ::Val{:iq4_nl},
+    Q,
+    boff::Int,
+    b::Int,
+    gb::Int,
+    qx,
+    dx,
+    grid,
+    kv,
+    ksigns,
+    kmask,
+)
+    return _eq_iq4nl(Q, boff, gb, qx, dx, kv)
+end
+
+@inline function _eq_block(
+    ::Val{:q2_0},
+    Q,
+    boff::Int,
+    b::Int,
+    gb::Int,
+    qx,
+    dx,
+    grid,
+    kv,
+    ksigns,
+    kmask,
+)
+    return _eq_q20(Q, boff, b, gb, qx, dx)
+end
+
 # --- expert MMVQ kernel: one warp per output row, four rows per block --------
 # grid = (rows/4, n_used). Launch i reads expert slab meta[i] and writes column
 # meta[coloff + i] of y. It reads the same column of x, or column
 # meta[xcoloff + i] when xcoloff > 0, which lets a prompt's (token, expert)
 # pairs each read their token's activation. When x has one column it is shared.
+
+# log2 of the number of 32-value activation blocks in one ggml block of type
+# K. Superblock types hold 256 values (8 blocks); IQ4_NL is one 32-value block;
+# Q2_0 holds 64 values, two blocks.
+_eq_sub_shift(::Val) = 3
+_eq_sub_shift(::Val{:iq4_nl}) = 0
+_eq_sub_shift(::Val{:q2_0}) = 1
 
 function _cuda_eqgemv_kernel!(
     y,
@@ -477,7 +553,7 @@ function _cuda_eqgemv_kernel!(
             acc += _eq_block(
                 Val{K}(),
                 Q,
-                rowoff + (b >> 3) * bsz,
+                rowoff + (b >> _eq_sub_shift(Val{K}())) * bsz,
                 b,
                 gbase + b,
                 qx,
@@ -564,6 +640,8 @@ const _CUDA_QGEMV_TYPES = (
     Gesso.Inference.GGML_TYPE_Q2_K,
     Gesso.Inference.GGML_TYPE_Q3_K,
     Gesso.Inference.GGML_TYPE_Q4_K,
+    Gesso.Inference.GGML_TYPE_IQ4_NL,
+    Gesso.Inference.GGML_TYPE_Q2_0,
 )
 
 function _cuda_launch_qgemv!(
@@ -642,6 +720,12 @@ function _cuda_launch_qgemv!(
         _cuda_eqgemv_launch!(Val(:q3_k), 110, tables.kv4, args...)
     elseif ggml_type == I.GGML_TYPE_Q4_K
         _cuda_eqgemv_launch!(Val(:q4_k), 144, tables.kv4, args...)
+    elseif ggml_type == I.GGML_TYPE_IQ4_NL
+        ne0 % 32 == 0 || error("cuda qgemv: IQ4_NL rows need a multiple of 32 values")
+        _cuda_eqgemv_launch!(Val(:iq4_nl), 18, tables.kv4, args...)
+    elseif ggml_type == I.GGML_TYPE_Q2_0
+        ne0 % 64 == 0 || error("cuda qgemv: Q2_0 rows need a multiple of 64 values")
+        _cuda_eqgemv_launch!(Val(:q2_0), 18, tables.kv4, args...)
     else
         _cuda_eqgemv_launch!(Val(:iq4_xs), 136, tables.kv4, args...)
     end
@@ -679,7 +763,7 @@ end
         ne1,
         nbk,
         bsz,
-        (nbk ÷ 8) * bsz,
+        (nbk >> _eq_sub_shift(vk)) * bsz,
         alpha,
         beta,
         vk,
