@@ -4,11 +4,16 @@ Every `GESSO_*` variable the code, tests and benchmarks mention. This file is ge
 `julia scripts/env-vars.jl` and checked in CI, so do not edit it by hand. The default and
 meaning of each variable are documented where it is read.
 
+Backend variables. `GESSO_BACKEND` picks the backend for the scripts and the chat
+server. It is `lava` when unset, the GPU default. `cpu` is the correctness oracle.
+`cuda` is an optional comparator and runs only when asked for. A variable listed
+only with `ext/cuda_*` files applies to the CUDA path. New GPU work goes into Lava.
+
 | Variable | Mentioned in |
 |---|---|
 | `GESSO_27B_NEW` | `scripts/gen_qwen38_27b.jl` |
 | `GESSO_27B_PROMPT` | `scripts/bench_qwen38_27b.jl`, `scripts/gen_qwen38_27b.jl` |
-| `GESSO_BACKEND` | `scripts/bench_35b.jl`, `scripts/gate_35b.jl`, `scripts/gesso-serve.jl`, `scripts/julia_runtime/ttft_probe.jl`, `scripts/profile_35b.jl`, `scripts/routing_trace_35b.jl`, `scripts/stress_ornith_lava.jl` |
+| `GESSO_BACKEND` | `scripts/bench_35b.jl`, `scripts/env-vars.jl`, `scripts/gate_35b.jl`, `scripts/gesso-serve.jl`, `scripts/julia_runtime/ttft_probe.jl`, `scripts/profile_35b.jl`, `scripts/routing_trace_35b.jl`, `scripts/stress_ornith_lava.jl` |
 | `GESSO_BEAN_BACKOFF` | `scripts/saluki_combo_bench.jl` |
 | `GESSO_BEAN_GGUF` | `scripts/saluki_bean_bench.jl`, `scripts/saluki_combo_bench.jl`, `scripts/saluki_window_oracle.jl` |
 | `GESSO_BEAN_SELFTEST` | `scripts/saluki_bean_bench.jl` |
