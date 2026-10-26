@@ -133,10 +133,12 @@ const _GGML_KNOWN_BLOCKS = Dict{Int32, Tuple{Int, Int}}(
     17 => (256, 74),    # IQ2_XS
     18 => (256, 98),    # IQ3_XXS
     19 => (256, 50),    # IQ1_S
+    20 => (32, 18),     # IQ4_NL
     21 => (256, 110),   # IQ3_S
     22 => (256, 82),    # IQ2_S
     23 => (256, 136),   # IQ4_XS
     29 => (256, 56),    # IQ1_M
+    42 => (64, 18),     # Q2_0
 )
 
 # Throws unless the traits read for `ggml_type` are plausible: equal to Gesso's
