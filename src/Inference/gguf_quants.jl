@@ -17,11 +17,13 @@ const GGML_TYPE_IQ4_XS = Int32(23)
 const GGML_TYPE_IQ1_M = Int32(29)
 const GGML_TYPE_Q4_0 = Int32(2)
 const GGML_TYPE_Q8_0 = Int32(8)
+const GGML_TYPE_IQ4_NL = Int32(20)
 const GGML_TYPE_Q2_K = Int32(10)
 const GGML_TYPE_Q3_K = Int32(11)
 const GGML_TYPE_Q4_K = Int32(12)
 const GGML_TYPE_Q5_K = Int32(13)
 const GGML_TYPE_Q6_K = Int32(14)
+const GGML_TYPE_Q2_0 = Int32(42)
 
 """
 GPU-resident packed quantized expert bank. `data` is `n_exp * bytes_per_expert`
@@ -56,6 +58,8 @@ function _iq_block_bytes(ggml_type::Int32)
     ggml_type == GGML_TYPE_IQ2_S && return 82
     ggml_type == GGML_TYPE_IQ3_S && return 110
     ggml_type == GGML_TYPE_IQ1_M && return 56
+    ggml_type == GGML_TYPE_IQ4_NL && return 18
+    ggml_type == GGML_TYPE_Q2_0 && return 18
     # K-quants, Q8_0 and Q4_0 (quant_cpu_kquants.jl). Q8_0 and Q4_0 blocks hold
     # 32 values, not QK_K; _qrow_bytes handles that.
     ggml_type == GGML_TYPE_Q2_K && return 84
@@ -270,6 +274,66 @@ function _qgemv_iq4_xs!(
     return y
 end
 
+function _qgemv_iq4_nl!(
+    y::AbstractVector{Float32},
+    x::AbstractVector{Float32},
+    q,
+    ne0::Int,
+    ne1::Int,
+    alpha::Float32,
+    beta::Float32,
+)
+    nb = div(ne0, 32)
+    bsz = 18
+    @inbounds for j in 1:ne1
+        acc = zero(Float32)
+        col = (j - 1) * nb * bsz
+        for ib in 0:(nb-1)
+            boff = col + ib * bsz
+            d = _ld_f16(q, boff)
+            xoff = ib * 32
+            for t in 0:15
+                qs = _ld_u8(q, boff + 2 + t)
+                acc += d * Float32(KVALUES_IQ4NL[(qs&0x0f)+0x01]) * x[xoff+t+1]
+                acc += d * Float32(KVALUES_IQ4NL[(qs>>4)+0x01]) * x[xoff+t+17]
+            end
+        end
+        y[j] = alpha * acc + (beta == 0.0f0 ? 0.0f0 : beta * y[j])
+    end
+    return y
+end
+
+# Q2_0: element t of a 64-value block is the 2-bit code (qs[t>>2] >> 2(t&3)) & 3,
+# valued (code - 1) * d.
+function _qgemv_q2_0!(
+    y::AbstractVector{Float32},
+    x::AbstractVector{Float32},
+    q,
+    ne0::Int,
+    ne1::Int,
+    alpha::Float32,
+    beta::Float32,
+)
+    nb = div(ne0, 64)
+    bsz = 18
+    @inbounds for j in 1:ne1
+        acc = zero(Float32)
+        col = (j - 1) * nb * bsz
+        for ib in 0:(nb-1)
+            boff = col + ib * bsz
+            d = _ld_f16(q, boff)
+            xoff = ib * 64
+            for t in 0:63
+                qs = Int(_ld_u8(q, boff + 2 + (t >> 2)))
+                code = (qs >> (2 * (t & 3))) & 0x3
+                acc += d * Float32(code - 1) * x[xoff+t+1]
+            end
+        end
+        y[j] = alpha * acc + (beta == 0.0f0 ? 0.0f0 : beta * y[j])
+    end
+    return y
+end
+
 function _qgemv_bytes!(
     y::AbstractVector{Float32},
     x::AbstractVector{Float32},
@@ -290,6 +354,10 @@ function _qgemv_bytes!(
         return _qgemv_iq3_xxs!(y, x, q, ne0, ne1, alpha, beta)
     elseif ggml_type == GGML_TYPE_IQ4_XS
         return _qgemv_iq4_xs!(y, x, q, ne0, ne1, alpha, beta)
+    elseif ggml_type == GGML_TYPE_IQ4_NL
+        return _qgemv_iq4_nl!(y, x, q, ne0, ne1, alpha, beta)
+    elseif ggml_type == GGML_TYPE_Q2_0
+        return _qgemv_q2_0!(y, x, q, ne0, ne1, alpha, beta)
     elseif _q8k_supported_type(ggml_type)
         # K-quants, Q8_0 and the IQ2_XXS / IQ2_S / IQ3_S / IQ1_S / IQ1_M formats: the native
         # integer kernels against a Q8_K (Q8_0) quantization of x. Single
@@ -399,6 +467,8 @@ end
 
 function _qrow_bytes(ggml_type::Int32, ne0::Int)
     ggml_type == GGML_TYPE_F32 && return ne0 * 4
+    ggml_type == GGML_TYPE_IQ4_NL && return div(ne0, 32) * 18
+    ggml_type == GGML_TYPE_Q2_0 && return div(ne0, 64) * 18
     _q80_act_type(ggml_type) && return div(ne0, 32) * _iq_block_bytes(ggml_type)
     return div(ne0, QK_K) * _iq_block_bytes(ggml_type)
 end
