@@ -857,6 +857,174 @@ else
         end
     end
 
+    @testset "cuda device MoE layer with mixed Flash-Next types matches CPU" begin
+        # Gate and up share one IQ2/IQ3 type, down is IQ4_NL or Q2_0, and every
+        # expert is routed so each expert's scales reach the output. The CPU
+        # reference decodes the same bytes; the device rounds activations to
+        # int8, so the tolerance is relative to the output's largest magnitude.
+        ext = Base.get_extension(Gesso, :GessoCUDAExt)
+        rng = deterministic_rng(91)
+        n_exp, n_used, h, ff = 4, 4, 256, 512
+        tol = 2.0e-2
+        layer_cases = (
+            (
+                Inf_.GGML_TYPE_IQ2_XXS,
+                66,
+                256,
+                Inf_.GGML_TYPE_IQ4_NL,
+                18,
+                32,
+                "IQ2_XXS gate/up, IQ4_NL down",
+            ),
+            (
+                Inf_.GGML_TYPE_IQ2_S,
+                82,
+                256,
+                Inf_.GGML_TYPE_Q2_0,
+                18,
+                64,
+                "IQ2_S gate/up, Q2_0 down",
+            ),
+            (
+                Inf_.GGML_TYPE_IQ3_S,
+                110,
+                256,
+                Inf_.GGML_TYPE_IQ4_NL,
+                18,
+                32,
+                "IQ3_S gate/up, IQ4_NL down",
+            ),
+        )
+
+        # Payload bytes are random; each block's fp16 scale is written as a
+        # valid value so the reference is finite and meaningful.
+        function synth_host(ggml_type, bsz::Int, blck::Int, ne0::Int, ne1::Int)
+            nb = div(ne0, blck)
+            bpe = ne1 * nb * bsz
+            data = rand(rng, UInt8, n_exp * bpe)
+            for e in 0:(n_exp-1), r in 0:(ne1-1), b in 0:(nb-1)
+                base = e * bpe + (r * nb + b) * bsz
+                v = Float16((rand(rng) < 0.5 ? -1 : 1) * (0.01 + 0.05 * rand(rng)))
+                data[(base+1):(base+2)] .= reinterpret(UInt8, [v])
+            end
+            return Gesso.GgufQuantSlice(
+                data,
+                0,
+                ggml_type,
+                n_exp,
+                ne0,
+                ne1,
+                bpe,
+                C_NULL,
+                Int64(blck),
+            )
+        end
+
+        # Device copy of a host layer. With `factor` != 1 the block scales of
+        # expert `expert` are multiplied, which is the negative control.
+        function to_device(host, bsz::Int; expert::Int=0, factor::Float32=1.0f0)
+            parts = Vector{UInt8}[]
+            for e in 1:host.n_exp
+                b = copy(Vector{UInt8}(Inf_._quant_expert_bytes(host, e)))
+                if e == expert
+                    for s in 0:bsz:(length(b)-bsz)
+                        bits = UInt16(b[s+1]) | (UInt16(b[s+2]) << 8)
+                        nbits = reinterpret(
+                            UInt16,
+                            Float16(Float32(reinterpret(Float16, bits)) * factor),
+                        )
+                        b[s+1] = UInt8(nbits & 0xff)
+                        b[s+2] = UInt8(nbits >> 8)
+                    end
+                end
+                push!(parts, b)
+            end
+            return Gesso.GpuQuantSlice(
+                CuArray{UInt8}(vcat(parts...)),
+                host.ggml_type,
+                host.n_exp,
+                host.ne0,
+                host.ne1,
+                host.bytes_per_expert,
+                host.blck_size,
+            )
+        end
+
+        function cpu_layer(x, router, gate, up, down)
+            y = zeros(Float32, size(x, 1), h)
+            Inf_._moe_topk_swiglu!(cpu, y, x, router, gate, up, down, n_used)
+            return y
+        end
+
+        function rel_err(y_dev, y_ref)
+            return maximum(abs, Array(y_dev) .- y_ref) / maximum(abs, y_ref)
+        end
+
+        for (gtype, gbsz, gblck, dtype, dbsz, dblck, label) in layer_cases
+            gate = synth_host(gtype, gbsz, gblck, h, ff)
+            up = synth_host(gtype, gbsz, gblck, h, ff)
+            down = synth_host(dtype, dbsz, dblck, ff, h)
+            router = 0.05f0 .* randn(rng, Float32, n_exp, h)
+            router_d = CuArray(router)
+            gd = to_device(gate, gbsz)
+            ud = to_device(up, gbsz)
+            dd = to_device(down, dbsz)
+            @test ext._hot_supported(gd, ud, dd)
+
+            for seq in (1, 5)
+                x = randn(rng, Float32, seq, h)
+                y_ref = cpu_layer(x, router, gate, up, down)
+                y_dev = CUDA.fill(NaN32, seq, h)
+                Inf_._moe_topk_swiglu!(
+                    cuda,
+                    y_dev,
+                    CuArray(x),
+                    router_d,
+                    gd,
+                    ud,
+                    dd,
+                    n_used,
+                )
+                rel = rel_err(y_dev, y_ref)
+                @test rel <= tol
+                seq > 1 && @test ext._moe_device_prefill_ok(
+                    y_dev,
+                    CuArray(x),
+                    router_d,
+                    gd,
+                    ud,
+                    dd,
+                    n_used,
+                )
+                @info "cuda mixed-type MoE layer" case = label seq max_rel_err = rel
+            end
+
+            # negative control: one expert's scale off by 8x must leave tolerance
+            x = randn(rng, Float32, 5, h)
+            y_ref = cpu_layer(x, router, gate, up, down)
+            for (gb, db, which) in (
+                (to_device(gate, gbsz; expert=2, factor=8.0f0), dd, "gate expert 2"),
+                (gd, to_device(down, dbsz; expert=3, factor=8.0f0), "down expert 3"),
+            )
+                y_bad = CUDA.fill(NaN32, 5, h)
+                Inf_._moe_topk_swiglu!(
+                    cuda,
+                    y_bad,
+                    CuArray(x),
+                    router_d,
+                    gb,
+                    ud,
+                    db,
+                    n_used,
+                )
+                rel_bad = rel_err(y_bad, y_ref)
+                @test rel_bad > tol
+                @info "cuda mixed-type MoE negative control" case = label corrupted = which max_rel_err =
+                    rel_bad
+            end
+        end
+    end
+
     @testset "cuda synthetic MoE block greedy ids match CPU F32" begin
         h, nh, nkv, hd, vocab = 8, 2, 2, 4, 16
         n_exp, k, ff = 4, 2, 8
