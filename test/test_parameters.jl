@@ -77,3 +77,12 @@ end
     @test !isdefined(Gesso, :Quantized)
     @test !isdefined(Gesso.Parameters, :Representation)
 end
+
+@testset "param_family_for: unlisted roles fall back to :projection" begin
+    I = Gesso.Inference
+    @test I.param_family_for(I.ROLE_Q) === :projection
+    @test I.param_family_for(I.ROLE_LM_HEAD) === :projection
+    @test I.param_family_for(I.ROLE_NORM_PRE_ATTN) === :frozen
+    @test I.param_family_for(I.ROLE_FINAL_NORM) === :frozen
+    @test I.param_family_for(I.ROLE_EXPERT_UP) === :expert
+end
