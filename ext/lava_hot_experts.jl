@@ -15,7 +15,10 @@
 #
 # Prefill (T > 1) keeps the all-host route: a prompt's experts are spread over
 # every row, so the pool would be a small share of the work and the fills would
-# cost more than they save. The pool serves decode only.
+# cost more than they save. The pool serves decode only, and lives only during
+# decode: each multi-row prefill pass frees it so the pass has the device to
+# itself, and the next decode token allocates it again against the memory then
+# free, refilled with the experts that scored highest.
 #
 # Hits use the device expert GEMV with F32 activations, misses the host Q8_K
 # route, so a pool changes the rounding of the output. Zero slots leave the
@@ -43,6 +46,7 @@ mutable struct _LavaHotLayer
     gate::Gesso.Inference.GgufQuantSlice
     up::Gesso.Inference.GgufQuantSlice
     down::Gesso.Inference.GgufQuantSlice
+    live::Bool                    # false until the next decode token gives it a pool
     nslots::Int
     pg::Any                       # device GpuQuantSlice per projection, nothing when nslots == 0
     pu::Any
@@ -58,6 +62,7 @@ mutable struct _LavaHotLayer
     hits::Int
     picks::Int
     tokens::Int
+    restores::Int                 # pools refilled from scores after a prefill freed them
     experts::Matrix{Int}
     wts::Matrix{Float32}
     logits::Vector{Float32}
@@ -148,50 +153,41 @@ function _lhot_register!(blocks)
     return n
 end
 
-# Creates a layer's state the first time its gate bank is seen. The budget is
-# split evenly over `nlayers` when the caller knows the count (qwen4exp), else
-# over the count `_lhot_register!` took; with neither, layers take what they
-# need in the order they are first seen.
+# Creates a layer's state the first time its gate bank is seen, then gives it
+# a pool whenever it has none: on the first decode token, and on the first one
+# after a prefill pass freed it. The budget is split evenly over `nlayers` when
+# the caller knows the count (qwen4exp), else over the count `_lhot_register!`
+# took; with neither, layers take what they need in the order they are first
+# seen.
 function _lhot_layer!(gate, up, down, nlayers::Int)
     hot = get(_LHOT, gate, nothing)
-    hot === nothing || return hot
-    I = Gesso.Inference
-    total = _lhot_budget_init!()
-    bpe = gate.bytes_per_expert + up.bytes_per_expert + down.bytes_per_expert
-    n = nlayers > 0 ? nlayers : _LHOT_NLAYERS[]
-    share = n > 0 ? min(_LHOT_LEFT[], div(total, n)) : _LHOT_LEFT[]
-    # Slot offsets into a pool stay inside Int32, as in the CUDA pool.
-    nslots = _lhot_eligible(gate, up, down) ?
-        min(gate.n_exp, div(Int(share), bpe), div(Int(typemax(Int32)), bpe)) : 0
-    pg = pu = pd = nothing
-    if nslots > 0
-        try
-            pg = _lhot_pool(gate, nslots)
-            pu = _lhot_pool(up, nslots)
-            pd = _lhot_pool(down, nslots)
-        catch err
-            @warn "lava hot experts: pool allocation failed, this layer stays on the host" layer=objectid(gate) nslots exception=err
-            nslots = 0
-            pg = pu = pd = nothing
-        end
+    if hot === nothing
+        hot = _lhot_state(gate, up, down)
+        _LHOT[gate] = hot
     end
+    hot.live || _lhot_alloc!(hot, nlayers)
+    return hot
+end
+
+function _lhot_state(gate, up, down)
     nexp = gate.n_exp
     h = gate.ne0
-    ff = gate.ne1
-    hot = _LavaHotLayer(
+    return _LavaHotLayer(
         length(_LHOT) + 1,
         gate,
         up,
         down,
-        nslots,
-        pg,
-        pu,
-        pd,
+        false,
+        0,
+        nothing,
+        nothing,
+        nothing,
         zeros(Int, nexp),
-        zeros(Int, nslots),
-        collect(nslots:-1:1),
+        Int[],
+        Int[],
         zeros(Float32, nexp),
         zeros(Int, nexp),
+        0,
         0,
         0,
         0,
@@ -209,10 +205,88 @@ function _lhot_layer!(gate, up, down, nlayers::Int)
         Vector{Float32}(undef, h),
         Vector{Float32}(undef, h),
     )
+end
+
+function _lhot_alloc!(hot::_LavaHotLayer, nlayers::Int)
+    gate, up, down = hot.gate, hot.up, hot.down
+    total = _lhot_budget_init!()
+    bpe = gate.bytes_per_expert + up.bytes_per_expert + down.bytes_per_expert
+    n = nlayers > 0 ? nlayers : _LHOT_NLAYERS[]
+    share = n > 0 ? min(_LHOT_LEFT[], div(total, n)) : _LHOT_LEFT[]
+    # Slot offsets into a pool stay inside Int32, as in the CUDA pool.
+    nslots = _lhot_eligible(gate, up, down) ?
+        min(gate.n_exp, div(Int(share), bpe), div(Int(typemax(Int32)), bpe)) : 0
+    pg = pu = pd = nothing
+    if nslots > 0
+        try
+            pg = _lhot_pool(gate, nslots)
+            pu = _lhot_pool(up, nslots)
+            pd = _lhot_pool(down, nslots)
+        catch err
+            @warn "lava hot experts: pool allocation failed, this layer stays on the host" layer=hot.id nslots exception=err
+            for p in (pg, pu, pd)
+                p === nothing || Lava.unsafe_free!(p.data)
+            end
+            nslots = 0
+            pg = pu = pd = nothing
+        end
+    end
+    hot.nslots = nslots
+    hot.pg, hot.pu, hot.pd = pg, pu, pd
+    fill!(hot.slot_of, 0)
+    hot.expert_in = zeros(Int, nslots)
+    hot.free = collect(nslots:-1:1)
+    hot.live = true
     _LHOT_LEFT[] -= Int64(nslots) * bpe
-    _LHOT[gate] = hot
+    nslots > 0 && _lhot_restore!(hot)
     return hot
 end
+
+# Refills a fresh pool with the experts that scored highest before the last
+# prefill freed it, so decode does not start cold. Scores survive a suspend;
+# on a layer's first pool every score is zero and nothing is copied.
+function _lhot_restore!(hot::_LavaHotLayer)
+    nexp = length(hot.score)
+    v = Float32[_lhot_score(hot, e) for e in 1:nexp]
+    k = 0
+    for e in partialsortperm(v, 1:min(hot.nslots, nexp); rev=true)
+        v[e] > 0.0f0 || break
+        slot = pop!(hot.free)
+        _lhot_fill!(hot, slot, e)
+        hot.expert_in[slot] = e
+        hot.slot_of[e] = slot
+        k += 1
+    end
+    k > 0 && (hot.restores += 1)
+    return k
+end
+
+# Frees every layer's pool and gives the empty blocks back to the driver. A
+# multi-row prefill pass calls it first: its activations grow with the pass,
+# and a pool sized at an earlier decode token, after a shorter prefill, leaves
+# a longer one too little room. Scores are kept for the restore.
+function _lhot_suspend!()
+    any(h -> h.live && h.nslots > 0, values(_LHOT)) || return false
+    # A decode token's hit GEMVs may still be queued against the pools.
+    KA.synchronize(KALava())
+    for hot in values(_LHOT)
+        for p in (hot.pg, hot.pu, hot.pd)
+            p === nothing || Lava.unsafe_free!(p.data)
+        end
+        hot.pg = hot.pu = hot.pd = nothing
+        hot.nslots = 0
+        fill!(hot.slot_of, 0)
+        hot.expert_in = Int[]
+        hot.free = Int[]
+        hot.live = false
+    end
+    _LHOT_BUDGET[] = -1
+    _LHOT_LEFT[] = 0
+    Lava.trim_gpu_pool!()
+    return true
+end
+
+Gesso.Inference._backend_prefill_pass!(::LavaBackend, n::Int) = (n > 1 && _lhot_suspend!(); nothing)
 
 # Whether this token takes the device pool: decode only, every bank a host
 # GgufQuantSlice, and a layer with at least one slot. Creates the layer state.
@@ -419,6 +493,7 @@ function lava_hot_experts_stats()
             hits=l.hits,
             fills=l.fills,
             evictions=l.evictions,
+            restores=l.restores,
             hit_rate=l.picks == 0 ? 0.0 : l.hits / l.picks,
         ) for l in layers
     ]
@@ -431,7 +506,7 @@ function release_lava_hot_experts!()
         for s in lava_hot_experts_stats()
             println(stderr, "lava hot experts layer $(s.layer): slots=$(s.slots) tokens=$(s.tokens) " *
                 "picks=$(s.picks) hits=$(s.hits) hit_rate=$(round(s.hit_rate; digits=3)) " *
-                "fills=$(s.fills) evictions=$(s.evictions)")
+                "fills=$(s.fills) evictions=$(s.evictions) restores=$(s.restores)")
         end
     end
     empty!(_LHOT)

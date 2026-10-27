@@ -366,4 +366,53 @@ else
             @test _HOT_EXT._LHOT_NLAYERS[] == 2
         end
     end
+
+    @testset "a prefill pass frees the pool and decode restores the hottest experts" begin
+        lava = Gesso.LavaBackend()
+        _hot_with(4) do
+            layer = _HOT_EXT._lhot_layer!(gate, up, down, 0)
+            for f in 1:5
+                _hot_decode(gate, up, down, R, _hot_onehot(f))
+            end
+            @test Set(layer.expert_in) == Set((5, 6))
+            score = copy(layer.score)
+
+            # A one-row pass is a decode token's shape and keeps the pool.
+            _HOT_INF._backend_prefill_pass!(lava, 1)
+            @test layer.live && layer.nslots == 2 && layer.pg !== nothing
+
+            _HOT_INF._backend_prefill_pass!(lava, 8)
+            @test !layer.live
+            @test layer.nslots == 0
+            @test layer.pg === nothing && layer.pu === nothing && layer.pd === nothing
+            @test all(==(0), layer.slot_of)
+            @test _HOT_EXT._LHOT_BUDGET[] == -1
+            @test layer.score == score
+            @test !_HOT_EXT._lhot_suspend!()
+
+            # The next decode token gets a pool back, holding 5 and 6 byte for byte.
+            @test _HOT_EXT._lhot_wants(_hot_onehot(7), gate, up, down, 0)
+            @test layer.live && layer.nslots == 2
+            @test layer.restores == 1
+            @test Set(layer.expert_in) == Set((5, 6))
+            for (s, e) in enumerate(layer.expert_in)
+                @test layer.slot_of[e] == s
+                for (pool, bank) in ((layer.pg, gate), (layer.pu, up), (layer.pd, down))
+                    b = bank.bytes_per_expert
+                    off = _HOT_INF._quant_expert_off0(bank, e)
+                    @test Array(pool.data)[((s - 1) * b + 1):(s * b)] == bank.data[(off + 1):(off + b)]
+                end
+            end
+
+            # Both picks hit at once, with no fill, and the output holds.
+            hits, fills = layer.hits, layer.fills
+            xrow = _hot_onehot(7)
+            y = _hot_decode(gate, up, down, R, xrow)
+            ord, w = _hot_route_ref(R, xrow)
+            ref = _hot_ref(Wg, Wu, Wd, xrow, ord, w)
+            @test maximum(abs, y[1, :] .- ref) <= _hot_tol(ref)
+            @test layer.hits == hits + 2
+            @test layer.fills == fills
+        end
+    end
 end

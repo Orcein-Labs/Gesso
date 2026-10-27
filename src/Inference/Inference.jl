@@ -170,6 +170,7 @@ function reference_prefill(
     cpu = backend
     wl = PrefillWorkload()
     seq = length(tokens)
+    _backend_prefill_pass!(cpu, seq)
     dim = model.embedding.dim
     n_heads = model.blocks[1].attention.n_heads
     n_kv_heads = model.blocks[1].attention.n_kv_heads
@@ -1346,6 +1347,11 @@ function _prefill_chunk(P::Int)
     return c <= 0 ? P : min(c, P)
 end
 
+# Called before each prefill pass with its row count. A backend that keeps
+# decode-only device state (the Lava hot-experts pools) gives the memory back
+# here, so a pass has the device to itself.
+_backend_prefill_pass!(::AbstractGessoBackend, ::Int) = nothing
+
 # GESSO_PREFILL_WINDOW=0 keeps the per-row prefill for A/B timing and oracle checks.
 _prefill_window_enabled() = get(ENV, "GESSO_PREFILL_WINDOW", "1") != "0"
 
@@ -1787,6 +1793,7 @@ function reference_generate(
             ckpt_at > s1 && (lim = min(lim, ckpt_at))
             s1 += _prefill_pass_rows(cpu, lim - s1, s1, chunk, qdim, group)
             n = s1 - s0 + 1
+            _backend_prefill_pass!(cpu, n)
             ptok = _prefill_pass_begin(cpu, s0, n, P)
             if win_ok
                 # CPU hybrid prefill is the verify window's T-row forward: one
