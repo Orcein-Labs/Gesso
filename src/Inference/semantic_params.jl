@@ -144,7 +144,7 @@ _role_family(::Val{Symbol("ffn.shared.gate_inp")}) = :frozen
 _role_family(::Val{Symbol("ffn.experts.gate")}) = :expert
 _role_family(::Val{Symbol("ffn.experts.up")}) = :expert
 _role_family(::Val{Symbol("ffn.experts.down")}) = :expert
-_role_family(role::Symbol) = :projection
+_role_family(::Val) = :projection
 
 param_family_for(role::Symbol) = _role_family(Val(role))
 
