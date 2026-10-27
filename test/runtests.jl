@@ -233,6 +233,7 @@ using Gesso: reference_prefill, reference_generate
     # IQ2_XXS, IQ2_S and IQ3_S as expert banks; host F64 reference with
     # negative controls.
     include("test_lava_quant_flash_next.jl")
+    include("test_lava_quant_kexperts.jl")
 
     # Hot host experts: per-layer device pools for decode. Zero-slot bit identity
     # with the host route, full and partial pools against F64 and a residency
