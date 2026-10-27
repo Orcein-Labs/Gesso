@@ -158,6 +158,10 @@ include("lava_attention.jl")
 # ops, and the host-expert MoE route. Needs lava_ops.jl for the device helpers.
 include("lava_hybrid.jl")
 
+# qwen4exp (Flash-Next) device forward: GDN, dense gated attention, PLE and
+# hyper-connections on Lava, with host experts.
+include("lava_qwen4exp.jl")
+
 # Bind the backend into the package's namespace: after this ext triggers,
 # `Gesso.LavaBackend` resolves to the type defined HERE — while a Lava-less
 # load of core leaves the name entirely absent (both directions are pinned

@@ -215,6 +215,7 @@ const _LH_RED_LANES = 64
     nv::Int,
     dv::Int,
     eps::Float32,
+    sigmoid::Bool,
 )
     tl = @index(Local, Linear)
     gi = @index(Group, Linear)
@@ -237,7 +238,8 @@ const _LH_RED_LANES = 64
     base = (hh - 1) * dv
     for j in tl:_LH_RED_LANES:dv
         zv = z[t, base+j]
-        merged[t, base+j] = (core[t, hh, j] * inv) * norm_w[j] * (zv / (1.0f0 + exp(-zv)))
+        gate = sigmoid ? 1.0f0 / (1.0f0 + exp(-zv)) : zv / (1.0f0 + exp(-zv))
+        merged[t, base+j] = (core[t, hh, j] * inv) * norm_w[j] * gate
     end
 end
 
@@ -260,7 +262,8 @@ function Gesso.Inference._gdn_gnorm_merge!(
         w,
         Int(nv),
         Int(dv),
-        Float32(eps);
+        Float32(eps),
+        false;
         ndrange=seq * nv * _LH_RED_LANES,
         workgroupsize=(_LH_RED_LANES,),
     )
