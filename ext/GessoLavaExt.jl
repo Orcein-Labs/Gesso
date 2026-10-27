@@ -154,6 +154,9 @@ include("lava_quant.jl")
 include("lava_ops.jl")
 include("lava_attention.jl")
 
+# Quantized KV cache on the device: the q8 write, the dense read and the q4h refusal.
+include("lava_kv_format.jl")
+
 # L2 hybrid decode seams for qwen35moe: the gated-delta-net mixer, its gating
 # ops, and the host-expert MoE route. Needs lava_ops.jl for the device helpers.
 include("lava_hybrid.jl")

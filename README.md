@@ -162,8 +162,8 @@ real-model gates are reported as named skips.
   with copy-on-write), and a receipt on every call.
 - Model support: Llama-family safetensors, and GGUF with K-quants and
   IQ-quants, including the Qwen3.5-MoE hybrid architecture.
-- KV cache formats f32, f16, q8 and q4h (`GESSO_KV_FORMAT`). CUDA defaults to
-  q8.
+- KV cache formats f32, f16, q8 and q4h (`GESSO_KV_FORMAT`). CUDA and Lava
+  default to q8.
 - Backends: CPU, the oracle. CUDA, with device argmax, GEMM attention,
   quantized expert kernels and an autotuned `matmul!`. Lava, the portable
   Vulkan path. The core package depends on neither GPU stack.

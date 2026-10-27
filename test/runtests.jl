@@ -213,6 +213,10 @@ using Gesso: reference_prefill, reference_generate
     # oracle; named skip without a device.
     include("test_lava_attention_decode.jl")
 
+    # Lava q8 KV cache: device write vs host quantizer, dense read, decode over
+    # a device q8 cache, and the q4h refusal; named skip without a device.
+    include("test_lava_kv_format.jl")
+
     # Lava single-row rmsnorm workgroup reduction vs the serial kernel it
     # replaced; named skip without a device.
     include("test_lava_rmsnorm_reduce.jl")

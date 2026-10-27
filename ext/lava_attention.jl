@@ -13,6 +13,11 @@
 #
 # Each tile costs three workgroup barriers. The cross-lane max and sum are
 # read by every lane from its own slot, so no broadcast barrier is needed.
+#
+# A q8 cache (QuantKV, see lava_kv_format.jl) is read through the same kernel:
+# its Int8 codes go in for kc/vc and its Float16 block scales for ks/vs, and
+# _lava_kv_at dequantizes each element in a register. A dense cache passes
+# itself as the scale argument, which _lava_kv_at never reads.
 
 const _LAVA_ATTN_LANES = 64
 const _LAVA_ATTN_TILE = 512
@@ -20,11 +25,17 @@ const _LAVA_ATTN_DMAX = 512
 
 import Gesso.Inference: _attention_decode_device!
 
+@inline _lava_kv_at(c, sc, u, h, j) = c[u, h, j]
+@inline _lava_kv_at(c::AbstractArray{Int8}, sc, u, h, j) =
+    Float32(c[u, h, j]) * Float32(sc[u, h, ((j-1)>>5)+1])
+
 @kernel cpu=false function _lava_attn_split_kernel!(
     part,
     q,
     kc,
+    ks,
     vc,
+    vs,
     group::Int,
     K::Int,
     scale::Float32,
@@ -59,7 +70,7 @@ import Gesso.Inference: _attention_decode_device!
             u = k0 + t0 + i
             x = Float32(0)
             for j in 1:d
-                x += sq[j] * kc[u, hk, j]
+                x += sq[j] * _lava_kv_at(kc, ks, u, hk, j)
             end
             x *= scale
             sp[i] = x
@@ -92,7 +103,7 @@ import Gesso.Inference: _attention_decode_device!
         for j in tl:_LAVA_ATTN_LANES:d
             piece = Float32(0)
             for i in 1:n
-                piece += sp[i] * vc[k0+t0+i, hk, j]
+                piece += sp[i] * _lava_kv_at(vc, vs, k0 + t0 + i, hk, j)
             end
             acc[j] = acc[j] * alpha + piece
         end
@@ -128,12 +139,25 @@ end
     end
 end
 
-function _attention_decode_device!(
+_attention_decode_device!(
     ::LavaBackend,
     attn::Lava.LavaArray,
     q::Lava.LavaArray,
     kc::Lava.LavaArray,
     vc::Lava.LavaArray,
+    n_heads::Int,
+    d_head::Int,
+    group::Int,
+    K::Int,
+) = _lava_attn_decode!(attn, q, kc, kc, vc, vc, n_heads, d_head, group, K)
+
+function _lava_attn_decode!(
+    attn::Lava.LavaArray,
+    q::Lava.LavaArray,
+    kc::Lava.LavaArray,
+    ks::Lava.LavaArray,
+    vc::Lava.LavaArray,
+    vs::Lava.LavaArray,
     n_heads::Int,
     d_head::Int,
     group::Int,
@@ -151,7 +175,9 @@ function _attention_decode_device!(
         part,
         q,
         kc,
+        ks,
         vc,
+        vs,
         Int(group),
         Int(K),
         scale,

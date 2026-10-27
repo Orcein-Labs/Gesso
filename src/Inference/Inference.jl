@@ -1915,11 +1915,11 @@ function reference_generate(
                             (
                                 Activation(;
                                     shape=(K, n_kv_heads, d_head),
-                                    storage=@view kc[bi].storage[1:K, :, :]
+                                    storage=_kv_dense(@view(kc[bi].storage[1:K, :, :]), K)
                                 ),
                                 Activation(;
                                     shape=(K, n_kv_heads, d_head),
-                                    storage=@view vc[bi].storage[1:K, :, :]
+                                    storage=_kv_dense(@view(vc[bi].storage[1:K, :, :]), K)
                                 ),
                             )
                         kv_rot = _kv_rotated(kc[bi].storage)
@@ -2585,8 +2585,8 @@ function _decode_attn_core!(
             scores = TemporaryWorkspace(; shape=(1, K), storage=zeros_like((1, K)))
             scores_out = TemporaryWorkspace(; shape=(1, K), storage=zeros_like((1, K)))
             @decode_sub :attn_kv_append cpu begin
-                kx = _repeat_heads(kc[bi], group)
-                vx = _repeat_heads(vc[bi], group)
+                kx = _repeat_heads(_kv_readable(kc[bi].storage, K), group)
+                vx = _repeat_heads(_kv_readable(vc[bi].storage, K), group)
             end
             @decode_sub :attn_core cpu _attention_heads!(
                 cpu,
