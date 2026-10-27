@@ -57,9 +57,9 @@ else
         return src
     end
 
-    @testset "q8 default is on for Lava when d_head is a whole number of blocks" begin
-        @test _kvl._kv_default_format(:lava, 64) === :q8
-        @test _kvl._kv_default_format(:lava, 256) === :q8
+    @testset "Lava defaults to f32; q8 is opt-in" begin
+        @test _kvl._kv_default_format(:lava, 64) === :f32
+        @test _kvl._kv_default_format(:lava, 256) === :f32
         @test _kvl._kv_default_format(:lava, 16) === :f32
         @test _kvl._kv_default_format(:cpu, 64) === :f32
     end
