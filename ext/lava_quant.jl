@@ -26,6 +26,8 @@ const _LQ_KIND_IQ3_S = 13
 # read as they are in the GGUF, so a BF16 weight never widens on the host.
 const _LQ_KIND_BF16 = 14
 const _LQ_KIND_F16 = 15
+const _LQ_KIND_Q2_K = 16
+const _LQ_KIND_Q3_K = 17
 
 # Entry offsets of each grid in the concatenated device tables (see _lq_tables).
 const _LQ_G2_XS = 0
@@ -72,6 +74,8 @@ function _lq_kind(t::Int32)
     t == I.GGML_TYPE_Q8_0 && return _LQ_KIND_Q8_0
     t == I.GGML_TYPE_IQ4_NL && return _LQ_KIND_IQ4_NL
     t == I.GGML_TYPE_Q2_0 && return _LQ_KIND_Q2_0
+    t == I.GGML_TYPE_Q2_K && return _LQ_KIND_Q2_K
+    t == I.GGML_TYPE_Q3_K && return _LQ_KIND_Q3_K
     t == I.GGML_TYPE_IQ2_XS && return _LQ_KIND_IQ2_XS
     t == I.GGML_TYPE_IQ3_XXS && return _LQ_KIND_IQ3_XXS
     t == I.GGML_TYPE_IQ2_XXS && return _LQ_KIND_IQ2_XXS
@@ -82,13 +86,19 @@ function _lq_kind(t::Int32)
     return nothing
 end
 
-# Expert banks cover the same types as the CUDA expert path, plus the half
-# types, which cost nothing extra: the element decoder already reads them.
+# Expert banks take the K-quants Q2_K..Q6_K as well as the IQ and half types.
+# The CUDA expert launcher has no Q5_K or Q6_K kernel, so Lava is wider there;
+# both decoders are the ones the dense path already uses.
 function _lq_expert_kind(t::Int32)
     I = Gesso.Inference
     t == I.GGML_TYPE_F32 && return _LQ_KIND_F32
     t == I.GGML_TYPE_BF16 && return _LQ_KIND_BF16
     t == I.GGML_TYPE_F16 && return _LQ_KIND_F16
+    t == I.GGML_TYPE_Q2_K && return _LQ_KIND_Q2_K
+    t == I.GGML_TYPE_Q3_K && return _LQ_KIND_Q3_K
+    t == I.GGML_TYPE_Q4_K && return _LQ_KIND_Q4_K
+    t == I.GGML_TYPE_Q5_K && return _LQ_KIND_Q5_K
+    t == I.GGML_TYPE_Q6_K && return _LQ_KIND_Q6_K
     t == I.GGML_TYPE_IQ2_XS && return _LQ_KIND_IQ2_XS
     t == I.GGML_TYPE_IQ3_XXS && return _LQ_KIND_IQ3_XXS
     t == I.GGML_TYPE_IQ4_XS && return _LQ_KIND_IQ4_XS
@@ -216,6 +226,60 @@ end
     q = (nib | (hb << 4)) - Int32(32)
     sc = Int32(reinterpret(Int8, W[b+192+8*h+(l>>4)+2*quad+1]))
     return d * Float32(sc) * Float32(q)
+end
+
+# Q2_K (84-byte superblock): scales[16] with the scale in the low nibble and the
+# min in the high nibble, qs[64] of 2-bit values, d and dmin f16 at 80 and 82.
+# Scale byte e >> 4 covers 16 values, the same index the CPU reference uses.
+@inline function _lq_q2k(W, b::Int, e::Int)
+    d = _lq_f16(W, b + 80)
+    dmin = _lq_f16(W, b + 82)
+    h = e >> 7
+    r = e & 127
+    t = r >> 5
+    l = r & 31
+    sc = _lq_u8(W, b + (e >> 4))
+    q = (_lq_u8(W, b + 16 + 32 * h + l) >> (2 * t)) & Int32(3)
+    return d * Float32(sc & Int32(15)) * Float32(q) - dmin * Float32(sc >> 4)
+end
+
+# Q3_K (110-byte superblock): hmask[32], qs[64] of 2-bit values, scales[12] of
+# packed 6-bit signed scales, d f16 at 108. A clear hmask bit subtracts 4 from
+# the 2-bit value rather than leaving it unsigned, so the bit sense is what the
+# negative control checks.
+@inline function _lq_q3k_scale(W, b::Int, i::Int)
+    m = i & 3
+    k = i >> 2
+    a0 = _lq_u8(W, b + 96 + m)
+    a1 = _lq_u8(W, b + 100 + m)
+    a2 = _lq_u8(W, b + 104 + m)
+    if k == 0
+        lo = a0 & Int32(15)
+        hi = a2 & Int32(3)
+    elseif k == 1
+        lo = a1 & Int32(15)
+        hi = (a2 >> 2) & Int32(3)
+    elseif k == 2
+        lo = a0 >> 4
+        hi = (a2 >> 4) & Int32(3)
+    else
+        lo = a1 >> 4
+        hi = (a2 >> 6) & Int32(3)
+    end
+    return (lo | (hi << 4)) - Int32(32)
+end
+
+@inline function _lq_q3k(W, b::Int, e::Int)
+    d = _lq_f16(W, b + 108)
+    h = e >> 7
+    r = e & 127
+    t = r >> 5
+    l = r & 31
+    c = 4 * h + t
+    sc = _lq_q3k_scale(W, b, e >> 4)
+    q2 = (_lq_u8(W, b + 32 + 32 * h + l) >> (2 * t)) & Int32(3)
+    hm = (_lq_u8(W, b + l) >> c) & Int32(1)
+    return d * Float32(sc) * Float32(q2 - Int32(4) * (Int32(1) - hm))
 end
 
 # IQ4_XS (136-byte superblock): d f16, 16-bit scales_h, 4 scales_l bytes, 128
@@ -388,6 +452,10 @@ end
         return _lq_q5k(W, rowoff + sb * 176, es)
     elseif kind == _LQ_KIND_Q6_K
         return _lq_q6k(W, rowoff + sb * 210, es)
+    elseif kind == _LQ_KIND_Q2_K
+        return _lq_q2k(W, rowoff + sb * 84, es)
+    elseif kind == _LQ_KIND_Q3_K
+        return _lq_q3k(W, rowoff + sb * 110, es)
     elseif kind == _LQ_KIND_IQ2_XS
         return _lq_iq2xs(W, rowoff + sb * 74, es, g2, ks)
     elseif kind == _LQ_KIND_IQ3_XXS
