@@ -674,6 +674,13 @@ function Gesso.Inference._moe_topk_swiglu!(
         Lava.submit!(KALava().dispatch_bq)
     end
     rh = _lh_host_weight(router)
+    # Decode only. A prompt spreads its picks over every row, so the pool would
+    # see few repeats and refill often; prefill keeps the all-host route below.
+    if _lhot_wants(xh, gate, up, down, 0)
+        Gesso.Inference.@decode_stage :moe_hot backend _lhot_moe_decode!(
+            y, x, xh, rh, gate, up, down, n_used)
+        return y
+    end
     yh = zeros(Float32, size(y))
     Gesso.Inference.@decode_stage :moe_host nothing Gesso.Inference._moe_topk_swiglu!(
         Gesso.CPUBackend(),

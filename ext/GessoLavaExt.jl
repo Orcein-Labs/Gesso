@@ -157,6 +157,10 @@ include("lava_attention.jl")
 # Quantized KV cache on the device: the q8 write, the dense read and the q4h refusal.
 include("lava_kv_format.jl")
 
+# Hot host experts: per-layer device pools for the routed experts that the
+# decode path runs on the GPU. Used by the hybrid and qwen4exp decode routes.
+include("lava_hot_experts.jl")
+
 # L2 hybrid decode seams for qwen35moe: the gated-delta-net mixer, its gating
 # ops, and the host-expert MoE route. Needs lava_ops.jl for the device helpers.
 include("lava_hybrid.jl")

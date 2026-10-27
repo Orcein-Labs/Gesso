@@ -1397,6 +1397,7 @@ function _lava_to_device(tensors)
         _conv_t(tensors.lm_head; proj=true)
     fr = haskey(tensors, :final_rms) ? tensors.final_rms : nothing
     final_rms = fr === nothing ? nothing : _conv_t(fr)
+    _lhot_register!(blocks)
     _lava_sync!()
     result = (; embedding, blocks, lm_head, final_rms)
     return merge(result, _keep_tensor_meta(tensors))
