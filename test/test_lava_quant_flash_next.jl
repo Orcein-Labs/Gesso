@@ -1,6 +1,6 @@
 # Flash-Next quant types on the Lava (Vulkan) backend: IQ4_NL and Q2_0, dense and
-# as expert banks. Every device GEMV is checked against the host F64 dequant times x,
-# with the bound of
+# as expert banks; IQ2_XXS, IQ2_S and IQ3_S as expert banks. Every device GEMV is
+# checked against the host F64 dequant times x, with the bound of
 # test_lava_quant.jl: |dev - ref| <= 5e-5 * sum|W x| + 1e-9. The negative control
 # doubles every block scale of the weight on the device and asserts that the same
 # bound then fails. Named skip without a Vulkan device or without GESSO_GGML_DIR
@@ -27,14 +27,20 @@ else
     const _FNQ_WL = Gesso.PrefillWorkload()
 
     # (block bytes, values per block). The f16 block scale sits at byte 0 of every
-    # block for both types.
+    # block for all five types.
     const _FNQ_LAYOUT = Dict(
         :iq4_nl => (18, 32),
         :q2_0 => (18, 64),
+        :iq2_xxs => (66, 256),
+        :iq2_s => (82, 256),
+        :iq3_s => (110, 256),
     )
     const _FNQ_TYPE = Dict(
         :iq4_nl => _FNQ_INF.GGML_TYPE_IQ4_NL,
         :q2_0 => _FNQ_INF.GGML_TYPE_Q2_0,
+        :iq2_xxs => _FNQ_INF.GGML_TYPE_IQ2_XXS,
+        :iq2_s => _FNQ_INF.GGML_TYPE_IQ2_S,
+        :iq3_s => _FNQ_INF.GGML_TYPE_IQ3_S,
     )
 
     _fnq_ggml_ready() = isfile(joinpath(get(ENV, "GESSO_GGML_DIR", ""), "libggml-base.so"))
@@ -216,7 +222,7 @@ else
 
     @testset "Flash-Next expert GEMV: device bank vs host dequant" begin
         rng = MersenneTwister(20261028)
-        for kind in (:iq4_nl, :q2_0)
+        for kind in (:iq4_nl, :q2_0, :iq2_xxs, :iq2_s, :iq3_s)
             @testset "$kind" begin
                 k = 512
                 nrows = 37
@@ -257,6 +263,9 @@ else
             for (kind, t) in (
                 (:iq4_nl, _FNQ_INF.GGML_TYPE_IQ4_NL),
                 (:q2_0, _FNQ_INF.GGML_TYPE_Q2_0),
+                (:iq2_xxs, _FNQ_INF.GGML_TYPE_IQ2_XXS),
+                (:iq2_s, _FNQ_INF.GGML_TYPE_IQ2_S),
+                (:iq3_s, _FNQ_INF.GGML_TYPE_IQ3_S),
             )
                 @testset "$kind" begin
                     i = findfirst(
