@@ -124,11 +124,15 @@ execution_tier(::LavaBackend) = 1   # OPTIMIZED_GENERIC (§XXI)
 backend_name(::Type{LavaBackend}) = :lava
 execution_tier(::Type{LavaBackend}) = 1
 
-# Same capability coverage as the CPU reference: the six implemented ops.
-# :quantize / :dequantize stay false (Representation-phase concern), and
+# The semantic vocabulary (see backends.jl) that Lava runs. import_report reads
+# this set, so a missing entry tells the user Lava cannot load a model it does
+# run. :quantize / :dequantize stay false (Representation-phase concern), and
 # unknown capabilities stay false — probing is always safe (§XX).
-# BREADTH-1: the semantic vocabulary (see backends.jl). Like CUDA, Lava's
-# `rope!` uses the explicit frequency table for ordinary linear/Llama3 policies.
+# Like CUDA, Lava's `rope!` uses the explicit frequency table for ordinary
+# linear/Llama3 policies. :mrope means what it means on the CPU and CUDA: text
+# positions, where the sectioned table equals the plain one. The qwen3_5 and
+# qwen3_5_moe entries are covered by test_lava_hybrid.jl and the 35B runs; the
+# spark2_5 entries by test_lava_spark25.jl.
 const LAVA_SUPPORTED_CAPS = Set([
     :rmsnorm,
     :attention,
@@ -140,6 +144,15 @@ const LAVA_SUPPORTED_CAPS = Set([
     :rope_linear,
     :rope_llama3,
     :rope_partial_dim,
+    :rope_interleaved,
+    :mrope,
+    :qk_norm,
+    :attn_output_gate,
+    :linear_attention,
+    :moe_routing,
+    :geglu_ffn,
+    :attn_head_gate,
+    :sliding_window_attention,
 ])
 
 supports(::LavaBackend, cap::Symbol) = cap in LAVA_SUPPORTED_CAPS
