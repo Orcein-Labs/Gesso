@@ -41,6 +41,8 @@ end
 function Gesso.Inference.qwen4exp_device(::LavaBackend, m::Gesso.Inference.Qwen4expModel)
     cfg = m.cfg
     freq = Float32[cfg.rope_base^(-2 * i / cfg.n_rot) for i in 0:(cfg.n_rot÷2-1)]
+    # Pools are keyed by the previous model's banks; its layer count does not apply.
+    _lhot_register!(())
     return LavaQwen4exp(m, Dict{String,Any}(), Lava.LavaArray{Float32}(freq), Ref(Int64(0)))
 end
 
@@ -603,11 +605,19 @@ function _q4x_dev_ffn(dm::LavaQwen4exp, il::Int, x, taps)
     T, NE = size(x)
     router = Gesso.Inference._q4x_w(m, p * "ffn_gate_inp.weight")
     xh = Array(x)
-    moe_h = zeros(Float32, T, NE)
-    Gesso.Inference._q4x_moe!(moe_h, xh, router, Gesso.Inference._q4x_w(m, p * "ffn_gate_exps.weight"),
-        Gesso.Inference._q4x_w(m, p * "ffn_up_exps.weight"),
-        Gesso.Inference._q4x_w(m, p * "ffn_down_exps.weight"), cfg.n_used)
-    moe = Lava.LavaArray{Float32}(moe_h)
+    ge = Gesso.Inference._q4x_w(m, p * "ffn_gate_exps.weight")
+    ue = Gesso.Inference._q4x_w(m, p * "ffn_up_exps.weight")
+    de = Gesso.Inference._q4x_w(m, p * "ffn_down_exps.weight")
+    # Decode only: prefill keeps the all-host route, since a prompt's picks
+    # spread over every row and the pool would refill more than it hits.
+    if _lhot_wants(xh, ge, ue, de, cfg.n_layer)
+        moe = Lava.LavaArray{Float32}(undef, T, NE)
+        _lhot_moe_decode!(moe, x, xh, router, ge, ue, de, cfg.n_used)
+    else
+        moe_h = zeros(Float32, T, NE)
+        Gesso.Inference._q4x_moe!(moe_h, xh, router, ge, ue, de, cfg.n_used)
+        moe = Lava.LavaArray{Float32}(moe_h)
+    end
     gs = _q4x_dmm(dm, x, p * "ffn_gate_shexp.weight")
     us = _q4x_dmm(dm, x, p * "ffn_up_shexp.weight")
     act = Lava.LavaArray{Float32}(undef, size(gs)...)

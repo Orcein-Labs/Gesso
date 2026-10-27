@@ -1128,6 +1128,38 @@ function _cpu_moe_topk_swiglu_gguf!(
     return y
 end
 
+# One token's top-k routing: softmax over the router logits, then the top
+# n_used experts renormalised. Shared by the batched host route and the device
+# hot-expert route, so both select the same experts with the same weights.
+# Returns false when the token routes nothing (weights sum to zero).
+function _moe_route_token!(experts, wts, t::Int, x, router, logits, order, n_used::Int)
+    n_exp = length(logits)
+    m = _cpu_router_logits!(logits, x, t, router)
+    s = 0.0f0
+    for e in 1:n_exp
+        v = exp(logits[e] - m)
+        logits[e] = v
+        s += v
+    end
+    invs = 1.0f0 / s
+    for e in 1:n_exp
+        logits[e] *= invs
+        order[e] = e
+    end
+    sort!(order; by=e -> (-logits[e], e))
+    wsum = 0.0f0
+    for k in 1:n_used
+        wsum += logits[order[k]]
+    end
+    wsum > 0 || return false
+    invw = 1.0f0 / wsum
+    for k in 1:n_used
+        experts[k, t] = order[k]
+        wts[k, t] = logits[order[k]] * invw
+    end
+    return true
+end
+
 # Routing is the per-expert loop's, op for op, so the selected experts and
 # their weights match it exactly.
 function _cpu_moe_topk_swiglu_batched!(
@@ -1147,30 +1179,7 @@ function _cpu_moe_topk_swiglu_batched!(
     wts = Matrix{Float32}(undef, n_used, seq)
     live = fill(false, seq)
     for t in 1:seq
-        m = _cpu_router_logits!(logits, x, t, router)
-        s = 0.0f0
-        for e in 1:n_exp
-            v = exp(logits[e] - m)
-            logits[e] = v
-            s += v
-        end
-        invs = 1.0f0 / s
-        for e in 1:n_exp
-            logits[e] *= invs
-            order[e] = e
-        end
-        sort!(order; by=e -> (-logits[e], e))
-        wsum = 0.0f0
-        for k in 1:n_used
-            wsum += logits[order[k]]
-        end
-        wsum > 0 || continue
-        invw = 1.0f0 / wsum
-        live[t] = true
-        for k in 1:n_used
-            experts[k, t] = order[k]
-            wts[k, t] = logits[order[k]] * invw
-        end
+        live[t] = _moe_route_token!(experts, wts, t, x, router, logits, order, n_used)
     end
     if seq == 1
         live[1] || return y

@@ -234,6 +234,11 @@ using Gesso: reference_prefill, reference_generate
     # negative controls.
     include("test_lava_quant_flash_next.jl")
 
+    # Hot host experts: per-layer device pools for decode. Zero-slot bit identity
+    # with the host route, full and partial pools against F64 and a residency
+    # model, slot bytes, and two negative controls.
+    include("test_lava_hot_experts.jl")
+
     # Phase 8 L2: Lava hybrid seams (conv1d, GDN gates and delta rule with
     # carried state, host-storage refusal) vs the F64 CPU oracle; named skip
     # without a device.
