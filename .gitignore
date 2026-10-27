@@ -24,3 +24,6 @@ outputs(from chatgpt)/
 
 # Local scratch and handoff notes, never pushed
 /.local/
+
+# Kernel IR that vendored Lava dumps on every compile
+/vendor/tmp_kernels/
