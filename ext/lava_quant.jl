@@ -22,6 +22,10 @@ const _LQ_KIND_Q2_0 = 10
 const _LQ_KIND_IQ2_XXS = 11
 const _LQ_KIND_IQ2_S = 12
 const _LQ_KIND_IQ3_S = 13
+# Half-precision kinds have one value per element and no blocks. The bytes are
+# read as they are in the GGUF, so a BF16 weight never widens on the host.
+const _LQ_KIND_BF16 = 14
+const _LQ_KIND_F16 = 15
 
 # Entry offsets of each grid in the concatenated device tables (see _lq_tables).
 const _LQ_G2_XS = 0
@@ -68,13 +72,23 @@ function _lq_kind(t::Int32)
     t == I.GGML_TYPE_Q8_0 && return _LQ_KIND_Q8_0
     t == I.GGML_TYPE_IQ4_NL && return _LQ_KIND_IQ4_NL
     t == I.GGML_TYPE_Q2_0 && return _LQ_KIND_Q2_0
+    t == I.GGML_TYPE_IQ2_XS && return _LQ_KIND_IQ2_XS
+    t == I.GGML_TYPE_IQ3_XXS && return _LQ_KIND_IQ3_XXS
+    t == I.GGML_TYPE_IQ2_XXS && return _LQ_KIND_IQ2_XXS
+    t == I.GGML_TYPE_IQ2_S && return _LQ_KIND_IQ2_S
+    t == I.GGML_TYPE_IQ3_S && return _LQ_KIND_IQ3_S
+    t == I.GGML_TYPE_BF16 && return _LQ_KIND_BF16
+    t == I.GGML_TYPE_F16 && return _LQ_KIND_F16
     return nothing
 end
 
-# Expert banks cover the same types as the CUDA expert path.
+# Expert banks cover the same types as the CUDA expert path, plus the half
+# types, which cost nothing extra: the element decoder already reads them.
 function _lq_expert_kind(t::Int32)
     I = Gesso.Inference
     t == I.GGML_TYPE_F32 && return _LQ_KIND_F32
+    t == I.GGML_TYPE_BF16 && return _LQ_KIND_BF16
+    t == I.GGML_TYPE_F16 && return _LQ_KIND_F16
     t == I.GGML_TYPE_IQ2_XS && return _LQ_KIND_IQ2_XS
     t == I.GGML_TYPE_IQ3_XXS && return _LQ_KIND_IQ3_XXS
     t == I.GGML_TYPE_IQ4_XS && return _LQ_KIND_IQ4_XS
@@ -87,9 +101,10 @@ function _lq_expert_kind(t::Int32)
 end
 
 # Values per block for each kind: K-quant and IQ2/IQ3 superblocks hold 256,
-# Q2_0 blocks 64, Q8_0 and IQ4_NL blocks 32, and F32 is one value per element.
+# Q2_0 blocks 64, Q8_0 and IQ4_NL blocks 32. F32, BF16 and F16 are one value
+# per element, so a row of any width is a whole number of blocks.
 _lq_block_values(kind::Int) =
-    kind == _LQ_KIND_F32 ? 1 :
+    kind == _LQ_KIND_F32 || kind == _LQ_KIND_BF16 || kind == _LQ_KIND_F16 ? 1 :
     kind == _LQ_KIND_Q8_0 || kind == _LQ_KIND_IQ4_NL ? 32 :
     kind == _LQ_KIND_Q2_0 ? 64 : 256
 
@@ -353,6 +368,11 @@ end
 @inline function _lq_elem(kind::Int, W, kv, g2, g3, ks, rowoff::Int, e::Int)
     if kind == _LQ_KIND_F32
         return _lq_f32(W, rowoff + 4 * e)
+    elseif kind == _LQ_KIND_BF16
+        # BF16 is the top half of an F32, so widening is a shift, not a table.
+        return reinterpret(Float32, _lq_u16(W, rowoff + 2 * e) << 16)
+    elseif kind == _LQ_KIND_F16
+        return _lq_f16(W, rowoff + 2 * e)
     elseif kind == _LQ_KIND_Q8_0
         return _lq_q8_0(W, rowoff + (e >> 5) * 34, e)
     elseif kind == _LQ_KIND_IQ4_NL

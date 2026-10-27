@@ -329,8 +329,9 @@ else
             # keeps the rest in GGUF bytes, whose Lava kernels take F32
             # activations and so compute the same exact product. Routed expert
             # banks run on the host in both forwards; both read one exact bank.
-            # Half-precision matrices and embeddings are left as loaded: both
-            # forwards read them through the same host code.
+            # Half-precision matrices are left as loaded: the CPU widens them
+            # to F32 exactly, and Lava decodes them in the kernel against F32
+            # activations, so both sides compute the exact product.
             ref = _lq4_inf.Qwen4expModel(cfg, m.index, Dict{String,Any}())
             dev = _lq4_inf.Qwen4expModel(cfg, m.index, Dict{String,Any}())
             for name in dense
