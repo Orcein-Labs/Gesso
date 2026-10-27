@@ -221,6 +221,10 @@ using Gesso: reference_prefill, reference_generate
     # dequant) vs the host F64 reference; named skip without a device.
     include("test_lava_quant.jl")
 
+    # BF16 and F16 bytes stay on the device; IQ2_XS, IQ2_XXS, IQ2_S, IQ3_XXS and
+    # IQ3_S dense matrices use the same in-kernel decode. Host F64 reference.
+    include("test_lava_quant_half.jl")
+
     # Flash-Next quant types on Lava: IQ4_NL and Q2_0, dense and expert;
     # IQ2_XXS, IQ2_S and IQ3_S as expert banks; host F64 reference with
     # negative controls.

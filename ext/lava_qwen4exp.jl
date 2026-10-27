@@ -87,18 +87,39 @@ function _q4x_dev(dm::LavaQwen4exp, name::String)
     end
 end
 
-# A dense vector as a (1, n) row, for the shared-expert gate.
-function _q4x_dev_row(dm::LavaQwen4exp, name::String)
-    return get!(dm.dev, name * "#row") do
-        host = reshape(Float32.(Gesso.Inference._q4x_w(dm.cpu, name)), 1, :)
+# Tensors the forward reads straight from device memory, in the kernels that
+# take F32 values (norms, biases, the conv taps, ssm_a). These never reach a
+# matmul, so a half or IQ matrix stored under one of these names is widened
+# here, and the native bytes are kept only for the matmul names.
+_q4x_direct_read(name::AbstractString) =
+    endswith(name, "norm.weight") || endswith(name, "_conv1d.weight") ||
+    endswith(name, "ssm_dt.bias") || endswith(name, "ssm_a")
+
+function _q4x_dev_f32(dm::LavaQwen4exp, name::String)
+    return get!(dm.dev, name * "#f32") do
+        h = Gesso.Inference._q4x_w(dm.cpu, name)
+        host = h isa Gesso.Inference.QuantMatrix ?
+            Gesso.Inference._quant_host_f32(h) : Float32.(h)
         _q4x_budget!(dm, sizeof(host))
         Lava.LavaArray{Float32}(host)
     end
 end
 
-# Dense bytes of the layer tensors below n_layers, read before any upload:
-# quantized matrices count their device size, dense ones their host size.
-# Routed expert banks are excluded because they stay on the host.
+# A dense vector as a (1, n) row, for the shared-expert gate.
+function _q4x_dev_row(dm::LavaQwen4exp, name::String)
+    return get!(dm.dev, name * "#row") do
+        h = Gesso.Inference._q4x_w(dm.cpu, name)
+        host = reshape(h isa Gesso.Inference.QuantMatrix ?
+            Gesso.Inference._quant_host_f32(h) : Float32.(h), 1, :)
+        _q4x_budget!(dm, sizeof(host))
+        Lava.LavaArray{Float32}(host)
+    end
+end
+
+# Dense bytes of the layer tensors below n_layers, read before any upload, with
+# the size each one takes on the device: matmul matrices keep their native
+# bytes when eligible, direct reads and ineligible tensors are F32. Routed
+# expert banks are excluded because they stay on the host.
 function _q4x_dense_bytes(m::Gesso.Inference.Qwen4expModel, n_layers::Int)
     total = 0
     for name in keys(m.index)
@@ -107,8 +128,9 @@ function _q4x_dense_bytes(m::Gesso.Inference.Qwen4expModel, n_layers::Int)
         (il === nothing || il >= n_layers) && continue
         occursin("_exps", name) && continue
         h = Gesso.Inference._q4x_w(m, name)
-        total += h isa Gesso.Inference.QuantMatrix && _lq_eligible(h) ?
-            _lq_device_bytes(h) :
+        native = h isa Gesso.Inference.QuantMatrix && _lq_eligible(h) &&
+            !_q4x_direct_read(name)
+        total += native ? _lq_device_bytes(h) :
             (h isa Gesso.Inference.QuantMatrix ? Int64(h.nrows) * h.ne0 * 4 : sizeof(Float32.(h)))
     end
     return total
@@ -390,7 +412,7 @@ function _q4x_dev_hc_mix(dm::LavaQwen4exp, x::Lava.LavaArray, pre::String; injec
     cfg = dm.cpu.cfg
     NE, HC = cfg.n_embd, cfg.n_hc
     T = size(x, 1)
-    xn = _q4x_dev_group_rms(x, NE, _q4x_dev(dm, pre * "_norm.weight"), cfg.eps)
+    xn = _q4x_dev_group_rms(x, NE, _q4x_dev_f32(dm, pre * "_norm.weight"), cfg.eps)
     lo = _q4x_dmm(dm, xn, pre * "_down.weight")
     lo .= (lo ./ Float32(HC)) ./ (1.0f0 .+ exp.(-lo ./ Float32(HC)))
     gate = _q4x_dmm(dm, lo, pre * "_up.weight")
@@ -472,16 +494,16 @@ function _q4x_dev_ple(dm::LavaQwen4exp, st::LavaQwen4expState, il::Int, emb, res
     p = "blk.$il."
     T = size(res, 1)
     key = _q4x_dev_group_rms(_q4x_dmm(dm, emb, p * "ple_key.weight"), NE,
-        _q4x_dev(dm, p * "ple_norm_key.weight"), cfg.eps)
+        _q4x_dev_f32(dm, p * "ple_norm_key.weight"), cfg.eps)
     val = _q4x_dmm(dm, emb, p * "ple_value.weight")
-    qry = _q4x_dev_group_rms(res, NE, _q4x_dev(dm, p * "ple_norm_query.weight"), cfg.eps)
+    qry = _q4x_dev_group_rms(res, NE, _q4x_dev_f32(dm, p * "ple_norm_query.weight"), cfg.eps)
     gate, gated = _q4x_dev_ple_gate(key, qry, val, NE, HC)
-    nrm = _q4x_dev_group_rms(gated, NE, _q4x_dev(dm, p * "ple_norm_conv.weight"), cfg.eps)
+    nrm = _q4x_dev_group_rms(gated, NE, _q4x_dev_f32(dm, p * "ple_norm_conv.weight"), cfg.eps)
     k = cfg.ple_kernel
     dil = fc == 2 ? 1 : cfg.ple_ngram
     H = (k - 1) * cfg.ple_ngram
     hist = get!(() -> Lava.LavaArray{Float32}(zeros(Float32, H, HC * NE)), st.ple_conv, il)
-    conv, newh = _q4x_dev_conv(hist, nrm, _q4x_dev(dm, p * "ple_conv1d.weight"), k, dil)
+    conv, newh = _q4x_dev_conv(hist, nrm, _q4x_dev_f32(dm, p * "ple_conv1d.weight"), k, dil)
     st.ple_conv[il] = newh
     conv .= conv ./ (1.0f0 .+ exp.(-conv))
     out = Lava.LavaArray{Float32}(undef, T, HC * NE)
@@ -502,11 +524,11 @@ function _q4x_dev_gdn(dm::LavaQwen4exp, st::LavaQwen4expState, il::Int, x, taps,
     beta = _q4x_dmm(dm, x, p * "ssm_beta.weight")
     beta .= 1.0f0 ./ (1.0f0 .+ exp.(-beta))
     alpha = _q4x_dmm(dm, x, p * "ssm_alpha.weight")
-    sp, g = _q4x_dev_gdn_gate(alpha, _q4x_dev(dm, p * "ssm_dt.bias"), _q4x_dev(dm, p * "ssm_a"))
+    sp, g = _q4x_dev_gdn_gate(alpha, _q4x_dev_f32(dm, p * "ssm_dt.bias"), _q4x_dev_f32(dm, p * "ssm_a"))
     k = cfg.conv_kernel
     C = size(qkv, 2)
     hist = get!(() -> Lava.LavaArray{Float32}(zeros(Float32, k - 1, C)), st.conv, il)
-    craw, newh = _q4x_dev_conv(hist, qkv, _q4x_dev(dm, p * "ssm_conv1d.weight"), k, 1)
+    craw, newh = _q4x_dev_conv(hist, qkv, _q4x_dev_f32(dm, p * "ssm_conv1d.weight"), k, 1)
     st.conv[il] = newh
     c = Lava.LavaArray{Float32}(undef, T, C)
     c .= craw ./ (1.0f0 .+ exp.(-craw))
@@ -520,7 +542,7 @@ function _q4x_dev_gdn(dm::LavaQwen4exp, st::LavaQwen4expState, il::Int, x, taps,
     _lava_gdn_reference!(core, qd, kd, vd, g, beta, state; l2norm=true, v_head_tiled=true)
     merged = Lava.LavaArray{Float32}(undef, T, nv * dv)
     gnorm = _lava_gdn_gnorm_kernel!(KA.get_backend(core))
-    gnorm(merged, core, z, _q4x_dev(dm, p * "ssm_norm.weight"), nv, dv,
+    gnorm(merged, core, z, _q4x_dev_f32(dm, p * "ssm_norm.weight"), nv, dv,
         Float32(cfg.eps), fc != 1; ndrange=T * nv * _LH_RED_LANES, workgroupsize=(_LH_RED_LANES,))
     out = _q4x_dmm(dm, merged, p * "ssm_out.weight")
     if taps !== nothing
@@ -548,9 +570,9 @@ function _q4x_dev_attn(dm::LavaQwen4exp, st::LavaQwen4expState, il::Int, x, taps
     qraw = Lava.LavaArray{Float32}(undef, T, NH * HD)
     gt = Lava.LavaArray{Float32}(undef, T, NH * HD)
     _q4x_run!(_q4x_qgate_split_kernel!, qraw, T * NH * HD, qraw, gt, qf, HD, T)
-    q = _q4x_dev_group_rms(qraw, HD, _q4x_dev(dm, p * "attn_q_norm.weight"), cfg.eps)
+    q = _q4x_dev_group_rms(qraw, HD, _q4x_dev_f32(dm, p * "attn_q_norm.weight"), cfg.eps)
     k = _q4x_dev_group_rms(_q4x_dmm(dm, x, p * "attn_k.weight"), HD,
-        _q4x_dev(dm, p * "attn_k_norm.weight"), cfg.eps)
+        _q4x_dev_f32(dm, p * "attn_k_norm.weight"), cfg.eps)
     v = _q4x_dmm(dm, x, p * "attn_v.weight")
     _q4x_dtap!(taps, "Qcur_normed-$il", q)
     _q4x_dtap!(taps, "Kcur_normed-$il", k)
