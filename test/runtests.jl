@@ -222,7 +222,8 @@ using Gesso: reference_prefill, reference_generate
     include("test_lava_quant.jl")
 
     # Flash-Next quant types on Lava: IQ4_NL and Q2_0, dense and expert;
-    # host F64 reference with negative controls.
+    # IQ2_XXS, IQ2_S and IQ3_S as expert banks; host F64 reference with
+    # negative controls.
     include("test_lava_quant_flash_next.jl")
 
     # Phase 8 L2: Lava hybrid seams (conv1d, GDN gates and delta rule with

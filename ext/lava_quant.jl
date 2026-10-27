@@ -19,6 +19,16 @@ const _LQ_KIND_IQ2_XS = 7
 const _LQ_KIND_IQ3_XXS = 8
 const _LQ_KIND_IQ4_NL = 9
 const _LQ_KIND_Q2_0 = 10
+const _LQ_KIND_IQ2_XXS = 11
+const _LQ_KIND_IQ2_S = 12
+const _LQ_KIND_IQ3_S = 13
+
+# Entry offsets of each grid in the concatenated device tables (see _lq_tables).
+const _LQ_G2_XS = 0
+const _LQ_G2_XXS = 512
+const _LQ_G2_S = 768
+const _LQ_G3_XXS = 0
+const _LQ_G3_S = 256
 
 # Lanes per output row. Fixed at compile time: Lava bakes the SPIR-V
 # LocalSize from workgroupsize, and a shape-dependent size would recompile
@@ -70,6 +80,9 @@ function _lq_expert_kind(t::Int32)
     t == I.GGML_TYPE_IQ4_XS && return _LQ_KIND_IQ4_XS
     t == I.GGML_TYPE_IQ4_NL && return _LQ_KIND_IQ4_NL
     t == I.GGML_TYPE_Q2_0 && return _LQ_KIND_Q2_0
+    t == I.GGML_TYPE_IQ2_XXS && return _LQ_KIND_IQ2_XXS
+    t == I.GGML_TYPE_IQ2_S && return _LQ_KIND_IQ2_S
+    t == I.GGML_TYPE_IQ3_S && return _LQ_KIND_IQ3_S
     return nothing
 end
 
@@ -217,7 +230,7 @@ end
     l = r >> 3
     t = r & 7
     qv = _lq_u16(W, b + 2 + 2 * (4 * ib32 + l))
-    gi = Int(qv & UInt32(0x01ff))
+    gi = Int(qv & UInt32(0x01ff)) + _LQ_G2_XS
     signs = UInt32(ks[Int(qv>>9)+1])
     sc = UInt32(W[b+66+ib32+1])
     s4 = l < 2 ? (sc & UInt32(0x0f)) : (sc >> 4)
@@ -241,7 +254,7 @@ end
     db = d * (0.5f0 + Float32(aux >> 28)) * 0.5f0
     signs = UInt32(ks[Int((aux>>(7*l))&UInt32(0x7f))+1])
     qbase = b + 2 + 8 * ib32 + 2 * l
-    gi = Int(W[(u<4 ? qbase : qbase+1)+1])
+    gi = Int(W[(u<4 ? qbase : qbase+1)+1]) + _LQ_G3_XXS
     word = g3[gi+1]
     g = (word >> (8 * (u & 3))) & UInt32(0xff)
     sgn = ((signs >> u) & UInt32(1)) == UInt32(1) ? -1.0f0 : 1.0f0
@@ -273,6 +286,69 @@ end
     return d * Float32(code - Int32(1))
 end
 
+# IQ2_XXS (66-byte superblock): d f16, then per 32-value sub-block four grid
+# bytes and a u32 holding the 4-bit scale (top bits) and four 7-bit sign indices.
+@inline function _lq_iq2xxs(W, b::Int, e::Int, g2, ks)
+    d = _lq_f16(W, b)
+    ib32 = e >> 5
+    r = e & 31
+    l = r >> 3
+    t = r & 7
+    q = b + 2 + 8 * ib32
+    aux = _lq_u32(W, q + 4)
+    gi = Int(W[q+l+1]) + _LQ_G2_XXS
+    signs = UInt32(ks[Int((aux >> (7 * l)) & UInt32(0x7f))+1])
+    db = d * (0.5f0 + Float32(aux >> 28)) * 0.25f0
+    word = t < 4 ? g2[2*gi+1] : g2[2*gi+2]
+    g = (word >> (8 * (t & 3))) & UInt32(0xff)
+    sgn = ((signs >> t) & UInt32(1)) == UInt32(1) ? -1.0f0 : 1.0f0
+    return db * Float32(g) * sgn
+end
+
+# IQ2_S (82-byte superblock): d f16, 32 value bytes, 8 high-bit bytes, 8 scale
+# bytes and 32 sign bytes. The grid index is 10 bits: one value byte plus two
+# bits from qh. Signs are literal bits of the sign byte, not a table lookup.
+@inline function _lq_iq2s(W, b::Int, e::Int, g2)
+    d = _lq_f16(W, b)
+    ib32 = e >> 5
+    r = e & 31
+    l = r >> 3
+    t = r & 7
+    qh = _lq_u8(W, b + 66 + ib32)
+    gi = (Int(W[b+2+4*ib32+l+1]) | (Int(qh << (8 - 2 * l)) & 0x300)) + _LQ_G2_S
+    sb = UInt32(W[b+34+4*ib32+l+1])
+    sc = UInt32(W[b+74+ib32+1])
+    s4 = l < 2 ? (sc & UInt32(0x0f)) : (sc >> 4)
+    db = d * (0.5f0 + Float32(s4)) * 0.25f0
+    word = t < 4 ? g2[2*gi+1] : g2[2*gi+2]
+    g = (word >> (8 * (t & 3))) & UInt32(0xff)
+    sgn = ((sb >> t) & UInt32(1)) == UInt32(1) ? -1.0f0 : 1.0f0
+    return db * Float32(g) * sgn
+end
+
+# IQ3_S (110-byte superblock): d f16, 64 grid bytes, 8 high-bit bytes, 32 sign
+# bytes, 4 scale bytes. Sub-block k (32 values) takes its 4-bit scale from
+# nibble k of the scale bytes (low nibble for even k). Within each 8-value group
+# the first four values come from one 9-bit grid entry and the last four from another.
+@inline function _lq_iq3s(W, b::Int, e::Int, g3)
+    d = _lq_f16(W, b)
+    k = e >> 5
+    r = e & 31
+    l = r >> 3
+    u = r & 7
+    qh = _lq_u8(W, b + 66 + k)
+    shift = u < 4 ? (8 - 2 * l) : (7 - 2 * l)
+    gbyte = b + 2 + 8 * k + 2 * l + (u < 4 ? 0 : 1)
+    gi = (Int(W[gbyte+1]) | (Int(qh << shift) & 256)) + _LQ_G3_S
+    sb = UInt32(W[b+74+4*k+l+1])
+    scb = UInt32(W[b+106+(k>>1)+1])
+    s4 = (k & 1) == 0 ? (scb & UInt32(0x0f)) : (scb >> 4)
+    db = d * Float32(2 * s4 + 1)
+    g = (g3[gi+1] >> (8 * (u & 3))) & UInt32(0xff)
+    sgn = ((sb >> u) & UInt32(1)) == UInt32(1) ? -1.0f0 : 1.0f0
+    return db * Float32(g) * sgn
+end
+
 # One weight element at 0-based position e within a row starting at byte rowoff.
 @inline function _lq_elem(kind::Int, W, kv, g2, g3, ks, rowoff::Int, e::Int)
     if kind == _LQ_KIND_F32
@@ -296,6 +372,12 @@ end
         return _lq_iq2xs(W, rowoff + sb * 74, es, g2, ks)
     elseif kind == _LQ_KIND_IQ3_XXS
         return _lq_iq3xxs(W, rowoff + sb * 98, es, g3, ks)
+    elseif kind == _LQ_KIND_IQ2_XXS
+        return _lq_iq2xxs(W, rowoff + sb * 66, es, g2, ks)
+    elseif kind == _LQ_KIND_IQ2_S
+        return _lq_iq2s(W, rowoff + sb * 82, es, g2)
+    elseif kind == _LQ_KIND_IQ3_S
+        return _lq_iq3s(W, rowoff + sb * 110, es, g3)
     else
         return _lq_iq4xs(W, rowoff + sb * 136, es, kv)
     end
@@ -472,22 +554,33 @@ end
     end
 end
 
-# Device-resident lookup tables, uploaded once. g2 holds each IQ2_XS grid entry
-# as two UInt32 words (low, then high); g3 is the IQ3_XXS grid; ks the sign table.
+# Device-resident lookup tables, uploaded once. g2 holds the 64-bit grid
+# entries of IQ2_XS, IQ2_XXS and IQ2_S back to back, each as two UInt32 words
+# (low, then high), at the entry offsets _LQ_G2_*. g3 holds the 32-bit IQ3_XXS
+# and IQ3_S grids at _LQ_G3_*. ks is the sign table.
 const _LQ_TABLES = Ref{Any}(nothing)
 function _lq_tables()
     tb = _LQ_TABLES[]
     if tb === nothing
         I = Gesso.Inference
-        g2 = Vector{UInt32}(undef, 2 * length(I.IQ2XS_GRID))
-        for i in eachindex(I.IQ2XS_GRID)
-            g2[2i-1] = UInt32(I.IQ2XS_GRID[i] & 0xffffffff)
-            g2[2i] = UInt32(I.IQ2XS_GRID[i] >> 32)
+        @assert length(I.IQ2XS_GRID) == _LQ_G2_XXS - _LQ_G2_XS
+        @assert length(I.IQ2XXS_GRID) == _LQ_G2_S - _LQ_G2_XXS
+        @assert length(I.IQ2S_GRID) == 1024
+        @assert length(I.IQ3XXS_GRID) == _LQ_G3_S - _LQ_G3_XXS
+        @assert length(I.IQ3S_GRID) == 512
+        grids64 = (I.IQ2XS_GRID, I.IQ2XXS_GRID, I.IQ2S_GRID)
+        g2 = Vector{UInt32}(undef, 2 * sum(length, grids64))
+        p = 0
+        for grid in grids64, v in grid
+            g2[p+1] = UInt32(v & 0xffffffff)
+            g2[p+2] = UInt32(v >> 32)
+            p += 2
         end
+        g3 = vcat(collect(UInt32, I.IQ3XXS_GRID), collect(UInt32, I.IQ3S_GRID))
         tb = (
             kv=Lava.LavaArray{Float32}(_LQ_KVALUES_IQ4NL),
             g2=Lava.LavaArray{UInt32}(g2),
-            g3=Lava.LavaArray{UInt32}(collect(I.IQ3XXS_GRID)),
+            g3=Lava.LavaArray{UInt32}(g3),
             ks=Lava.LavaArray{UInt8}(collect(I.KSIGNS_IQ2XS)),
         )
         _LQ_TABLES[] = tb
