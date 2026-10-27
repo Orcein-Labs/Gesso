@@ -35,16 +35,18 @@ function _kv_format(default::Symbol=:f32)
     return f
 end
 
-# Unset GESSO_KV_FORMAT means q8 on CUDA. Its logit drift on the 35B matches
-# f16 (llama.cpp's default) and its decode beats f32 at every length, at 27% of
-# the memory. Lava takes q8 when asked and stores the same codes, but stays f32
-# by default: its greedy 35B output at 2048 tokens fell into a repetition loop
-# under q8, and that drift has not been measured teacher-forced yet.
+# Unset GESSO_KV_FORMAT means q8 on CUDA and Lava. On CUDA its logit drift on
+# the 35B matches f16 (llama.cpp's default) and its decode beats f32 at every
+# length, at 27% of the memory. Lava stores the same codes; its fused decode
+# reads them in place and its other readers take a dense Float32 copy of the
+# rows they attend (see ext/lava_kv_format.jl). Teacher-forced at 2048 tokens
+# on the 35B, Lava's q8 drift sits with CUDA's and inside the spread two f32
+# runs on CUDA show, so a greedy split under q8 is routing noise, not q8 error.
 # The CPU decode reads a quantized cache one getindex per element and has no
 # vectorized reader, so it stays f32 until one is measured. A head too narrow
 # for one scale block also stays f32.
 _kv_default_format(backend::Symbol, d_head::Int) =
-    backend === :cuda && d_head % _KV_BLOCK == 0 ? :q8 : :f32
+    backend in (:cuda, :lava) && d_head % _KV_BLOCK == 0 ? :q8 : :f32
 
 # A device reader that cannot take a cache in its stored format returns a dense
 # Float32 view of rows 1:K here. Other backends read the cache as it is.
