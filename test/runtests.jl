@@ -221,6 +221,10 @@ using Gesso: reference_prefill, reference_generate
     # dequant) vs the host F64 reference; named skip without a device.
     include("test_lava_quant.jl")
 
+    # Flash-Next quant types on Lava: IQ4_NL and Q2_0, dense and expert;
+    # host F64 reference with negative controls.
+    include("test_lava_quant_flash_next.jl")
+
     # Phase 8 L2: Lava hybrid seams (conv1d, GDN gates and delta rule with
     # carried state, host-storage refusal) vs the F64 CPU oracle; named skip
     # without a device.

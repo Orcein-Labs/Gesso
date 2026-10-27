@@ -17,13 +17,15 @@ const _LQ_KIND_Q8_0 = 5
 const _LQ_KIND_F32 = 6
 const _LQ_KIND_IQ2_XS = 7
 const _LQ_KIND_IQ3_XXS = 8
+const _LQ_KIND_IQ4_NL = 9
+const _LQ_KIND_Q2_0 = 10
 
 # Lanes per output row. Fixed at compile time: Lava bakes the SPIR-V
 # LocalSize from workgroupsize, and a shape-dependent size would recompile
 # the pipeline for every projection.
 const _LQ_LANES = 64
 
-# The IQ4_NL codebook used by IQ4_XS (ggml kvalues_iq4nl).
+# The IQ4_NL codebook, shared by IQ4_NL and IQ4_XS (ggml kvalues_iq4nl).
 const _LQ_KVALUES_IQ4NL =
     Float32[-127, -104, -83, -65, -49, -35, -22, -10, 1, 13, 25, 38, 53, 69, 89, 113]
 
@@ -54,6 +56,8 @@ function _lq_kind(t::Int32)
     t == I.GGML_TYPE_Q6_K && return _LQ_KIND_Q6_K
     t == I.GGML_TYPE_IQ4_XS && return _LQ_KIND_IQ4_XS
     t == I.GGML_TYPE_Q8_0 && return _LQ_KIND_Q8_0
+    t == I.GGML_TYPE_IQ4_NL && return _LQ_KIND_IQ4_NL
+    t == I.GGML_TYPE_Q2_0 && return _LQ_KIND_Q2_0
     return nothing
 end
 
@@ -64,17 +68,24 @@ function _lq_expert_kind(t::Int32)
     t == I.GGML_TYPE_IQ2_XS && return _LQ_KIND_IQ2_XS
     t == I.GGML_TYPE_IQ3_XXS && return _LQ_KIND_IQ3_XXS
     t == I.GGML_TYPE_IQ4_XS && return _LQ_KIND_IQ4_XS
+    t == I.GGML_TYPE_IQ4_NL && return _LQ_KIND_IQ4_NL
+    t == I.GGML_TYPE_Q2_0 && return _LQ_KIND_Q2_0
     return nothing
 end
 
-# Same rule as the CUDA side: K-quant superblocks are 256 values, Q8_0 blocks 32.
+# Values per block for each kind: K-quant and IQ2/IQ3 superblocks hold 256,
+# Q2_0 blocks 64, Q8_0 and IQ4_NL blocks 32, and F32 is one value per element.
+_lq_block_values(kind::Int) =
+    kind == _LQ_KIND_F32 ? 1 :
+    kind == _LQ_KIND_Q8_0 || kind == _LQ_KIND_IQ4_NL ? 32 :
+    kind == _LQ_KIND_Q2_0 ? 64 : 256
+
+# Same rule as the CUDA side: a row is a whole number of blocks.
 function _lq_eligible(s)
     s isa Gesso.Inference.QuantMatrix || return false
     kind = _lq_kind(s.ggml_type)
     kind === nothing && return false
-    s.ne0 % 32 == 0 || return false
-    kind == _LQ_KIND_Q8_0 || s.ne0 % 256 == 0 || return false
-    return true
+    return s.ne0 % _lq_block_values(kind) == 0
 end
 
 # Q8_0 repacked is one int8 per value plus one F32 scale per 32 values: ne0 + ne0/8 bytes a row.
@@ -244,12 +255,34 @@ end
     return d * q
 end
 
+# IQ4_NL (18-byte block): f16 d, 16 nibble bytes. Low nibbles give the first
+# 16 values, high nibbles the next 16, both through the IQ4_NL codebook.
+@inline function _lq_iq4nl(W, b::Int, e::Int, kv)
+    d = _lq_f16(W, b)
+    qb = _lq_u8(W, b + 2 + (e & 15))
+    nib = e < 16 ? (qb & Int32(15)) : (qb >> 4)
+    return d * kv[Int(nib)+1]
+end
+
+# Q2_0 (18-byte block of 64 values): f16 d, 16 bytes of four 2-bit codes each.
+# Code c maps to c - 1, so the values are -d, 0, d, 2d.
+@inline function _lq_q2_0(W, b::Int, e::Int)
+    d = _lq_f16(W, b)
+    qs = _lq_u8(W, b + 2 + (e >> 2))
+    code = (qs >> (2 * (e & 3))) & Int32(3)
+    return d * Float32(code - Int32(1))
+end
+
 # One weight element at 0-based position e within a row starting at byte rowoff.
 @inline function _lq_elem(kind::Int, W, kv, g2, g3, ks, rowoff::Int, e::Int)
     if kind == _LQ_KIND_F32
         return _lq_f32(W, rowoff + 4 * e)
     elseif kind == _LQ_KIND_Q8_0
         return _lq_q8_0(W, rowoff + (e >> 5) * 34, e)
+    elseif kind == _LQ_KIND_IQ4_NL
+        return _lq_iq4nl(W, rowoff + (e >> 5) * 18, e & 31, kv)
+    elseif kind == _LQ_KIND_Q2_0
+        return _lq_q2_0(W, rowoff + (e >> 6) * 18, e & 63)
     end
     sb = e >> 8
     es = e & 255
@@ -694,11 +727,9 @@ function Gesso.Inference._qgemv_expert!(
             "lava expert GEMV: y has $(length(y)) elements, bank has $(bank.ne1) rows",
         ),
     )
-    kind == _LQ_KIND_F32 ||
-        bank.ne0 % 256 == 0 ||
-        error(
-            "lava expert GEMV: ne0 = $(bank.ne0) is not a multiple of the 256-value superblock",
-        )
+    bn = _lq_block_values(kind)
+    bank.ne0 % bn == 0 ||
+        error("lava expert GEMV: ne0 = $(bank.ne0) is not a multiple of the $bn-value block")
     row_bytes = bank.bytes_per_expert ÷ bank.ne1
     base = I._quant_expert_off0(bank, e)
     _lq_launch!(y, x, bank.data, base, kind, 1, bank.ne0, bank.ne1, row_bytes, alpha, beta)
