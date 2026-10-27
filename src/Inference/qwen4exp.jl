@@ -552,3 +552,18 @@ function qwen4exp_logits(m::Qwen4expModel, res::AbstractMatrix; taps=nothing)
     _q4x_tap!(taps, "result_output", logits)
     return vec(logits)
 end
+
+"""
+    qwen4exp_device(backend, m) -> device model
+
+Backend hook. A backend extension returns a device mirror of `m` whose
+`qwen4exp_forward!` and `qwen4exp_logits` match the CPU taps by name.
+"""
+function qwen4exp_device end
+
+"""
+    qwen4exp_device_state(dm) -> device decode state
+
+Backend hook paired with `qwen4exp_device`.
+"""
+function qwen4exp_device_state end

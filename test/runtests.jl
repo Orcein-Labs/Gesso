@@ -231,6 +231,7 @@ using Gesso: reference_prefill, reference_generate
     # without a device.
     include("test_lava_hybrid.jl")
     include("test_lava_gdn_reference.jl")
+    include("test_lava_qwen4exp.jl")
 
     # Phase 8 (§LXXXI item C): Lava inference — prefill + greedy generate vs
     # the CPU oracle, ids EXACT, logits at declared atol; no-copy law.
