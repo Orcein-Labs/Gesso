@@ -94,6 +94,7 @@ using Gesso: reference_prefill, reference_generate
     include("test_prefill_profile.jl")
     include("test_gguf_import.jl")
     include("test_gguf_llama.jl")
+    include("test_gguf_malformed.jl")
     include("test_qwen35_dense.jl")
 
     # Native CPU Q8_K x IQ dot products: quantizer vs port, AVX2 bit-exact vs

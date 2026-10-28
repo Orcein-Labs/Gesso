@@ -123,6 +123,10 @@ const _GGML_KNOWN_BLOCKS = Dict{Int32, Tuple{Int, Int}}(
     0 => (1, 4),        # F32
     1 => (1, 2),        # F16
     30 => (1, 2),       # BF16
+    2 => (32, 18),      # Q4_0
+    3 => (32, 20),      # Q4_1
+    6 => (32, 22),      # Q5_0
+    7 => (32, 24),      # Q5_1
     8 => (32, 34),      # Q8_0
     10 => (256, 84),    # Q2_K
     11 => (256, 110),   # Q3_K
@@ -190,6 +194,26 @@ mutable struct _Cur
     data::Vector{UInt8}
     pos::Int
 end
+
+# Raised by the cursor when a length or count read from the file cannot fit in
+# what is left of it; gguf_header turns it into a GessoError naming the file.
+struct _GgufOverrun <: Exception end
+
+_remaining(c::_Cur) = length(c.data) - c.pos + 1
+
+# A length or element count read from the file, checked against the bytes left
+# (each element takes at least `min_bytes`). Without this a corrupt count
+# allocates, or loops, on a number the file never backs.
+function _count(c::_Cur, min_bytes::Int=1)
+    n = _u64(c)
+    n <= UInt64(max(_remaining(c), 0) ÷ min_bytes) || throw(_GgufOverrun())
+    return Int(n)
+end
+
+# Bytes per element of the fixed-width GGUF metadata value types; 0 for string
+# (8) and array (9).
+_gguf_value_width(t::UInt32) =
+    t in (0, 1, 7) ? 1 : t in (2, 3) ? 2 : t in (4, 5, 6) ? 4 : t in (10, 11, 12) ? 8 : 0
 _u8(c::_Cur) = (v=c.data[c.pos]; c.pos += 1; v)
 function _u32(c::_Cur)
     p = c.pos
@@ -215,7 +239,7 @@ function _f64(c::_Cur)
     return reinterpret(Float64, _u64(c))
 end
 function _str(c::_Cur)
-    n = Int(_u64(c))
+    n = _count(c)
     s = String(c.data[c.pos:(c.pos+n-1)])
     c.pos += n
     return s
@@ -228,26 +252,27 @@ function _read_u16!(c::_Cur)
 end
 
 function _skip_value!(c::_Cur, t::UInt32)
-    if t == 0 || t == 1 || t == 7
-        c.pos += 1
-    elseif t == 2 || t == 3
-        c.pos += 2
-    elseif t == 4 || t == 5 || t == 6
-        c.pos += 4
+    w = _gguf_value_width(t)
+    if w > 0
+        c.pos += w
     elseif t == 8
-        n = Int(_u64(c))
+        n = _count(c)
         c.pos += n
-    elseif t == 10 || t == 11 || t == 12
-        c.pos += 8
     elseif t == 9
         at = _u32(c)
-        n = Int(_u64(c))
-        for _ in 1:n
-            _skip_value!(c, at)
+        aw = _gguf_value_width(at)
+        if aw > 0
+            n = _count(c, aw)
+            c.pos += n * aw
+        else
+            for _ in 1:_count(c, 8)
+                _skip_value!(c, at)
+            end
         end
     else
         error("gguf_import: unknown value type $t")
     end
+    _remaining(c) >= 0 || throw(_GgufOverrun())
     return nothing
 end
 
@@ -266,7 +291,7 @@ function _read_value(c::_Cur, t::UInt32)
     t == 12 && return _f64(c)
     if t == 9
         at = _u32(c)
-        n = Int(_u64(c))
+        n = _count(c, max(_gguf_value_width(at), 1))
         return [_read_value(c, at) for _ in 1:n]
     end
     error("gguf_import: unread value type $t")
@@ -279,18 +304,50 @@ struct GgufTensorInfo
     offset::UInt64
 end
 
+function _malformed_gguf(path::AbstractString, msg::AbstractString; kw...)
+    return gesso_error(
+        ERR_RUNTIME,
+        "gguf_header: $path: $msg. The file is truncated or corrupt; download it again.";
+        reason=:malformed_gguf,
+        path=String(path),
+        kw...,
+    )
+end
+
+"""
+    gguf_header(path) -> (; data, kv, tensors, data_start)
+
+Parse a GGUF header and check it against the file before anything reads
+tensor bytes. A file that ends early, a count or length the file cannot hold,
+a bad alignment, or a tensor whose bytes run past the end throws a
+`GessoError` with `detail[:reason] == :malformed_gguf`. Tensors of a ggml type
+missing from `_GGML_KNOWN_BLOCKS` are sized when they are loaded instead.
+"""
 function gguf_header(path::AbstractString)
     isfile(path) || error("gguf_header: no such file: $path")
     data = open(path, "r") do io
         Mmap.mmap(io, Vector{UInt8}; grow=false, shared=false)
     end
+    length(data) >= 24 || throw(_malformed_gguf(path, "$(length(data)) bytes is too short for a GGUF header"))
+    hdr = try
+        _gguf_header_parse(path, data)
+    catch e
+        e isa Union{_GgufOverrun, BoundsError, InexactError} || rethrow()
+        throw(_malformed_gguf(path, "the metadata runs past the end of the file or holds an impossible length"))
+    end
+    _check_tensor_extents(path, hdr)
+    return hdr
+end
+
+function _gguf_header_parse(path::AbstractString, data::Vector{UInt8})
     c = _Cur(data, 1)
     magic = (_u8(c), _u8(c), _u8(c), _u8(c))
     magic == _GGUF_MAGIC || error("gguf_header: not a GGUF file: $path")
     version = _u32(c)
     version >= 2 || error("gguf_header: GGUF version $version is too old")
-    n_tensors = Int(_u64(c))
-    n_kv = Int(_u64(c))
+    # A tensor info is at least 24 bytes and a key/value at least 13.
+    n_tensors = _count(c, 24)
+    n_kv = _count(c, 13)
     kv = Dict{String, Any}()
     for _ in 1:n_kv
         k = _str(c)
@@ -298,7 +355,7 @@ function gguf_header(path::AbstractString)
         # tokenizer arrays are hundreds of thousands of strings; keep counts.
         if t == UInt32(9) && startswith(k, "tokenizer.ggml.")
             at = _u32(c)
-            n = Int(_u64(c))
+            n = _count(c, max(_gguf_value_width(at), 1))
             kv[k] = n
             for _ in 1:n
                 _skip_value!(c, at)
@@ -313,6 +370,7 @@ function gguf_header(path::AbstractString)
     for i in 1:n_tensors
         name = _str(c)
         nd = Int(_u32(c))
+        1 <= nd <= 4 || throw(_malformed_gguf(path, "tensor $name has $nd dimensions"; tensor=name))
         dims = Vector{Int}(undef, nd)
         for d in 1:nd
             dims[d] = Int(_u64(c))
@@ -322,10 +380,66 @@ function gguf_header(path::AbstractString)
         infos[i] = GgufTensorInfo(name, dims, t, off)
     end
     alignment = Int(get(kv, "general.alignment", 32))
+    alignment > 0 && ispow2(alignment) ||
+        throw(_malformed_gguf(path, "general.alignment is $alignment"; alignment))
     pad = alignment - ((c.pos - 1) % alignment)
     pad == alignment && (pad = 0)
     data_start = (c.pos - 1) + pad
-    return (data=data, kv=kv, tensors=infos, data_start=data_start)
+    return (data=data, kv=kv, tensors=infos, data_start=data_start, alignment=alignment, path=String(path))
+end
+
+# Bytes of a tensor of `ggml_type` with ggml dims `dims`, or `nothing` when the
+# type is not in _GGML_KNOWN_BLOCKS. Throws on a row length that is not whole
+# blocks or an element count that overflows.
+function _known_tensor_nbytes(path, name, dims::Vector{Int}, ggml_type::Int32)
+    blk = get(_GGML_KNOWN_BLOCKS, ggml_type, nothing)
+    blk === nothing && return nothing
+    blck, tsize = blk
+    rem(dims[1], blck) == 0 || throw(
+        _malformed_gguf(path, "tensor $name row length $(dims[1]) is not whole blocks of $blck"; tensor=name),
+    )
+    n = 1
+    for d in dims
+        n = Base.checked_mul(n, d)
+    end
+    return Base.checked_mul(n ÷ blck, tsize)
+end
+
+function _check_tensor_extents(path::AbstractString, hdr)
+    len = length(hdr.data)
+    hdr.data_start <= len ||
+        throw(_malformed_gguf(path, "the tensor data would start at byte $(hdr.data_start) of $len"))
+    for info in hdr.tensors
+        name = info.name
+        any(<(0), info.dims) && throw(_malformed_gguf(path, "tensor $name has dims $(info.dims)"; tensor=name))
+        info.offset % UInt64(hdr.alignment) == 0 ||
+            throw(_malformed_gguf(path, "tensor $name offset $(info.offset) is not aligned"; tensor=name))
+        nbytes = try
+            _known_tensor_nbytes(path, name, info.dims, info.ggml_type)
+        catch e
+            e isa OverflowError || rethrow()
+            throw(_malformed_gguf(path, "tensor $name dims $(info.dims) overflow"; tensor=name))
+        end
+        nbytes === nothing && continue
+        _check_extent(path, hdr, info, nbytes)
+    end
+    return nothing
+end
+
+# The one bounds check every raw tensor read goes through: `nbytes` from the
+# tensor's start must lie inside the mapped file.
+function _check_extent(path, hdr, info::GgufTensorInfo, nbytes::Integer)
+    len = length(hdr.data)
+    start = Int128(hdr.data_start) + Int128(info.offset)
+    start + nbytes <= len && return nothing
+    throw(
+        _malformed_gguf(
+            path,
+            "tensor $(info.name) needs bytes $start:$(start + nbytes) but the file has $len";
+            tensor=info.name,
+            file_bytes=len,
+        ),
+    )
 end
 
 """
@@ -623,6 +737,17 @@ function _dequant_f32(data::Vector{UInt8}, offset0::Int, ggml_type::Int32, n_ele
     end
     traits = _ggml_traits(ggml_type)
     traits.to_float == C_NULL && error("gguf_import: no to_float for ggml type $ggml_type")
+    # The ccall reads raw memory, so a range past the mapped file would not
+    # stop at a BoundsError. Every caller passes header-checked offsets; this
+    # is the backstop for the ones that compute their own.
+    nbytes = cld(n_elem, Int(traits.blck_size)) * Int(traits.type_size)
+    0 <= offset0 && offset0 + nbytes <= length(data) || throw(
+        gesso_error(
+            ERR_RUNTIME,
+            "gguf_import: tensor read of $nbytes bytes at $offset0 runs past the $(length(data))-byte file. The file is truncated or corrupt; download it again.";
+            reason=:malformed_gguf,
+        ),
+    )
     ccall(
         traits.to_float,
         Cvoid,
@@ -636,6 +761,15 @@ end
 
 function _gguf_array(hdr, info::GgufTensorInfo)
     n_elem = prod(info.dims)
+    if info.ggml_type == 0
+        _check_extent(hdr.path, hdr, info, 4 * n_elem)
+    else
+        traits = _ggml_traits(info.ggml_type)
+        rem(n_elem, Int(traits.blck_size)) == 0 || error(
+            "gguf_import: $(info.name) n_elem $n_elem not divisible by blck_size $(traits.blck_size)",
+        )
+        _check_extent(hdr.path, hdr, info, div(n_elem, Int(traits.blck_size)) * traits.type_size)
+    end
     off = Int(hdr.data_start) + Int(info.offset)
     raw = _dequant_f32(hdr.data, off, info.ggml_type, n_elem)
     nd = length(info.dims)
@@ -663,6 +797,7 @@ function _expert_slice(hdr, info::GgufTensorInfo)
         )
         div(n_elem, Int(traits.blck_size)) * traits.type_size
     end
+    _check_extent(hdr.path, hdr, info, nbytes * n_exp)
     return GgufQuantSlice(
         hdr.data,
         Int(hdr.data_start) + Int(info.offset),
@@ -849,6 +984,7 @@ function _quant_matrix(hdr, info::GgufTensorInfo)
         "gguf_import: $(info.name) ne0 $ne0 not divisible by blck_size $(traits.blck_size)",
     )
     rb = div(ne0, Int(traits.blck_size)) * traits.type_size
+    _check_extent(hdr.path, hdr, info, rb * nrows)
     return QuantMatrix(
         hdr.data,
         Int(hdr.data_start) + Int(info.offset),
