@@ -90,12 +90,16 @@ end
 # The template's family, as an ArgumentError so the server's constructor reports
 # it like the other refusals above.
 function _template_family(template::AbstractString)::Symbol
-    try
-        return chat_family(template)
+    family = try
+        chat_family(template)
     catch e
         e isa ErrorException || rethrow()
         throw(ArgumentError("gguf_chat_model: " * e.msg))
     end
+    family in (:qwen35_xml, :lfm2, :lfm25) || throw(
+        ArgumentError("gguf_chat_model: the server cannot serve chat family $family yet"),
+    )
+    return family
 end
 
 # One renderer per family, shared by the request prompt and the prefix boundary,

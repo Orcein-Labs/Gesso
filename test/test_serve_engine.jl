@@ -303,3 +303,11 @@ end
         backend=nothing, n_ctx=64, model_id="x",
     )
 end
+
+@testset "engine: a known family with no server renderer is an ArgumentError" begin
+    tk = sv_bpe(eos=3, template="<|turn>user\n{{ m }}<turn|><|channel>thought\n<channel|>")
+    @test_throws ArgumentError gguf_chat_model(
+        nothing, nothing, (; rms_norm_eps=1e-6), tk;
+        backend=nothing, n_ctx=64, model_id="x",
+    )
+end

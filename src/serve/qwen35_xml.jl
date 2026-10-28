@@ -31,6 +31,7 @@ struct ToolCallDelta
     arguments::String
 end
 
+const _THINK_OPEN = Vector{UInt8}("<think>")
 const _THINK_CLOSE = Vector{UInt8}("</think>")
 const _TOOL_OPEN = Vector{UInt8}("<tool_call>")
 const _TOOL_CLOSE = Vector{UInt8}("</tool_call>")
@@ -43,6 +44,7 @@ mutable struct QwenXMLParser
     stops::Vector{Vector{UInt8}}
     n_calls::Int
     stopped::Bool
+    opening::Bool               # the model may still open its own <think>
 end
 
 """
@@ -85,6 +87,7 @@ function QwenXMLParser(;
         stops,
         0,
         false,
+        !start_in_reasoning,
     )
 end
 
@@ -140,6 +143,12 @@ function _advance!(p::QwenXMLParser, out::Vector{Any})
             continue
         end
 
+        if p.opening
+            r = _open_think!(p)
+            r === :hold && return
+            r === :opened && continue
+        end
+
         i, kind, len = _next_match(p)
         if i !== nothing
             _emit!(p, out, p.buf[1:(i-1)])
@@ -165,6 +174,28 @@ function _advance!(p::QwenXMLParser, out::Vector{Any})
         end
         return
     end
+end
+
+# A thinking model whose prompt did not open reasoning writes `<think>` itself
+# as its first output. Leading whitespace is skipped while that is decided, and
+# one newline after the tag belongs to the tag, as it does in the Qwen prompt.
+function _open_think!(p::QwenXMLParser)
+    j = findfirst(b -> !(b in (0x20, 0x09, 0x0a, 0x0d)), p.buf)
+    j === nothing && return :hold
+    rest = view(p.buf, j:length(p.buf))
+    m = length(_THINK_OPEN)
+    if length(rest) <= m
+        rest == view(_THINK_OPEN, 1:length(rest)) && return :hold
+    elseif view(rest, 1:m) == _THINK_OPEN
+        k = j + m
+        k += p.buf[k] == 0x0a
+        p.buf = p.buf[k:end]
+        p.state = :reasoning
+        p.opening = false
+        return :opened
+    end
+    p.opening = false
+    return :none
 end
 
 function _next_match(p::QwenXMLParser)
