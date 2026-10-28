@@ -1,4 +1,4 @@
-using Test, Random, LinearAlgebra
+using Test, Random
 using Gesso
 
 const _gemma4_inf = Gesso.Inference
