@@ -15,7 +15,7 @@
 #   * F16 and BF16: threaded row dots that widen each weight row once and
 #     dot it with every token, up to 256 tokens; longer prefills widen row
 #     chunks into F32 and run one BLAS GEMM (`_half_matmul!`);
-#   * every other format (Q4_1, Q5_0, Q5_1): FALLBACK. Rows are dequantized per
+#   * every other format (Q4_1, Q5_0): FALLBACK. Rows are dequantized per
 #     call (`_dequant_f32`, gguf_dequant.jl) in bounded row chunks, then
 #     multiplied in F32. It is logged once per ggml type through `@gfallback`.
 #     Fused kernels for those formats are separate work.
