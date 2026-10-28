@@ -163,7 +163,7 @@ end
 
 const _matrix_base = (;
     hidden_size=8,
-    num_layers=1,
+    num_layers=2,
     n_heads=4,
     n_kv_heads=2,
     vocab_size=8,
@@ -190,6 +190,59 @@ const _MATRIX_FEATURES = (
     [:mrope],
 )
 const _MATRIX_WINDOWS = (nothing, 64)
+const _MATRIX_MIXERS = (
+    nothing,
+    ShortConvSpec([:short_convolution, :full_attention], 3),
+)
+_matrix_moe(gating, selection_bias) = MoeSpec(;
+    n_experts=4,
+    n_expert_used=2,
+    expert_ff=8,
+    dense_lead=1,
+    gating,
+    selection_bias,
+)
+const _MATRIX_MOES = (
+    nothing,
+    _matrix_moe(:softmax, false),
+    _matrix_moe(:softmax, true),
+    _matrix_moe(:sigmoid, false),
+    _matrix_moe(:sigmoid, true),
+)
+
+function _matrix_specs(fam::Symbol)
+    specs = ArchitectureSpec[]
+    for rope in _MATRIX_ROPES,
+        act in _MATRIX_ACTIVATIONS,
+        feats in _MATRIX_FEATURES,
+        win in _MATRIX_WINDOWS
+        push!(specs, ArchitectureSpec(;
+            _matrix_base...,
+            family=fam,
+            activation_kind=act,
+            rope,
+            features=Set{Symbol}(feats),
+            sliding_window=win,
+        ))
+    end
+    for mixer in _MATRIX_MIXERS, moe in _MATRIX_MOES
+        # Exercise each new mixer/router combination both with and without
+        # QK normalization. Real LFM imports require qk_norm together with
+        # shortconv, and the MoE model combines it with sigmoid selection bias.
+        mixer === nothing && moe === nothing && continue
+        for qk_norm in (false, true)
+            features = qk_norm ? Set{Symbol}([:qk_norm]) : Set{Symbol}()
+            push!(specs, ArchitectureSpec(;
+                _matrix_base...,
+                family=fam,
+                mixer,
+                moe,
+                features,
+            ))
+        end
+    end
+    return specs
+end
 
 # The stable order `required_semantics` emits, DERIVED from it rather than
 # restated, so the "first missing" ordering cannot drift from the real one.
@@ -205,21 +258,8 @@ const _MATRIX_WINDOWS = (nothing, 64)
 # want: how early does execution hit this?
 const _REQUIRED_RANK = let
     rank = Dict{Symbol, Int}()
-    for act in _MATRIX_ACTIVATIONS,
-        rope in _MATRIX_ROPES,
-        feats in _MATRIX_FEATURES,
-        win in _MATRIX_WINDOWS
-
-        reqs = required_semantics(
-            ArchitectureSpec(;
-                _matrix_base...,
-                family=:probe,
-                activation_kind=act,
-                rope=rope,
-                features=Set{Symbol}(feats),
-                sliding_window=win,
-            ),
-        )
+    for spec in _matrix_specs(:probe)
+        reqs = required_semantics(spec)
         for (i, c) in enumerate(reqs)
             rank[c] = min(get(rank, c, typemax(Int)), i)
         end
@@ -229,24 +269,22 @@ end
 
 _required_rank(c::Symbol) = get(_REQUIRED_RANK, c, length(_REQUIRED_RANK) + 1)
 
-function _matrix_variant(fam::Symbol, rope, act, feats, win, backend::AbstractGessoBackend)
-    spec = ArchitectureSpec(;
-        _matrix_base...,
-        family=fam,
-        activation_kind=act,
-        rope=rope,
-        features=Set{Symbol}(feats),
-        sliding_window=win,
-    )
+function _matrix_variant(spec::ArchitectureSpec, backend::AbstractGessoBackend)
     reqs = required_semantics(spec)
     miss = [c for c in reqs if !supports(backend, c)]
+    feats = sort!(collect(spec.features); by=String)
     label = string(
         "rope=",
-        rope.kind,
+        spec.rope.kind,
         " act=",
-        act,
+        spec.activation_kind,
         isempty(feats) ? "" : string(" feat=", join(feats, "+")),
-        win === nothing ? "" : " window",
+        spec.mixer isa ShortConvSpec ? " mixer=shortconv" : "",
+        spec.moe === nothing ? "" : string(
+            " moe=", spec.moe.gating,
+            spec.moe.selection_bias ? "+selection_bias" : "",
+        ),
+        spec.sliding_window === nothing ? "" : " window",
     )
     return (;
         variant=label,
@@ -283,13 +321,7 @@ and the worst-case column may never read green while any implemented capabilityi
 function compatibility_matrix(; backend::AbstractGessoBackend=CPUBackend())
     rows = NamedTuple[]
     for fam in known_families()
-        variants = [
-            _matrix_variant(Symbol(fam), rope, act, feats, win, backend) for
-            rope in _MATRIX_ROPES,
-            act in _MATRIX_ACTIVATIONS,
-            feats in _MATRIX_FEATURES,
-            win in _MATRIX_WINDOWS
-        ]
+        variants = [_matrix_variant(spec, backend) for spec in _matrix_specs(Symbol(fam))]
         unreachable = Symbol[]
         for v in variants, c in v.missing
             c in unreachable || push!(unreachable, c)

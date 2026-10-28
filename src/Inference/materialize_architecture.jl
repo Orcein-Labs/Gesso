@@ -33,8 +33,8 @@ function expected_shape(spec::ArchitectureSpec, role::Symbol)
     qd = spec.n_heads * spec.head_dim
     kvd = spec.n_kv_heads * spec.head_dim
     mx = spec.mixer
-    key_dim = mx === nothing ? 0 : mx.num_key_heads * mx.key_head_dim
-    value_dim = mx === nothing ? 0 : mx.num_value_heads * mx.value_head_dim
+    key_dim = mx isa LinearMixerSpec ? mx.num_key_heads * mx.key_head_dim : 0
+    value_dim = mx isa LinearMixerSpec ? mx.num_value_heads * mx.value_head_dim : 0
     conv_dim = 2 * key_dim + value_dim
     return if role === ROLE_TOKEN_EMBEDDING || role === ROLE_LM_HEAD
         (spec.vocab_size, h)
@@ -70,6 +70,15 @@ function expected_shape(spec::ArchitectureSpec, role::Symbol)
         (mx.value_head_dim,)
     elseif role === ROLE_GDN_O
         (h, value_dim)
+    elseif role === ROLE_SHORT_IN
+        (3h, h)
+    elseif role === ROLE_SHORT_CONV
+        mx isa ShortConvSpec || error("expected_shape: shortconv requires ShortConvSpec")
+        (h, mx.conv_kernel_dim)
+    elseif role === ROLE_SHORT_OUT
+        (h, h)
+    elseif role === ROLE_ROUTER_BIAS
+        (spec.moe.n_experts,)
     elseif role === ROLE_ROUTER
         spec.moe === nothing && error("expected_shape: ffn.router requires a MoeSpec")
         (spec.moe.n_experts, h)
@@ -252,6 +261,7 @@ function materialize_architecture(
         slots[:mixer] = mixer
         if spec.moe !== nothing
             slots[:n_expert_used] = spec.moe.n_expert_used
+            slots[:router_gating] = spec.moe.gating
         end
         # Per-layer attention geometry, added only for families that declare it,
         # so every other family keeps the block fields it had.
@@ -264,9 +274,7 @@ function materialize_architecture(
         if spec.activation_kind === :geglu
             slots[:ffn_geglu] = true
         end
-        refs =
-            mixer === :linear_attention && !isempty(pmap.linear_refs) ?
-            pmap.linear_refs : pmap.layer_refs
+        refs = _layer_param_refs(pmap, spec, layer)
         for ref in refs
             external = external_name(pmap, ref, i)
             arr = grab(external)

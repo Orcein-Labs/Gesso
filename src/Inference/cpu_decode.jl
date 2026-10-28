@@ -93,7 +93,7 @@ function _cpu_decode_scratch(
     row::Type{R}=Float32,
 ) where {R <: AbstractFloat}
     nk, nv, dk, dv =
-        mx === nothing ? (0, 0, 0, 0) :
+        (mx === nothing || mx isa ShortConvSpec) ? (0, 0, 0, 0) :
         (mx.num_key_heads, mx.num_value_heads, mx.key_head_dim, mx.value_head_dim)
     key_dim = nk * dk
     value_dim = nv * dv
@@ -118,7 +118,7 @@ function _cpu_decode_scratch(
         zeros(Float32, nv),
         zeros(Float32, nv, nslab),
         nslab,
-        mx !== nothing,
+        mx !== nothing && !(mx isa ShortConvSpec),
         Q8KVec(div(Int(dim), QK_K)),
         Q8KVec(div(max(Int(qdim), 1), QK_K)),
         Q8KVec(div(value_dim, QK_K)),
@@ -154,7 +154,7 @@ end
 # type `_decode_row_buffers` gives a fresh buffer without scratch, so the dense
 # residual stream and projections run at the same precision either way.
 function _decode_row_type(mx, tensors)
-    mx !== nothing && return Float32
+    mx !== nothing && !(mx isa ShortConvSpec) && return Float32
     s = _first_array_storage(tensors)
     return s === nothing ? Float32 : eltype(s)
 end

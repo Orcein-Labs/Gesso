@@ -156,6 +156,8 @@ using Gesso: reference_prefill, reference_generate
     # random toy model, the QSA context refusal; the real-GGUF run against the
     # llama.cpp dump is gated on GESSO_QWEN4EXP_GGUF (skips without it)
     include("test_qwen4exp.jl")
+    include("test_lfm25.jl")
+    include("test_lfm_chat.jl")
 
     # Phase 3 (§LXXVI item D): the REAL-model gate — one named skip unless
     # GESSO_SMOLLM2_DIR points at a local snapshot; it never downloads
@@ -249,6 +251,7 @@ using Gesso: reference_prefill, reference_generate
     include("test_lava_gdn_reference.jl")
     include("test_lava_qwen4exp.jl")
     include("test_lava_spark25.jl")
+    include("test_lava_lfm25.jl")
 
     # Phase 8 (§LXXXI item C): Lava inference — prefill + greedy generate vs
     # the CPU oracle, ids EXACT, logits at declared atol; no-copy law.

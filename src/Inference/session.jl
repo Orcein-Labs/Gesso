@@ -1059,11 +1059,14 @@ function _generate_impl!(
     return ids
 end
 
+_prompt_ids(tk, text) = encode(tk, text)
+
 """
     generate(s, text::AbstractString; max_new_tokens=8, on_token=nothing) -> Vector{Int}
 
-String prompt: `encode(s.tokenizer, text)`. Throws `ERR_INVALID_PLAN` when
-the session has no tokenizer (§LXXVIII).
+String prompt: `encode(s.tokenizer, text)`, plus a leading BOS when a GGUF
+tokenizer declares `add_bos_token` (llama.cpp's raw-text default). Throws
+`ERR_INVALID_PLAN` when the session has no tokenizer (§LXXVIII).
 """
 function generate(s::Session, text::AbstractString; max_new_tokens::Int=8, on_token=nothing)
     return _audited(s, :generate; max_new_tokens) do span
@@ -1074,7 +1077,7 @@ function generate(s::Session, text::AbstractString; max_new_tokens::Int=8, on_to
             ),
         )
         token_start=time_ns()
-        ids=encode(s.tokenizer, text)
+        ids=_prompt_ids(s.tokenizer, text)
         span.tokenize_ns=UInt64(time_ns()-token_start)
         return _generate_impl!(s, ids, max_new_tokens, on_token, span)
     end

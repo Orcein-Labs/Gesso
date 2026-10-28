@@ -219,6 +219,19 @@ function _probe(backend, cap::Symbol)
                 rotary_dim=4,
             ),
         )
+    elseif cap === :short_convolution
+        bt = (attn_rms=_froz(ones(4)), wshort_in=_pw(randn(rng, 12, 4)),
+            wshort_conv=_froz(randn(rng, 4, 3)), wshort_out=_pw(randn(rng, 4, 4)))
+        return _conformance_run(() -> Gesso.Inference._short_convolution_block!(backend,
+            _act(randn(rng, 3, 4)), _act(zeros(3, 4)), _act(zeros(3, 4)), bt, wl, 1e-6, dims -> zeros(dims)))
+    elseif cap in (:sigmoid_moe_routing, :moe_selection_bias)
+        ex(a) = Gesso.ExpertWeight(; shape=size(a), storage=a)
+        bt = (wrouter=_pw(randn(rng, 4, 4)), wrouter_bias=_froz(randn(rng, 4)),
+            wexp_gate=ex(randn(rng, 4, 8, 4)), wexp_up=ex(randn(rng, 4, 8, 4)),
+            wexp_down=ex(randn(rng, 4, 4, 8)), n_expert_used=2,
+            router_gating=cap === :sigmoid_moe_routing ? :sigmoid : :softmax)
+        return _conformance_run(() -> Gesso.Inference._biased_moe_ffn!(backend,
+            _act(zeros(2, 4)), _act(randn(rng, 2, 4)), bt))
     elseif cap === :moe_routing
         seq, h, n_exp, ff, k = 2, 4, 4, 8, 2
         x = randn(rng, seq, h)
@@ -411,6 +424,19 @@ const _CAP_PROBE_SPECS = [
         rope=Gesso.RoPEPolicy(; interleaved=true),
     ),
 ]
+
+append!(_CAP_PROBE_SPECS, [
+    Gesso.ArchitectureSpec(; family=:probe, hidden_size=8,
+        num_layers=2, n_heads=2, n_kv_heads=1, vocab_size=8, intermediate_size=16,
+        features=Set([:qk_norm]),
+        mixer=Gesso.ShortConvSpec([:short_convolution, :full_attention], 3)),
+    Gesso.ArchitectureSpec(; family=:probe, hidden_size=8,
+        num_layers=2, n_heads=2, n_kv_heads=1, vocab_size=8, intermediate_size=16,
+        features=Set([:qk_norm]),
+        mixer=Gesso.ShortConvSpec([:short_convolution, :full_attention], 3),
+        moe=Gesso.MoeSpec(; n_experts=4, n_expert_used=2, expert_ff=8,
+            dense_lead=1, gating=:sigmoid, selection_bias=true)),
+])
 
 const ALL_SEMANTIC_CAPS = sort!(
     unique(
