@@ -111,8 +111,10 @@ end
     engine = ChatModel(
         tokenize=s -> Int.(codeunits(s)),
         detokenize=ids -> String(UInt8.(filter(<(256), ids))),
-        render=(msgs, tools, thinking) ->
-            join((string(m["content"]) for m in msgs), "\n"),
+        render=(msgs, tools, thinking) -> begin
+            body = join((string(m["content"]) for m in msgs), "\n")
+            thinking ? body * "\n<think>\n" : body
+        end,
         generate=sv_engine(script; eos=eos, cached=2),
         n_ctx=4096,
         model_id="gesso-eos",
@@ -188,7 +190,7 @@ function sv_qwen_bpe()
         nothing,
         257,
         nothing,
-        "{{ template }}",
+        read(joinpath(@__DIR__, "fixtures", "qwen35_chat", "ornith_chat_template.jinja"), String),
     )
 end
 
@@ -245,4 +247,59 @@ end
         parse_special=true,
     )
     @test cm.prefix_len([sys], Any[], true, sys_only) == 0
+end
+
+# A GGUFBPE for the LFM2 renderer: BOS and the end-of-turn token are the only
+# vocabulary entries, and the end-of-turn token is the EOS.
+function sv_lfm_bpe(template::String)
+    return Gesso.Inference.GGUFBPE(
+        String["<|startoftext|>", "<|im_end|>"],
+        Int32[3, 3],
+        Dict("<|startoftext|>" => 0, "<|im_end|>" => 1),
+        Int[],
+        Dict{UInt64, Int}(),
+        Int[],
+        Int[],
+        Int[],
+        Gesso.Inference._GGUFSpecial[],
+        0,
+        1,
+        nothing,
+        template,
+        false,
+        :lfm2,
+    )
+end
+
+@testset "engine: the chat family picks the render; LFM prompts have no think block" begin
+    msgs = Any[Dict{String, Any}("role" => "user", "content" => "Say hello in one word.")]
+    lfm_template = read(joinpath(@__DIR__, "fixtures", "lfm_chat", "lfm2.jinja"), String)
+    lfm = gguf_chat_model(
+        nothing, nothing, (; rms_norm_eps=1e-6), sv_lfm_bpe(lfm_template);
+        backend=nothing, n_ctx=4096, model_id="lfm2",
+    )
+    prompt = lfm.render(msgs, Any[], true)
+    @test prompt == Gesso.Inference.render_chat(
+        sv_lfm_bpe(lfm_template), msgs; tools=Any[], add_generation_prompt=true,
+    )
+    @test startswith(prompt, "<|startoftext|>")
+    @test endswith(prompt, "<|im_start|>assistant\n")
+    @test !occursin("<think>", prompt)
+    @test !lfm.accepts_tools
+
+    qwen = gguf_chat_model(
+        nothing, nothing, (; rms_norm_eps=1e-6), sv_qwen_bpe();
+        backend=nothing, n_ctx=4096, model_id="x",
+    )
+    @test qwen.accepts_tools
+    @test endswith(qwen.render(msgs, Any[], true), "<think>\n")
+    @test endswith(qwen.render(msgs, Any[], false), "<think>\n\n</think>\n\n")
+end
+
+@testset "engine: an unsupported chat template is an ArgumentError" begin
+    tk = sv_bpe(eos=3, template="{{ bananas }}")
+    @test_throws ArgumentError gguf_chat_model(
+        nothing, nothing, (; rms_norm_eps=1e-6), tk;
+        backend=nothing, n_ctx=64, model_id="x",
+    )
 end
