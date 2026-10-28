@@ -13,6 +13,7 @@ using ..Inference: _chat_json_parse
 
 include("http.jl")
 include("qwen35_xml.jl")
+include("gemma4_parser.jl")
 include("chatmodel.jl")
 include("engine.jl")
 include("server.jl")

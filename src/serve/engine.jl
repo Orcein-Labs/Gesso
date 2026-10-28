@@ -4,7 +4,8 @@
 # GPU type and the package stays free of CUDA.
 
 using ..Inference:
-    GGUFBPE, render_chat, chat_family, reference_generate, GenerateState, Sampler
+    GGUFBPE, GGUFGemma4BPE, render_chat, render_gemma4_chat, chat_family,
+    reference_generate, GenerateState, Sampler
 import ..Inference: encode, decode
 
 """
@@ -19,7 +20,7 @@ function gguf_chat_model(
     model,
     tensors,
     spec,
-    tk::GGUFBPE;
+    tk::Union{GGUFBPE, GGUFGemma4BPE};
     backend,
     n_ctx::Integer,
     model_id::AbstractString,
@@ -83,7 +84,8 @@ function gguf_chat_model(
         model_id=model_id,
         prefix_len=(msgs, tools, thinking, ids) ->
             _system_prefix_len(tk, family, msgs, tools, thinking, ids),
-        accepts_tools=family === :qwen35_xml,
+        accepts_tools=family in (:qwen35_xml, :gemma4),
+        family=family,
     )
 end
 
@@ -96,7 +98,7 @@ function _template_family(template::AbstractString)::Symbol
         e isa ErrorException || rethrow()
         throw(ArgumentError("gguf_chat_model: " * e.msg))
     end
-    family in (:qwen35_xml, :lfm2, :lfm25) || throw(
+    family in (:qwen35_xml, :lfm2, :lfm25, :gemma4) || throw(
         ArgumentError("gguf_chat_model: the server cannot serve chat family $family yet"),
     )
     return family
@@ -106,7 +108,7 @@ end
 # so the two cannot disagree about the bytes they cover. LFM has no thinking
 # switch; its generation prompt never opens a `<think>` block.
 function _render_prompt(
-    tk::GGUFBPE,
+    tk::Union{GGUFBPE, GGUFGemma4BPE},
     family::Symbol,
     msgs,
     tools,
@@ -115,6 +117,13 @@ function _render_prompt(
 )
     if family === :qwen35_xml
         return render_chat(
+            msgs;
+            tools=tools,
+            add_generation_prompt=add_generation_prompt,
+            enable_thinking=thinking,
+        )
+    elseif family === :gemma4
+        return render_gemma4_chat(
             msgs;
             tools=tools,
             add_generation_prompt=add_generation_prompt,
@@ -137,7 +146,7 @@ end
 # messages are merged by the template does not begin with the lone rendering,
 # so it gets 0 and no boundary.
 function _system_prefix_len(
-    tk::GGUFBPE,
+    tk::Union{GGUFBPE, GGUFGemma4BPE},
     family::Symbol,
     msgs,
     tools,
@@ -164,10 +173,10 @@ end
 # The end-of-turn ids the sampler must stop on. The GGUF's eos key is not always
 # the token the chat template ends a turn with, so the two named turn-end tokens
 # are added whenever the vocabulary has them.
-function _engine_eos_ids(tk::GGUFBPE)::Vector{Int}
+function _engine_eos_ids(tk::Union{GGUFBPE, GGUFGemma4BPE})::Vector{Int}
     ids = Int[]
     tk.eos_token_id === nothing || push!(ids, tk.eos_token_id)
-    for name in ("<|im_end|>", "<|endoftext|>")
+    for name in ("<|im_end|>", "<|endoftext|>", "<turn|>")
         id = get(tk.vocab, name, nothing)
         id === nothing || push!(ids, id)
     end

@@ -54,9 +54,27 @@ end
 
 # State of one chat request. `started` is set once a stream's headers are out:
 # after that an error can no longer become a 500, so the connection is closed.
+# The output parser of the model's chat family.
+const OutputParser = Union{QwenXMLParser, Gemma4Parser}
+
+# One parser per request, chosen by the family the engine renders.
+function _new_parser(model::ChatModel, prompt::AbstractString, tools, stop)::OutputParser
+    if model.family === :gemma4
+        return Gemma4Parser(;
+            start_in_reasoning=gemma4_opens_reasoning(prompt),
+            stop=stop,
+        )
+    end
+    return QwenXMLParser(;
+        tools=tools,
+        start_in_reasoning=opens_reasoning(prompt),
+        stop=stop,
+    )
+end
+
 mutable struct Turn
     model::ChatModel
-    parser::QwenXMLParser
+    parser::OutputParser
     io::IO
     stream::Bool
     include_usage::Bool
@@ -125,11 +143,7 @@ function handle_chat(srv::Server, req::HTTPRequest, io::IO, keepalive::Bool)::Bo
 
     turn = Turn(
         model,
-        QwenXMLParser(;
-            tools=collect(Any, tools),
-            start_in_reasoning=opens_reasoning(prompt),
-            stop=stop,
-        ),
+        _new_parser(model, prompt, collect(Any, tools), stop),
         io,
         stream,
         include_usage,

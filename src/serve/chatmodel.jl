@@ -26,6 +26,7 @@
 The engine as seen by the server. See the comment block in chatmodel.jl for the
 contract of each function. `prefix_len` defaults to a function that finds no
 boundary, so an engine without one is unchanged. `accepts_tools` defaults to true.
+`family` names the chat format; the handlers use it to pick the output parser.
 """
 struct ChatModel
     tokenize::Function
@@ -36,6 +37,7 @@ struct ChatModel
     model_id::String
     prefix_len::Function
     accepts_tools::Bool
+    family::Symbol
 
     function ChatModel(;
         tokenize::Function,
@@ -46,6 +48,7 @@ struct ChatModel
         model_id::AbstractString,
         prefix_len::Function=(msgs, tools, thinking, ids) -> 0,
         accepts_tools::Bool=true,
+        family::Symbol=:qwen35_xml,
     )
         n_ctx > 0 || throw(ArgumentError("n_ctx must be positive, got $n_ctx"))
         isempty(model_id) && throw(ArgumentError("model_id must not be empty"))
@@ -58,6 +61,7 @@ struct ChatModel
             String(model_id),
             prefix_len,
             accepts_tools,
+            family,
         )
     end
 end
