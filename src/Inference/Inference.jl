@@ -155,6 +155,12 @@ function _tensor_head_dim(model, tensors)
     return div(dim, n_heads)
 end
 
+function _spec_has_feature(tensors, feature::Symbol)
+    haskey(tensors, :spec) || return false
+    spec = tensors.spec
+    return spec !== nothing && hasproperty(spec, :features) && feature in spec.features
+end
+
 function _tensor_rotary_dim(tensors)
     policy = tensors isa NamedTuple && haskey(tensors, :rope) ? tensors.rope : nothing
     return policy === nothing ? 0 : Int(policy.rotary_dim)
@@ -203,7 +209,7 @@ function reference_prefill(
     # hidden states: (seq, dim)
     h = Activation(; shape=(seq, dim), storage=zeros_like((seq, dim)))
     embedding_lookup!(cpu, h, tensors.embedding, tokens, wl)
-    if haskey(tensors, :spec) && tensors.spec !== nothing && :embedding_scale in tensors.spec.features
+    if _spec_has_feature(tensors, :embedding_scale)
         _apply_embedding_scale!(cpu, h, tensors)
     end
 
@@ -365,7 +371,7 @@ function reference_prefill(
         storage=zeros_like((seq, size(lm_head.storage, 1))),
     )
     matmul!(cpu, seqvocab, hhead, lm_head, wl)
-    if haskey(tensors, :spec) && tensors.spec !== nothing && :logit_softcap in tensors.spec.features
+    if _spec_has_feature(tensors, :logit_softcap)
         _apply_logit_softcap!(cpu, seqvocab, tensors)
     end
     return _logits_transpose(seqvocab.storage)  # (vocab, seq)
@@ -1901,7 +1907,7 @@ function reference_generate(
             # the pass's hidden rows s0..s1; the last pass hands its final row to h
             hp = Activation(; shape=(n, dim), storage=tmp((n, dim)))
             embedding_lookup!(cpu, hp, tensors.embedding, prompt[s0:s1], wp)
-            if haskey(tensors, :spec) && tensors.spec !== nothing && :embedding_scale in tensors.spec.features
+            if _spec_has_feature(tensors, :embedding_scale)
                 _apply_embedding_scale!(cpu, hp, tensors)
             end
             for (bi, blk) in enumerate(model.blocks)
@@ -2314,7 +2320,7 @@ function _last_logits(
         (tensors.lm_head,),
         wl,
     )
-    if haskey(tensors, :spec) && tensors.spec !== nothing && :logit_softcap in tensors.spec.features
+    if _spec_has_feature(tensors, :logit_softcap)
         _apply_logit_softcap!(cpu, out, tensors)
     end
     return vec(out.storage)
@@ -2770,7 +2776,7 @@ function _decode_step!(
     )
     hp = bufs.hp
     @decode_stage :embed cpu embedding_lookup!(cpu, hp, tensors.embedding, [tok], wl)
-    if haskey(tensors, :spec) && tensors.spec !== nothing && :embedding_scale in tensors.spec.features
+    if _spec_has_feature(tensors, :embedding_scale)
         _apply_embedding_scale!(cpu, hp, tensors)
     end
     _T_GDN_NS[] = 0
