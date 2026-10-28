@@ -1,9 +1,9 @@
 # GGUF transport for qwen35 (dense) and qwen35moe (Ornith-1.5-35B-A3B). Header
-# parse is pure Julia. Quantized payloads dequant through the local llama.cpp
-# ggml `to_float` (same third-column binary the ID-gate already uses). Experts
-# stay mmap'd and dequant per selected expert. Large 2-D projections and the
-# embedding/head stay quantized as `QuantMatrix` (gguf_quant_matrix.jl); small
-# and 1-D tensors materialize as Float32 in Gesso `(out, in)` layout.
+# parse and dequant are pure Julia (gguf_dequant.jl); libggml is loaded only
+# as a test oracle. Experts stay mmap'd and dequant per selected expert. Large
+# 2-D projections and the embedding/head stay quantized as `QuantMatrix`
+# (gguf_quant_matrix.jl); small and 1-D tensors materialize as Float32 in
+# Gesso `(out, in)` layout.
 
 using Mmap
 using Libdl
@@ -24,7 +24,6 @@ mutable struct GgufQuantSlice
     ne0::Int                     # GGUF innermost
     ne1::Int
     bytes_per_expert::Int
-    to_float::Ptr{Cvoid}
     blck_size::Int64
     cache::Dict{Int, Matrix{Float32}}
     cache_order::Vector{Int}
@@ -36,7 +35,6 @@ mutable struct GgufQuantSlice
         ne0::Int,
         ne1::Int,
         bytes_per_expert::Int,
-        to_float::Ptr{Cvoid},
         blck_size::Int64,
     )
         return new(
@@ -47,7 +45,6 @@ mutable struct GgufQuantSlice
             ne0,
             ne1,
             bytes_per_expert,
-            to_float,
             blck_size,
             Dict{Int, Matrix{Float32}}(),
             Int[],
@@ -84,6 +81,8 @@ _is_host_float_storage(s::HostOffload) = _is_host_float_storage(s.data)
 _offload_host_array(s::HostOffload) = s.data
 _offload_host_array(s::AbstractArray) = s
 
+# libggml from a llama.cpp build, loaded only by the oracle tests that compare
+# Gesso's kernels and dequant against ggml's (_ggml_lib_traits, _ggml_lib_dequant).
 const _GGML_LIBS = Ref{Tuple{Ptr{Cvoid}, Ptr{Cvoid}}}((C_NULL, C_NULL))
 const _GGML_GET_TRAITS = Ref{Ptr{Cvoid}}(C_NULL)
 
@@ -118,8 +117,9 @@ end
 
 # Block size and bytes per block of the ggml types Gesso reads, from ggml's own
 # type table (the same sizes as _iq_block_bytes). Also the allow-list: a type
-# missing here is refused, and a libggml whose traits struct no longer has the
-# layout _ggml_traits reads is caught against these sizes.
+# missing here is refused, every type here has a decoder in gguf_dequant.jl,
+# and a libggml whose traits struct no longer has the layout _ggml_lib_traits
+# reads is caught against these sizes.
 const _GGML_KNOWN_BLOCKS = Dict{Int32, Tuple{Int, Int}}(
     0 => (1, 4),        # F32
     1 => (1, 2),        # F16
@@ -169,8 +169,6 @@ function _check_ggml_traits(ggml_type::Integer, blck::Integer, tsize::Integer)
 end
 
 function _ggml_traits(ggml_type::Integer; tensor=nothing)
-    # ggml_get_type_traits indexes its table unchecked in release builds, so a
-    # type outside Gesso's table is refused here rather than read.
     ggml_type in keys(_GGML_KNOWN_BLOCKS) || throw(
         gesso_error(
             ERR_RUNTIME,
@@ -181,6 +179,15 @@ function _ggml_traits(ggml_type::Integer; tensor=nothing)
             tensor=something(tensor, ""),
         ),
     )
+    blck, tsize = _GGML_KNOWN_BLOCKS[Int32(ggml_type)]
+    return (blck_size=Int64(blck), type_size=tsize)
+end
+
+# libggml's traits for a type, checked against the table. Oracle tests only.
+function _ggml_lib_traits(ggml_type::Integer)
+    # ggml_get_type_traits indexes its table unchecked in release builds, so a
+    # type outside Gesso's table is refused before it is asked.
+    _ggml_traits(ggml_type)
     _ensure_ggml!()
     p = ccall(_GGML_GET_TRAITS[], Ptr{Cvoid}, (Cint,), Int32(ggml_type))
     p == C_NULL && error("gguf_import: ggml_get_type_traits($ggml_type) is null")
@@ -192,6 +199,24 @@ function _ggml_traits(ggml_type::Integer; tensor=nothing)
     _check_ggml_traits(ggml_type, blck, tsize)
     to_float = unsafe_load(Ptr{Ptr{Cvoid}}(p + 40))
     return (blck_size=blck, type_size=tsize, to_float=to_float)
+end
+
+# ggml's own dequant of n_elem values at 0-based offset0. Oracle tests only.
+function _ggml_lib_dequant(data::AbstractVector{UInt8}, offset0::Int, ggml_type::Integer, n_elem::Int)
+    tr = _ggml_lib_traits(ggml_type)
+    tr.to_float == C_NULL && error("gguf_import: libggml has no to_float for ggml type $ggml_type")
+    nbytes = cld(n_elem, Int(tr.blck_size)) * tr.type_size
+    0 <= offset0 && offset0 + nbytes <= length(data) || error("ggml oracle: read past the end of data")
+    y = Vector{Float32}(undef, n_elem)
+    GC.@preserve data y ccall(
+        tr.to_float,
+        Cvoid,
+        (Ptr{Cvoid}, Ptr{Float32}, Int64),
+        pointer(data, offset0 + 1),
+        pointer(y),
+        Int64(n_elem),
+    )
+    return y
 end
 
 # --- tiny cursor --------------------------------------------------------------
@@ -755,20 +780,12 @@ function gguf_architecture_spec(path::AbstractString)
 end
 
 function _dequant_f32(data::Vector{UInt8}, offset0::Int, ggml_type::Int32, n_elem::Int)
-    y = Vector{Float32}(undef, n_elem)
-    # F32 is a byte copy. Taking it before the ggml lookup keeps F32-only
-    # files loadable without a llama.cpp build.
-    if ggml_type == 0
-        nbytes = n_elem * 4
-        y .= reinterpret(Float32, view(data, (offset0+1):(offset0+nbytes)))
-        return y
-    end
     traits = _ggml_traits(ggml_type)
-    traits.to_float == C_NULL && error("gguf_import: no to_float for ggml type $ggml_type")
-    # The ccall reads raw memory, so a range past the mapped file would not
-    # stop at a BoundsError. Every caller passes header-checked offsets; this
-    # is the backstop for the ones that compute their own.
-    nbytes = cld(n_elem, Int(traits.blck_size)) * Int(traits.type_size)
+    blck = Int(traits.blck_size)
+    rem(n_elem, blck) == 0 || error("gguf_import: $n_elem values is not a whole number of $blck-value blocks")
+    # Every caller passes header-checked offsets; this is the backstop for the
+    # ones that compute their own.
+    nbytes = div(n_elem, blck) * traits.type_size
     0 <= offset0 && offset0 + nbytes <= length(data) || throw(
         gesso_error(
             ERR_RUNTIME,
@@ -776,15 +793,7 @@ function _dequant_f32(data::Vector{UInt8}, offset0::Int, ggml_type::Int32, n_ele
             reason=:malformed_gguf,
         ),
     )
-    ccall(
-        traits.to_float,
-        Cvoid,
-        (Ptr{Cvoid}, Ptr{Float32}, Int64),
-        pointer(data, offset0 + 1),
-        pointer(y),
-        Int64(n_elem),
-    )
-    return y
+    return _ggml_dequant!(Vector{Float32}(undef, n_elem), data, offset0, ggml_type, n_elem)
 end
 
 function _gguf_array(hdr, info::GgufTensorInfo)
@@ -834,7 +843,6 @@ function _expert_slice(hdr, info::GgufTensorInfo)
         ne0,
         ne1,
         nbytes,
-        traits.to_float,
         traits.blck_size,
     )
 end
@@ -856,21 +864,7 @@ function _gguf_dequant_expert_into!(
     size(W) == (s.ne1, s.ne0) ||
         error("gguf_dequant_expert!: W $(size(W)) ≠ ($(s.ne1), $(s.ne0))")
     off = s.offset0 + (e - 1) * s.bytes_per_expert
-    y = view(raw, 1:n_elem)
-    if s.ggml_type == Int32(0)
-        y .= reinterpret(Float32, view(s.data, (off+1):(off+n_elem*4)))
-    else
-        s.to_float == C_NULL &&
-            error("gguf_dequant_expert: no to_float for ggml type $(s.ggml_type)")
-        ccall(
-            s.to_float,
-            Cvoid,
-            (Ptr{Cvoid}, Ptr{Float32}, Int64),
-            pointer(s.data, off + 1),
-            pointer(raw),
-            Int64(n_elem),
-        )
-    end
+    _ggml_dequant!(raw, s.data, off, s.ggml_type, n_elem)
     A = reshape(view(raw, 1:n_elem), s.ne0, s.ne1)
     @inbounds for j in 1:s.ne1, i in 1:s.ne0
         W[j, i] = A[i, j]
@@ -1020,7 +1014,6 @@ function _quant_matrix(hdr, info::GgufTensorInfo)
         ne0,
         nrows,
         rb,
-        traits.to_float,
         traits.blck_size,
     )
 end

@@ -69,12 +69,6 @@ else
         return X64 * transpose(W), abs.(X64) * transpose(abs.(W))
     end
 
-    function _lh_host_ready(label::AbstractString)
-        isfile(joinpath(get(ENV, "GESSO_GGML_DIR", ""), "libggml-base.so")) && return true
-        _skip("set GESSO_GGML_DIR to a directory with libggml-base.so — $label host reference skipped")
-        return false
-    end
-
     function _lh_random_matrix(rng, kind::Symbol, nrows::Int, ne0::Int)
         bbytes, bvals = _LH_BLOCK[kind]
         rb = div(ne0, bvals) * bbytes
@@ -92,7 +86,7 @@ else
                 data[(base+1):(base+2)] .= reinterpret(UInt8, [d])
             end
         end
-        return _lh_inf.QuantMatrix(data, 0, _LH_TYPE[kind], ne0, nrows, rb, C_NULL, Int64(bvals))
+        return _lh_inf.QuantMatrix(data, 0, _LH_TYPE[kind], ne0, nrows, rb, Int64(bvals))
     end
 
     # BF16 matrix from dense F32 (out, in): the top 16 bits of each value, so the
@@ -102,7 +96,7 @@ else
         u = UInt16.(reinterpret(UInt32, vec(permutedims(W))) .>> 16)
         return _lh_inf.QuantMatrix(
             collect(reinterpret(UInt8, u)), 0, _lh_inf.GGML_TYPE_BF16,
-            ne0, nrows, 2 * ne0, C_NULL, Int64(1),
+            ne0, nrows, 2 * ne0, Int64(1),
         )
     end
 
@@ -139,7 +133,6 @@ else
                 up = _lh_ext._lq_upload(qm)
                 @test up isa _lh_ext.LavaBlockQuant
                 @test up.kind == _lh_ext._lq_kind(qm.ggml_type)
-                _lh_host_ready(string(kind)) || continue
                 label = string(kind)
 
                 X1 = randn(rng, Float32, 1, ne0)
@@ -187,23 +180,21 @@ else
             _lh_ext._lq_matmul!(Y, Xd, lq)
             return Float64.(Array(Y))
         end
-        if _lh_host_ready("negative controls")
-            ref, _ = _lh_ref(qm, X)
-            bound = 1.0e-4 * max(1.0, maximum(abs, ref))
-            ncs = (
-                "bf16 bytes read as f16" => _lh_ext.LavaBlockQuant(
-                    up.data, _lh_inf.GGML_TYPE_F16, _lh_ext._LQ_KIND_F16, ne0, nrows, 2 * ne0,
-                ),
-                "bf16 row stride minus 2" => _lh_ext.LavaBlockQuant(
-                    up.data, up.ggml_type, up.kind, ne0, nrows, 2 * ne0 - 2,
-                ),
-            )
-            for (name, lq) in ncs
-                err = maximum(abs, run_gemv(lq) .- ref)
-                _lh_note!(_LH_NC, name, err)
-                @info "negative control" name err bound
-                @test !(err <= bound)
-            end
+        ref, _ = _lh_ref(qm, X)
+        bound = 1.0e-4 * max(1.0, maximum(abs, ref))
+        ncs = (
+            "bf16 bytes read as f16" => _lh_ext.LavaBlockQuant(
+                up.data, _lh_inf.GGML_TYPE_F16, _lh_ext._LQ_KIND_F16, ne0, nrows, 2 * ne0,
+            ),
+            "bf16 row stride minus 2" => _lh_ext.LavaBlockQuant(
+                up.data, up.ggml_type, up.kind, ne0, nrows, 2 * ne0 - 2,
+            ),
+        )
+        for (name, lq) in ncs
+            err = maximum(abs, run_gemv(lq) .- ref)
+            _lh_note!(_LH_NC, name, err)
+            @info "negative control" name err bound
+            @test !(err <= bound)
         end
     end
 
