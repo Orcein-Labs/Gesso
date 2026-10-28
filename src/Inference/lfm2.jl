@@ -96,7 +96,6 @@ function _gguf_lfm_param_map(spec::ArchitectureSpec)
 end
 
 function _short_convolution_block!(cpu, h, normed, sub, bt, wl, eps, zeros_like; state=nothing)
-    backend_name(cpu) === :cpu || throw(LoweringNotImplemented(:short_convolution, backend_name(cpu)))
     seq, dim = size(h.storage)
     width = size(bt.wshort_conv.storage, 2)
     hist = state === nothing ? zeros_like((dim, width - 1)) : state
@@ -105,23 +104,33 @@ function _short_convolution_block!(cpu, h, normed, sub, bt, wl, eps, zeros_like;
     bcx = Activation(; shape=(seq, 3dim), storage=zeros_like((seq, 3dim)))
     matmul!(cpu, bcx, normed, bt.wshort_in, wl)
     mixed = Activation(; shape=(seq, dim), storage=zeros_like((seq, dim)))
-    w = bt.wshort_conv.storage
+    _short_conv_mix!(cpu, mixed.storage, bcx.storage, bt.wshort_conv.storage, hist)
+    matmul!(cpu, sub, mixed, bt.wshort_out, wl)
+    return sub
+end
+
+# The gated short convolution between the two projections. bcx holds B, C and X
+# side by side; hist holds the last width-1 B*X values per channel and is
+# advanced in place.
+function _short_conv_mix!(backend, mixed, bcx, w, hist)
+    backend_name(backend) === :cpu || throw(LoweringNotImplemented(:short_convolution, backend_name(backend)))
+    seq, dim = size(mixed)
+    width = size(w, 2)
     # GGUF taps run oldest to newest; the current B*X is the final tap.
     @inbounds for t in 1:seq, c in 1:dim
-        bx = bcx.storage[t, c] * bcx.storage[t, 2dim+c]
-        y = zero(eltype(mixed.storage))
+        bx = bcx[t, c] * bcx[t, 2dim+c]
+        y = zero(eltype(mixed))
         for p in 1:(width-1)
             y += hist[c, p] * w[c, p]
         end
         y += bx * w[c, width]
-        mixed.storage[t, c] = bcx.storage[t, dim+c] * y
+        mixed[t, c] = bcx[t, dim+c] * y
         for p in 1:(width-2)
             hist[c, p] = hist[c, p+1]
         end
         hist[c, width-1] = bx
     end
-    matmul!(cpu, sub, mixed, bt.wshort_out, wl)
-    return sub
+    return mixed
 end
 
 function _selected_expert_mul!(dst, bank, e, x)
