@@ -132,6 +132,9 @@ function _gdn_states(tensors, zeros_like)
             conv_dim = 2 * key_dim + value_dim
             conv[bi] = zeros_like((conv_dim, mx.conv_kernel_dim - 1))
             rec[bi] = zeros_like((mx.num_value_heads, mx.key_head_dim, mx.value_head_dim))
+        elseif mx isa ShortConvSpec && _block_mixer(tensors.blocks[bi]) === :short_convolution
+            conv[bi] = zeros_like((spec.hidden_size, mx.conv_kernel_dim - 1))
+            rec[bi] = nothing
         else
             conv[bi] = nothing
             rec[bi] = nothing
@@ -246,7 +249,10 @@ function reference_prefill(
         bt = tensors.blocks[bi]
 
         # --- attention sublayer (pre-norm) -----------------------------------
-        if _block_mixer(bt) === :linear_attention
+        if _block_mixer(bt) === :short_convolution
+            _short_convolution_block!(cpu, h, normed, sub, bt, wl, eps, zeros_like)
+            h.storage .+= sub.storage
+        elseif _block_mixer(bt) === :linear_attention
             _hybrid_linear_block!(
                 cpu,
                 h,
@@ -475,7 +481,9 @@ end
 function _gdn_decode_scratch(zeros_like, tensors)
     spec = haskey(tensors, :spec) ? tensors.spec : nothing
     mx = spec === nothing ? nothing : spec.mixer
-    mx === nothing && return nothing
+    if mx === nothing || mx isa ShortConvSpec
+        return nothing
+    end
     key_dim = mx.num_key_heads * mx.key_head_dim
     value_dim = mx.num_value_heads * mx.value_head_dim
     conv_dim = 2 * key_dim + value_dim
@@ -715,6 +723,9 @@ function _ffn_block!(
 end
 
 function _moe_ffn!(cpu, down, normed2, bt, wl, zeros_like)
+    if haskey(bt, :wrouter_bias) || (haskey(bt, :router_gating) && bt.router_gating === :sigmoid)
+        return _biased_moe_ffn!(cpu, down, normed2, bt)
+    end
     x = normed2.storage
     y = down.storage
     n_used =
@@ -1700,7 +1711,7 @@ function reference_generate(
         # per-layer KV caches: preallocated ctx rows, filled progressively
         # (the cache is runtime state, not a weight — no fixture-walk entries)
         # (linear-attention blocks keep no cache: a zero-row placeholder)
-        kv_rows(bt) = _block_mixer(bt) === :linear_attention ? 0 : st.ctx
+        kv_rows(bt) = _block_mixer(bt) !== :full_attention ? 0 : st.ctx
         kv_like = fresh ? zeros_like((0, 0, 0)) : nothing
         function kv_cache(bt)
             rows = kv_rows(bt)
@@ -1759,7 +1770,9 @@ function reference_generate(
         kdim = n_kv_heads * d_head
         qdim = n_heads * d_head
         hidden_ffn = model.blocks[1].ffn.hidden
-        hybrid = any(bt -> _block_mixer(bt) === :linear_attention, tensors.blocks)
+        hybrid = any(bt -> _block_mixer(bt) !== :full_attention, tensors.blocks)
+        draft === nothing || !any(bt -> _block_mixer(bt) === :short_convolution, tensors.blocks) ||
+            error("reference_generate: speculative verification does not support short convolution")
         n0 = _generate_resume!(st, prompt, hybrid)
         # a call without a state keeps nothing, so it takes no interior checkpoints
         # and its end-of-prompt snapshot is skipped
@@ -1870,7 +1883,10 @@ function reference_generate(
             embedding_lookup!(cpu, hp, tensors.embedding, prompt[s0:s1], wp)
             for (bi, blk) in enumerate(model.blocks)
                 bt = tensors.blocks[bi]
-                if _block_mixer(bt) === :linear_attention
+                if _block_mixer(bt) === :short_convolution
+                    _short_convolution_block!(cpu, hp, normed, sub, bt, wp, eps, block_tmp; state=gdn_conv[bi])
+                    hp.storage .+= sub.storage
+                elseif _block_mixer(bt) === :linear_attention
                     @decode_stage :gdn_mixer cpu _hybrid_linear_block!(
                         cpu,
                         hp,
@@ -2727,7 +2743,10 @@ function _decode_step!(
 
     for (bi, blk) in enumerate(model.blocks)
         bt = tensors.blocks[bi]
-        if _block_mixer(bt) === :linear_attention
+        if _block_mixer(bt) === :short_convolution
+            _short_convolution_block!(cpu, hp, bufs.normed, bufs.sub, bt, wl, eps, zeros_like;
+                state=gdn_conv === nothing ? nothing : gdn_conv[bi])
+        elseif _block_mixer(bt) === :linear_attention
             t0 = time_ns()
             @decode_stage :gdn_mixer cpu _hybrid_linear_block!(
                 cpu,
@@ -2828,6 +2847,7 @@ include("semantic_params.jl")        # Pass B/E: canonical parameter identity
 include("arch_adapters.jl")          # Pass A/B: the family boundary
 include("materialize_architecture.jl") # Pass B/E: the generic binder
 include("gguf_import.jl")          # qwen35moe GGUF mmap + lazy experts
+include("lfm2.jl")
 include("gguf_quants.jl")          # IQ2_XS / IQ3_XXS / IQ4_XS fused expert GEMV
 include("expert_residency.jl")     # per-expert device residency, profile, routing trace
 include("quant_q8k.jl")            # Q8_K activation quantization (ggml block_q8_K)
@@ -2844,6 +2864,7 @@ include("dflash_draft.jl")        # DFlash2 block drafter over the target's tapp
 include("tokenizer_protocol.jl")   # Pass C: the tokenizer PROTOCOL
 include("gguf_tokenizer.jl")       # GGUF tokenizer section: qwen35 BPE, streaming decode
 include("chat_template.jl")         # Qwen3.5 XML chat template renderer (no Jinja)
+include("lfm2_chat.jl")
 include("qwen4exp.jl")              # Flash-Next (qwen4exp) CPU forward
 include("import_report.jl")      # Passes I/J: report + generated matrix
 

@@ -103,6 +103,10 @@ const ROLE_GDN_DT_BIAS = Symbol("linear.dt_bias")
 const ROLE_GDN_NORM = Symbol("linear.norm")
 const ROLE_GDN_O = Symbol("linear.o")
 const ROLE_ROUTER = Symbol("ffn.router")
+const ROLE_ROUTER_BIAS = Symbol("ffn.selection_bias")
+const ROLE_SHORT_IN = Symbol("shortconv.in")
+const ROLE_SHORT_CONV = Symbol("shortconv.kernel")
+const ROLE_SHORT_OUT = Symbol("shortconv.out")
 const ROLE_EXPERT_GATE = Symbol("ffn.experts.gate")
 const ROLE_EXPERT_UP = Symbol("ffn.experts.up")
 const ROLE_EXPERT_DOWN = Symbol("ffn.experts.down")
@@ -141,6 +145,8 @@ _role_family(::Val{Symbol("linear.norm")}) = :frozen
 _role_family(::Val{Symbol("linear.A_log")}) = :frozen
 _role_family(::Val{Symbol("linear.dt_bias")}) = :frozen
 _role_family(::Val{Symbol("ffn.shared.gate_inp")}) = :frozen
+_role_family(::Val{Symbol("ffn.selection_bias")}) = :frozen
+_role_family(::Val{Symbol("shortconv.kernel")}) = :frozen
 _role_family(::Val{Symbol("ffn.experts.gate")}) = :expert
 _role_family(::Val{Symbol("ffn.experts.up")}) = :expert
 _role_family(::Val{Symbol("ffn.experts.down")}) = :expert
@@ -186,6 +192,10 @@ const ROLE_TO_SLOT = Dict{Symbol, Symbol}(
     ROLE_GDN_NORM => :wgdn_norm,
     ROLE_GDN_O => :wgdn_o,
     ROLE_ROUTER => :wrouter,
+    ROLE_ROUTER_BIAS => :wrouter_bias,
+    ROLE_SHORT_IN => :wshort_in,
+    ROLE_SHORT_CONV => :wshort_conv,
+    ROLE_SHORT_OUT => :wshort_out,
     ROLE_EXPERT_GATE => :wexp_gate,
     ROLE_EXPERT_UP => :wexp_up,
     ROLE_EXPERT_DOWN => :wexp_down,
@@ -283,6 +293,16 @@ once at the boundary (Pass B), never per-name.
 """
 function external_name(map::FamilyParamMap, ref::ParamRef, layer::Int)
     return map.layer_prefix * string(layer) * "." * ref.external
+end
+
+function _layer_param_refs(map::FamilyParamMap, spec::ArchitectureSpec, layer::Int)
+    refs = layer_mixer(spec, layer) !== :full_attention && !isempty(map.linear_refs) ?
+        map.linear_refs : map.layer_refs
+    spec.moe === nothing && return refs
+    dense = layer < spec.moe.dense_lead
+    expert_roles = (ROLE_ROUTER, ROLE_ROUTER_BIAS, ROLE_EXPERT_GATE, ROLE_EXPERT_UP, ROLE_EXPERT_DOWN)
+    dense_roles = (ROLE_GATE, ROLE_UP, ROLE_DOWN)
+    return filter(r -> dense ? r.id.role ∉ expert_roles : r.id.role ∉ dense_roles, refs)
 end
 
 export SemanticParamId,

@@ -345,13 +345,14 @@ defaults to a particular checkpoint's shape, except `full_attention_interval`
 """
 function spec_from_gguf_kv(kv::AbstractDict; tensor_names=nothing)
     arch = String(get(kv, "general.architecture", "qwen35moe"))
-    arch in ("qwen35", "qwen35moe", "llama", "spark2_5", "qwen4exp") || error(
+    arch in ("qwen35", "qwen35moe", "llama", "spark2_5", "qwen4exp", "lfm2", "lfm2moe") || error(
         "spec_from_gguf_kv: unsupported general.architecture $(repr(arch)) " *
-        "(supported: qwen35 dense, qwen35moe, llama, spark2_5, qwen4exp)",
+        "(supported: qwen35 dense, qwen35moe, llama, spark2_5, qwen4exp, lfm2, lfm2moe)",
     )
     arch == "llama" && return _spec_from_gguf_llama(kv, tensor_names)
     arch == "spark2_5" && return _spec_from_gguf_spark(kv, tensor_names)
     arch == "qwen4exp" && return _spec_from_gguf_qwen4exp(kv, tensor_names)
+    arch in ("lfm2", "lfm2moe") && return _spec_from_gguf_lfm(kv, tensor_names)
     p(key, default=nothing) = get(kv, "$arch.$key", default)
     req(key) =
         (v=p(key); v === nothing ? error("spec_from_gguf_kv: missing $arch.$key") : v)
@@ -746,10 +747,7 @@ function _required_gguf_names(pmap::FamilyParamMap, spec::ArchitectureSpec)
     pmap.final_norm_external !== nothing && push!(names, pmap.final_norm_external)
     pmap.lm_head_external !== nothing && push!(names, pmap.lm_head_external)
     for i in 0:(spec.num_layers-1)
-        mixer = layer_mixer(spec, i)
-        refs =
-            mixer === :linear_attention && !isempty(pmap.linear_refs) ? pmap.linear_refs :
-            pmap.layer_refs
+        refs = _layer_param_refs(pmap, spec, i)
         for ref in refs
             push!(names, external_name(pmap, ref, i))
         end
@@ -792,7 +790,7 @@ end
 
 function _gguf_unreorder_linear(A, name::AbstractString, spec::ArchitectureSpec)
     mx = spec.mixer
-    mx === nothing && return A
+    mx isa LinearMixerSpec || return A
     nk, nv = mx.num_key_heads, mx.num_value_heads
     nk == nv && return A
     r = div(nv, nk)
@@ -892,6 +890,7 @@ _gguf_param_map(spec::ArchitectureSpec) =
     error("qwen4exp GGUFs do not load through the generic block runner; use load_qwen4exp") :
     spec.family === :llama ? gguf_param_map(LlamaAdapter(), spec) :
     spec.family === :spark2_5 ? _gguf_spark_param_map(spec) :
+    spec.family in (:lfm2, :lfm2moe) ? _gguf_lfm_param_map(spec) :
     spec.moe === nothing ? gguf_param_map(Qwen35Adapter(), spec) :
     gguf_param_map(Qwen35MoeAdapter(), spec)
 
