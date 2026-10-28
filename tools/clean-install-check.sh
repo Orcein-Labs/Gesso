@@ -85,12 +85,12 @@ fi
 echo "== request: /v1/chat/completions"
 REPLY=$(curl -fsS -X POST "http://127.0.0.1:$PORT/v1/chat/completions" \
     -H 'Content-Type: application/json' \
-    -d '{"model":"clean-install","messages":[{"role":"user","content":"Say hello in one word."}],"max_tokens":64}')
+    -d '{"model":"clean-install","messages":[{"role":"user","content":"Say hello in one word."}],"max_tokens":512}')
 echo "$REPLY"
 
 object=$(jq -r '.object' <<<"$REPLY")
 tokens=$(jq -r '.usage.completion_tokens' <<<"$REPLY")
-text=$(jq -r '.choices[0].message | ((.content // "") + (.reasoning_content // ""))' <<<"$REPLY")
+text=$(jq -r '.choices[0].message.content // ""' <<<"$REPLY")
 
 if [[ "$object" != "chat.completion" ]]; then
     echo "clean-install-check: unexpected object: $object" >&2
@@ -100,8 +100,8 @@ if [[ "$tokens" -lt 1 ]]; then
     echo "clean-install-check: no completion tokens generated" >&2
     exit 1
 fi
-if [[ -z "${text// /}" ]]; then
-    echo "clean-install-check: empty completion text" >&2
+if [[ -z "$(tr -d "[:space:]" <<<"$text")" ]]; then
+    echo "clean-install-check: empty message content" >&2
     exit 1
 fi
 
