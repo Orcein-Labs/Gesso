@@ -215,6 +215,7 @@ const _LH_RED_LANES = 64
     nv::Int,
     dv::Int,
     eps::Float32,
+    sigmoid::Bool,
 )
     tl = @index(Local, Linear)
     gi = @index(Group, Linear)
@@ -237,7 +238,8 @@ const _LH_RED_LANES = 64
     base = (hh - 1) * dv
     for j in tl:_LH_RED_LANES:dv
         zv = z[t, base+j]
-        merged[t, base+j] = (core[t, hh, j] * inv) * norm_w[j] * (zv / (1.0f0 + exp(-zv)))
+        gate = sigmoid ? 1.0f0 / (1.0f0 + exp(-zv)) : zv / (1.0f0 + exp(-zv))
+        merged[t, base+j] = (core[t, hh, j] * inv) * norm_w[j] * gate
     end
 end
 
@@ -260,7 +262,8 @@ function Gesso.Inference._gdn_gnorm_merge!(
         w,
         Int(nv),
         Int(dv),
-        Float32(eps);
+        Float32(eps),
+        false;
         ndrange=seq * nv * _LH_RED_LANES,
         workgroupsize=(_LH_RED_LANES,),
     )
@@ -671,6 +674,13 @@ function Gesso.Inference._moe_topk_swiglu!(
         Lava.submit!(KALava().dispatch_bq)
     end
     rh = _lh_host_weight(router)
+    # Decode only. A prompt spreads its picks over every row, so the pool would
+    # see few repeats and refill often; prefill keeps the all-host route below.
+    if _lhot_wants(xh, gate, up, down, 0)
+        Gesso.Inference.@decode_stage :moe_hot backend _lhot_moe_decode!(
+            y, x, xh, rh, gate, up, down, n_used)
+        return y
+    end
     yh = zeros(Float32, size(y))
     Gesso.Inference.@decode_stage :moe_host nothing Gesso.Inference._moe_topk_swiglu!(
         Gesso.CPUBackend(),

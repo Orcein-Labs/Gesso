@@ -58,6 +58,8 @@ _quant_native(t::Int32) =
     t == GGML_TYPE_IQ2_XS ||
     t == GGML_TYPE_IQ3_XXS ||
     t == GGML_TYPE_IQ4_XS ||
+    t == GGML_TYPE_IQ4_NL ||
+    t == GGML_TYPE_Q2_0 ||
     _quant_q8k_native(t)
 
 const GGML_TYPE_F16 = Int32(1)

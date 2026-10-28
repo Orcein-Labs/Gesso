@@ -152,6 +152,11 @@ using Gesso: reference_prefill, reference_generate
     # RoPE lookups; the GGUF spec check is gated on GESSO_SPARK25_GGUF
     include("test_spark25.jl")
 
+    # qwen4exp (Flash-Next): metadata reader, chunked prefill against one call on a
+    # random toy model, the QSA context refusal; the real-GGUF run against the
+    # llama.cpp dump is gated on GESSO_QWEN4EXP_GGUF (skips without it)
+    include("test_qwen4exp.jl")
+
     # Phase 3 (§LXXVI item D): the REAL-model gate — one named skip unless
     # GESSO_SMOLLM2_DIR points at a local snapshot; it never downloads
     include("test_smollm2.jl")
@@ -168,6 +173,12 @@ using Gesso: reference_prefill, reference_generate
     include("test_cuda_hybrid.jl")
     include("test_gdn_decode_fused.jl")
     include("test_cuda_moe.jl")
+
+    # IQ4_NL and Q2_0 block layouts, dequant against ggml to_float (env-gated),
+    # CPU and CUDA expert GEMV against an F32 reference. After the seam test:
+    # it imports CUDA.
+    include("test_quant_flash_next_types.jl")
+
     include("test_expert_cache.jl")
     include("test_cuda_quant_dense.jl")
     include("test_cuda_attention_decode.jl")
@@ -204,6 +215,10 @@ using Gesso: reference_prefill, reference_generate
     # oracle; named skip without a device.
     include("test_lava_attention_decode.jl")
 
+    # Lava q8 KV cache: device write vs host quantizer, dense read, decode over
+    # a device q8 cache, and the q4h refusal; named skip without a device.
+    include("test_lava_kv_format.jl")
+
     # Lava single-row rmsnorm workgroup reduction vs the serial kernel it
     # replaced; named skip without a device.
     include("test_lava_rmsnorm_reduce.jl")
@@ -212,11 +227,28 @@ using Gesso: reference_prefill, reference_generate
     # dequant) vs the host F64 reference; named skip without a device.
     include("test_lava_quant.jl")
 
+    # BF16 and F16 bytes stay on the device; IQ2_XS, IQ2_XXS, IQ2_S, IQ3_XXS and
+    # IQ3_S dense matrices use the same in-kernel decode. Host F64 reference.
+    include("test_lava_quant_half.jl")
+
+    # Flash-Next quant types on Lava: IQ4_NL and Q2_0, dense and expert;
+    # IQ2_XXS, IQ2_S and IQ3_S as expert banks; host F64 reference with
+    # negative controls.
+    include("test_lava_quant_flash_next.jl")
+    include("test_lava_quant_kexperts.jl")
+
+    # Hot host experts: per-layer device pools for decode. Zero-slot bit identity
+    # with the host route, full and partial pools against F64 and a residency
+    # model, slot bytes, and two negative controls.
+    include("test_lava_hot_experts.jl")
+
     # Phase 8 L2: Lava hybrid seams (conv1d, GDN gates and delta rule with
     # carried state, host-storage refusal) vs the F64 CPU oracle; named skip
     # without a device.
     include("test_lava_hybrid.jl")
     include("test_lava_gdn_reference.jl")
+    include("test_lava_qwen4exp.jl")
+    include("test_lava_spark25.jl")
 
     # Phase 8 (§LXXXI item C): Lava inference — prefill + greedy generate vs
     # the CPU oracle, ids EXACT, logits at declared atol; no-copy law.

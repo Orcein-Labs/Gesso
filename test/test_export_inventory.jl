@@ -235,6 +235,15 @@ const INVENTORY = Dict{Symbol, Tuple{Symbol, Vector{String}}}(
     :complete_text => (:live, ["test_speculation.jl"]),
     :feedback_counts => (:live, ["test_speculation.jl"]),
 
+    # --- qwen4exp (Flash-Next) forward -------------------------------------
+    :Qwen4expConfig => (:live, ["test_qwen4exp.jl"]),
+    :Qwen4expModel => (:live, ["test_qwen4exp.jl", "test_lava_qwen4exp.jl"]),
+    :Qwen4expState => (:live, ["test_qwen4exp.jl", "test_lava_qwen4exp.jl"]),
+    :qwen4exp_config => (:live, ["test_qwen4exp.jl"]),
+    :load_qwen4exp => (:live, ["test_qwen4exp.jl", "test_lava_qwen4exp.jl"]),
+    :qwen4exp_forward! => (:live, ["test_qwen4exp.jl", "test_lava_qwen4exp.jl"]),
+    :qwen4exp_logits => (:live, ["test_qwen4exp.jl", "test_lava_qwen4exp.jl"]),
+
     # --- Phase 5 engine (§LXXVIII) ------------------------------------------
     :Session => (:live, ["test_session.jl"]),
     :prefill! => (:live, ["test_session.jl"]),
