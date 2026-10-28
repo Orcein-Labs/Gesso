@@ -230,7 +230,12 @@ end
 
 @testset "gguf llama: unknown architecture is refused" begin
     kv = Dict{String, Any}("general.architecture" => "mistral")
-    @test_throws ErrorException Gesso.Inference.spec_from_gguf_kv(kv)
+    err = try
+        Gesso.Inference.spec_from_gguf_kv(kv)
+    catch e
+        e
+    end
+    @test err isa Gesso.GessoError && err.detail[:reason] == :unsupported_architecture
 end
 
 @testset "gguf llama: llama3 rope scaling is refused, not dropped" begin
