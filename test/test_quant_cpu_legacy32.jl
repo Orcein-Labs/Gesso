@@ -113,7 +113,7 @@ end
     for ty in (_G4T_IQ4NL, _G4T_Q51)
         b = _g4t_random_bytes(rng, ty, div(ne0, 32) * 3)
         ref = vec(_g4t_ref_matrix(ty, b, ne0, 3)')
-        ggml = Gesso.Inference._dequant_f32(b, 0, ty, 3 * ne0)
+        ggml = Gesso.Inference._ggml_lib_dequant(b, 0, ty, 3 * ne0)
         @test ggml == ref
     end
 end

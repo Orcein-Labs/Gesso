@@ -319,6 +319,9 @@ function materialize_architecture(
         refs = _layer_param_refs(pmap, spec, layer)
         for ref in refs
             external = external_name(pmap, ref, i)
+            if ref.id.role === ROLE_LAYER_OUTPUT_SCALE && !haskey(tensors_by_name, external)
+                continue
+            end
             arr = grab(external)
             slice = ref.rows === nothing ? arr : arr[ref.rows, :]
             slice = _apply_rms_unit_offset(spec, ref.id.role, slice)

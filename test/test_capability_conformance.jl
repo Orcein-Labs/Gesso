@@ -280,7 +280,7 @@ function _probe(backend, cap::Symbol)
         )
     elseif cap === :v_norm_weightless
         return _conformance_run(
-            () -> Gesso.Inference._gemma4_v_norm!(backend, randn(rng, 2, 2, 4), 1e-6),
+            () -> Gesso.Inference._gemma4_v_norm!(backend, Matrix{Float32}(randn(rng, 2, 8)), 1e-6; nheads=2, hd=4),
         )
     elseif cap === :k_only_global_attention
         return _conformance_run(
@@ -288,7 +288,7 @@ function _probe(backend, cap::Symbol)
         )
     elseif cap === :rope_freq_factors
         return _conformance_run(
-            () -> Gesso.Inference._gemma4_rope_with_factors!(backend, Matrix{Float32}(randn(rng, 2, 4)), 4, 4, 0, 10000.0, [1.0f0, 1.0f0]),
+            () -> Gesso.Inference._apply_rope_neox!(backend, Matrix{Float32}(randn(rng, 2, 8)), 0:1, 2, 4, 4, [1.0, 0.1]),
         )
     elseif cap === :layer_output_scale
         return _conformance_run(

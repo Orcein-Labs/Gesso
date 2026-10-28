@@ -255,91 +255,92 @@ function reference_prefill(
 
         if haskey(bt, :gemma4_layer)
             _gemma4_prefill_block!(cpu, h, bt, tensors, positions, wl, eps, zeros_like)
+            continue
+        end
+
+        # --- attention sublayer (pre-norm) -----------------------------------
+        if _block_mixer(bt) === :short_convolution
+            _short_convolution_block!(cpu, h, normed, sub, bt, wl, eps, zeros_like)
+            h.storage .+= sub.storage
+        elseif _block_mixer(bt) === :linear_attention
+            _hybrid_linear_block!(
+                cpu,
+                h,
+                normed,
+                sub,
+                bt,
+                tensors.spec,
+                wl,
+                eps,
+                zeros_like,
+            )
+            h.storage .+= sub.storage
         else
-            # --- attention sublayer (pre-norm) -----------------------------------
-            if _block_mixer(bt) === :short_convolution
-                _short_convolution_block!(cpu, h, normed, sub, bt, wl, eps, zeros_like)
-                h.storage .+= sub.storage
-            elseif _block_mixer(bt) === :linear_attention
-                _hybrid_linear_block!(
-                    cpu,
-                    h,
-                    normed,
-                    sub,
-                    bt,
-                    tensors.spec,
-                    wl,
-                    eps,
-                    zeros_like,
-                )
-                h.storage .+= sub.storage
-            else
-                rmsnorm!(cpu, normed, h, bt.attn_rms, wl; eps)
-                matmul!(cpu, q, normed, bt.wq, wl)
-                matmul!(cpu, k, normed, bt.wk, wl)
-                matmul!(cpu, v, normed, bt.wv, wl)
+            rmsnorm!(cpu, normed, h, bt.attn_rms, wl; eps)
+            matmul!(cpu, q, normed, bt.wq, wl)
+            matmul!(cpu, k, normed, bt.wk, wl)
+            matmul!(cpu, v, normed, bt.wv, wl)
 
-                # split heads: feature f (0-based) = head * d_head + j (head-major
-                # packing, matching the packed Wk/Wv rows of the weight walk)
-                _split_heads!(qh, q, n_heads, d_head)
-                _split_heads!(kh, k, n_kv_heads, d_head)
-                _split_heads!(vh, v, n_kv_heads, d_head)
-                if haskey(bt, :wq_norm)
-                    rmsnorm!(cpu, qh, qh, bt.wq_norm, wl; eps)
-                    rmsnorm!(cpu, kh, kh, bt.wk_norm, wl; eps)
-                end
-
-                br = _block_rope(bt, theta, inv_freq, rotary_dim)
-                rope!(
-                    cpu,
-                    qh,
-                    kh,
-                    positions,
-                    wl;
-                    theta=br.theta,
-                    inv_freq=br.inv_freq,
-                    interleaved=_tensors_rope_interleaved(tensors),
-                    rotary_dim=br.rotary_dim,
-                )
-
-                # repeat KV heads for the contraction only (identity when MHA)
-                kx = _repeat_heads(kh, group)
-                vx = _repeat_heads(vh, group)
-
-                _attention_heads!(
-                    cpu,
-                    attn.storage,
-                    scores,
-                    scores_out,
-                    qh.storage,
-                    kx.storage,
-                    vx.storage,
-                    n_heads,
-                    d_head,
-                    seq,
-                    seq,
-                    wl;
-                    window=_block_window(bt),
-                )
-
-                _merge_heads!(merged, attn, n_heads, d_head)
-                if haskey(bt, :wattn_gate)
-                    matmul!(cpu, gate_attn, normed, bt.wattn_gate, wl)
-                    _sigmoid_mul!(cpu, merged.storage, merged.storage, gate_attn.storage)
-                end
-                if haskey(bt, :wattn_head_gate)
-                    matmul!(cpu, gate_head, normed, bt.wattn_head_gate, wl)
-                    _head_gate_mul!(cpu, merged.storage, gate_head.storage, d_head)
-                end
-                matmul!(cpu, sub, merged, bt.wo, wl)
-                h.storage .+= sub.storage               # residual (interpreter add)
+            # split heads: feature f (0-based) = head * d_head + j (head-major
+            # packing, matching the packed Wk/Wv rows of the weight walk)
+            _split_heads!(qh, q, n_heads, d_head)
+            _split_heads!(kh, k, n_kv_heads, d_head)
+            _split_heads!(vh, v, n_kv_heads, d_head)
+            if haskey(bt, :wq_norm)
+                rmsnorm!(cpu, qh, qh, bt.wq_norm, wl; eps)
+                rmsnorm!(cpu, kh, kh, bt.wk_norm, wl; eps)
             end
 
-            # --- ffn sublayer (pre-norm) -----------------------------------------
-            rmsnorm!(cpu, normed2, h, bt.ffn_rms, wl; eps)
-            _ffn_block!(cpu, down, gate, up, act, normed2, bt, wl, zeros_like)
-            h.storage .+= down.storage              # residual
+            br = _block_rope(bt, theta, inv_freq, rotary_dim)
+            rope!(
+                cpu,
+                qh,
+                kh,
+                positions,
+                wl;
+                theta=br.theta,
+                inv_freq=br.inv_freq,
+                interleaved=_tensors_rope_interleaved(tensors),
+                rotary_dim=br.rotary_dim,
+            )
+
+            # repeat KV heads for the contraction only (identity when MHA)
+            kx = _repeat_heads(kh, group)
+            vx = _repeat_heads(vh, group)
+
+            _attention_heads!(
+                cpu,
+                attn.storage,
+                scores,
+                scores_out,
+                qh.storage,
+                kx.storage,
+                vx.storage,
+                n_heads,
+                d_head,
+                seq,
+                seq,
+                wl;
+                window=_block_window(bt),
+            )
+
+            _merge_heads!(merged, attn, n_heads, d_head)
+            if haskey(bt, :wattn_gate)
+                matmul!(cpu, gate_attn, normed, bt.wattn_gate, wl)
+                _sigmoid_mul!(cpu, merged.storage, merged.storage, gate_attn.storage)
+            end
+            if haskey(bt, :wattn_head_gate)
+                matmul!(cpu, gate_head, normed, bt.wattn_head_gate, wl)
+                _head_gate_mul!(cpu, merged.storage, gate_head.storage, d_head)
+            end
+            matmul!(cpu, sub, merged, bt.wo, wl)
+            h.storage .+= sub.storage               # residual (interpreter add)
         end
+
+        # --- ffn sublayer (pre-norm) -----------------------------------------
+        rmsnorm!(cpu, normed2, h, bt.ffn_rms, wl; eps)
+        _ffn_block!(cpu, down, gate, up, act, normed2, bt, wl, zeros_like)
+        h.storage .+= down.storage              # residual
     end
 
     # Llama applies a final RMSNorm before the head (§LXXVI); toy2 has none
@@ -1905,7 +1906,10 @@ function reference_generate(
                 bt = tensors.blocks[bi]
                 if haskey(bt, :gemma4_layer)
                     _gemma4_generate_block!(cpu, hp, kc[bi], vc[bi], bt, tensors, s0, s1, wp, eps, block_tmp)
-                elseif _block_mixer(bt) === :short_convolution
+                    _arena_release!(block_tmp)
+                    continue
+                end
+                if _block_mixer(bt) === :short_convolution
                     _short_convolution_block!(cpu, hp, normed, sub, bt, wp, eps, block_tmp; state=gdn_conv[bi])
                     hp.storage .+= sub.storage
                 elseif _block_mixer(bt) === :linear_attention
@@ -2034,11 +2038,9 @@ function reference_generate(
                         hp.storage .+= sub.storage
                     end
                 end
-                if !haskey(bt, :gemma4_layer)
-                    rmsnorm!(cpu, normed2, hp, bt.ffn_rms, wp; eps)
-                    _ffn_block!(cpu, down, gate, up, act, normed2, bt, wp, block_tmp)
-                    hp.storage .+= down.storage
-                end
+                rmsnorm!(cpu, normed2, hp, bt.ffn_rms, wp; eps)
+                _ffn_block!(cpu, down, gate, up, act, normed2, bt, wp, block_tmp)
+                hp.storage .+= down.storage
                 _arena_release!(block_tmp)
             end
             # every pass, not only the last: a stride checkpoint copies h at its boundary
@@ -2775,7 +2777,9 @@ function _decode_step!(
         bt = tensors.blocks[bi]
         if haskey(bt, :gemma4_layer)
             _gemma4_generate_block!(cpu, hp, kc[bi], vc[bi], bt, tensors, pos0, pos0, wl, eps, zeros_like)
-        elseif _block_mixer(bt) === :short_convolution
+            continue
+        end
+        if _block_mixer(bt) === :short_convolution
             _short_convolution_block!(cpu, hp, bufs.normed, bufs.sub, bt, wl, eps, zeros_like;
                 state=gdn_conv === nothing ? nothing : gdn_conv[bi])
         elseif _block_mixer(bt) === :linear_attention
@@ -2822,11 +2826,9 @@ function _decode_step!(
             )
             _T_ATTN_NS[] += time_ns() - t0
         end
-        if !haskey(bt, :gemma4_layer)
-            t1 = time_ns()
-            _decode_ffn_block!(bt, bufs, cpu, wl, zeros_like; eps)
-            _T_FFN_NS[] += time_ns() - t1
-        end
+        t1 = time_ns()
+        _decode_ffn_block!(bt, bufs, cpu, wl, zeros_like; eps)
+        _T_FFN_NS[] += time_ns() - t1
     end
     # write the new hidden state into its row slot — storage CONTENT, not a
     # field reassignment (Activation is immutable, §CIX)
