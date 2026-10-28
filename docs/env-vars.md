@@ -92,6 +92,8 @@ only with `ext/cuda_*` files applies to the CUDA path. New GPU work goes into La
 | `GESSO_L1_SEED` | `scripts/stress_ornith_lava.jl` |
 | `GESSO_L1_STATE_MODES` | `scripts/stress_ornith_lava.jl` |
 | `GESSO_L1_VARIANT_LEN` | `scripts/stress_ornith_lava.jl` |
+| `GESSO_LFM25_GGUF` | `test/test_lfm25.jl`, `test/test_lfm_chat.jl` |
+| `GESSO_LFM2_GGUF` | `test/test_lfm25.jl`, `test/test_lfm_chat.jl` |
 | `GESSO_LLAMA_GGUF` | `test/test_gguf_llama.jl` |
 | `GESSO_LOAD_35B` | `test/test_gguf_import.jl` |
 | `GESSO_MOE_DEVICE_PREFILL` | `ext/cuda_ops.jl`, `test/test_cuda_moe.jl` |

@@ -161,24 +161,46 @@ struct LinearMixerSpec
 end
 
 """
+    ShortConvSpec(layer_types, conv_kernel_dim)
+
+Causal depthwise convolution of B*X, gated by C, alternating with attention.
+The history contains the previous `conv_kernel_dim - 1` B*X rows per sequence.
+"""
+struct ShortConvSpec
+    layer_types::Vector{Symbol}
+    conv_kernel_dim::Int
+    function ShortConvSpec(layer_types::Vector{Symbol}, conv_kernel_dim::Integer)
+        !isempty(layer_types) && all(t -> t in (:short_convolution, :full_attention), layer_types) ||
+            error("ShortConvSpec: expected nonempty short-convolution/attention layer types")
+        conv_kernel_dim > 1 || error("ShortConvSpec: kernel width must exceed one")
+        new(copy(layer_types), Int(conv_kernel_dim))
+    end
+end
+
+"""
     MoeSpec
 
-Routed Mixture-of-Experts geometry (Qwen3.5-MoE / Ornith-1.5-35B-A3B).
-`n_expert_used` experts run per token after a softmax over all `n_experts`;
-top-k weights are renormalized. A shared SwiGLU expert of width `shared_ff`
-is always on, gated by a sigmoid. Empty MoE is illegal — a dense FFN leaves
-`ArchitectureSpec.moe === nothing`.
+Routed SwiGLU experts. Probabilities use `gating`; optional selection bias
+affects top-k membership, while mixture weights use the unbiased probabilities.
+`dense_lead` initial layers use dense FFNs. `shared_ff` is an optional always-on
+expert. The defaults preserve softmax routing without selection bias.
 """
 struct MoeSpec
     n_experts::Int
     n_expert_used::Int
     expert_ff::Int
     shared_ff::Int
+    dense_lead::Int
+    gating::Symbol
+    selection_bias::Bool
     function MoeSpec(;
         n_experts::Integer,
         n_expert_used::Integer,
         expert_ff::Integer,
         shared_ff::Integer=0,
+        dense_lead::Integer=0,
+        gating::Symbol=:softmax,
+        selection_bias::Bool=false,
     )
         n_experts > 0 || error("MoeSpec: n_experts must be positive")
         0 < n_expert_used <= n_experts || error(
@@ -186,7 +208,10 @@ struct MoeSpec
         )
         expert_ff > 0 || error("MoeSpec: expert_ff must be positive")
         shared_ff >= 0 || error("MoeSpec: shared_ff must be >= 0")
-        return new(Int(n_experts), Int(n_expert_used), Int(expert_ff), Int(shared_ff))
+        dense_lead >= 0 || error("MoeSpec: dense_lead must be nonnegative")
+        gating in (:softmax, :sigmoid) || error("MoeSpec: unsupported gating $gating")
+        return new(Int(n_experts), Int(n_expert_used), Int(expert_ff), Int(shared_ff),
+            Int(dense_lead), gating, selection_bias)
     end
 end
 
@@ -207,7 +232,7 @@ struct ArchitectureSpec
     mlp_bias::Bool
     sliding_window::Union{Nothing, Int}
     features::Set{Symbol}
-    mixer::Union{Nothing, LinearMixerSpec}
+    mixer::Union{Nothing, LinearMixerSpec, ShortConvSpec}
     rms_norm_eps::Float64
     moe::Union{Nothing, MoeSpec}
     # Per-layer sliding-window pattern (true = windowed). Empty means every
@@ -243,7 +268,7 @@ function ArchitectureSpec(;
     sliding_window::Union{Nothing, Integer}=nothing,
     head_dim::Union{Nothing, Integer}=nothing,
     features=Set{Symbol}(),
-    mixer::Union{Nothing, LinearMixerSpec}=nothing,
+    mixer::Union{Nothing, LinearMixerSpec, ShortConvSpec}=nothing,
     rms_norm_eps::Real=1e-6,
     moe::Union{Nothing, MoeSpec}=nothing,
     swa_layers::AbstractVector{Bool}=Bool[],
@@ -293,6 +318,7 @@ function ArchitectureSpec(;
         )
     end
     feats = Set{Symbol}(features)
+    moe === nothing || moe.dense_lead < num_layers || error("ArchitectureSpec: no routed layer after dense_lead")
     moe !== nothing && push!(feats, :moe)
     return ArchitectureSpec(
         family,
@@ -426,6 +452,9 @@ function required_semantics(spec::ArchitectureSpec)
     caps.qk_norm && push!(req, :qk_norm)
     caps.sliding_window && push!(req, :sliding_window_attention)
     caps.moe && push!(req, :moe_routing)
+    spec.moe === nothing || spec.moe.gating !== :sigmoid || push!(req, :sigmoid_moe_routing)
+    spec.moe === nothing || !spec.moe.selection_bias || push!(req, :moe_selection_bias)
+    spec.mixer isa ShortConvSpec && push!(req, :short_convolution)
     caps.linear_attention && push!(req, :linear_attention)
     caps.attn_output_gate && push!(req, :attn_output_gate)
     :hyper_connections in spec.features && push!(req, :hyper_connections)
@@ -441,6 +470,7 @@ export RoPEPolicy,
     ArchitectureSpec,
     ArchitectureCapabilities,
     LinearMixerSpec,
+    ShortConvSpec,
     MoeSpec,
     capabilities,
     required_semantics,
