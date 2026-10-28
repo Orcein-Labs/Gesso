@@ -245,21 +245,57 @@ end
 # Refills a fresh pool with the experts that scored highest before the last
 # prefill freed it, so decode does not start cold. Scores survive a suspend;
 # on a layer's first pool every score is zero and nothing is copied.
+# The chosen experts take slots 1..k, so each projection goes up as one run of
+# consecutive slots, staged on the host in chunks of at most _LHOT_STAGE_MIB.
 function _lhot_restore!(hot::_LavaHotLayer)
     nexp = length(hot.score)
     v = Float32[_lhot_score(hot, e) for e in 1:nexp]
-    k = 0
+    es = Int[]
     for e in partialsortperm(v, 1:min(hot.nslots, nexp); rev=true)
         v[e] > 0.0f0 || break
-        slot = pop!(hot.free)
-        _lhot_fill!(hot, slot, e)
+        push!(es, e)
+    end
+    k = length(es)
+    k == 0 && return 0
+    for (pool, bank) in ((hot.pg, hot.gate), (hot.pu, hot.up), (hot.pd, hot.down))
+        _lhot_upload_run!(pool, bank, es)
+    end
+    for (slot, e) in enumerate(es)
         hot.expert_in[slot] = e
         hot.slot_of[e] = slot
-        k += 1
     end
-    k > 0 && (hot.restores += 1)
+    hot.free = collect(hot.nslots:-1:k+1)
+    hot.restores += 1
     return k
 end
+
+const _LHOT_STAGE_MIB = 64
+const _LHOT_STAGE = Ref(UInt8[])
+
+function _lhot_upload_run!(pool, bank, es::Vector{Int};
+                           per::Int=max(1, (_LHOT_STAGE_MIB << 20) ÷ bank.bytes_per_expert))
+    I = Gesso.Inference
+    b = bank.bytes_per_expert
+    stage = _LHOT_STAGE[]
+    i = 1
+    while i <= length(es)
+        n = min(per, length(es) - i + 1)
+        length(stage) < n * b && resize!(stage, n * b)
+        for j in 0:n-1
+            copyto!(stage, j * b + 1, bank.data, I._quant_expert_off0(bank, es[i+j]) + 1, b)
+        end
+        GC.@preserve stage _lhot_upload!(pool, i, pointer(stage), n * b)
+        i += n
+    end
+    return
+end
+
+# Host bytes straight into a pool at a slot. Lava's copyto! from an Array
+# allocates a host copy of the source first; this goes through its staging
+# buffer alone.
+_lhot_upload!(pool, slot::Int, src::Ptr{UInt8}, nbytes::Int) =
+    Lava.copy_buffer!(:upload, pool.data.buf[], src, nbytes;
+                      offset=pool.data.offset + (slot - 1) * pool.bytes_per_expert)
 
 # Frees every layer's pool and gives the empty blocks back to the driver. A
 # multi-row prefill pass calls it first: its activations grow with the pass,
@@ -318,8 +354,8 @@ end
 function _lhot_fill!(hot::_LavaHotLayer, slot::Int, e::Int)
     I = Gesso.Inference
     for (pool, bank) in ((hot.pg, hot.gate), (hot.pu, hot.up), (hot.pd, hot.down))
-        b = bank.bytes_per_expert
-        copyto!(pool.data, (slot - 1) * b + 1, bank.data, I._quant_expert_off0(bank, e) + 1, b)
+        GC.@preserve bank _lhot_upload!(pool, slot, pointer(bank.data, I._quant_expert_off0(bank, e) + 1),
+                                        bank.bytes_per_expert)
     end
     return
 end
@@ -392,6 +428,151 @@ function _lhot_host_decode!(y, xh, router, gate, up, down, n_used::Int)
     return y
 end
 
+# --- Batched hits ---------------------------------------------------------------
+# A token's hits go to the device as two dispatches per layer, not four per hit:
+# recording a dispatch costs about as much as running a small expert GEMV, so
+# one launch per projection per hit spent more host time than the hits saved.
+# Up to _LHOT_BATCH hits go per launch. Their slots and routing weights travel
+# as scalar kernel arguments, so nothing is copied to the device and the open
+# batch is not flushed. Each workgroup is _LQ_LANES lanes on one output row, the
+# layout of _lq_gemv_kernel!.
+
+const _LHOT_BATCH = 8
+
+@inline _lhot_pick(j, a1, a2, a3, a4, a5, a6, a7, a8) =
+    j == 1 ? a1 : j == 2 ? a2 : j == 3 ? a3 : j == 4 ? a4 :
+    j == 5 ? a5 : j == 6 ? a6 : j == 7 ? a7 : a8
+
+# A[(j-1)*ff + r] = silu(Wg_j[r, :] x) * (Wu_j[r, :] x) for hit j, row r.
+@kernel cpu=false function _lhot_gateup_kernel!(
+    A, Wg, Wu, X, kv, g2, g3, ks,
+    kind_g::Int, kind_u::Int, ne0::Int, ff::Int,
+    bpe_g::Int, bpe_u::Int, rb_g::Int, rb_u::Int,
+    s1::Int, s2::Int, s3::Int, s4::Int, s5::Int, s6::Int, s7::Int, s8::Int,
+)
+    tl = @index(Local, Linear)
+    r = @index(Group, Linear)
+    part = @localmem Float32 (2 * _LQ_LANES,)
+    sgs = Lava.subgroup_size()
+    sgid = (tl - 1) ÷ sgs
+    nsg = _LQ_LANES ÷ sgs
+    lane0 = Lava.subgroup_lane() == 0
+    j = (r - 1) ÷ ff + 1
+    row = (r - 1) % ff
+    s = _lhot_pick(j, s1, s2, s3, s4, s5, s6, s7, s8)
+    og = (s - 1) * bpe_g + row * rb_g
+    ou = (s - 1) * bpe_u + row * rb_u
+    accg = 0.0f0
+    accu = 0.0f0
+    e = tl - 1
+    while e < ne0
+        xe = X[e+1]
+        accg += _lq_elem(kind_g, Wg, kv, g2, g3, ks, og, e) * xe
+        accu += _lq_elem(kind_u, Wu, kv, g2, g3, ks, ou, e) * xe
+        e += _LQ_LANES
+    end
+    redg = Lava.subgroup_add(accg)
+    redu = Lava.subgroup_add(accu)
+    if lane0
+        part[sgid+1] = redg
+        part[_LQ_LANES+sgid+1] = redu
+    end
+    @synchronize
+    if tl == 1
+        g = 0.0f0
+        u = 0.0f0
+        for i in 1:nsg
+            g += part[i]
+            u += part[_LQ_LANES+i]
+        end
+        A[r] = g / (1.0f0 + exp(-g)) * u
+    end
+end
+
+# Y[r] = sum_j w_j * (Wd_j[r, :] A_j) + beta * Y[r], over nh hits.
+@kernel cpu=false function _lhot_down_kernel!(
+    Y, Wd, A, kv, g2, g3, ks,
+    kind::Int, ff::Int, bpe::Int, rb::Int, nh::Int, beta::Float32,
+    s1::Int, s2::Int, s3::Int, s4::Int, s5::Int, s6::Int, s7::Int, s8::Int,
+    w1::Float32, w2::Float32, w3::Float32, w4::Float32,
+    w5::Float32, w6::Float32, w7::Float32, w8::Float32,
+)
+    tl = @index(Local, Linear)
+    r = @index(Group, Linear)
+    part = @localmem Float32 (_LQ_LANES,)
+    sgs = Lava.subgroup_size()
+    sgid = (tl - 1) ÷ sgs
+    nsg = _LQ_LANES ÷ sgs
+    lane0 = Lava.subgroup_lane() == 0
+    acc = 0.0f0
+    for j in 1:nh
+        s = _lhot_pick(j, s1, s2, s3, s4, s5, s6, s7, s8)
+        w = _lhot_pick(j, w1, w2, w3, w4, w5, w6, w7, w8)
+        off = (s - 1) * bpe + (r - 1) * rb
+        a0 = (j - 1) * ff
+        part_j = 0.0f0
+        e = tl - 1
+        while e < ff
+            part_j += _lq_elem(kind, Wd, kv, g2, g3, ks, off, e) * A[a0+e+1]
+            e += _LQ_LANES
+        end
+        acc += w * part_j
+    end
+    red = Lava.subgroup_add(acc)
+    if lane0
+        part[sgid+1] = red
+    end
+    @synchronize
+    if tl == 1
+        t = 0.0f0
+        for i in 1:nsg
+            t += part[i]
+        end
+        # beta == 0 must not read Y: the scratch may be uninitialized.
+        Y[r] = beta == 0.0f0 ? t : t + beta * Y[r]
+    end
+end
+
+# acc = sum over the token's hits of w_j * expert_j(xv), on the device.
+function _lhot_hits!(acc, xv, hot::_LavaHotLayer, nh::Int)
+    pg, pu, pd = hot.pg, hot.pu, hot.pd
+    h = pg.ne0
+    ff = pg.ne1
+    tb = _lq_tables()
+    be = Lava.KernelAbstractions.get_backend(xv)
+    kg = _lq_expert_kind(pg.ggml_type)
+    ku = _lq_expert_kind(pu.ggml_type)
+    kd = _lq_expert_kind(pd.ggml_type)
+    A = _lq_scratch(Float32, :lhot_a, (ff * _LHOT_BATCH,))
+    gateup = _lhot_gateup_kernel!(be)
+    down = _lhot_down_kernel!(be)
+    j0 = 0
+    while j0 < nh
+        n = min(_LHOT_BATCH, nh - j0)
+        s = ntuple(k -> k <= n ? hot.hit_s[j0+k] : 1, _LHOT_BATCH)
+        w = ntuple(k -> k <= n ? hot.hit_w[j0+k] : 0.0f0, _LHOT_BATCH)
+        gateup(
+            A, pg.data, pu.data, xv, tb.kv, tb.g2, tb.g3, tb.ks,
+            kg, ku, h, ff,
+            pg.bytes_per_expert, pu.bytes_per_expert,
+            pg.bytes_per_expert ÷ ff, pu.bytes_per_expert ÷ ff,
+            s...;
+            ndrange=_LQ_LANES * ff * n,
+            workgroupsize=(_LQ_LANES,),
+        )
+        down(
+            acc, pd.data, A, tb.kv, tb.g2, tb.g3, tb.ks,
+            kd, ff, pd.bytes_per_expert, pd.bytes_per_expert ÷ h, n,
+            j0 == 0 ? 0.0f0 : 1.0f0,
+            s..., w...;
+            ndrange=_LQ_LANES * h,
+            workgroupsize=(_LQ_LANES,),
+        )
+        j0 += n
+    end
+    return acc
+end
+
 # One decode token through a layer's pool. `y` is the device (1, h) output and
 # is written in full. The hybrid and qwen4exp routes call `_lhot_wants` first,
 # which registers the layer; a slice that was never registered takes the host
@@ -445,16 +626,7 @@ function _lhot_moe_decode!(y, x, xh, router, gate, up, down, n_used::Int)
     if nh > 0
         xv = _lq_scratch(Float32, :lhot_x, (h,))
         copyto!(xv, 1, x, 1, h)
-        g = _lq_scratch(Float32, :lhot_g, (ff,))
-        u = _lq_scratch(Float32, :lhot_u, (ff,))
-        a = _lq_scratch(Float32, :lhot_a, (ff,))
-        for j in 1:nh
-            s = hot.hit_s[j]
-            I._qgemv_expert!(g, xv, hot.pg, s; alpha=1.0f0, beta=0.0f0)
-            I._qgemv_expert!(u, xv, hot.pu, s; alpha=1.0f0, beta=0.0f0)
-            a .= (g ./ (1.0f0 .+ exp.(-g))) .* u
-            I._qgemv_expert!(acc, a, hot.pd, s; alpha=hot.hit_w[j], beta=j == 1 ? 0.0f0 : 1.0f0)
-        end
+        _lhot_hits!(acc, xv, hot, nh)
         Lava.submit!(KALava().dispatch_bq)
     end
 
@@ -510,6 +682,7 @@ function release_lava_hot_experts!()
         end
     end
     empty!(_LHOT)
+    _LHOT_STAGE[] = UInt8[]
     _LHOT_BUDGET[] = -1
     _LHOT_LEFT[] = 0
     return nothing
