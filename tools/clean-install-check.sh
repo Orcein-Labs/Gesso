@@ -21,7 +21,6 @@ fi
 MODEL=$1
 REGISTRY_URL=$2
 JULIA=${JULIA:-julia}
-ROOT=$(cd "$(dirname "$0")/.." && pwd)
 
 if [[ ! -f "$MODEL" ]]; then
     echo "clean-install-check: model not found: $MODEL" >&2
@@ -53,11 +52,16 @@ echo "== install: registries and Gesso"
     Pkg.status()
 ' "$REGISTRY_URL"
 
+# The server script is taken from the installed package, not from this checkout,
+# so the check covers what a user actually gets.
+SERVE=$("$JULIA" --project="$ENV_DIR" -e 'using Gesso; print(joinpath(pkgdir(Gesso), "scripts", "gesso-serve.jl"))')
+[[ -f "$SERVE" ]] || { echo "clean-install-check: installed package has no $SERVE" >&2; exit 1; }
+
 PORT=${PORT:-$(( 20000 + RANDOM % 20000 ))}
 LOG="$WORK/serve.log"
 
 echo "== serve: CPU backend on port $PORT"
-"$JULIA" --project="$ENV_DIR" "$ROOT/scripts/gesso-serve.jl" \
+"$JULIA" --project="$ENV_DIR" "$SERVE" \
     --gguf "$MODEL" --cpu --port "$PORT" --model-id clean-install >"$LOG" 2>&1 &
 SERVER_PID=$!
 
