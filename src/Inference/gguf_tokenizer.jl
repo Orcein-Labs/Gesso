@@ -39,6 +39,7 @@ const _GGUF_TOK_UNKNOWN = Int32(2)
 const _GGUF_TOK_CONTROL = Int32(3)
 const _GGUF_TOK_USER = Int32(4)
 const _GGUF_TOK_UNUSED = Int32(5)
+const _GGUF_TOK_BYTE = Int32(6)
 
 struct _GGUFSpecial
     text::String
@@ -139,11 +140,91 @@ GGUFBPE(
     pre,
 )
 
+"""
+    GGUFGemma4BPE
+
+SPM-style BPE built from a GGUF tokenizer section with tokenizer.ggml.model
+"gemma4". Ids are 0-based.
+"""
+struct GGUFGemma4BPE <: Tokenizer
+    tokens::Vector{String}
+    token_type::Vector{Int32}
+    vocab::Dict{String, Int}
+    byte_id::Vector{Int}
+    merge_rank::Dict{Tuple{String, String}, Int}
+    specials::Vector{_GGUFSpecial}
+    bos_token_id::Union{Nothing, Int}
+    eos_token_id::Union{Nothing, Int}
+    pad_token_id::Union{Nothing, Int}
+    chat_template::Union{Nothing, String}
+    add_bos::Bool
+end
+
+GGUFGemma4BPE(
+    tokens,
+    token_type,
+    vocab,
+    byte_id,
+    merge_rank,
+    specials,
+    bos,
+    eos,
+    pad,
+    chat_template,
+) = GGUFGemma4BPE(
+    tokens,
+    token_type,
+    vocab,
+    byte_id,
+    merge_rank,
+    specials,
+    bos,
+    eos,
+    pad,
+    chat_template,
+    true,
+)
+
 const _GGUF_PRE = Dict("qwen35" => :qwen35, "spark2_5" => :spark2_5, "lfm2" => :lfm2)
 
 # --- the GGUF tokenizer section ------------------------------------------------
 
-function _load_gguf_tokenizer_impl(path::AbstractString)
+# Token text to 0-based id. A repeated text keeps the id that is not UNUSED;
+# two non-UNUSED entries with one text are an error.
+function _gguf_vocab(tokens::Vector{String}, types::Vector{Int32})
+    vocab = Dict{String, Int}()
+    sizehint!(vocab, length(tokens))
+    for i in eachindex(tokens)
+        t = tokens[i]
+        j = get(vocab, t, nothing)
+        if j === nothing
+            vocab[t] = i - 1
+        elseif types[j+1] == _GGUF_TOK_UNUSED && types[i] != _GGUF_TOK_UNUSED
+            vocab[t] = i - 1
+        elseif types[j+1] != _GGUF_TOK_UNUSED && types[i] != _GGUF_TOK_UNUSED
+            error(
+                "load_gguf_tokenizer: duplicate token text $(repr(t)) at ids $j and $(i - 1)",
+            )
+        end
+    end
+    return vocab
+end
+
+# CONTROL, USER_DEFINED and UNKNOWN tokens with text, longest first.
+function _gguf_specials(tokens::Vector{String}, types::Vector{Int32})
+    specials = _GGUFSpecial[]
+    for i in eachindex(tokens)
+        ty = types[i]
+        if ty == _GGUF_TOK_CONTROL || ty == _GGUF_TOK_USER || ty == _GGUF_TOK_UNKNOWN
+            isempty(tokens[i]) && continue
+            push!(specials, _GGUFSpecial(tokens[i], i - 1, ty != _GGUF_TOK_USER))
+        end
+    end
+    sort!(specials; by=s -> (-ncodeunits(s.text), s.id))
+    return specials
+end
+
+function _scan_gguf_tokenizer_kv(path::AbstractString)
     isfile(path) || error("load_gguf_tokenizer: no such file: $path")
     data = open(path, "r") do io
         Mmap.mmap(io, Vector{UInt8}; grow=false, shared=false)
@@ -188,7 +269,13 @@ function _load_gguf_tokenizer_impl(path::AbstractString)
         end
     end
 
+    return kv
+end
+
+function _load_gguf_tokenizer_impl(path::AbstractString)
+    kv = _scan_gguf_tokenizer_kv(path)
     model = get(kv, "tokenizer.ggml.model", nothing)
+    model == "gemma4" && return _build_gemma4_bpe(kv, path)
     model == "gpt2" ||
         error("load_gguf_tokenizer: tokenizer.ggml.model is $(repr(model)), want \"gpt2\"")
     pre = get(kv, "tokenizer.ggml.pre", nothing)
@@ -209,21 +296,7 @@ function _load_gguf_tokenizer_impl(path::AbstractString)
     )
     isempty(tokens) && error("load_gguf_tokenizer: tokenizer.ggml.tokens is empty")
 
-    vocab = Dict{String, Int}()
-    sizehint!(vocab, length(tokens))
-    for i in eachindex(tokens)
-        t = tokens[i]
-        j = get(vocab, t, nothing)
-        if j === nothing
-            vocab[t] = i - 1
-        elseif types[j+1] == _GGUF_TOK_UNUSED && types[i] != _GGUF_TOK_UNUSED
-            vocab[t] = i - 1
-        elseif types[j+1] != _GGUF_TOK_UNUSED && types[i] != _GGUF_TOK_UNUSED
-            error(
-                "load_gguf_tokenizer: duplicate token text $(repr(t)) at ids $j and $(i - 1)",
-            )
-        end
-    end
+    vocab = _gguf_vocab(tokens, types)
 
     byte_id = Vector{Int}(undef, 256)
     for b in 0:255
@@ -264,15 +337,7 @@ function _load_gguf_tokenizer_impl(path::AbstractString)
         merge_rank[key] = length(merge_left)
     end
 
-    specials = _GGUFSpecial[]
-    for i in eachindex(tokens)
-        ty = types[i]
-        if ty == _GGUF_TOK_CONTROL || ty == _GGUF_TOK_USER || ty == _GGUF_TOK_UNKNOWN
-            isempty(tokens[i]) && continue
-            push!(specials, _GGUFSpecial(tokens[i], i - 1, ty != _GGUF_TOK_USER))
-        end
-    end
-    sort!(specials; by=s -> (-ncodeunits(s.text), s.id))
+    specials = _gguf_specials(tokens, types)
 
     _special_id(key) = begin
         v = get(kv, key, nothing)
@@ -627,7 +692,7 @@ _bytes_slice(s::String, a::Int, b::Int) =
     a > b ? "" : String(collect(view(codeunits(s), a:b)))
 
 # Partition the text into raw fragments and special ids, in the order llama.cpp uses.
-function _partition_specials(tk::GGUFBPE, s::String, parse_special::Bool)
+function _partition_specials(tk, s::String, parse_special::Bool)
     frags = Tuple{Int, String}[(-1, s)]
     for sp in tk.specials
         (!parse_special && sp.control) && continue
@@ -727,7 +792,7 @@ tokenizer_metadata(tk::GGUFBPE) = (
 )
 
 """
-    StreamDetokenizer(tk::GGUFBPE)
+    StreamDetokenizer(tk::Union{GGUFBPE, GGUFGemma4BPE})
 
 Turns ids into text as they arrive. `push!(dec, id)` returns the text that is
 complete so far. A UTF-8 sequence split across ids is held back until its
@@ -735,10 +800,10 @@ last byte arrives. `finish!(dec)` returns whatever bytes are still held. The
 concatenation of every push and the finish equals `decode` of the same ids.
 """
 mutable struct StreamDetokenizer
-    tk::GGUFBPE
+    tk::Union{GGUFBPE, GGUFGemma4BPE}
     pending::Vector{UInt8}
 end
-StreamDetokenizer(tk::GGUFBPE) = StreamDetokenizer(tk, UInt8[])
+StreamDetokenizer(tk::Union{GGUFBPE, GGUFGemma4BPE}) = StreamDetokenizer(tk, UInt8[])
 
 # Length of the longest prefix of `buf` that ends on a UTF-8 character boundary.
 # A stray continuation byte is treated as complete so it cannot stall the stream.
@@ -756,7 +821,7 @@ function _complete_utf8_prefix(buf::Vector{UInt8})
 end
 
 function Base.push!(dec::StreamDetokenizer, id::Integer)::String
-    _token_bytes!(dec.pending, dec.tk, id)
+    dec.tk isa GGUFGemma4BPE ? _gemma4_token_bytes!(dec.pending, dec.tk, id) : _token_bytes!(dec.pending, dec.tk, id)
     n = _complete_utf8_prefix(dec.pending)
     out = String(dec.pending[1:n])
     deleteat!(dec.pending, 1:n)
@@ -769,7 +834,199 @@ function finish!(dec::StreamDetokenizer)::String
     return out
 end
 
-export GGUFBPE, load_gguf_tokenizer, StreamDetokenizer, finish!
+# --- gemma4 (SPM-style BPE) ------------------------------------------------------
+#
+# tokenizer.ggml.model = "gemma4". Pinned to llm_tokenizer_bpe_session and
+# gemma4 detokenize in src/llama-vocab.cpp:
+#   * symbols are raw UTF-8 characters (no byte-level encoding). Spaces in each
+#     raw fragment become U+2581 before the split.
+#   * the split is `[^\n]+|\n+`: each run of non-newlines and each run of
+#     newlines is one word. A newline-only word that is itself a token stays
+#     one symbol.
+#   * merges: lowest merge_rank first; ties break to the leftmost pair. Merges
+#     operate on string symbols directly (the merge table has (left, right)
+#     text pairs and its rank is the 1-based line number in tokenizer.ggml.merges).
+#   * a final symbol missing from the vocabulary becomes one <0xXX> token per
+#     byte. A byte with no such token is dropped.
+#   * decode: NORMAL tokens map U+2581 back to a space; BYTE tokens are one raw
+#     byte; CONTROL, USER_DEFINED and UNKNOWN tokens emit their text; UNUSED is
+#     an error.
+#   * BOS is added with add_special (add_bos is forced on for gemma4).
+
+const _GEMMA4_SPACE = "▁"
+const _GEMMA4_SPLIT = r"[^\n]+|\n+"
+
+_gemma4_byte_text(b::Integer) = "<0x" * uppercase(lpad(string(b, base=16), 2, '0')) * ">"
+
+function _build_gemma4_bpe(kv::Dict{String, Any}, path::AbstractString)
+    # llama.cpp sets the pre-tokenizer from the model name for gemma4; the key may be absent.
+    pre = get(kv, "tokenizer.ggml.pre", "gemma4")
+    pre == "gemma4" || error("load_gguf_tokenizer: tokenizer.ggml.pre is $(repr(pre)), want \"gemma4\"")
+    haskey(kv, "tokenizer.ggml.tokens") || error("load_gguf_tokenizer: no tokenizer.ggml.tokens in $path")
+    haskey(kv, "tokenizer.ggml.token_type") || error("load_gguf_tokenizer: no tokenizer.ggml.token_type in $path")
+    haskey(kv, "tokenizer.ggml.merges") || error("load_gguf_tokenizer: no tokenizer.ggml.merges in $path")
+
+    tokens = kv["tokenizer.ggml.tokens"]
+    types = kv["tokenizer.ggml.token_type"]
+    length(types) == length(tokens) ||
+        error("load_gguf_tokenizer: token_type has $(length(types)) entries, tokens has $(length(tokens))")
+    isempty(tokens) && error("load_gguf_tokenizer: tokenizer.ggml.tokens is empty")
+
+    vocab = _gguf_vocab(tokens, types)
+
+    byte_id = fill(-1, 256)
+    for b in 0:255
+        id = get(vocab, _gemma4_byte_text(b), nothing)
+        id === nothing || (byte_id[b+1] = id)
+    end
+
+    merge_rank = Dict{Tuple{String, String}, Int}()
+    for (i, line) in enumerate(kv["tokenizer.ggml.merges"])
+        # llama.cpp: word.find(' ', 1), so a space in the first character is not a separator
+        pos = ncodeunits(line) >= 2 ? findnext(' ', line, nextind(line, 1)) : nothing
+        pos === nothing && continue
+        key = (_bytes_slice(line, 1, pos - 1), _bytes_slice(line, pos + 1, ncodeunits(line)))
+        haskey(merge_rank, key) || (merge_rank[key] = i)
+    end
+
+    _special_id(key) = begin
+        v = get(kv, key, nothing)
+        v === nothing ? nothing : Int(v)
+    end
+    return GGUFGemma4BPE(
+        tokens, types, vocab, byte_id, merge_rank,
+        _gguf_specials(tokens, types),
+        _special_id("tokenizer.ggml.bos_token_id"),
+        _special_id("tokenizer.ggml.eos_token_id"),
+        _special_id("tokenizer.ggml.padding_token_id"),
+        get(kv, "tokenizer.chat_template", nothing),
+        Bool(get(kv, "tokenizer.ggml.add_bos_token", true)),
+    )
+end
+const _load_gemma4_tokenizer = _build_gemma4_bpe
+
+# Lowest-rank-first merge over one word's symbols, in place. Ties go to the leftmost pair.
+function _gemma4_merge!(syms::Vector{String}, tk::GGUFGemma4BPE)
+    while length(syms) > 1
+        best = 0
+        best_rank = typemax(Int)
+        for i in 1:(length(syms) - 1)
+            r = get(tk.merge_rank, (syms[i], syms[i+1]), typemax(Int))
+            if r < best_rank
+                best_rank = r
+                best = i
+            end
+        end
+        best == 0 && break
+        syms[best] = syms[best] * syms[best+1]
+        deleteat!(syms, best+1)
+    end
+    return syms
+end
+
+function _gemma4_encode_raw!(ids::Vector{Int}, tk::GGUFGemma4BPE, s::AbstractString)
+    for m in eachmatch(_GEMMA4_SPLIT, s)
+        word = m.match
+        if all(c -> c == '\n', word)
+            id = get(tk.vocab, word, nothing)
+            if id !== nothing
+                push!(ids, id)
+                continue
+            end
+        end
+        syms = String[string(c) for c in word]
+        _gemma4_merge!(syms, tk)
+        for sym in syms
+            id = get(tk.vocab, sym, nothing)
+            if id !== nothing
+                push!(ids, id)
+            else
+                for b in codeunits(sym)
+                    bid = tk.byte_id[Int(b) + 1]
+                    bid >= 0 && push!(ids, bid)
+                end
+            end
+        end
+    end
+    return ids
+end
+
+"""
+    encode(tk::GGUFGemma4BPE, text; parse_special=true, add_special=false) -> Vector{Int}
+
+Encode `text` to 0-based ids the way llama.cpp does for tokenizer.ggml.model
+"gemma4" with the same flags as /tokenize. `add_special` prepends BOS.
+"""
+function encode(tk::GGUFGemma4BPE, text::AbstractString; parse_special::Bool=true, add_special::Bool=false)
+    ids = Int[]
+    if add_special && tk.bos_token_id !== nothing
+        push!(ids, tk.bos_token_id)
+    end
+    for (id, t) in _partition_specials(tk, String(text), parse_special)
+        if id >= 0
+            push!(ids, id)
+        else
+            _gemma4_encode_raw!(ids, tk, replace(t, ' ' => _GEMMA4_SPACE))
+        end
+    end
+    return ids
+end
+
+function _gemma4_byte_value(id::Integer, text::AbstractString)
+    (length(text) == 6 && startswith(text, "<0x") && endswith(text, ">")) ||
+        error("decode: byte token $id has text $(repr(text)), want <0xXX>")
+    return parse(UInt8, text[4:5]; base=16)
+end
+
+function _gemma4_token_bytes!(buf::Vector{UInt8}, tk::GGUFGemma4BPE, id::Integer)
+    0 <= id < length(tk.tokens) ||
+        error("decode: token id $id is outside the vocabulary of $(length(tk.tokens)) tokens")
+    i = Int(id) + 1
+    ty = tk.token_type[i]
+    text = tk.tokens[i]
+    if ty == _GGUF_TOK_NORMAL
+        append!(buf, codeunits(replace(text, _GEMMA4_SPACE => " ")))
+    elseif ty == _GGUF_TOK_CONTROL || ty == _GGUF_TOK_USER || ty == _GGUF_TOK_UNKNOWN
+        append!(buf, codeunits(text))
+    elseif ty == _GGUF_TOK_BYTE
+        push!(buf, _gemma4_byte_value(id, text))
+    else
+        error("decode: token id $id has type $ty (unused), which has no text")
+    end
+    return buf
+end
+
+"""
+    decode(tk::GGUFGemma4BPE, ids) -> String
+
+Concatenate the text of `ids` as llama.cpp detokenizes gemma4: U+2581 becomes a
+space, BYTE tokens become their raw byte, special tokens emit their text.
+"""
+function decode(tk::GGUFGemma4BPE, ids::AbstractVector{<:Integer})
+    buf = UInt8[]
+    for id in ids
+        _gemma4_token_bytes!(buf, tk, id)
+    end
+    return String(buf)
+end
+
+tokenizer_metadata(tk::GGUFGemma4BPE) = (
+    kind=:gguf_gemma4_spm_bpe,
+    vocab_size=length(tk.tokens),
+    bos_token_id=tk.bos_token_id,
+    eos_token_id=tk.eos_token_id,
+    pad_token_id=tk.pad_token_id,
+)
+
+function _prompt_ids(tk::GGUFGemma4BPE, text::AbstractString)
+    ids = encode(tk, text)
+    if tk.add_bos && tk.bos_token_id !== nothing && (isempty(ids) || first(ids) != tk.bos_token_id)
+        pushfirst!(ids, tk.bos_token_id)
+    end
+    return ids
+end
+
+export GGUFBPE, GGUFGemma4BPE, load_gguf_tokenizer, StreamDetokenizer, finish!
 
 load_gguf_tokenizer(path::AbstractString) =
     _load_boundary(() -> _load_gguf_tokenizer_impl(path), :load_gguf_tokenizer)

@@ -451,6 +451,9 @@ Qwen3.5 XML family (`<function=`, `<tool_response>`, `<think>`). Any other
 template is an error.
 """
 function chat_family(template::AbstractString)::Symbol
+    if occursin("<|turn>", template) && occursin("<turn|>", template) && occursin("<|channel>thought", template)
+        return :gemma4
+    end
     if occursin("CONTINUE_FINAL_MESSAGE_TAG", template) && occursin("render_tool_calls", template)
         return :lfm25
     elseif occursin("<|tool_list_start|>", template) && occursin("<|tool_response_start|>", template)
