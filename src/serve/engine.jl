@@ -3,7 +3,8 @@
 # Weights and the backend are passed in by the caller, so this file names no
 # GPU type and the package stays free of CUDA.
 
-using ..Inference: GGUFBPE, render_chat, reference_generate, GenerateState, Sampler
+using ..Inference:
+    GGUFBPE, render_chat, chat_family, reference_generate, GenerateState, Sampler
 import ..Inference: encode, decode
 
 """
@@ -29,6 +30,7 @@ function gguf_chat_model(
             "tokenizer has no chat template; the server cannot render chat requests",
         ),
     )
+    family = _template_family(tk.chat_template)
     eos = _engine_eos_ids(tk)
     isempty(eos) && throw(
         ArgumentError("tokenizer names no end-of-turn token; generation would not stop"),
@@ -68,18 +70,61 @@ function gguf_chat_model(
     return ChatModel(
         tokenize=s -> encode(tk, s; parse_special=true),
         detokenize=ids -> decode(tk, ids),
-        render=(msgs, tools, thinking) -> render_chat(
-            msgs;
-            tools=tools,
+        render=(msgs, tools, thinking) -> _render_prompt(
+            tk,
+            family,
+            msgs,
+            tools,
+            thinking;
             add_generation_prompt=true,
-            enable_thinking=thinking,
         ),
         generate=generate,
         n_ctx=n_ctx,
         model_id=model_id,
         prefix_len=(msgs, tools, thinking, ids) ->
-            _system_prefix_len(tk, msgs, tools, thinking, ids),
+            _system_prefix_len(tk, family, msgs, tools, thinking, ids),
+        accepts_tools=family === :qwen35_xml,
     )
+end
+
+# The template's family, as an ArgumentError so the server's constructor reports
+# it like the other refusals above.
+function _template_family(template::AbstractString)::Symbol
+    try
+        return chat_family(template)
+    catch e
+        e isa ErrorException || rethrow()
+        throw(ArgumentError("gguf_chat_model: " * e.msg))
+    end
+end
+
+# One renderer per family, shared by the request prompt and the prefix boundary,
+# so the two cannot disagree about the bytes they cover. LFM has no thinking
+# switch; its generation prompt never opens a `<think>` block.
+function _render_prompt(
+    tk::GGUFBPE,
+    family::Symbol,
+    msgs,
+    tools,
+    thinking::Bool;
+    add_generation_prompt::Bool,
+)
+    if family === :qwen35_xml
+        return render_chat(
+            msgs;
+            tools=tools,
+            add_generation_prompt=add_generation_prompt,
+            enable_thinking=thinking,
+        )
+    elseif family === :lfm2 || family === :lfm25
+        return render_chat(
+            tk,
+            msgs;
+            tools=tools,
+            add_generation_prompt=add_generation_prompt,
+        )
+    end
+    throw(ArgumentError("no renderer for chat family $family"))
 end
 
 # Length of the prompt's leading system message, rendered alone, when the prompt
@@ -89,6 +134,7 @@ end
 # so it gets 0 and no boundary.
 function _system_prefix_len(
     tk::GGUFBPE,
+    family::Symbol,
     msgs,
     tools,
     thinking::Bool,
@@ -97,11 +143,13 @@ function _system_prefix_len(
     (isempty(msgs) || get(msgs[1], "role", nothing) != "system") && return 0
     head = encode(
         tk,
-        render_chat(
-            [msgs[1]];
-            tools=tools,
+        _render_prompt(
+            tk,
+            family,
+            [msgs[1]],
+            tools,
+            thinking;
             add_generation_prompt=false,
-            enable_thinking=thinking,
         );
         parse_special=true,
     )

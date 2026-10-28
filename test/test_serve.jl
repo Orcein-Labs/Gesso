@@ -6,7 +6,7 @@ using Sockets
 using JSON
 using Random
 using Gesso
-using Gesso.Serve: QwenXMLParser, feed!, ReasoningDelta, ContentDelta, ToolCallDelta
+using Gesso.Serve: QwenXMLParser, feed!, ReasoningDelta, ContentDelta, ToolCallDelta, opens_reasoning
 
 # ---------------------------------------------------------------------------
 # Gate 2: parser
@@ -237,6 +237,7 @@ const SV_THINK = "think about it\n</think>\n\n" * repeat("word ", 40)
 # the ids each generate call emitted, `peak` the most calls seen at once.
 function sv_fake(;
     script::AbstractString=SV_THINK,
+    accepts_tools::Bool=true,
     n_ctx::Integer=4096,
     delay::Real=0.0,
     cached::Integer=2,
@@ -247,7 +248,11 @@ function sv_fake(;
     return ChatModel(
         tokenize=s -> Int.(codeunits(s)),
         detokenize=ids -> String(UInt8.(ids)),
-        render=(msgs, tools, thinking) -> join((string(m["content"]) for m in msgs), "\n"),
+        accepts_tools=accepts_tools,
+        render=(msgs, tools, thinking) -> begin
+            body = join((string(m["content"]) for m in msgs), "\n")
+            thinking ? body * "\n<think>\n" : body
+        end,
         generate=(prompt_ids; max_new_tokens, on_token) -> begin
             active[] += 1
             peak[] = max(peak[], active[])
@@ -354,7 +359,7 @@ end
         @test finals[end] == "stop"
         usage = events[end]
         @test isempty(usage["choices"])
-        @test usage["usage"]["prompt_tokens"] == 2
+        @test usage["usage"]["prompt_tokens"] == ncodeunits("hi\n<think>\n")
         @test usage["usage"]["completion_tokens"] == ncodeunits(SV_THINK)
         @test usage["usage"]["prompt_tokens_details"]["cached_tokens"] == 2
     finally
@@ -687,4 +692,36 @@ end
     end
     @test_throws ArgumentError serve(sv_fake(); port=0, block=false, read_timeout=0)
     @test_throws ArgumentError serve(sv_fake(); port=0, block=false, max_connections=0)
+end
+
+@testset "parser: the start state comes from the prompt" begin
+    @test opens_reasoning("<|im_start|>assistant\n<think>\n")
+    @test !opens_reasoning("<|im_start|>assistant\n")
+    @test !opens_reasoning("<|im_start|>assistant\n<think>\n\n</think>\n\n")
+    @test !opens_reasoning("<|im_start|>assistant\n")
+    function sv_parse(p, text)
+        events = feed!(p, Vector{UInt8}(codeunits(text)))
+        append!(events, Gesso.Serve.finish!(p))
+        return sv_merge(events)
+    end
+    @test sv_parse(QwenXMLParser(; start_in_reasoning=true), "plan\n</think>\nanswer") ==
+          [(:reasoning, "plan\n"), (:content, "answer")]
+    @test sv_parse(QwenXMLParser(; start_in_reasoning=false), "answer") ==
+          [(:content, "answer")]
+    @test sv_parse(QwenXMLParser(; thinking=false), "answer") == [(:content, "answer")]
+    @test sv_parse(QwenXMLParser(; thinking=true), "plan\n</think>\nanswer") ==
+          [(:reasoning, "plan\n"), (:content, "answer")]
+end
+
+@testset "tools on a model with no tool-call parser are a 400" begin
+    srv = serve(sv_fake(; accepts_tools=false); port=0, block=false)
+    try
+        r = sv_request(srv.port, sv_post("/v1/chat/completions", sv_chat(SV_USER; tools=SV_WEATHER)))
+        @test r.status == 400
+        @test JSON.parse(r.body)["error"]["code"] == "tools_unsupported"
+        r = sv_request(srv.port, sv_post("/v1/chat/completions", sv_chat(SV_USER; tools=Any[])))
+        @test r.status == 200
+    finally
+        close(srv)
+    end
 end

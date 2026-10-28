@@ -83,6 +83,14 @@ function handle_chat(srv::Server, req::HTTPRequest, io::IO, keepalive::Bool)::Bo
     tools = get(body, "tools", nothing)
     tools = tools === nothing ? Any[] : tools
     tools isa AbstractVector || throw(HTTPError(400, "tools must be an array"))
+    (isempty(tools) || model.accepts_tools) || throw(
+        HTTPError(
+            400,
+            "tools are not supported by this model: its chat format has no tool-call parser";
+            code="tools_unsupported",
+            param="tools",
+        ),
+    )
     stream = get(body, "stream", false)
     stream isa Bool || throw(HTTPError(400, "stream must be a boolean"))
     include_usage = stream && _flag(get(body, "stream_options", nothing), "include_usage")
@@ -92,7 +100,8 @@ function handle_chat(srv::Server, req::HTTPRequest, io::IO, keepalive::Bool)::Bo
     sampling = _sampling(body)
 
     msgs = _normalize_messages(messages)
-    prompt_ids = model.tokenize(model.render(msgs, collect(Any, tools), thinking))
+    prompt = model.render(msgs, collect(Any, tools), thinking)
+    prompt_ids = model.tokenize(prompt)
     boundary = model.prefix_len(msgs, collect(Any, tools), thinking, prompt_ids)
     n = length(prompt_ids)
     n >= model.n_ctx && throw(
@@ -116,7 +125,11 @@ function handle_chat(srv::Server, req::HTTPRequest, io::IO, keepalive::Bool)::Bo
 
     turn = Turn(
         model,
-        QwenXMLParser(; tools=collect(Any, tools), thinking=thinking, stop=stop),
+        QwenXMLParser(;
+            tools=collect(Any, tools),
+            start_in_reasoning=opens_reasoning(prompt),
+            stop=stop,
+        ),
         io,
         stream,
         include_usage,

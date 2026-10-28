@@ -46,18 +46,40 @@ mutable struct QwenXMLParser
 end
 
 """
-    QwenXMLParser(; tools=[], thinking=true, stop=String[])
+    opens_reasoning(prompt) -> Bool
 
-`thinking=true` starts in reasoning, which matches the template's `<think>`
-generation prompt. `tools` is the request's tool list, used to coerce parameter
-values by their declared JSON type. A stop string ends generation: the text before
-it is emitted and the rest is discarded. `p.stopped` tells the caller to stop.
+True when the rendered prompt ends inside an open `<think>` block, so the model's
+first bytes are reasoning. The last `<think>` has to come after the last
+`</think>`, and trailing whitespace is ignored.
 """
-function QwenXMLParser(; tools=Any[], thinking::Bool=true, stop=String[])
+function opens_reasoning(prompt::AbstractString)::Bool
+    t = rstrip(prompt)
+    last_open = findlast("<think>", t)
+    last_open === nothing && return false
+    last_close = findlast("</think>", t)
+    return last_close === nothing || first(last_open) > first(last_close)
+end
+
+"""
+    QwenXMLParser(; tools=[], thinking=true, start_in_reasoning=thinking, stop=String[])
+
+`start_in_reasoning` says whether the prompt left a `<think>` open. The server
+takes it from the rendered prompt (see `opens_reasoning`). It defaults to
+`thinking`, which is the Qwen3.5 rule. `tools` is the request's tool list, used to
+coerce parameter values by their declared JSON type. A stop string ends
+generation: the text before it is emitted and the rest is discarded. `p.stopped`
+tells the caller to stop.
+"""
+function QwenXMLParser(;
+    tools=Any[],
+    thinking::Bool=true,
+    start_in_reasoning::Bool=thinking,
+    stop=String[],
+)
     stops = Vector{UInt8}[Vector{UInt8}(s) for s in stop if !isempty(s)]
     return QwenXMLParser(
         collect(Any, tools),
-        thinking ? :reasoning : :content,
+        start_in_reasoning ? :reasoning : :content,
         UInt8[],
         false,
         stops,
