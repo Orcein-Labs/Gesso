@@ -114,6 +114,16 @@ const ROLE_SHARED_GATE = Symbol("ffn.shared.gate")
 const ROLE_SHARED_UP = Symbol("ffn.shared.up")
 const ROLE_SHARED_DOWN = Symbol("ffn.shared.down")
 const ROLE_SHARED_GATE_INP = Symbol("ffn.shared.gate_inp")
+const ROLE_ROPE_FREQS = :rope_freqs
+const ROLE_ATTN_POST_NORM = Symbol("norm.attention_output")
+const ROLE_FFN_POST_NORM_1 = Symbol("norm.post_ffn_1")
+const ROLE_FFN_PRE_NORM_2 = Symbol("norm.pre_ffn_2")
+const ROLE_FFN_POST_NORM_2 = Symbol("norm.post_ffn_2")
+const ROLE_FFN_POST_NORM = Symbol("norm.post_ffn")
+const ROLE_LAYER_OUTPUT_SCALE = Symbol("layer.output_scale")
+const ROLE_ROUTER_SCALE = Symbol("ffn.router_scale")
+const ROLE_EXPERT_GATE_UP = Symbol("ffn.experts.gate_up")
+const ROLE_EXPERT_DOWN_SCALE = Symbol("ffn.experts.down_scale")
 
 """
     LAYER_ROLES
@@ -150,6 +160,16 @@ _role_family(::Val{Symbol("shortconv.kernel")}) = :frozen
 _role_family(::Val{Symbol("ffn.experts.gate")}) = :expert
 _role_family(::Val{Symbol("ffn.experts.up")}) = :expert
 _role_family(::Val{Symbol("ffn.experts.down")}) = :expert
+_role_family(::Val{:rope_freqs}) = :frozen
+_role_family(::Val{Symbol("norm.attention_output")}) = :frozen
+_role_family(::Val{Symbol("norm.post_ffn_1")}) = :frozen
+_role_family(::Val{Symbol("norm.pre_ffn_2")}) = :frozen
+_role_family(::Val{Symbol("norm.post_ffn_2")}) = :frozen
+_role_family(::Val{Symbol("norm.post_ffn")}) = :frozen
+_role_family(::Val{Symbol("layer.output_scale")}) = :frozen
+_role_family(::Val{Symbol("ffn.router_scale")}) = :frozen
+_role_family(::Val{Symbol("ffn.experts.gate_up")}) = :expert
+_role_family(::Val{Symbol("ffn.experts.down_scale")}) = :frozen
 _role_family(::Val) = :projection
 
 param_family_for(role::Symbol) = _role_family(Val(role))
@@ -203,6 +223,15 @@ const ROLE_TO_SLOT = Dict{Symbol, Symbol}(
     ROLE_SHARED_UP => :wshared_up,
     ROLE_SHARED_DOWN => :wshared_down,
     ROLE_SHARED_GATE_INP => :wshared_gate_inp,
+    ROLE_ATTN_POST_NORM => :attn_post_rms,
+    ROLE_FFN_POST_NORM_1 => :ffn_post_rms_1,
+    ROLE_FFN_PRE_NORM_2 => :ffn_pre_rms_2,
+    ROLE_FFN_POST_NORM_2 => :ffn_post_rms_2,
+    ROLE_FFN_POST_NORM => :ffn_post_rms,
+    ROLE_LAYER_OUTPUT_SCALE => :layer_output_scale,
+    ROLE_ROUTER_SCALE => :wrouter_scale,
+    ROLE_EXPERT_GATE_UP => :wexp_gate_up,
+    ROLE_EXPERT_DOWN_SCALE => :wexp_down_scale,
 )
 
 slot_for(role::Symbol) = get(ROLE_TO_SLOT, role, nothing)
@@ -260,6 +289,7 @@ struct FamilyParamMap
     lm_head_external::Union{Nothing, String}
     ignored_prefixes::Vector{String}
     linear_refs::Vector{ParamRef}
+    rope_freqs_external::Union{Nothing, String}
 end
 
 function FamilyParamMap(
@@ -271,6 +301,7 @@ function FamilyParamMap(
     lm_head_external::Union{Nothing, AbstractString};
     ignored_prefixes::Vector{String}=String[],
     linear_refs::Vector{ParamRef}=ParamRef[],
+    rope_freqs_external::Union{Nothing, AbstractString}=nothing,
 )
     return FamilyParamMap(
         family,
@@ -281,6 +312,7 @@ function FamilyParamMap(
         lm_head_external === nothing ? nothing : String(lm_head_external),
         ignored_prefixes,
         linear_refs,
+        rope_freqs_external === nothing ? nothing : String(rope_freqs_external),
     )
 end
 
@@ -298,6 +330,12 @@ end
 function _layer_param_refs(map::FamilyParamMap, spec::ArchitectureSpec, layer::Int)
     refs = layer_mixer(spec, layer) !== :full_attention && !isempty(map.linear_refs) ?
         map.linear_refs : map.layer_refs
+    if :k_only_global_attention in spec.features && layer_window(spec, layer) == 0
+        refs = filter(r -> r.id.role !== ROLE_V, refs)
+    end
+    if :gemma4_parallel_moe in spec.features
+        return refs
+    end
     spec.moe === nothing && return refs
     dense = layer < spec.moe.dense_lead
     expert_roles = (ROLE_ROUTER, ROLE_ROUTER_BIAS, ROLE_EXPERT_GATE, ROLE_EXPERT_UP, ROLE_EXPERT_DOWN)
@@ -346,4 +384,14 @@ export SemanticParamId,
     ROLE_SHARED_GATE,
     ROLE_SHARED_UP,
     ROLE_SHARED_DOWN,
-    ROLE_SHARED_GATE_INP
+    ROLE_SHARED_GATE_INP,
+    ROLE_ROPE_FREQS,
+    ROLE_ATTN_POST_NORM,
+    ROLE_FFN_POST_NORM_1,
+    ROLE_FFN_PRE_NORM_2,
+    ROLE_FFN_POST_NORM_2,
+    ROLE_FFN_POST_NORM,
+    ROLE_LAYER_OUTPUT_SCALE,
+    ROLE_ROUTER_SCALE,
+    ROLE_EXPERT_GATE_UP,
+    ROLE_EXPERT_DOWN_SCALE

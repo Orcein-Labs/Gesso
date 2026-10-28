@@ -124,6 +124,9 @@ const _GGML_KNOWN_BLOCKS = Dict{Int32, Tuple{Int, Int}}(
     0 => (1, 4),        # F32
     1 => (1, 2),        # F16
     30 => (1, 2),       # BF16
+    0 => (1, 4),        # F32
+    1 => (1, 2),        # F16
+    30 => (1, 2),       # BF16
     2 => (32, 18),      # Q4_0
     3 => (32, 20),      # Q4_1
     6 => (32, 22),      # Q5_0
@@ -507,15 +510,16 @@ defaults to a particular checkpoint's shape, except `full_attention_interval`
 """
 function spec_from_gguf_kv(kv::AbstractDict; tensor_names=nothing)
     arch = String(get(kv, "general.architecture", "qwen35moe"))
-    arch in ("qwen35", "qwen35moe", "llama", "spark2_5", "qwen4exp", "lfm2", "lfm2moe") || throw(
+    arch in ("qwen35", "qwen35moe", "llama", "spark2_5", "qwen4exp", "lfm2", "lfm2moe", "gemma4") || throw(
         gesso_error(
             ERR_RUNTIME,
             "spec_from_gguf_kv: unsupported general.architecture $(repr(arch)) " *
-            "(supported: qwen35 dense, qwen35moe, llama, spark2_5, qwen4exp, lfm2, lfm2moe)";
+            "(supported: qwen35 dense, qwen35moe, llama, spark2_5, qwen4exp, lfm2, lfm2moe, gemma4)";
             reason=:unsupported_architecture,
             architecture=arch,
         ),
     )
+    arch == "gemma4" && return _spec_from_gguf_gemma4(kv, tensor_names)
     arch == "llama" && return _spec_from_gguf_llama(kv, tensor_names)
     arch == "spark2_5" && return _spec_from_gguf_spark(kv, tensor_names)
     arch == "qwen4exp" && return _spec_from_gguf_qwen4exp(kv, tensor_names)
@@ -819,7 +823,8 @@ end
 function _is_expert_tensor(name::AbstractString)
     return occursin("ffn_gate_exps", name) ||
            occursin("ffn_up_exps", name) ||
-           occursin("ffn_down_exps", name)
+           occursin("ffn_down_exps", name) ||
+           occursin("ffn_gate_up_exps", name)
 end
 
 function _expert_slice(hdr, info::GgufTensorInfo)
@@ -903,6 +908,7 @@ function _required_gguf_names(pmap::FamilyParamMap, spec::ArchitectureSpec)
     names = String[pmap.embedding_external]
     pmap.final_norm_external !== nothing && push!(names, pmap.final_norm_external)
     pmap.lm_head_external !== nothing && push!(names, pmap.lm_head_external)
+    pmap.rope_freqs_external !== nothing && push!(names, pmap.rope_freqs_external)
     for i in 0:(spec.num_layers-1)
         refs = _layer_param_refs(pmap, spec, i)
         for ref in refs
@@ -1048,6 +1054,7 @@ _gguf_param_map(spec::ArchitectureSpec) =
     spec.family === :llama ? gguf_param_map(LlamaAdapter(), spec) :
     spec.family === :spark2_5 ? _gguf_spark_param_map(spec) :
     spec.family in (:lfm2, :lfm2moe) ? _gguf_lfm_param_map(spec) :
+    spec.family === :gemma4 ? _gguf_gemma4_param_map(spec) :
     spec.moe === nothing ? gguf_param_map(Qwen35Adapter(), spec) :
     gguf_param_map(Qwen35MoeAdapter(), spec)
 

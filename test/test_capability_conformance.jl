@@ -270,6 +270,50 @@ function _probe(backend, cap::Symbol)
         return _conformance_run(
             () -> Gesso._cpu_gated_delta_rule!(out, q, k, v, g, beta, state),
         )
+    elseif cap === :embedding_scale
+        return _conformance_run(
+            () -> Gesso.Inference._apply_embedding_scale!(backend, _act(randn(rng, 2, 4)), (; spec=(; embedding_scale=2.0))),
+        )
+    elseif cap === :logit_softcap
+        return _conformance_run(
+            () -> Gesso.Inference._apply_logit_softcap!(backend, _act(randn(rng, 2, 4)), (; spec=(; final_logit_softcap=30.0))),
+        )
+    elseif cap === :v_norm_weightless
+        return _conformance_run(
+            () -> Gesso.Inference._gemma4_v_norm!(backend, randn(rng, 2, 2, 4), 1e-6),
+        )
+    elseif cap === :k_only_global_attention
+        return _conformance_run(
+            () -> Gesso.Inference._gemma4_k_only_v!(backend, randn(rng, 2, 4)),
+        )
+    elseif cap === :rope_freq_factors
+        return _conformance_run(
+            () -> Gesso.Inference._gemma4_rope_with_factors!(backend, Matrix{Float32}(randn(rng, 2, 4)), 4, 4, 0, 10000.0, [1.0f0, 1.0f0]),
+        )
+    elseif cap === :layer_output_scale
+        return _conformance_run(
+            () -> Gesso.Inference._gemma4_layer_output_scale!(backend, randn(rng, 2, 4), [0.5f0]),
+        )
+    elseif cap === :gemma4_parallel_moe
+        bt = (
+            ffn_rms=_froz(ones(Float32, 4)),
+            wgate=_pw(randn(rng, Float32, 8, 4)),
+            wup=_pw(randn(rng, Float32, 8, 4)),
+            wdown=_pw(randn(rng, Float32, 4, 8)),
+            ffn_post_rms_1=_froz(ones(Float32, 4)),
+            wrouter_scale=_froz(ones(Float32, 4)),
+            ffn_pre_rms_2=_froz(ones(Float32, 4)),
+            wrouter=_pw(randn(rng, Float32, 2, 4)),
+            n_expert_used=1,
+            wexp_gate_up=Gesso.ExpertWeight(; shape=(2, 8, 4), storage=randn(rng, Float32, 2, 8, 4)),
+            wexp_down=Gesso.ExpertWeight(; shape=(2, 4, 4), storage=randn(rng, Float32, 2, 4, 4)),
+            wexp_down_scale=_froz(ones(Float32, 2)),
+            ffn_post_rms_2=_froz(ones(Float32, 4)),
+            ffn_post_rms=_froz(ones(Float32, 4)),
+        )
+        return _conformance_run(
+            () -> Gesso.Inference._gemma4_parallel_moe_ffn!(backend, randn(rng, Float32, 2, 4), bt, 1.0f-6),
+        )
     else
         return :unsupported
     end
@@ -436,6 +480,33 @@ append!(_CAP_PROBE_SPECS, [
         mixer=Gesso.ShortConvSpec([:short_convolution, :full_attention], 3),
         moe=Gesso.MoeSpec(; n_experts=4, n_expert_used=2, expert_ff=8,
             dense_lead=1, gating=:sigmoid, selection_bias=true)),
+    Gesso.ArchitectureSpec(;
+        family=:probe,
+        hidden_size=8,
+        num_layers=2,
+        n_heads=2,
+        n_kv_heads=1,
+        vocab_size=8,
+        intermediate_size=16,
+        activation_kind=:geglu,
+        head_dim_swa=4,
+        layer_kv_heads=[1, 1],
+        embedding_scale=sqrt(8.0),
+        final_logit_softcap=30.0,
+        sliding_window=64,
+        swa_layers=[true, false],
+        features=Set{Symbol}([
+            :qk_norm,
+            :embedding_scale,
+            :logit_softcap,
+            :v_norm_weightless,
+            :k_only_global_attention,
+            :gemma4_parallel_moe,
+            :layer_output_scale,
+            :rope_freq_factors,
+        ]),
+        moe=Gesso.MoeSpec(; n_experts=4, n_expert_used=2, expert_ff=8),
+    ),
 ])
 
 const ALL_SEMANTIC_CAPS = sort!(
@@ -572,5 +643,32 @@ end
         @test issubset(ALL_SEMANTIC_CAPS, union(declared, CPU_SUPPORTED_CAPS))
         probed = Set(c for c in ALL_SEMANTIC_CAPS if _probe(backend, c) !== :unsupported)
         @test issubset(probed, declared)
+    end
+
+    @testset "refusal: Gemma 4 capabilities throw LoweringNotImplemented on non-CPU backends" begin
+        struct _MockCUDABackend <: Gesso.AbstractGessoBackend end
+        Gesso.backend_name(::_MockCUDABackend) = :cuda
+        struct _MockLavaBackend <: Gesso.AbstractGessoBackend end
+        Gesso.backend_name(::_MockLavaBackend) = :lava
+
+        non_cpu = [
+            isdefined(Gesso, :CUDABackend) ? Gesso.CUDABackend() : _MockCUDABackend(),
+            isdefined(Gesso, :LavaBackend) ? Gesso.LavaBackend() : _MockLavaBackend(),
+        ]
+        gemma4_caps = (
+            :embedding_scale,
+            :logit_softcap,
+            :v_norm_weightless,
+            :k_only_global_attention,
+            :gemma4_parallel_moe,
+            :layer_output_scale,
+            :rope_freq_factors,
+        )
+        for be in non_cpu
+            for cap in gemma4_caps
+                @test !Gesso.supports(be, cap)
+                @test _probe(be, cap) === :refused
+            end
+        end
     end
 end

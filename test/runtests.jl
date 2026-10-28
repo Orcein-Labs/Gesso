@@ -115,6 +115,8 @@ using Gesso: reference_prefill, reference_generate
     # AVX2 bit-exact vs scalar, real Qwen3.8-27B UD-IQ2_M rows (env-gated)
     include("test_quant_cpu_iq_s.jl")
 
+    # CPU and CUDA expert GEMV against an F32 reference
+    include("test_quant_cpu_legacy32.jl")
     # Multi-column Q8_K dots (K = 1..8 activation tiles) bit-equal to the
     # single-column kernel for every type; prefill on/off through _quant_matmul!;
     # real Saluki rows (env-gated)
@@ -163,6 +165,9 @@ using Gesso: reference_prefill, reference_generate
     include("test_qwen4exp.jl")
     include("test_lfm25.jl")
     include("test_lfm_chat.jl")
+    include("test_gemma4_tokenizer.jl")
+    include("test_gemma4_chat.jl")
+    include("test_gemma4.jl")
 
     # Phase 3 (§LXXVI item D): the REAL-model gate — one named skip unless
     # GESSO_SMOLLM2_DIR points at a local snapshot; it never downloads

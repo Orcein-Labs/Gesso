@@ -126,9 +126,18 @@ const CPU_SUPPORTED_CAPS = Set([
     :sliding_window_attention,
     :geglu_ffn,
     :attn_head_gate,
+    :embedding_scale,
+    :logit_softcap,
+    :v_norm_weightless,
+    :k_only_global_attention,
+    :gemma4_parallel_moe,
+    :layer_output_scale,
+    :rope_freq_factors,
 ])
 supports(::CPUBackend, cap::Symbol) = cap in CPU_SUPPORTED_CAPS
 supports(::Type{CPUBackend}, cap::Symbol) = cap in CPU_SUPPORTED_CAPS
+supports(::AbstractGessoBackend, ::Symbol) = false
+supports(::Type{<:AbstractGessoBackend}, ::Symbol) = false
 
 # --- Lowering operation contract -------------------------------------------
 #

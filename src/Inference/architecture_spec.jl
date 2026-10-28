@@ -241,6 +241,11 @@ struct ArchitectureSpec
     # RoPE of the windowed layers when it differs from `rope` (Spark2.5:
     # full layers theta 5e6 over 64 dims, windowed layers theta 1e4 over all).
     rope_swa::Union{Nothing, RoPEPolicy}
+    # Optional Gemma 4 fields
+    head_dim_swa::Union{Nothing, Int}
+    layer_kv_heads::Vector{Int}
+    embedding_scale::Float64
+    final_logit_softcap::Float64
 end
 
 function layer_mixer(spec::ArchitectureSpec, layer0::Integer)
@@ -273,6 +278,10 @@ function ArchitectureSpec(;
     moe::Union{Nothing, MoeSpec}=nothing,
     swa_layers::AbstractVector{Bool}=Bool[],
     rope_swa::Union{Nothing, RoPEPolicy}=nothing,
+    head_dim_swa::Union{Nothing, Integer}=nothing,
+    layer_kv_heads::AbstractVector{<:Integer}=Int[],
+    embedding_scale::Real=1.0,
+    final_logit_softcap::Real=0.0,
 )
     hidden_size > 0 || error("ArchitectureSpec: hidden_size must be positive")
     num_layers > 0 || error("ArchitectureSpec: num_layers must be positive")
@@ -317,6 +326,11 @@ function ArchitectureSpec(;
             "ArchitectureSpec: mixer.layer_types length $(length(mixer.layer_types)) != num_layers $num_layers",
         )
     end
+    head_dim_swa === nothing || head_dim_swa > 0 ||
+        error("ArchitectureSpec: head_dim_swa must be positive")
+    isempty(layer_kv_heads) ||
+        length(layer_kv_heads) == num_layers ||
+        error("ArchitectureSpec: layer_kv_heads length $(length(layer_kv_heads)) != num_layers $num_layers")
     feats = Set{Symbol}(features)
     moe === nothing || moe.dense_lead < num_layers || error("ArchitectureSpec: no routed layer after dense_lead")
     moe !== nothing && push!(feats, :moe)
@@ -342,6 +356,10 @@ function ArchitectureSpec(;
         moe,
         collect(Bool, swa_layers),
         rope_swa,
+        head_dim_swa === nothing ? nothing : Int(head_dim_swa),
+        collect(Int, layer_kv_heads),
+        Float64(embedding_scale),
+        Float64(final_logit_softcap),
     )
 end
 
@@ -356,6 +374,24 @@ function layer_window(spec::ArchitectureSpec, layer0::Integer)
     isempty(spec.swa_layers) && return spec.sliding_window
     return spec.swa_layers[layer0+1] ? spec.sliding_window : 0
 end
+
+"""
+    layer_head_dim(spec, layer0) -> Int
+
+Head dimension of 0-based layer `layer0`: `head_dim_swa` on SWA layers if present,
+otherwise `head_dim`.
+"""
+layer_head_dim(spec::ArchitectureSpec, layer0::Integer)::Int =
+    (spec.head_dim_swa !== nothing && layer_window(spec, layer0) > 0) ? spec.head_dim_swa : spec.head_dim
+
+"""
+    layer_n_kv_heads(spec, layer0) -> Int
+
+Number of KV heads for 0-based layer `layer0`: `layer_kv_heads[layer0+1]` if set,
+otherwise `spec.n_kv_heads`.
+"""
+layer_n_kv_heads(spec::ArchitectureSpec, layer0::Integer)::Int =
+    isempty(spec.layer_kv_heads) ? spec.n_kv_heads : spec.layer_kv_heads[layer0+1]
 
 """
     layer_rope(spec, layer0) -> RoPEPolicy
@@ -463,6 +499,9 @@ function required_semantics(spec::ArchitectureSpec)
     spec.rope.rotary_dim != 0 && push!(req, :rope_partial_dim)
     spec.rope.interleaved && push!(req, :rope_interleaved)
     push!(req, Symbol("rope_", caps.rope_scaling))
+    for f in (:shared_expert, :embedding_scale, :logit_softcap, :v_norm_weightless, :k_only_global_attention, :gemma4_parallel_moe, :layer_output_scale, :rope_freq_factors)
+        f in spec.features && !(f in req) && push!(req, f)
+    end
     return req
 end
 
@@ -477,7 +516,9 @@ export RoPEPolicy,
     is_scaled,
     layer_mixer,
     layer_window,
-    layer_rope
+    layer_rope,
+    layer_head_dim,
+    layer_n_kv_heads
 
 # --- Pass D: the CPU-oracle reference for a positional policy ------------------
 
