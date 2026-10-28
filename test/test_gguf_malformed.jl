@@ -140,6 +140,14 @@ end
         _mg_str(io, "tokenizer.ggml.tokens")
         write(io, UInt32(9), UInt32(8), UInt64(1) << 60)
         @test _mg_rejects(take!(io))
+        # A value type GGUF does not define, on a read key and on a skipped one.
+        for key in ("general.name", "tokenizer.ggml.tokens")
+            io = IOBuffer()
+            write(io, UInt8['G', 'G', 'U', 'F'], UInt32(3), UInt64(0), UInt64(1))
+            _mg_str(io, key)
+            write(io, UInt32(99), UInt64(0))
+            @test _mg_rejects(take!(io))
+        end
     end
 
     @testset "bad tensor records" begin
@@ -169,4 +177,27 @@ end
         @test err.code == Gesso.ERR_RUNTIME
         rm(path)
     end
+end
+
+_mg_reason(f) =
+    try
+        f()
+        nothing
+    catch e
+        e isa Gesso.GessoError ? e.detail[:reason] : e
+    end
+
+@testset "well-formed files Gesso cannot run throw typed errors" begin
+    # A ggml type outside the table is refused before libggml is asked, which
+    # would index its type table out of bounds.
+    @test _mg_reason(() -> _mg_inf._ggml_traits(99; tensor="a.weight")) == :unsupported_ggml_type
+    @test _mg_reason(() -> _mg_inf._ggml_traits(Int64(1) << 40)) == :unsupported_ggml_type
+    # Header parsing still accepts the type; it is the load that refuses it.
+    path = _mg_file(_mg_bytes(; tensors=[("a.weight", [8, 2], Int32(99), zeros(UInt8, 64))]))
+    @test only(_mg_inf.gguf_header(path).tensors).ggml_type == 99
+    rm(path)
+    @test _mg_reason(() -> _mg_inf.spec_from_gguf_kv(Dict{String, Any}("general.architecture" => "notarealarch"))) ==
+          :unsupported_architecture
+    @test _mg_reason(() -> _mg_inf.spec_from_gguf_kv(Dict{String, Any}("general.architecture" => "llama"))) ==
+          :missing_metadata
 end

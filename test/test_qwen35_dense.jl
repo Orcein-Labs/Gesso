@@ -219,7 +219,7 @@ end
     @test spec.num_layers == 4
 
     kv["general.architecture"] = "kolibri1"
-    @test_throws ErrorException _GI.spec_from_gguf_kv(kv)
+    @test_throws Gesso.GessoError _GI.spec_from_gguf_kv(kv)
 end
 
 @testset "real 27B header: dense spec and MTP block" begin
