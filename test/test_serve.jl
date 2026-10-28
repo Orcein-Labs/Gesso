@@ -713,6 +713,25 @@ end
           [(:reasoning, "plan\n"), (:content, "answer")]
 end
 
+@testset "a model that opens its own think block is parsed as reasoning" begin
+    function sv_bytewise(text)
+        p = QwenXMLParser(; start_in_reasoning=false)
+        events = Any[]
+        for b in codeunits(text)
+            append!(events, feed!(p, [b]))
+        end
+        append!(events, Gesso.Serve.finish!(p))
+        return sv_merge(events)
+    end
+    @test sv_bytewise("<think>\nplan\n</think>\n\nParis") ==
+          [(:reasoning, "plan\n"), (:content, "Paris")]
+    @test sv_bytewise("\n<think>plan</think>Paris") ==
+          [(:reasoning, "plan"), (:content, "Paris")]
+    @test sv_bytewise("<thinking is fun") == [(:content, "<thinking is fun")]
+    @test sv_bytewise("Paris <think>") == [(:content, "Paris <think>")]
+    @test sv_bytewise("<thi") == [(:content, "<thi")]
+end
+
 @testset "tools on a model with no tool-call parser are a 400" begin
     srv = serve(sv_fake(; accepts_tools=false); port=0, block=false)
     try
