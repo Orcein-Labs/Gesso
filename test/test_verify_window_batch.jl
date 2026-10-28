@@ -20,7 +20,7 @@ function _vwb_random_qm(rng, ty::Int32, nrows::Int, ne0::Int)
         data[blk*bsz+off+1] = UInt8(bits & 0xff)
         data[blk*bsz+off+2] = UInt8(bits >> 8)
     end
-    return _GIB.QuantMatrix(data, 0, ty, ne0, nrows, rb, C_NULL, Int64(_GIB.QK_K))
+    return _GIB.QuantMatrix(data, 0, ty, ne0, nrows, rb, Int64(_GIB.QK_K))
 end
 
 @testset "verify window: batched quantized projections" begin

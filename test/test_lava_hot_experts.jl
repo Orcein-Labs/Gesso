@@ -46,7 +46,7 @@ else
     function _hot_bank(A3::Array{Float32,3})
         n, r, c = size(A3)
         return _HOT_INF.GgufQuantSlice(
-            _hot_pack(A3), 0, Int32(0), n, c, r, c * r * 4, C_NULL, Int64(1),
+            _hot_pack(A3), 0, Int32(0), n, c, r, c * r * 4, Int64(1),
         )
     end
 

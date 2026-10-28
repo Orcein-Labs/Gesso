@@ -28,7 +28,6 @@ function _pack_f32_slice(A3, ne0, ne1)
         ne0,
         ne1,
         ne0 * ne1 * 4,
-        C_NULL,
         Int64(1),
     )
 end
@@ -368,7 +367,6 @@ else
                 ne0,
                 ne1,
                 bpe,
-                C_NULL,
                 Int64(1),
             )
         end
@@ -512,7 +510,7 @@ else
         ext = Base.get_extension(Gesso, :GessoCUDAExt)
         I_ = Gesso.Inference
         sl(t, ne0, ne1) =
-            Gesso.GgufQuantSlice(UInt8[], 0, t, 4, ne0, ne1, 1024, C_NULL, Int64(1))
+            Gesso.GgufQuantSlice(UInt8[], 0, t, 4, ne0, ne1, 1024, Int64(1))
         @test ext._hot_supported(
             sl(I_.GGML_TYPE_Q2_K, 256, 64),
             sl(I_.GGML_TYPE_Q3_K, 256, 64),
@@ -915,7 +913,6 @@ else
                 ne0,
                 ne1,
                 bpe,
-                C_NULL,
                 Int64(blck),
             )
         end

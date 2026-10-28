@@ -1,9 +1,9 @@
 # GGUF transport for qwen35 (dense) and qwen35moe (Ornith-1.5-35B-A3B). Header
-# parse is pure Julia. Quantized payloads dequant through the local llama.cpp
-# ggml `to_float` (same third-column binary the ID-gate already uses). Experts
-# stay mmap'd and dequant per selected expert. Large 2-D projections and the
-# embedding/head stay quantized as `QuantMatrix` (gguf_quant_matrix.jl); small
-# and 1-D tensors materialize as Float32 in Gesso `(out, in)` layout.
+# parse and dequant are pure Julia (gguf_dequant.jl); libggml is loaded only
+# as a test oracle. Experts stay mmap'd and dequant per selected expert. Large
+# 2-D projections and the embedding/head stay quantized as `QuantMatrix`
+# (gguf_quant_matrix.jl); small and 1-D tensors materialize as Float32 in
+# Gesso `(out, in)` layout.
 
 using Mmap
 using Libdl
@@ -24,7 +24,6 @@ mutable struct GgufQuantSlice
     ne0::Int                     # GGUF innermost
     ne1::Int
     bytes_per_expert::Int
-    to_float::Ptr{Cvoid}
     blck_size::Int64
     cache::Dict{Int, Matrix{Float32}}
     cache_order::Vector{Int}
@@ -36,7 +35,6 @@ mutable struct GgufQuantSlice
         ne0::Int,
         ne1::Int,
         bytes_per_expert::Int,
-        to_float::Ptr{Cvoid},
         blck_size::Int64,
     )
         return new(
@@ -47,7 +45,6 @@ mutable struct GgufQuantSlice
             ne0,
             ne1,
             bytes_per_expert,
-            to_float,
             blck_size,
             Dict{Int, Matrix{Float32}}(),
             Int[],
@@ -84,6 +81,8 @@ _is_host_float_storage(s::HostOffload) = _is_host_float_storage(s.data)
 _offload_host_array(s::HostOffload) = s.data
 _offload_host_array(s::AbstractArray) = s
 
+# libggml from a llama.cpp build, loaded only by the oracle tests that compare
+# Gesso's kernels and dequant against ggml's (_ggml_lib_traits, _ggml_lib_dequant).
 const _GGML_LIBS = Ref{Tuple{Ptr{Cvoid}, Ptr{Cvoid}}}((C_NULL, C_NULL))
 const _GGML_GET_TRAITS = Ref{Ptr{Cvoid}}(C_NULL)
 
@@ -117,12 +116,18 @@ function _ensure_ggml!()
 end
 
 # Block size and bytes per block of the ggml types Gesso reads, from ggml's own
-# type table (the same sizes as _iq_block_bytes). Used to catch a libggml whose
-# traits struct no longer has the layout _ggml_traits reads.
+# type table (the same sizes as _iq_block_bytes). Also the allow-list: a type
+# missing here is refused, every type here has a decoder in gguf_dequant.jl,
+# and a libggml whose traits struct no longer has the layout _ggml_lib_traits
+# reads is caught against these sizes.
 const _GGML_KNOWN_BLOCKS = Dict{Int32, Tuple{Int, Int}}(
     0 => (1, 4),        # F32
     1 => (1, 2),        # F16
     30 => (1, 2),       # BF16
+    2 => (32, 18),      # Q4_0
+    3 => (32, 20),      # Q4_1
+    6 => (32, 22),      # Q5_0
+    7 => (32, 24),      # Q5_1
     8 => (32, 34),      # Q8_0
     10 => (256, 84),    # Q2_K
     11 => (256, 110),   # Q3_K
@@ -141,20 +146,13 @@ const _GGML_KNOWN_BLOCKS = Dict{Int32, Tuple{Int, Int}}(
     42 => (64, 18),     # Q2_0
 )
 
-# Throws unless the traits read for `ggml_type` are plausible: equal to Gesso's
-# table where it has the type, and in range otherwise. Wrong values here would
-# size every row and dequant call wrongly, so they must not pass silently.
+# Throws unless the traits read for `ggml_type` equal Gesso's table. Wrong
+# values here would size every row and dequant call wrongly, so they must not
+# pass silently.
 function _check_ggml_traits(ggml_type::Integer, blck::Integer, tsize::Integer)
-    known = get(_GGML_KNOWN_BLOCKS, Int32(ggml_type), nothing)
-    ok = if known === nothing
-        1 <= blck <= 1024 && 1 <= tsize <= 1 << 16
-    else
-        (blck, tsize) == known
-    end
-    ok && return nothing
-    want =
-        known === nothing ? "a block size in 1:1024 and type size in 1:65536" :
-        "block size $(known[1]) and type size $(known[2])"
+    known = _GGML_KNOWN_BLOCKS[Int32(ggml_type)]
+    (blck, tsize) == known && return nothing
+    want = "block size $(known[1]) and type size $(known[2])"
     throw(
         gesso_error(
             ERR_RUNTIME,
@@ -170,7 +168,26 @@ function _check_ggml_traits(ggml_type::Integer, blck::Integer, tsize::Integer)
     )
 end
 
-function _ggml_traits(ggml_type::Integer)
+function _ggml_traits(ggml_type::Integer; tensor=nothing)
+    ggml_type in keys(_GGML_KNOWN_BLOCKS) || throw(
+        gesso_error(
+            ERR_RUNTIME,
+            "gguf_import: ggml type $ggml_type" * (tensor === nothing ? "" : " (tensor $tensor)") *
+            " has no reader in Gesso";
+            reason=:unsupported_ggml_type,
+            ggml_type=Int(ggml_type),
+            tensor=something(tensor, ""),
+        ),
+    )
+    blck, tsize = _GGML_KNOWN_BLOCKS[Int32(ggml_type)]
+    return (blck_size=Int64(blck), type_size=tsize)
+end
+
+# libggml's traits for a type, checked against the table. Oracle tests only.
+function _ggml_lib_traits(ggml_type::Integer)
+    # ggml_get_type_traits indexes its table unchecked in release builds, so a
+    # type outside Gesso's table is refused before it is asked.
+    _ggml_traits(ggml_type)
     _ensure_ggml!()
     p = ccall(_GGML_GET_TRAITS[], Ptr{Cvoid}, (Cint,), Int32(ggml_type))
     p == C_NULL && error("gguf_import: ggml_get_type_traits($ggml_type) is null")
@@ -184,12 +201,55 @@ function _ggml_traits(ggml_type::Integer)
     return (blck_size=blck, type_size=tsize, to_float=to_float)
 end
 
+# ggml's own dequant of n_elem values at 0-based offset0. Oracle tests only.
+function _ggml_lib_dequant(data::AbstractVector{UInt8}, offset0::Int, ggml_type::Integer, n_elem::Int)
+    tr = _ggml_lib_traits(ggml_type)
+    tr.to_float == C_NULL && error("gguf_import: libggml has no to_float for ggml type $ggml_type")
+    nbytes = cld(n_elem, Int(tr.blck_size)) * tr.type_size
+    0 <= offset0 && offset0 + nbytes <= length(data) || error("ggml oracle: read past the end of data")
+    y = Vector{Float32}(undef, n_elem)
+    GC.@preserve data y ccall(
+        tr.to_float,
+        Cvoid,
+        (Ptr{Cvoid}, Ptr{Float32}, Int64),
+        pointer(data, offset0 + 1),
+        pointer(y),
+        Int64(n_elem),
+    )
+    return y
+end
+
 # --- tiny cursor --------------------------------------------------------------
 
 mutable struct _Cur
     data::Vector{UInt8}
     pos::Int
 end
+
+# Raised by the cursor when a length or count read from the file cannot fit in
+# what is left of it; gguf_header turns it into a GessoError naming the file.
+struct _GgufOverrun <: Exception end
+
+# A metadata value type GGUF does not define: the type field itself is damaged.
+struct _GgufBadValueType <: Exception
+    t::UInt32
+end
+
+_remaining(c::_Cur) = length(c.data) - c.pos + 1
+
+# A length or element count read from the file, checked against the bytes left
+# (each element takes at least `min_bytes`). Without this a corrupt count
+# allocates, or loops, on a number the file never backs.
+function _count(c::_Cur, min_bytes::Int=1)
+    n = _u64(c)
+    n <= UInt64(max(_remaining(c), 0) ÷ min_bytes) || throw(_GgufOverrun())
+    return Int(n)
+end
+
+# Bytes per element of the fixed-width GGUF metadata value types; 0 for string
+# (8) and array (9).
+_gguf_value_width(t::UInt32) =
+    t in (0, 1, 7) ? 1 : t in (2, 3) ? 2 : t in (4, 5, 6) ? 4 : t in (10, 11, 12) ? 8 : 0
 _u8(c::_Cur) = (v=c.data[c.pos]; c.pos += 1; v)
 function _u32(c::_Cur)
     p = c.pos
@@ -215,7 +275,7 @@ function _f64(c::_Cur)
     return reinterpret(Float64, _u64(c))
 end
 function _str(c::_Cur)
-    n = Int(_u64(c))
+    n = _count(c)
     s = String(c.data[c.pos:(c.pos+n-1)])
     c.pos += n
     return s
@@ -228,26 +288,27 @@ function _read_u16!(c::_Cur)
 end
 
 function _skip_value!(c::_Cur, t::UInt32)
-    if t == 0 || t == 1 || t == 7
-        c.pos += 1
-    elseif t == 2 || t == 3
-        c.pos += 2
-    elseif t == 4 || t == 5 || t == 6
-        c.pos += 4
+    w = _gguf_value_width(t)
+    if w > 0
+        c.pos += w
     elseif t == 8
-        n = Int(_u64(c))
+        n = _count(c)
         c.pos += n
-    elseif t == 10 || t == 11 || t == 12
-        c.pos += 8
     elseif t == 9
         at = _u32(c)
-        n = Int(_u64(c))
-        for _ in 1:n
-            _skip_value!(c, at)
+        aw = _gguf_value_width(at)
+        if aw > 0
+            n = _count(c, aw)
+            c.pos += n * aw
+        else
+            for _ in 1:_count(c, 8)
+                _skip_value!(c, at)
+            end
         end
     else
-        error("gguf_import: unknown value type $t")
+        throw(_GgufBadValueType(t))
     end
+    _remaining(c) >= 0 || throw(_GgufOverrun())
     return nothing
 end
 
@@ -266,10 +327,10 @@ function _read_value(c::_Cur, t::UInt32)
     t == 12 && return _f64(c)
     if t == 9
         at = _u32(c)
-        n = Int(_u64(c))
+        n = _count(c, max(_gguf_value_width(at), 1))
         return [_read_value(c, at) for _ in 1:n]
     end
-    error("gguf_import: unread value type $t")
+    throw(_GgufBadValueType(t))
 end
 
 struct GgufTensorInfo
@@ -279,18 +340,62 @@ struct GgufTensorInfo
     offset::UInt64
 end
 
+# A key the architecture needs is absent: the bytes are fine, the export is not.
+_missing_metadata(key::AbstractString) = gesso_error(
+    ERR_RUNTIME,
+    "spec_from_gguf_kv: GGUF metadata has no $key, which this architecture needs. " *
+    "The file was not written by a converter Gesso supports.";
+    reason=:missing_metadata,
+    key=String(key),
+)
+
+function _malformed_gguf(path::AbstractString, msg::AbstractString; kw...)
+    return gesso_error(
+        ERR_RUNTIME,
+        "gguf_header: $path: $msg. The file is truncated or corrupt; download it again.";
+        reason=:malformed_gguf,
+        path=String(path),
+        kw...,
+    )
+end
+
+"""
+    gguf_header(path) -> (; data, kv, tensors, data_start)
+
+Parse a GGUF header and check it against the file before anything reads
+tensor bytes. A file that ends early, a count or length the file cannot hold,
+a bad alignment, or a tensor whose bytes run past the end throws a
+`GessoError` with `detail[:reason] == :malformed_gguf`. Tensors of a ggml type
+missing from `_GGML_KNOWN_BLOCKS` are not sized here; loading one throws with
+reason `:unsupported_ggml_type`.
+"""
 function gguf_header(path::AbstractString)
     isfile(path) || error("gguf_header: no such file: $path")
     data = open(path, "r") do io
         Mmap.mmap(io, Vector{UInt8}; grow=false, shared=false)
     end
+    length(data) >= 24 || throw(_malformed_gguf(path, "$(length(data)) bytes is too short for a GGUF header"))
+    hdr = try
+        _gguf_header_parse(path, data)
+    catch e
+        e isa _GgufBadValueType &&
+            throw(_malformed_gguf(path, "metadata value type $(e.t) is not a GGUF type"; value_type=Int(e.t)))
+        e isa Union{_GgufOverrun, BoundsError, InexactError} || rethrow()
+        throw(_malformed_gguf(path, "the metadata runs past the end of the file or holds an impossible length"))
+    end
+    _check_tensor_extents(path, hdr)
+    return hdr
+end
+
+function _gguf_header_parse(path::AbstractString, data::Vector{UInt8})
     c = _Cur(data, 1)
     magic = (_u8(c), _u8(c), _u8(c), _u8(c))
     magic == _GGUF_MAGIC || error("gguf_header: not a GGUF file: $path")
     version = _u32(c)
     version >= 2 || error("gguf_header: GGUF version $version is too old")
-    n_tensors = Int(_u64(c))
-    n_kv = Int(_u64(c))
+    # A tensor info is at least 24 bytes and a key/value at least 13.
+    n_tensors = _count(c, 24)
+    n_kv = _count(c, 13)
     kv = Dict{String, Any}()
     for _ in 1:n_kv
         k = _str(c)
@@ -298,7 +403,7 @@ function gguf_header(path::AbstractString)
         # tokenizer arrays are hundreds of thousands of strings; keep counts.
         if t == UInt32(9) && startswith(k, "tokenizer.ggml.")
             at = _u32(c)
-            n = Int(_u64(c))
+            n = _count(c, max(_gguf_value_width(at), 1))
             kv[k] = n
             for _ in 1:n
                 _skip_value!(c, at)
@@ -313,6 +418,7 @@ function gguf_header(path::AbstractString)
     for i in 1:n_tensors
         name = _str(c)
         nd = Int(_u32(c))
+        1 <= nd <= 4 || throw(_malformed_gguf(path, "tensor $name has $nd dimensions"; tensor=name))
         dims = Vector{Int}(undef, nd)
         for d in 1:nd
             dims[d] = Int(_u64(c))
@@ -322,10 +428,66 @@ function gguf_header(path::AbstractString)
         infos[i] = GgufTensorInfo(name, dims, t, off)
     end
     alignment = Int(get(kv, "general.alignment", 32))
+    alignment > 0 && ispow2(alignment) ||
+        throw(_malformed_gguf(path, "general.alignment is $alignment"; alignment))
     pad = alignment - ((c.pos - 1) % alignment)
     pad == alignment && (pad = 0)
     data_start = (c.pos - 1) + pad
-    return (data=data, kv=kv, tensors=infos, data_start=data_start)
+    return (data=data, kv=kv, tensors=infos, data_start=data_start, alignment=alignment, path=String(path))
+end
+
+# Bytes of a tensor of `ggml_type` with ggml dims `dims`, or `nothing` when the
+# type is not in _GGML_KNOWN_BLOCKS. Throws on a row length that is not whole
+# blocks or an element count that overflows.
+function _known_tensor_nbytes(path, name, dims::Vector{Int}, ggml_type::Int32)
+    blk = get(_GGML_KNOWN_BLOCKS, ggml_type, nothing)
+    blk === nothing && return nothing
+    blck, tsize = blk
+    rem(dims[1], blck) == 0 || throw(
+        _malformed_gguf(path, "tensor $name row length $(dims[1]) is not whole blocks of $blck"; tensor=name),
+    )
+    n = 1
+    for d in dims
+        n = Base.checked_mul(n, d)
+    end
+    return Base.checked_mul(n ÷ blck, tsize)
+end
+
+function _check_tensor_extents(path::AbstractString, hdr)
+    len = length(hdr.data)
+    hdr.data_start <= len ||
+        throw(_malformed_gguf(path, "the tensor data would start at byte $(hdr.data_start) of $len"))
+    for info in hdr.tensors
+        name = info.name
+        any(<(0), info.dims) && throw(_malformed_gguf(path, "tensor $name has dims $(info.dims)"; tensor=name))
+        info.offset % UInt64(hdr.alignment) == 0 ||
+            throw(_malformed_gguf(path, "tensor $name offset $(info.offset) is not aligned"; tensor=name))
+        nbytes = try
+            _known_tensor_nbytes(path, name, info.dims, info.ggml_type)
+        catch e
+            e isa OverflowError || rethrow()
+            throw(_malformed_gguf(path, "tensor $name dims $(info.dims) overflow"; tensor=name))
+        end
+        nbytes === nothing && continue
+        _check_extent(path, hdr, info, nbytes)
+    end
+    return nothing
+end
+
+# The one bounds check every raw tensor read goes through: `nbytes` from the
+# tensor's start must lie inside the mapped file.
+function _check_extent(path, hdr, info::GgufTensorInfo, nbytes::Integer)
+    len = length(hdr.data)
+    start = Int128(hdr.data_start) + Int128(info.offset)
+    start + nbytes <= len && return nothing
+    throw(
+        _malformed_gguf(
+            path,
+            "tensor $(info.name) needs bytes $start:$(start + nbytes) but the file has $len";
+            tensor=info.name,
+            file_bytes=len,
+        ),
+    )
 end
 
 """
@@ -345,9 +507,14 @@ defaults to a particular checkpoint's shape, except `full_attention_interval`
 """
 function spec_from_gguf_kv(kv::AbstractDict; tensor_names=nothing)
     arch = String(get(kv, "general.architecture", "qwen35moe"))
-    arch in ("qwen35", "qwen35moe", "llama", "spark2_5", "qwen4exp", "lfm2", "lfm2moe") || error(
-        "spec_from_gguf_kv: unsupported general.architecture $(repr(arch)) " *
-        "(supported: qwen35 dense, qwen35moe, llama, spark2_5, qwen4exp, lfm2, lfm2moe)",
+    arch in ("qwen35", "qwen35moe", "llama", "spark2_5", "qwen4exp", "lfm2", "lfm2moe") || throw(
+        gesso_error(
+            ERR_RUNTIME,
+            "spec_from_gguf_kv: unsupported general.architecture $(repr(arch)) " *
+            "(supported: qwen35 dense, qwen35moe, llama, spark2_5, qwen4exp, lfm2, lfm2moe)";
+            reason=:unsupported_architecture,
+            architecture=arch,
+        ),
     )
     arch == "llama" && return _spec_from_gguf_llama(kv, tensor_names)
     arch == "spark2_5" && return _spec_from_gguf_spark(kv, tensor_names)
@@ -355,7 +522,7 @@ function spec_from_gguf_kv(kv::AbstractDict; tensor_names=nothing)
     arch in ("lfm2", "lfm2moe") && return _spec_from_gguf_lfm(kv, tensor_names)
     p(key, default=nothing) = get(kv, "$arch.$key", default)
     req(key) =
-        (v=p(key); v === nothing ? error("spec_from_gguf_kv: missing $arch.$key") : v)
+        (v=p(key); v === nothing ? throw(_missing_metadata("$arch.$key")) : v)
     nextn = Int(p("nextn_predict_layers", 0))
     block_count = Int(req("block_count"))
     n_layers = block_count - nextn
@@ -391,7 +558,7 @@ function spec_from_gguf_kv(kv::AbstractDict; tensor_names=nothing)
     else
         length(toks)
     end
-    vocab > 0 || error("spec_from_gguf_kv: no vocabulary size in GGUF metadata")
+    vocab > 0 || throw(_missing_metadata("tokenizer.ggml.tokens"))
     interval = Int(p("full_attention_interval", 4))
     # llama.cpp: is_recr[i] = ((i+1) % interval != 0) with 0-based i, so
     # 1-based layers interval, 2*interval, … are full attention.
@@ -453,7 +620,7 @@ block runner. MTP layers are excluded from `num_layers`.
 """
 function _spec_from_gguf_qwen4exp(kv::AbstractDict, tensor_names)
     cfg = qwen4exp_config(kv)
-    cfg.vocab > 0 || error("spec_from_gguf_kv: no vocabulary size in GGUF metadata")
+    cfg.vocab > 0 || throw(_missing_metadata("tokenizer.ggml.tokens"))
     p(key) = kv["qwen4exp.$key"]
     layer_types = [a ? :full_attention : :linear_attention for a in cfg.attn_layer]
     mixer = LinearMixerSpec(;
@@ -508,7 +675,7 @@ than dropped.
 function _spec_from_gguf_llama(kv::AbstractDict, tensor_names)
     p(key, default=nothing) = get(kv, "llama.$key", default)
     req(key) =
-        (v=p(key); v === nothing ? error("spec_from_gguf_kv: missing llama.$key") : v)
+        (v=p(key); v === nothing ? throw(_missing_metadata("llama.$key")) : v)
     hidden = Int(req("embedding_length"))
     n_heads = Int(req("attention.head_count"))
     head_dim = Int(p("attention.key_length", 0))
@@ -516,7 +683,7 @@ function _spec_from_gguf_llama(kv::AbstractDict, tensor_names)
     vocab =
         toks isa Integer ? Int(toks) :
         toks === nothing ? Int(p("vocab_size", 0)) : length(toks)
-    vocab > 0 || error("spec_from_gguf_kv: no vocabulary size in GGUF metadata")
+    vocab > 0 || throw(_missing_metadata("tokenizer.ggml.tokens"))
     scaling = String(p("rope.scaling.type", "none"))
     (kind, factor) = if scaling in ("none", "")
         (:none, 1.0)
@@ -563,7 +730,7 @@ layout, and llama.cpp does not permute Q/K for it.
 function _spec_from_gguf_spark(kv::AbstractDict, tensor_names)
     p(key, default=nothing) = get(kv, "spark2_5.$key", default)
     req(key) =
-        (v=p(key); v === nothing ? error("spec_from_gguf_kv: missing spark2_5.$key") : v)
+        (v=p(key); v === nothing ? throw(_missing_metadata("spark2_5.$key")) : v)
     n_layers = Int(req("block_count"))
     n_heads = Int(req("attention.head_count"))
     head_dim = Int(req("attention.key_length"))
@@ -573,7 +740,7 @@ function _spec_from_gguf_spark(kv::AbstractDict, tensor_names)
     vocab =
         toks isa Integer ? Int(toks) :
         toks === nothing ? Int(p("vocab_size", 0)) : length(toks)
-    vocab > 0 || error("spec_from_gguf_kv: no vocabulary size in GGUF metadata")
+    vocab > 0 || throw(_missing_metadata("tokenizer.ggml.tokens"))
     pattern = collect(Bool, req("attention.sliding_window_pattern"))
     length(pattern) == n_layers || error(
         "spec_from_gguf_kv: spark2_5 sliding_window_pattern has $(length(pattern)) entries for $n_layers layers",
@@ -614,29 +781,33 @@ function gguf_architecture_spec(path::AbstractString)
 end
 
 function _dequant_f32(data::Vector{UInt8}, offset0::Int, ggml_type::Int32, n_elem::Int)
-    y = Vector{Float32}(undef, n_elem)
-    # F32 is a byte copy. Taking it before the ggml lookup keeps F32-only
-    # files loadable without a llama.cpp build.
-    if ggml_type == 0
-        nbytes = n_elem * 4
-        y .= reinterpret(Float32, view(data, (offset0+1):(offset0+nbytes)))
-        return y
-    end
     traits = _ggml_traits(ggml_type)
-    traits.to_float == C_NULL && error("gguf_import: no to_float for ggml type $ggml_type")
-    ccall(
-        traits.to_float,
-        Cvoid,
-        (Ptr{Cvoid}, Ptr{Float32}, Int64),
-        pointer(data, offset0 + 1),
-        pointer(y),
-        Int64(n_elem),
+    blck = Int(traits.blck_size)
+    rem(n_elem, blck) == 0 || error("gguf_import: $n_elem values is not a whole number of $blck-value blocks")
+    # Every caller passes header-checked offsets; this is the backstop for the
+    # ones that compute their own.
+    nbytes = div(n_elem, blck) * traits.type_size
+    0 <= offset0 && offset0 + nbytes <= length(data) || throw(
+        gesso_error(
+            ERR_RUNTIME,
+            "gguf_import: tensor read of $nbytes bytes at $offset0 runs past the $(length(data))-byte file. The file is truncated or corrupt; download it again.";
+            reason=:malformed_gguf,
+        ),
     )
-    return y
+    return _ggml_dequant!(Vector{Float32}(undef, n_elem), data, offset0, ggml_type, n_elem)
 end
 
 function _gguf_array(hdr, info::GgufTensorInfo)
     n_elem = prod(info.dims)
+    if info.ggml_type == 0
+        _check_extent(hdr.path, hdr, info, 4 * n_elem)
+    else
+        traits = _ggml_traits(info.ggml_type; tensor=info.name)
+        rem(n_elem, Int(traits.blck_size)) == 0 || error(
+            "gguf_import: $(info.name) n_elem $n_elem not divisible by blck_size $(traits.blck_size)",
+        )
+        _check_extent(hdr.path, hdr, info, div(n_elem, Int(traits.blck_size)) * traits.type_size)
+    end
     off = Int(hdr.data_start) + Int(info.offset)
     raw = _dequant_f32(hdr.data, off, info.ggml_type, n_elem)
     nd = length(info.dims)
@@ -654,7 +825,7 @@ end
 function _expert_slice(hdr, info::GgufTensorInfo)
     length(info.dims) == 3 || error("gguf_import: expert tensor $(info.name) is not 3D")
     ne0, ne1, n_exp = info.dims
-    traits = _ggml_traits(info.ggml_type)
+    traits = _ggml_traits(info.ggml_type; tensor=info.name)
     n_elem = ne0 * ne1
     nbytes = if info.ggml_type == 0
         n_elem * 4
@@ -664,6 +835,7 @@ function _expert_slice(hdr, info::GgufTensorInfo)
         )
         div(n_elem, Int(traits.blck_size)) * traits.type_size
     end
+    _check_extent(hdr.path, hdr, info, nbytes * n_exp)
     return GgufQuantSlice(
         hdr.data,
         Int(hdr.data_start) + Int(info.offset),
@@ -672,7 +844,6 @@ function _expert_slice(hdr, info::GgufTensorInfo)
         ne0,
         ne1,
         nbytes,
-        traits.to_float,
         traits.blck_size,
     )
 end
@@ -694,21 +865,7 @@ function _gguf_dequant_expert_into!(
     size(W) == (s.ne1, s.ne0) ||
         error("gguf_dequant_expert!: W $(size(W)) ≠ ($(s.ne1), $(s.ne0))")
     off = s.offset0 + (e - 1) * s.bytes_per_expert
-    y = view(raw, 1:n_elem)
-    if s.ggml_type == Int32(0)
-        y .= reinterpret(Float32, view(s.data, (off+1):(off+n_elem*4)))
-    else
-        s.to_float == C_NULL &&
-            error("gguf_dequant_expert: no to_float for ggml type $(s.ggml_type)")
-        ccall(
-            s.to_float,
-            Cvoid,
-            (Ptr{Cvoid}, Ptr{Float32}, Int64),
-            pointer(s.data, off + 1),
-            pointer(raw),
-            Int64(n_elem),
-        )
-    end
+    _ggml_dequant!(raw, s.data, off, s.ggml_type, n_elem)
     A = reshape(view(raw, 1:n_elem), s.ne0, s.ne1)
     @inbounds for j in 1:s.ne1, i in 1:s.ne0
         W[j, i] = A[i, j]
@@ -842,11 +999,12 @@ end
 
 function _quant_matrix(hdr, info::GgufTensorInfo)
     ne0, nrows = info.dims
-    traits = _ggml_traits(info.ggml_type)
+    traits = _ggml_traits(info.ggml_type; tensor=info.name)
     rem(ne0, Int(traits.blck_size)) == 0 || error(
         "gguf_import: $(info.name) ne0 $ne0 not divisible by blck_size $(traits.blck_size)",
     )
     rb = div(ne0, Int(traits.blck_size)) * traits.type_size
+    _check_extent(hdr.path, hdr, info, rb * nrows)
     return QuantMatrix(
         hdr.data,
         Int(hdr.data_start) + Int(info.offset),
@@ -854,7 +1012,6 @@ function _quant_matrix(hdr, info::GgufTensorInfo)
         ne0,
         nrows,
         rb,
-        traits.to_float,
         traits.blck_size,
     )
 end

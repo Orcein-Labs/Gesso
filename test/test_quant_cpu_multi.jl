@@ -262,7 +262,7 @@ end
     for (name, ty) in _MQ_TYPES
         rb = _MQ._qrow_bytes(ty, ne0)
         data = _mq_random_rows(rng, ty, nrows, nb)
-        q = _MQ.QuantMatrix(data, 0, ty, ne0, nrows, rb, C_NULL, Int64(256))
+        q = _MQ.QuantMatrix(data, 0, ty, ne0, nrows, rb, Int64(256))
         x = randn(rng, Float32, seq, ne0)
         saved = _MQ._PREFILL_MULTI[]
         dst_multi = zeros(Float32, seq, nrows)
@@ -348,7 +348,7 @@ end
                     ty == _MQ.GGML_TYPE_F32 ?
                     collect(reinterpret(UInt8, randn(rng, Float32, nrows * ne0))) :
                     _mq_random_rows(rng, ty, nrows, nb)
-                q = _MQ.QuantMatrix(w, 0, ty, ne0, nrows, rb, C_NULL, Int64(256))
+                q = _MQ.QuantMatrix(w, 0, ty, ne0, nrows, rb, Int64(256))
                 x = randn(rng, Float32, 1, ne0)
                 dst = zeros(Float32, 1, nrows)
                 _MQ._quant_matmul!(dst, x, q)
@@ -373,7 +373,7 @@ end
     ne0 = 256 * nb
     rb = _MQ._qrow_bytes(ty, ne0)
     w = _mq_random_rows(rng, ty, nrows, nb)
-    q = _MQ.QuantMatrix(w, 0, ty, ne0, nrows, rb, C_NULL, Int64(256))
+    q = _MQ.QuantMatrix(w, 0, ty, ne0, nrows, rb, Int64(256))
     ntask = 4
     xs = [randn(rng, Float32, 1, ne0) for _ in 1:ntask]
     refs = map(xs) do x

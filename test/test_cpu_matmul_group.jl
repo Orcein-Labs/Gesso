@@ -23,7 +23,7 @@ function _group_random_qm(rng, ty::Int32, nrows::Int, ne0::Int)
         data[blk*bsz+1] = UInt8(bits & 0xff)
         data[blk*bsz+2] = UInt8(bits >> 8)
     end
-    return _GI.QuantMatrix(data, 0, ty, ne0, nrows, rb, C_NULL, Int64(_GI.QK_K))
+    return _GI.QuantMatrix(data, 0, ty, ne0, nrows, rb, Int64(_GI.QK_K))
 end
 
 _bits(a::AbstractArray{Float32}) = reinterpret(UInt32, vec(a))

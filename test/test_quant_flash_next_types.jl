@@ -73,7 +73,7 @@ end
 
 function _fn_matrix(data::Vector{UInt8}, ty::Int32, nrows::Int, ne0::Int, blck::Int)
     rb = _FN._qrow_bytes(ty, ne0)
-    return _FN.QuantMatrix(data, 0, ty, ne0, nrows, rb, C_NULL, Int64(blck))
+    return _FN.QuantMatrix(data, 0, ty, ne0, nrows, rb, Int64(blck))
 end
 
 _fn_relerr(y, ref) = maximum(abs, Float64.(y) .- ref) / maximum(abs, ref)
@@ -116,8 +116,7 @@ end
         for (name, ty, blck) in _FN_TYPES
             nrows, ne0 = 5, 256
             data = _fn_random_rows(rng, ty, nrows, div(ne0, blck))
-            qm = _fn_matrix(data, ty, nrows, ne0, blck)
-            ggml = Float32.(_FN._quant_host_f32(qm))
+            ggml = permutedims(reshape(_FN._ggml_lib_dequant(data, 0, ty, nrows * ne0), ne0, nrows))
             mine = _fn_dequant(data, ty, nrows, ne0)
             # The accumulator never yields -0.0, so zeros are compared as +0.0.
             # Every nonzero value is compared bit for bit.

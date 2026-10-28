@@ -15,17 +15,16 @@
 #   * F16 and BF16: threaded row dots that widen each weight row once and
 #     dot it with every token, up to 256 tokens; longer prefills widen row
 #     chunks into F32 and run one BLAS GEMM (`_half_matmul!`);
-#   * every other format: FALLBACK. Rows are dequantized per call through the
-#     existing ggml `to_float` path (`_dequant_f32`), in bounded row chunks,
-#     then multiplied in F32. This is a temporary correctness bridge. It is
-#     logged once per ggml type through `@gfallback`. Native kernels for those
-#     formats are separate work.
+#   * every other format (Q4_1, Q5_0, Q5_1): FALLBACK. Rows are dequantized per
+#     call (`_dequant_f32`, gguf_dequant.jl) in bounded row chunks, then
+#     multiplied in F32. It is logged once per ggml type through `@gfallback`.
+#     Fused kernels for those formats are separate work.
 
 using ..Gesso: @gfallback
 import ..Gesso: _is_quant_storage, _quant_matmul!, _quant_embedding_rows!
 
 """
-    QuantMatrix(data, offset0, ggml_type, ne0, nrows, row_bytes, to_float, blck_size)
+    QuantMatrix(data, offset0, ggml_type, ne0, nrows, row_bytes, blck_size)
 
 Quantized `(nrows, ne0)` weight. Not an `AbstractArray` on purpose: code that
 takes an array as an activation prototype must not pick it up.
@@ -37,7 +36,6 @@ struct QuantMatrix
     ne0::Int                     # input features (GGUF innermost)
     nrows::Int                   # output rows
     row_bytes::Int
-    to_float::Ptr{Cvoid}
     blck_size::Int64
 end
 
@@ -90,7 +88,6 @@ function Base.getindex(q::QuantMatrix, rows::AbstractVector{<:Integer}, ::Colon)
             q.ne0,
             length(rs),
             rb,
-            q.to_float,
             q.blck_size,
         )
     end
@@ -105,7 +102,6 @@ function Base.getindex(q::QuantMatrix, rows::AbstractVector{<:Integer}, ::Colon)
         q.ne0,
         length(rs),
         rb,
-        q.to_float,
         q.blck_size,
     )
 end
@@ -130,7 +126,7 @@ function _note_quant_fallback(t::Int32)
     push!(_QUANT_FALLBACK_TYPES, t)
     @gfallback(
         "native quant GEMV for ggml type $t",
-        "ggml to_float dequant per call (correctness bridge, not a native kernel)",
+        "F32 dequant per call, then an F32 matmul (no fused kernel for this type)",
     )
     return nothing
 end

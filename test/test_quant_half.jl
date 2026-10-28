@@ -19,7 +19,7 @@ function _half_random_qm(rng, ty::Int32, nrows::Int, ne0::Int)
         map(v -> reinterpret(UInt16, Float16(v)), w)
     # two bytes of padding in front, so offset0 is exercised
     data = vcat(UInt8[0xaa, 0x55], collect(reinterpret(UInt8, vec(bits))))
-    q = _GH.QuantMatrix(data, 2, ty, ne0, nrows, 2 * ne0, C_NULL, Int64(1))
+    q = _GH.QuantMatrix(data, 2, ty, ne0, nrows, 2 * ne0, Int64(1))
     wide =
         ty == _GH.GGML_TYPE_BF16 ?
         map(u -> Float64(reinterpret(Float32, UInt32(u) << 16)), bits) :
