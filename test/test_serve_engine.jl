@@ -304,10 +304,53 @@ end
     )
 end
 
-@testset "engine: a known family with no server renderer is an ArgumentError" begin
-    tk = sv_bpe(eos=3, template="<|turn>user\n{{ m }}<turn|><|channel>thought\n<channel|>")
+@testset "engine: turn markup without a thought channel is still refused" begin
+    tk = sv_bpe(eos=3, template="<|turn>user\n{{ m }}<turn|>")
     @test_throws ArgumentError gguf_chat_model(
         nothing, nothing, (; rms_norm_eps=1e-6), tk;
         backend=nothing, n_ctx=64, model_id="x",
     )
+end
+
+@testset "engine: a made-up chat family is an ArgumentError" begin
+    tk = sv_bpe(eos=3, template="<|madeup_start|>{{ m }}<|madeup_end|>")
+    @test_throws ArgumentError gguf_chat_model(
+        nothing, nothing, (; rms_norm_eps=1e-6), tk;
+        backend=nothing, n_ctx=64, model_id="x",
+    )
+end
+
+# A GGUFGemma4BPE with only the fields the engine binding reads.
+function sv_gemma_bpe(; eos::Union{Nothing, Int}=nothing, vocab::Dict{String, Int}=Dict{String, Int}(), template::String)
+    return Gesso.Inference.GGUFGemma4BPE(
+        String[],
+        Int32[],
+        vocab,
+        Int[],
+        Dict{Tuple{String, String}, Int}(),
+        Gesso.Inference._GGUFSpecial[],
+        nothing,
+        eos,
+        nothing,
+        template,
+    )
+end
+
+@testset "engine: a gemma4 template is served with its own renderer and turn end" begin
+    tmpl = "<|turn>system\n{{ s }}<turn|><|turn>user\n{{ m }}<turn|><|channel>thought\n"
+    tk = sv_gemma_bpe(eos=1, vocab=Dict("<turn|>" => 106), template=tmpl)
+    cm = gguf_chat_model(
+        nothing, nothing, (; rms_norm_eps=1e-6), tk;
+        backend=nothing, n_ctx=64, model_id="g4",
+    )
+    @test cm.family === :gemma4
+    @test cm.accepts_tools
+    @test 106 in _engine_eos_ids(tk)
+    msgs = Dict{String, Any}[Dict{String, Any}("role" => "user", "content" => "hi")]
+    on = cm.render(msgs, Any[], true)
+    off = cm.render(msgs, Any[], false)
+    @test startswith(on, "<bos>")
+    @test endswith(on, "<|turn>model\n")
+    @test endswith(off, "<channel|>")
+    @test on == Gesso.Inference.render_gemma4_chat(msgs; add_generation_prompt=true, enable_thinking=true)
 end

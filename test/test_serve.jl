@@ -744,3 +744,100 @@ end
         close(srv)
     end
 end
+
+# ---------------------------------------------------------------------------
+# Gemma 4 dialect: the streaming parser and the tool-call round trip
+
+using Gesso.Serve: Gemma4Parser, gemma4_opens_reasoning
+
+function sv_g4_parse(text::AbstractString; start_in_reasoning::Bool=false, stop=String[], chunks=nothing)
+    p = Gemma4Parser(; start_in_reasoning=start_in_reasoning, stop=stop)
+    bytes = Vector{UInt8}(codeunits(text))
+    events = Any[]
+    for c in (chunks === nothing ? [bytes] : chunks)
+        append!(events, feed!(p, c))
+    end
+    append!(events, Gesso.Serve.finish!(p))
+    return sv_merge(events)
+end
+
+@testset "gemma4: the start state comes from the prompt" begin
+    @test gemma4_opens_reasoning("<|turn>model\n<|channel>thought\n")
+    @test !gemma4_opens_reasoning("<|turn>model\n<|channel>thought\n<channel|>")
+    @test !gemma4_opens_reasoning("<|turn>model\n")
+    @test sv_g4_parse("plan<channel|>Paris"; start_in_reasoning=true) ==
+          [(:reasoning, "plan"), (:content, "Paris")]
+    @test sv_g4_parse("Paris") == [(:content, "Paris")]
+end
+
+@testset "gemma4: every chunking gives the whole-text events" begin
+    cases = [
+        ("<|channel>thought\nplan\n<channel|>Paris", false,
+         [(:reasoning, "plan\n"), (:content, "Paris")]),
+        ("<|channel>thought\nplan<channel|>\n\n  Paris", false,
+         [(:reasoning, "plan"), (:content, "Paris")]),
+        ("<|channel>thought\n<channel|>Paris", false, [(:content, "Paris")]),
+        ("Paris <|channel>x", false, [(:content, "Paris <|channel>x")]),
+        ("Paris <|chan", false, [(:content, "Paris <|chan")]),
+        ("café <|channel>thought\nnaïve<channel|>ok", false,
+         [(:content, "café "), (:reasoning, "naïve"), (:content, "ok")]),
+        ("Let me check.<|tool_call>call:get_weather{city:<|\"|>Paris<|\"|>}<tool_call|>\n\nDone.", false,
+         [(:content, "Let me check."), (:call, 0, "get_weather", Dict("city" => "Paris")), (:content, "Done.")]),
+        ("<|tool_call>call:ping{}<tool_call|>", false, [(:call, 0, "ping", Dict{String, Any}())]),
+        ("<|tool_call>call:f{a:<|\"|>x}<tool_call|>", false,
+         [(:content, "<|tool_call>call:f{a:<|\"|>x}<tool_call|>")]),
+        ("<|tool_call>call:f{a:b:c}<tool_call|>", false,
+         [(:content, "<|tool_call>call:f{a:b:c}<tool_call|>")]),
+        ("<|tool_call>call:f{a:1}", false, [(:content, "<|tool_call>call:f{a:1}")]),
+    ]
+    rng = MersenneTwister(20261028)
+    for (text, start, expected) in cases
+        @testset "$(repr(text))" begin
+            bytes = Vector{UInt8}(codeunits(text))
+            @test sv_g4_parse(text; start_in_reasoning=start) == expected
+            for ch in sv_chunkings(bytes, rng)
+                @test sv_g4_parse(text; start_in_reasoning=start, chunks=ch) == expected
+            end
+        end
+    end
+end
+
+@testset "gemma4: a stop string ends the stream" begin
+    @test sv_g4_parse("Paris STOP more"; stop=["STOP"]) == [(:content, "Paris ")]
+    bytes = Vector{UInt8}(codeunits("Paris STOP more"))
+    chunks = [UInt8[b] for b in bytes]
+    @test sv_g4_parse("Paris STOP more"; stop=["STOP"], chunks=chunks) == [(:content, "Paris ")]
+end
+
+@testset "gemma4: tool-call arguments round-trip through the renderer" begin
+    args = Dict{String, Any}(
+        "quote" => "say \"hi\" and 'bye'",
+        "braces" => "{a: [1, 2]} }",
+        "commas" => "a,b,c",
+        "newline" => "line one\nline two\n",
+        "unicode" => "naïve ✓",
+        "int" => 42,
+        "negative" => -7,
+        "float" => 2.5,
+        "flag" => true,
+        "off" => false,
+        "nothing" => nothing,
+        "nested" => Dict{String, Any}(
+            "inner" => Dict{String, Any}("deep" => "x,y}"),
+            "list" => Any[1, "two", Dict{String, Any}("k" => false)],
+        ),
+        "empty_list" => Any[],
+        "empty_obj" => Dict{String, Any}(),
+    )
+    text = "<|tool_call>call:lookup" *
+           Gesso.Inference._g4_format_argument(args; escape_keys=false) *
+           "<tool_call|>"
+    expected = [(:call, 0, "lookup", JSON.parse(JSON.json(args)))]
+    @test sv_g4_parse(text) == expected
+    rng = MersenneTwister(7)
+    bytes = Vector{UInt8}(codeunits(text))
+    @test sv_g4_parse(text; chunks=[UInt8[b] for b in bytes]) == expected
+    for ch in sv_chunkings(bytes, rng)
+        @test sv_g4_parse(text; chunks=ch) == expected
+    end
+end
