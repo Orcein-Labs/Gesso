@@ -33,8 +33,6 @@ Base.@kwdef mutable struct _Gemma4Scratch
     order::Vector{Int} = Int[]
 end
 
-const _GEMMA4_SCRATCH = _Gemma4Scratch()
-
 @inline function _g4_mat!(s::_Gemma4Scratch, field::Symbol, m::Int, n::Int)
     M = getfield(s, field)
     if size(M) != (m, n)
@@ -207,7 +205,7 @@ function _gemma4_layer_output_scale!(backend, out, scale_vec)
     return out
 end
 
-function _gemma4_parallel_moe_ffn!(backend, attn, bt, eps::Real; scratch::_Gemma4Scratch=_GEMMA4_SCRATCH)
+function _gemma4_parallel_moe_ffn!(backend, attn, bt, eps::Real; scratch::_Gemma4Scratch=_Gemma4Scratch())
     backend_name(backend) === :cpu || throw(LoweringNotImplemented(:gemma4_parallel_moe, backend_name(backend)))
     X = attn isa Activation ? attn.storage : attn
     N, E = size(X)
@@ -303,7 +301,7 @@ end
 
 # --- Block prefill and generate -----------------------------------------------
 
-function _gemma4_prefill_block!(backend, h, bt, tensors, positions, wl, eps, zeros_like; scratch::_Gemma4Scratch=_GEMMA4_SCRATCH)
+function _gemma4_prefill_block!(backend, h, bt, tensors, positions, wl, eps, zeros_like; scratch::_Gemma4Scratch=_Gemma4Scratch())
     X = h isa Activation ? h.storage : h
     N, E = size(X)
     hd = bt.d_head_layer
@@ -397,7 +395,7 @@ function _gemma4_prefill_block!(backend, h, bt, tensors, positions, wl, eps, zer
     return h
 end
 
-function _gemma4_generate_block!(backend, hp, kc_layer, vc_layer, bt, tensors, s0, s1, wl, eps, zeros_like; scratch::_Gemma4Scratch=_GEMMA4_SCRATCH)
+function _gemma4_generate_block!(backend, hp, kc_layer, vc_layer, bt, tensors, s0, s1, wl, eps, zeros_like; scratch::_Gemma4Scratch=_Gemma4Scratch())
     X = hp isa Activation ? hp.storage : hp
     N, E = size(X)
     hd = bt.d_head_layer

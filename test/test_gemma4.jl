@@ -233,6 +233,19 @@ end
         end
     end
 
+    # Concurrency check: Two concurrent tasks must not race on module-global scratch
+    serial_short = Gesso.reference_generate(model, tensors, short_prompt; max_new_tokens=6, eos_ids=(), eps=eps)
+    serial_long = Gesso.reference_generate(model, tensors, long_prompt; max_new_tokens=6, eos_ids=(), eps=eps)
+
+    task_short = Threads.@spawn Gesso.reference_generate(model, tensors, short_prompt; max_new_tokens=6, eos_ids=(), eps=eps)
+    task_long = Threads.@spawn Gesso.reference_generate(model, tensors, long_prompt; max_new_tokens=6, eos_ids=(), eps=eps)
+
+    conc_short = fetch(task_short)
+    conc_long = fetch(task_long)
+
+    @test conc_short == serial_short
+    @test conc_long == serial_long
+
     # Negative Control A: Disable sliding-window mask (_GEMMA4_WINDOW_MASK_ENABLED)
     baseline_short = Gesso.reference_prefill(model, tensors, short_prompt; eps=eps)[:, end]
     baseline_long = Gesso.reference_prefill(model, tensors, long_prompt; eps=eps)[:, end]

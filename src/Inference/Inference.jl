@@ -249,12 +249,13 @@ function reference_prefill(
     down = Activation(; shape=(seq, dim), storage=zeros_like((seq, dim)))
     scores = TemporaryWorkspace(; shape=(seq, seq), storage=zeros_like((seq, seq)))
     scores_out = TemporaryWorkspace(; shape=(seq, seq), storage=zeros_like((seq, seq)))
+    g4_scratch = _Gemma4Scratch()
 
     for (bi, blk) in enumerate(model.blocks)
         bt = tensors.blocks[bi]
 
         if haskey(bt, :gemma4_layer)
-            _gemma4_prefill_block!(cpu, h, bt, tensors, positions, wl, eps, zeros_like)
+            _gemma4_prefill_block!(cpu, h, bt, tensors, positions, wl, eps, zeros_like; scratch=g4_scratch)
             continue
         end
 
@@ -1783,6 +1784,7 @@ function reference_generate(
             st.pending === nothing || _restore_pending!(st)
         end
         kc, vc, h = st.kc, st.vc, st.h
+        g4_scratch = _Gemma4Scratch()
         gdn_conv, gdn_rec, gdn_scratch, cpu_scratch =
             st.gdn_conv, st.gdn_rec, st.gdn_scratch, st.cpu_scratch
         kdim = n_kv_heads * d_head
@@ -1905,7 +1907,7 @@ function reference_generate(
             for (bi, blk) in enumerate(model.blocks)
                 bt = tensors.blocks[bi]
                 if haskey(bt, :gemma4_layer)
-                    _gemma4_generate_block!(cpu, hp, kc[bi], vc[bi], bt, tensors, s0, s1, wp, eps, block_tmp)
+                    _gemma4_generate_block!(cpu, hp, kc[bi], vc[bi], bt, tensors, s0, s1, wp, eps, block_tmp; scratch=g4_scratch)
                     _arena_release!(block_tmp)
                     continue
                 end
@@ -2215,6 +2217,7 @@ function reference_generate(
                 gdn_scratch,
                 cpu_scratch,
                 hrow=1,
+                gemma4_scratch=g4_scratch,
             )
             push!(st.ids, next)
             on_rows === nothing ||
@@ -2747,6 +2750,7 @@ function _decode_step!(
     gdn_scratch=nothing,
     cpu_scratch=nothing,
     hrow::Int=pos0,
+    gemma4_scratch=nothing,
 )
     dim = model.embedding.dim
     kdim = n_kv_heads * d_head
@@ -2772,11 +2776,12 @@ function _decode_step!(
     _T_GDN_NS[] = 0
     _T_ATTN_NS[] = 0
     _T_FFN_NS[] = 0
+    g4_scratch = gemma4_scratch === nothing ? _Gemma4Scratch() : gemma4_scratch
 
     for (bi, blk) in enumerate(model.blocks)
         bt = tensors.blocks[bi]
         if haskey(bt, :gemma4_layer)
-            _gemma4_generate_block!(cpu, hp, kc[bi], vc[bi], bt, tensors, pos0, pos0, wl, eps, zeros_like)
+            _gemma4_generate_block!(cpu, hp, kc[bi], vc[bi], bt, tensors, pos0, pos0, wl, eps, zeros_like; scratch=g4_scratch)
             continue
         end
         if _block_mixer(bt) === :short_convolution
