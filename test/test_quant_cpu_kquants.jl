@@ -1,7 +1,7 @@
 # Native CPU K-quant and Q8_0 dot products (src/Inference/quant_cpu_kquants.jl):
 #   * Q8_0 quantizer against an independent port of quantize_row_q8_0_ref
 #   * scalar dots against an F32 dequant reference (ports of dequantize_row_*)
-#   * F32 dequant bit-equal to ggml's to_float (env GESSO_GGML_DIR; skipped if unset)
+#   * row dequant bit-equal to ggml's to_float (env GESSO_GGML_DIR; skipped if unset)
 #   * AVX2 kernels bit-exact against the scalar reference, per format
 #   * zero allocations per dot; GEMV threading invariance
 #   * real tensors from the Ornith 35B and Qwen3.8-27B GGUFs and the Qwen3.8-27B
@@ -167,7 +167,7 @@ end
                 mine = Vector{Float32}(undef, ne0)
                 _KQ._kq_dequant_row!(mine, W, (j - 1) * rb, ty, ne0)
                 row = W[((j-1)*rb+1):(j*rb)]
-                ggml = _KQ._dequant_f32(row, 0, ty, ne0)
+                ggml = _KQ._ggml_lib_dequant(row, 0, ty, ne0)
                 @testset "$name row $j" begin
                     @test reinterpret.(UInt32, mine) == reinterpret.(UInt32, ggml)
                 end
@@ -507,7 +507,7 @@ end
         nrows, seq = 9, 3
         rb = _KQ._qrow_bytes(ty, ne0)
         W = _kq_random_rows(rng, ty, nrows, 2)
-        q = _KQ.QuantMatrix(W, 0, ty, ne0, nrows, rb, C_NULL, Int64(nval))
+        q = _KQ.QuantMatrix(W, 0, ty, ne0, nrows, rb, Int64(nval))
         x = randn(rng, Float32, seq, ne0)
         dst = zeros(Float32, seq, nrows)
         _KQ._quant_matmul!(dst, x, q)
@@ -600,7 +600,7 @@ end
                     off = base + (j - 1) * rb
                     mine = Vector{Float32}(undef, ne0)
                     _KQ._kq_dequant_row!(mine, hdr.data, off, ty, ne0)
-                    gg = _KQ._dequant_f32(
+                    gg = _KQ._ggml_lib_dequant(
                         Vector{UInt8}(hdr.data[(off+1):(off+rb)]),
                         0,
                         ty,

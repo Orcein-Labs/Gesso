@@ -95,6 +95,10 @@ using Gesso: reference_prefill, reference_generate
     include("test_gguf_import.jl")
     include("test_gguf_llama.jl")
     include("test_gguf_malformed.jl")
+
+    # Native F32 dequant for every ggml type Gesso reads, with no libggml;
+    # bit-equal to ggml's to_float when GESSO_GGML_DIR is set
+    include("test_gguf_dequant.jl")
     include("test_qwen35_dense.jl")
 
     # Native CPU Q8_K x IQ dot products: quantizer vs port, AVX2 bit-exact vs
@@ -103,7 +107,7 @@ using Gesso: reference_prefill, reference_generate
     include("test_cpu_pool.jl")
 
     # Native CPU K-quant (Q2_K..Q6_K) and Q8_0 dot products: Q8_0 quantizer vs
-    # port, F32 dequant references (bit-equal to ggml to_float when GESSO_GGML_DIR
+    # port, F32 dequant references (bit-equal to ggml's oracle when GESSO_GGML_DIR
     # is set), AVX2 bit-exact vs scalar, real Ornith / Qwen3.8-27B tensors (env-gated)
     include("test_quant_cpu_kquants.jl")
 
@@ -111,7 +115,7 @@ using Gesso: reference_prefill, reference_generate
     # AVX2 bit-exact vs scalar, real Qwen3.8-27B UD-IQ2_M rows (env-gated)
     include("test_quant_cpu_iq_s.jl")
 
-    # IQ4_NL and Q2_0 block layouts, dequant against ggml to_float (env-gated),
+    # IQ4_NL and Q2_0 block layouts, dequant against ggml's oracle (env-gated),
     # CPU and CUDA expert GEMV against an F32 reference
     include("test_quant_flash_next_types.jl")
 
@@ -345,7 +349,7 @@ using Gesso: reference_prefill, reference_generate
         stdlib_allowlist = Dict{String, String}( # name => justification
             "Dates" => "timestamps for structured log events (§XLII)",
             "LinearAlgebra" => "CPU reference matmul (§LXXV Phase 2)",
-            "Libdl" => "ggml to_float for GGUF dequant (qwen35moe)",
+            "Libdl" => "ggml dequant oracle for tests (GESSO_GGML_DIR); runtime dequant is native",
             "Mmap" => "safetensors byte region (§LXXVI)",
             "JSON" => "config.json + safetensors header parsing (§LXXVI)",
             "Sockets" => "TCP listener for the OpenAI-compatible server (src/serve)",

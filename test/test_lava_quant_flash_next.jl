@@ -3,8 +3,7 @@
 # checked against the host F64 dequant times x, with the bound of
 # test_lava_quant.jl: |dev - ref| <= 5e-5 * sum|W x| + 1e-9. The negative control
 # doubles every block scale of the weight on the device and asserts that the same
-# bound then fails. Named skip without a Vulkan device or without GESSO_GGML_DIR
-# (the host reference). The real-tensor check reads one expert slice per type from
+# bound then fails. Named skip without a Vulkan device. The real-tensor check reads one expert slice per type from
 # GESSO_QWEN4EXP_GGUF and is skipped when that is unset.
 
 using Test: AbstractTestSet, Broken, get_testset, record
@@ -43,8 +42,6 @@ else
         :iq3_s => _FNQ_INF.GGML_TYPE_IQ3_S,
     )
 
-    _fnq_ggml_ready() = isfile(joinpath(get(ENV, "GESSO_GGML_DIR", ""), "libggml-base.so"))
-
     # Random block bytes with sane f16 block scales; every other byte is random,
     # so all grid indices and sign bytes are exercised.
     function _fnq_random(rng, kind::Symbol, nrows::Int, k::Int)
@@ -64,7 +61,6 @@ else
             k,
             nrows,
             rb,
-            C_NULL,
             Int64(bvals),
         )
     end
@@ -86,7 +82,6 @@ else
             qm.ne0,
             qm.nrows,
             qm.row_bytes,
-            C_NULL,
             qm.blck_size,
         )
     end
@@ -143,10 +138,6 @@ else
     end
 
     function _fnq_check(qm, X, dev; label::AbstractString, rtol::Float64=5.0e-5)
-        if !_fnq_ggml_ready()
-            _skip("set GESSO_GGML_DIR to a directory with libggml-base.so — $label host reference skipped")
-            return nothing
-        end
         ok, maxerr, ratio = _fnq_bound(qm, X, dev; rtol)
         @info "flash-next lava quant" label maxerr worst_err_over_tol = ratio
         @test ok
@@ -155,10 +146,6 @@ else
 
     # The bound must fail on the doubled-scale device result.
     function _fnq_negative(qm_ref, X, dev_bad; label::AbstractString)
-        if !_fnq_ggml_ready()
-            _skip("set GESSO_GGML_DIR to a directory with libggml-base.so — $label negative control skipped")
-            return nothing
-        end
         ok, maxerr, _ = _fnq_bound(qm_ref, X, dev_bad)
         @info "flash-next lava negative control" label maxerr
         @test !ok
@@ -176,7 +163,6 @@ else
             96,
             4,
             18,
-            C_NULL,
             Int64(64),
         )
         @test !_FNQ_EXT._lq_eligible(q2_96)
@@ -293,7 +279,6 @@ else
                             ne0,
                             ne1,
                             rb,
-                            tr.to_float,
                             Int64(blck),
                         )
                         xv = randn(rng, Float32, ne0)

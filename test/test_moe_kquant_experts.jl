@@ -61,7 +61,6 @@ function _mke_slice(w::Vector{UInt8}, ty::Int32, nexp::Int, ne0::Int, ne1::Int)
         ne0,
         ne1,
         ne1 * rb,
-        C_NULL,
         Int64(_mke_qblock(ty)),
     )
 end

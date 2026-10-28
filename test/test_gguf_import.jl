@@ -64,13 +64,9 @@ end
     @test Gesso.Inference._gather_axis(Gesso.Inference._gather_axis(v, 1, p1), 1, inv1) == v
 end
 
-@testset "gguf ggml to_float + lazy expert" begin
+@testset "gguf dequant + lazy expert" begin
     if !isfile(_ORNITH35_GGUF)
         @test_skip "set GESSO_ORNITH35_GGUF to the Ornith 35B GGUF"
-        return
-    end
-    if !isfile(joinpath(_GGML_BIN, "libggml-base.so"))
-        @test_skip "set GESSO_GGML_DIR to a directory with libggml-base.so"
         return
     end
     hdr = Gesso.gguf_header(_ORNITH35_GGUF)
@@ -84,7 +80,7 @@ end
     @test minimum(arr) > 0.5
     @test maximum(arr) < 4.0
 
-    # One IQ2_XS expert: (out, in) = (512, 2048) after reverse-perm.
+    # One Q2_K expert: (out, in) = (512, 2048) after reverse-perm.
     einfo = only(t for t in hdr.tensors if t.name == "blk.0.ffn_gate_exps.weight")
     slice = Gesso.Inference._expert_slice(hdr, einfo)
     @test slice isa Gesso.GgufQuantSlice
@@ -99,13 +95,17 @@ end
     @test traits32.blck_size == 1
     @test traits32.type_size == 4
 
-    # Fused qgemv matches ggml to_float + BLAS on a real IQ2_XS expert.
+    # Fused qgemv on a real Q2_K expert. The kernel dots against a Q8_K
+    # quantization of x, as ggml does, so the reference is W times that
+    # quantized x; against the float x it is only within the Q8_K error.
     rng = GessoTestHelpers.deterministic_rng(42)
     x = randn(rng, Float32, slice.ne0)
-    y_ref = W * x
+    xq = Gesso.Inference.quantize_q8_K!(Gesso.Inference.Q8KVec(div(slice.ne0, Gesso.Inference.QK_K)), x)
+    y_ref = W * (repeat(xq.d; inner=Gesso.Inference.QK_K) .* Float32.(xq.qs))
     y = zeros(Float32, slice.ne1)
     Gesso.Inference._qgemv_expert!(y, x, slice, 1)
     @test y ≈ y_ref atol = 2e-4 rtol = 2e-4
+    @test y ≈ W * x rtol = 3e-2
     packed = Gesso.Inference.gpu_quant_slice(
         slice,
         Vector{UInt8}(Gesso.Inference.packed_quant_bytes(slice)),
@@ -135,7 +135,6 @@ function _pack_expert_slice(A3, ne0, ne1)
         ne0,
         ne1,
         ne0 * ne1 * 4,
-        C_NULL,
         Int64(1),
     )
 end
@@ -261,20 +260,19 @@ end
 end
 
 # The traits check needs no ggml library: it is a pure table lookup, so it
-# runs everywhere and catches a drifted ggml ABI before any byte is misread.
+# runs everywhere and catches a drifted ggml ABI before the oracle misreads a
+# byte. Types outside the table never reach it (_ggml_traits refuses them).
 @testset "ggml type traits are checked against the block table" begin
     check = Gesso.Inference._check_ggml_traits
     @test check(0, 1, 4) === nothing      # F32
     @test check(17, 256, 74) === nothing  # IQ2_XS
-    @test check(31, 1, 1) === nothing     # unknown type, plausible traits
     @test_throws Gesso.GessoError check(17, 256, 75)
     @test_throws Gesso.GessoError check(0, 4, 1)
-    @test_throws Gesso.GessoError check(31, 0, 4)
-    @test_throws Gesso.GessoError check(31, 1, 1 << 20)
-    # The library-backed path agrees with the table on every type it knows.
-    if isdir(_GGML_BIN)
+    @test Gesso.Inference._ggml_traits(17) == (blck_size=256, type_size=74)
+    # The library agrees with the table on every type Gesso reads.
+    if isfile(joinpath(_GGML_BIN, "libggml-base.so"))
         for (t, (blck, tsize)) in Gesso.Inference._GGML_KNOWN_BLOCKS
-            tr = Gesso.Inference._ggml_traits(t)
+            tr = Gesso.Inference._ggml_lib_traits(t)
             @test (tr.blck_size, tr.type_size) == (blck, tsize)
         end
     end

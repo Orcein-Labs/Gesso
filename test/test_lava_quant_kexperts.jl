@@ -1,8 +1,7 @@
 # Lava expert GEMV on K-quant expert banks (Q2_K, Q3_K, Q4_K, Q5_K, Q6_K). Each
 # device result is checked against the F64 product of the host expert matrix
-# (gguf_dequant_expert) with x, plus alpha and beta. The host reference is the
-# ggml to_float, so the file needs GESSO_GGML_DIR; without a Vulkan device or that
-# variable the whole file is a named skip. The real-model check reads four experts
+# (gguf_dequant_expert) with x, plus alpha and beta. Without a Vulkan device the
+# whole file is a named skip. The real-model check reads four experts
 # of two layers from GESSO_ORNITH35_GGUF and is skipped when that is unset.
 #
 # Tolerance: |dev - ref| <= 1e-4 * max(1, max|ref|). The weight side decodes the
@@ -21,8 +20,6 @@ end
 
 if !LAVA_LOADED || !VULKAN_OK
     _skip("no usable Vulkan device — Lava K-quant expert tests skipped")
-elseif !isfile(joinpath(get(ENV, "GESSO_GGML_DIR", ""), "libggml-base.so"))
-    _skip("GESSO_GGML_DIR not set — Lava K-quant expert host reference skipped")
 else
     const _KX_INF = Gesso.Inference
     const _KX_LAVA = Gesso.LavaBackend()
@@ -67,7 +64,7 @@ else
         t = _KX_TYPE[kind]
         tr = _KX_INF._ggml_traits(t)
         return _KX_INF.GgufQuantSlice(
-            data, 0, t, n_exp, ne0, ne1, bpe, tr.to_float, Int64(tr.blck_size),
+            data, 0, t, n_exp, ne0, ne1, bpe, Int64(tr.blck_size),
         )
     end
 
@@ -193,7 +190,6 @@ else
                         ne0,
                         ne1,
                         bpe,
-                        tr.to_float,
                         Int64(tr.blck_size),
                     )
                     bank = _kx_bank(s)

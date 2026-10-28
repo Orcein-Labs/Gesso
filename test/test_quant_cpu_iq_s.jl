@@ -180,7 +180,7 @@ end
                     mine = Vector{Float32}(undef, ne0)
                     _IQS._iqs_dequant_row!(mine, data, (j - 1) * rb, ty, ne0)
                     row = data[((j-1)*rb+1):(j*rb)]
-                    ggml = _IQS._dequant_f32(row, 0, ty, ne0)
+                    ggml = _IQS._ggml_lib_dequant(row, 0, ty, ne0)
                     @testset "$name $kind row $j" begin
                         @test reinterpret.(UInt32, mine) == reinterpret.(UInt32, ggml)
                     end
@@ -343,7 +343,6 @@ end
             ne0,
             nrow,
             _IQS._qrow_bytes(ty, ne0),
-            C_NULL,
             Int64(256),
         )
         X = randn(rng, Float32, seq, ne0)

@@ -73,7 +73,6 @@ else
             k,
             nrows,
             rb,
-            C_NULL,
             Int64(bvals),
         )
     end
@@ -119,12 +118,6 @@ else
 
     # Per-element error against the F32-accumulation bound, host F64 accumulation.
     function _lq_check(qm, X, dev; label::AbstractString, rtol::Float64=5.0e-5)
-        if !isfile(joinpath(get(ENV, "GESSO_GGML_DIR", ""), "libggml-base.so"))
-            _skip(
-                "set GESSO_GGML_DIR to a directory with libggml-base.so — $label host reference skipped",
-            )
-            return nothing
-        end
         W = Float64.(_lq_inf._quant_host_f32(qm))
         X64 = _lq_ref_x(qm, X)
         ref = X64 * transpose(W)
@@ -208,7 +201,6 @@ else
             100,
             8,
             qm.row_bytes,
-            C_NULL,
             Int64(256),
         )
         @test !_lq_ext._lq_eligible(bad)
@@ -328,7 +320,6 @@ else
                 k,
                 nrows,
                 k * 4,
-                C_NULL,
                 Int64(1),
             ) for _ in 1:2
         ]

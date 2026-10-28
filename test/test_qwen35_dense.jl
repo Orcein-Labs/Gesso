@@ -1,9 +1,9 @@
 # Dense qwen35 GGUF: spec derivation, quantized-resident dense weights, and the
 # CPU quant matmul against dequant + F32.
 #
-# Synthetic fixtures are written to a temp dir and need only GESSO_GGML_DIR
-# (libggml `to_float`). The 27B header test is gated on GESSO_QWEN38_27B_GGUF;
-# the Ornith tensor check on GESSO_ORNITH35_GGUF. Unset means skip.
+# Synthetic fixtures are written to a temp dir and need no environment. The
+# 27B header test is gated on GESSO_QWEN38_27B_GGUF; the Ornith tensor check
+# on GESSO_ORNITH35_GGUF. Unset means skip.
 
 using Test
 using Gesso
@@ -12,8 +12,6 @@ using Random
 const _GI = Gesso.Inference
 const _Q27_GGUF = get(ENV, "GESSO_QWEN38_27B_GGUF", "")
 const _ORN_GGUF = get(ENV, "GESSO_ORNITH35_GGUF", "")
-const _GGML_DIR_QD = get(ENV, "GESSO_GGML_DIR", "")
-const _HAS_GGML_QD = isfile(joinpath(_GGML_DIR_QD, "libggml-base.so"))
 
 # --- GGML type ids and block geometry used by the fixtures ----------------------
 const _T_Q2K = Int32(10)
@@ -41,7 +39,7 @@ function _quant_fixture(rng, t::Int32, ne0::Int, nrows::Int)
     tr = _GI._ggml_traits(t)
     rb = div(ne0, Int(tr.blck_size)) * tr.type_size
     data = _random_quant_bytes(rng, t, nrows * div(ne0, 256))
-    return _GI.QuantMatrix(data, 0, t, ne0, nrows, rb, tr.to_float, tr.blck_size)
+    return _GI.QuantMatrix(data, 0, t, ne0, nrows, rb, tr.blck_size)
 end
 
 # --- minimal GGUF v3 writer for fixtures ----------------------------------------
@@ -266,7 +264,6 @@ end
 end
 
 @testset "row selection: view for runs, gather otherwise" begin
-    _HAS_GGML_QD || return @test_skip "set GESSO_GGML_DIR (libggml to_float)"
     rng = MersenneTwister(11)
     q = _quant_fixture(rng, _T_IQ4XS, 512, 40)
     full = _GI._quant_host_f32(q)
@@ -279,7 +276,6 @@ end
 end
 
 @testset "quant matmul matches dequant + F32 (native and fallback)" begin
-    _HAS_GGML_QD || return @test_skip "set GESSO_GGML_DIR (libggml to_float)"
     rng = MersenneTwister(7)
     # All three run the native Q8_K integer kernels, so the activations are
     # quantized and the bound is the Q8_K one (measured about 0.7% of scale).
@@ -299,7 +295,6 @@ end
 end
 
 @testset "cpu matmul! and embedding lookup dispatch to quant storage" begin
-    _HAS_GGML_QD || return @test_skip "set GESSO_GGML_DIR (libggml to_float)"
     rng = MersenneTwister(3)
     q = _quant_fixture(rng, _T_IQ4XS, 512, 64)
     W = _GI._quant_host_f32(q)
@@ -525,7 +520,7 @@ function _tiny_kv()
     return kv
 end
 
-# The F32 twin: every quant tensor replaced by its to_float values in GGUF order.
+# The F32 twin: every quant tensor replaced by its dequantized values in GGUF order.
 function _f32_twin(tens)
     out = Any[]
     for (name, dims, t, bytes) in tens
@@ -541,7 +536,6 @@ function _f32_twin(tens)
 end
 
 @testset "tiny dense qwen35: quant storage matches F32 end to end" begin
-    _HAS_GGML_QD || return @test_skip "set GESSO_GGML_DIR (libggml to_float)"
     mktempdir() do dir
         rng = MersenneTwister(2026)
         tens = _tiny_dense_tensors(rng)
@@ -605,8 +599,8 @@ end
 end
 
 @testset "real Ornith tensor: quant bytes dequant to the F32 loader's values" begin
-    if !isfile(_ORN_GGUF) || !_HAS_GGML_QD
-        @test_skip "set GESSO_ORNITH35_GGUF and GESSO_GGML_DIR"
+    if !isfile(_ORN_GGUF)
+        @test_skip "set GESSO_ORNITH35_GGUF"
     else
         hdr = Gesso.gguf_header(_ORN_GGUF)
         info = only(filter(t -> t.name == "blk.0.ffn_gate_shexp.weight", hdr.tensors))
