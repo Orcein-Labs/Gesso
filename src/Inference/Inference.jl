@@ -172,6 +172,7 @@ function reference_prefill(
     cpu = backend
     wl = PrefillWorkload()
     seq = length(tokens)
+    _backend_prefill_pass!(cpu, seq)
     dim = model.embedding.dim
     n_heads = model.blocks[1].attention.n_heads
     n_kv_heads = model.blocks[1].attention.n_kv_heads
@@ -1348,6 +1349,11 @@ function _prefill_chunk(P::Int)
     return c <= 0 ? P : min(c, P)
 end
 
+# Called before each prefill pass with its row count. A backend that keeps
+# decode-only device state (the Lava hot-experts pools) gives the memory back
+# here, so a pass has the device to itself.
+_backend_prefill_pass!(::AbstractGessoBackend, ::Int) = nothing
+
 # GESSO_PREFILL_WINDOW=0 keeps the per-row prefill for A/B timing and oracle checks.
 _prefill_window_enabled() = get(ENV, "GESSO_PREFILL_WINDOW", "1") != "0"
 
@@ -1790,6 +1796,7 @@ function reference_generate(
             ckpt_at > s1 && (lim = min(lim, ckpt_at))
             s1 += _prefill_pass_rows(cpu, lim - s1, s1, chunk, qdim, group)
             n = s1 - s0 + 1
+            _backend_prefill_pass!(cpu, n)
             ptok = _prefill_pass_begin(cpu, s0, n, P)
             if win_ok
                 # CPU hybrid prefill is the verify window's T-row forward: one
@@ -1918,11 +1925,11 @@ function reference_generate(
                             (
                                 Activation(;
                                     shape=(K, n_kv_heads, d_head),
-                                    storage=@view kc[bi].storage[1:K, :, :]
+                                    storage=_kv_dense(@view(kc[bi].storage[1:K, :, :]), K)
                                 ),
                                 Activation(;
                                     shape=(K, n_kv_heads, d_head),
-                                    storage=@view vc[bi].storage[1:K, :, :]
+                                    storage=_kv_dense(@view(vc[bi].storage[1:K, :, :]), K)
                                 ),
                             )
                         kv_rot = _kv_rotated(kc[bi].storage)
@@ -2588,8 +2595,8 @@ function _decode_attn_core!(
             scores = TemporaryWorkspace(; shape=(1, K), storage=zeros_like((1, K)))
             scores_out = TemporaryWorkspace(; shape=(1, K), storage=zeros_like((1, K)))
             @decode_sub :attn_kv_append cpu begin
-                kx = _repeat_heads(kc[bi], group)
-                vx = _repeat_heads(vc[bi], group)
+                kx = _repeat_heads(_kv_readable(kc[bi].storage, K), group)
+                vx = _repeat_heads(_kv_readable(vc[bi].storage, K), group)
             end
             @decode_sub :attn_core cpu _attention_heads!(
                 cpu,
@@ -2840,6 +2847,7 @@ include("dflash_draft.jl")        # DFlash2 block drafter over the target's tapp
 include("tokenizer_protocol.jl")   # Pass C: the tokenizer PROTOCOL
 include("gguf_tokenizer.jl")       # GGUF tokenizer section: qwen35 BPE, streaming decode
 include("chat_template.jl")         # Qwen3.5 XML chat template renderer (no Jinja)
+include("qwen4exp.jl")              # Flash-Next (qwen4exp) CPU forward
 include("import_report.jl")      # Passes I/J: report + generated matrix
 
 end # module Inference

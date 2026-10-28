@@ -186,8 +186,8 @@ real-model gates are reported as named skips.
   with copy-on-write), and a receipt on every call.
 - Model support: Llama-family safetensors, and GGUF with K-quants and
   IQ-quants, including the Qwen3.5-MoE hybrid architecture.
-- KV cache formats f32, f16, q8 and q4h (`GESSO_KV_FORMAT`). When unset, the
-  CUDA path uses q8 and the other backends use f32.
+- KV cache formats f32, f16, q8 and q4h (`GESSO_KV_FORMAT`). When unset, CUDA
+  and Lava use q8 and the CPU uses f32.
 - Backends, in order of how the project treats them:
   - CPU, the correctness oracle.
   - Lava, the GPU backend and the default for the scripts and the chat server.

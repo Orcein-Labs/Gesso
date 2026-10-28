@@ -1,13 +1,17 @@
 # Lava dense quant GEMV (LavaDenseQuant): device placement and the in-kernel
 # dequant matmul against the host dequant reference. Named skip without a
-# usable Vulkan device. Mirrors test_cuda_quant_dense.jl; the CUDA side also
-# quantizes the activation to Q8_1, so its bound has an extra term. The Lava
-# port keeps the activation in F32, so that term is absent here.
+# usable Vulkan device. Mirrors test_cuda_quant_dense.jl.
+#
+# Activations. Q8_0 and Q4_K weights take the CPU-order kernels, which quantize
+# the activation first (Q8_0 blocks and Q8_K blocks, as ggml's CPU path does).
+# Their reference quantizes X the same way on the host and multiplies the
+# dequantized values. Every other kind keeps the activation in F32.
 #
 # Tolerance. The weight side is exact: the kernel and `_quant_host_f32` decode
-# the same bytes. With F32 activations the only error left is F32 accumulation,
-# bounded by 5e-5 times the absolute sum sum_i |W[r,i] x[t,i]| for k <= 2048.
-# A value passes when |dev - ref| <= 5e-5 * A + 1e-9 against the F64 reference.
+# the same bytes, and the host activation quantizers match the device ones bit
+# for bit. The only error left is F32 accumulation, bounded by 5e-5 times the
+# absolute sum sum_i |W[r,i] x[t,i]| for k <= 2048. A value passes when
+# |dev - ref| <= 5e-5 * A + 1e-9 against the F64 reference.
 
 using Test: AbstractTestSet, Broken, get_testset, record
 using Random: MersenneTwister
@@ -95,7 +99,25 @@ else
         return Array(dst.storage)
     end
 
-    # Per-element error against the F32-activation bound, host F64 accumulation.
+    # The activation as the kernel for this weight type sees it, in F64.
+    function _lq_ref_x(qm, X)
+        X64 = Float64.(X)
+        t = qm.ggml_type
+        if t == _lq_inf.GGML_TYPE_Q8_0
+            for r in axes(X, 1)
+                y = _lq_inf.quantize_q8_0!(_lq_inf.Q80Vec(size(X, 2) ÷ 32), X[r, :])
+                X64[r, :] .= Float64.(repeat(y.d; inner=32)) .* y.qs
+            end
+        elseif t == _lq_inf.GGML_TYPE_Q4_K
+            for r in axes(X, 1)
+                y = _lq_inf.quantize_q8_K!(_lq_inf.Q8KVec(size(X, 2) ÷ 256), X[r, :])
+                X64[r, :] .= Float64.(repeat(y.d; inner=256)) .* y.qs
+            end
+        end
+        return X64
+    end
+
+    # Per-element error against the F32-accumulation bound, host F64 accumulation.
     function _lq_check(qm, X, dev; label::AbstractString, rtol::Float64=5.0e-5)
         if !isfile(joinpath(get(ENV, "GESSO_GGML_DIR", ""), "libggml-base.so"))
             _skip(
@@ -104,7 +126,7 @@ else
             return nothing
         end
         W = Float64.(_lq_inf._quant_host_f32(qm))
-        X64 = Float64.(X)
+        X64 = _lq_ref_x(qm, X)
         ref = X64 * transpose(W)
         A = abs.(X64) * transpose(abs.(W))
         tol = rtol .* A .+ 1.0e-9
@@ -133,6 +155,7 @@ else
     # Prefill (ntok >= GESSO_DQ_GEMM_MIN, default 32): W is dequantized to F16
     # and multiplied with an F16 copy of X, so each value carries two F16 roundings.
     # Bound: 2e-3 times the absolute sum, against the same F64 host reference.
+    # Q4_K takes the CPU-order kernel at every ntok and keeps the tight bound.
     @testset "LavaDenseQuant: prefill GEMM vs host dequant" begin
         rng = MersenneTwister(20261012)
         for kind in (:q4_k, :q5_k, :q6_k)
@@ -144,7 +167,7 @@ else
                     X,
                     _lq_device_matmul(qm, X);
                     label="prefill $kind 37x512 n40",
-                    rtol=2.0e-3,
+                    rtol=kind == :q4_k ? 5.0e-5 : 2.0e-3,
                 )
             end
         end
@@ -243,9 +266,9 @@ else
         end
     end
 
-    # ntok >= 32 takes the dequant-to-F16 step, which indexes the repacked words
-    # and scales directly. The chunked case splits rows across scratch chunks.
-    @testset "LavaQ8Quant: prefill dequant path" begin
+    # Prefill-sized inputs: Q8_0 stays on the CPU-order kernel at ntok >= 32,
+    # including with many rows and a small scratch budget.
+    @testset "LavaQ8Quant: prefill-sized inputs" begin
         rng = MersenneTwister(20261016)
         @testset "staged shape, ntok=32" begin
             qm = _lq_random_matrix(rng, :q8_0, 37, 512)
@@ -255,7 +278,6 @@ else
                 X,
                 _lq_device_matmul(qm, X);
                 label="prefill q8_0 37x512 n32",
-                rtol=2.0e-3,
             )
         end
         @testset "chunked scratch with a partial last chunk" begin
@@ -267,7 +289,6 @@ else
                     X,
                     _lq_device_matmul(qm, X);
                     label="prefill q8_0 2300x512 n40 chunked",
-                    rtol=2.0e-3,
                 )
             end
         end

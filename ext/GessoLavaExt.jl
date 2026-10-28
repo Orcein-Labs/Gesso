@@ -126,11 +126,15 @@ execution_tier(::LavaBackend) = 1   # OPTIMIZED_GENERIC (§XXI)
 backend_name(::Type{LavaBackend}) = :lava
 execution_tier(::Type{LavaBackend}) = 1
 
-# Same capability coverage as the CPU reference: the six implemented ops.
-# :quantize / :dequantize stay false (Representation-phase concern), and
+# The semantic vocabulary (see backends.jl) that Lava runs. import_report reads
+# this set, so a missing entry tells the user Lava cannot load a model it does
+# run. :quantize / :dequantize stay false (Representation-phase concern), and
 # unknown capabilities stay false — probing is always safe (§XX).
-# BREADTH-1: the semantic vocabulary (see backends.jl). Like CUDA, Lava's
-# `rope!` uses the explicit frequency table for ordinary linear/Llama3 policies.
+# Like CUDA, Lava's `rope!` uses the explicit frequency table for ordinary
+# linear/Llama3 policies. :mrope means what it means on the CPU and CUDA: text
+# positions, where the sectioned table equals the plain one. The qwen3_5 and
+# qwen3_5_moe entries are covered by test_lava_hybrid.jl and the 35B runs; the
+# spark2_5 entries by test_lava_spark25.jl.
 const LAVA_SUPPORTED_CAPS = Set([
     :rmsnorm,
     :attention,
@@ -142,6 +146,15 @@ const LAVA_SUPPORTED_CAPS = Set([
     :rope_linear,
     :rope_llama3,
     :rope_partial_dim,
+    :rope_interleaved,
+    :mrope,
+    :qk_norm,
+    :attn_output_gate,
+    :linear_attention,
+    :moe_routing,
+    :geglu_ffn,
+    :attn_head_gate,
+    :sliding_window_attention,
 ])
 
 supports(::LavaBackend, cap::Symbol) = cap in LAVA_SUPPORTED_CAPS
@@ -156,9 +169,20 @@ include("lava_quant.jl")
 include("lava_ops.jl")
 include("lava_attention.jl")
 
+# Quantized KV cache on the device: the q8 write, the dense read and the q4h refusal.
+include("lava_kv_format.jl")
+
+# Hot host experts: per-layer device pools for the routed experts that the
+# decode path runs on the GPU. Used by the hybrid and qwen4exp decode routes.
+include("lava_hot_experts.jl")
+
 # L2 hybrid decode seams for qwen35moe: the gated-delta-net mixer, its gating
 # ops, and the host-expert MoE route. Needs lava_ops.jl for the device helpers.
 include("lava_hybrid.jl")
+
+# qwen4exp (Flash-Next) device forward: GDN, dense gated attention, PLE and
+# hyper-connections on Lava, with host experts.
+include("lava_qwen4exp.jl")
 
 # Bind the backend into the package's namespace: after this ext triggers,
 # `Gesso.LavaBackend` resolves to the type defined HERE — while a Lava-less

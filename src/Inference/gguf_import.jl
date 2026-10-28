@@ -133,10 +133,12 @@ const _GGML_KNOWN_BLOCKS = Dict{Int32, Tuple{Int, Int}}(
     17 => (256, 74),    # IQ2_XS
     18 => (256, 98),    # IQ3_XXS
     19 => (256, 50),    # IQ1_S
+    20 => (32, 18),     # IQ4_NL
     21 => (256, 110),   # IQ3_S
     22 => (256, 82),    # IQ2_S
     23 => (256, 136),   # IQ4_XS
     29 => (256, 56),    # IQ1_M
+    42 => (64, 18),     # Q2_0
 )
 
 # Throws unless the traits read for `ggml_type` are plausible: equal to Gesso's
@@ -343,12 +345,13 @@ defaults to a particular checkpoint's shape, except `full_attention_interval`
 """
 function spec_from_gguf_kv(kv::AbstractDict; tensor_names=nothing)
     arch = String(get(kv, "general.architecture", "qwen35moe"))
-    arch in ("qwen35", "qwen35moe", "llama", "spark2_5") || error(
+    arch in ("qwen35", "qwen35moe", "llama", "spark2_5", "qwen4exp") || error(
         "spec_from_gguf_kv: unsupported general.architecture $(repr(arch)) " *
-        "(supported: qwen35 dense, qwen35moe, llama, spark2_5)",
+        "(supported: qwen35 dense, qwen35moe, llama, spark2_5, qwen4exp)",
     )
     arch == "llama" && return _spec_from_gguf_llama(kv, tensor_names)
     arch == "spark2_5" && return _spec_from_gguf_spark(kv, tensor_names)
+    arch == "qwen4exp" && return _spec_from_gguf_qwen4exp(kv, tensor_names)
     p(key, default=nothing) = get(kv, "$arch.$key", default)
     req(key) =
         (v=p(key); v === nothing ? error("spec_from_gguf_kv: missing $arch.$key") : v)
@@ -437,6 +440,54 @@ function spec_from_gguf_kv(kv::AbstractDict; tensor_names=nothing)
         features=feats,
         mixer,
         rms_norm_eps=Float64(p("attention.layer_norm_rms_epsilon", 1e-6)),
+        moe,
+    )
+end
+
+"""
+`qwen4exp` (Flash-Next) GGUF spec. The spec records the shape and the
+features (hyper-connection streams, per-layer embeddings) so the import report
+can describe the file; the forward is `qwen4exp_forward!`, not the generic
+block runner. MTP layers are excluded from `num_layers`.
+"""
+function _spec_from_gguf_qwen4exp(kv::AbstractDict, tensor_names)
+    cfg = qwen4exp_config(kv)
+    cfg.vocab > 0 || error("spec_from_gguf_kv: no vocabulary size in GGUF metadata")
+    p(key) = kv["qwen4exp.$key"]
+    layer_types = [a ? :full_attention : :linear_attention for a in cfg.attn_layer]
+    mixer = LinearMixerSpec(;
+        layer_types,
+        num_key_heads=cfg.ssm_nk,
+        key_head_dim=cfg.ssm_dk,
+        num_value_heads=cfg.ssm_nv,
+        value_head_dim=cfg.ssm_dv,
+        conv_kernel_dim=cfg.conv_kernel,
+        v_head_tiled=true,
+    )
+    expert_ff = Int(p("expert_feed_forward_length"))
+    moe = MoeSpec(;
+        n_experts=cfg.n_exp,
+        n_expert_used=cfg.n_used,
+        expert_ff,
+        shared_ff=Int(p("expert_shared_feed_forward_length")),
+    )
+    section = filter(>(0), Int[Int(x) for x in p("rope.dimension_sections")])
+    return ArchitectureSpec(;
+        family=:qwen4exp,
+        hidden_size=cfg.n_embd,
+        num_layers=cfg.n_layer,
+        n_heads=cfg.n_head,
+        n_kv_heads=cfg.n_head_kv,
+        vocab_size=cfg.vocab,
+        intermediate_size=expert_ff,
+        head_dim=cfg.head_dim,
+        rope=RoPEPolicy(;
+            theta=cfg.rope_base, rotary_dim=cfg.n_rot, interleaved=false, mrope_section=section),
+        tie_word_embeddings=tensor_names !== nothing && !("output.weight" in tensor_names),
+        features=Set{Symbol}([:qk_norm, :attn_output_gate, :mrope, :linear_attention,
+            :hyper_connections, :ple]),
+        mixer,
+        rms_norm_eps=cfg.eps,
         moe,
     )
 end
@@ -837,6 +888,8 @@ function _materialize_gguf_tensor(
 end
 
 _gguf_param_map(spec::ArchitectureSpec) =
+    spec.family === :qwen4exp ?
+    error("qwen4exp GGUFs do not load through the generic block runner; use load_qwen4exp") :
     spec.family === :llama ? gguf_param_map(LlamaAdapter(), spec) :
     spec.family === :spark2_5 ? _gguf_spark_param_map(spec) :
     spec.moe === nothing ? gguf_param_map(Qwen35Adapter(), spec) :
@@ -1075,6 +1128,38 @@ function _cpu_moe_topk_swiglu_gguf!(
     return y
 end
 
+# One token's top-k routing: softmax over the router logits, then the top
+# n_used experts renormalised. Shared by the batched host route and the device
+# hot-expert route, so both select the same experts with the same weights.
+# Returns false when the token routes nothing (weights sum to zero).
+function _moe_route_token!(experts, wts, t::Int, x, router, logits, order, n_used::Int)
+    n_exp = length(logits)
+    m = _cpu_router_logits!(logits, x, t, router)
+    s = 0.0f0
+    for e in 1:n_exp
+        v = exp(logits[e] - m)
+        logits[e] = v
+        s += v
+    end
+    invs = 1.0f0 / s
+    for e in 1:n_exp
+        logits[e] *= invs
+        order[e] = e
+    end
+    sort!(order; by=e -> (-logits[e], e))
+    wsum = 0.0f0
+    for k in 1:n_used
+        wsum += logits[order[k]]
+    end
+    wsum > 0 || return false
+    invw = 1.0f0 / wsum
+    for k in 1:n_used
+        experts[k, t] = order[k]
+        wts[k, t] = logits[order[k]] * invw
+    end
+    return true
+end
+
 # Routing is the per-expert loop's, op for op, so the selected experts and
 # their weights match it exactly.
 function _cpu_moe_topk_swiglu_batched!(
@@ -1094,30 +1179,7 @@ function _cpu_moe_topk_swiglu_batched!(
     wts = Matrix{Float32}(undef, n_used, seq)
     live = fill(false, seq)
     for t in 1:seq
-        m = _cpu_router_logits!(logits, x, t, router)
-        s = 0.0f0
-        for e in 1:n_exp
-            v = exp(logits[e] - m)
-            logits[e] = v
-            s += v
-        end
-        invs = 1.0f0 / s
-        for e in 1:n_exp
-            logits[e] *= invs
-            order[e] = e
-        end
-        sort!(order; by=e -> (-logits[e], e))
-        wsum = 0.0f0
-        for k in 1:n_used
-            wsum += logits[order[k]]
-        end
-        wsum > 0 || continue
-        invw = 1.0f0 / wsum
-        live[t] = true
-        for k in 1:n_used
-            experts[k, t] = order[k]
-            wts[k, t] = logits[order[k]] * invw
-        end
+        live[t] = _moe_route_token!(experts, wts, t, x, router, logits, order, n_used)
     end
     if seq == 1
         live[1] || return y

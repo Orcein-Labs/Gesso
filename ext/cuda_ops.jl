@@ -3839,8 +3839,13 @@ function _moe_device_prefill_ok(y, x, router, gate, up, down, n_used::Int)
     for sl in (gate, up, down)
         sl.ggml_type in (
             I.GGML_TYPE_IQ2_XS,
+            I.GGML_TYPE_IQ2_XXS,
+            I.GGML_TYPE_IQ2_S,
             I.GGML_TYPE_IQ3_XXS,
+            I.GGML_TYPE_IQ3_S,
             I.GGML_TYPE_IQ4_XS,
+            I.GGML_TYPE_IQ4_NL,
+            I.GGML_TYPE_Q2_0,
             I.GGML_TYPE_Q2_K,
             I.GGML_TYPE_Q3_K,
             I.GGML_TYPE_Q4_K,

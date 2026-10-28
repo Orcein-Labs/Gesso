@@ -36,7 +36,7 @@ only with `ext/cuda_*` files applies to the CUDA path. New GPU work goes into La
 | `GESSO_CTX_CHECKPOINTS` | `src/Inference/generate_state.jl`, `test/test_ctx_checkpoints.jl` |
 | `GESSO_CTX_CHECKPOINT_EVERY` | `src/Inference/generate_state.jl`, `test/test_ctx_checkpoints.jl` |
 | `GESSO_DFLASH_PMIN` | `scripts/saluki_dflash_bench.jl` |
-| `GESSO_DQ_GEMM_MIN` | `ext/cuda_quant_dense.jl`, `ext/lava_quant.jl`, `test/test_cuda_quant_dense.jl`, `test/test_lava_quant.jl` |
+| `GESSO_DQ_GEMM_MIN` | `ext/cuda_quant_dense.jl`, `ext/lava_quant.jl`, `test/test_cuda_quant_dense.jl`, `test/test_lava_quant.jl`, `test/test_lava_quant_flash_next.jl` |
 | `GESSO_DQ_GEMM_SCRATCH_MIB` | `ext/cuda_quant_dense.jl`, `ext/lava_quant.jl`, `test/test_cuda_quant_dense.jl`, `test/test_lava_quant.jl` |
 | `GESSO_EAGER_PYTHON` | `benchmark/runbenchmarks.jl` |
 | `GESSO_EXPERT_CACHE` | `src/Inference/gguf_import.jl` |
@@ -46,15 +46,15 @@ only with `ext/cuda_*` files applies to the CUDA path. New GPU work goes into La
 | `GESSO_GDN_REFERENCE_FIXTURE` | `test/test_lava_gdn_reference.jl` |
 | `GESSO_GEMV_CHUNKS_PER_THREAD` | `src/Inference/gguf_quants.jl` |
 | `GESSO_GEMV_POOL` | `src/Inference/gguf_quants.jl` |
-| `GESSO_GGML_DIR` | `scripts/bench_35b.jl`, `scripts/bench_qwen38_27b.jl`, `scripts/gate_35b.jl`, `scripts/gen_qwen38_27b.jl`, `scripts/profile_35b.jl`, `scripts/profile_qwen38_27b.jl`, `scripts/routing_trace_35b.jl`, `scripts/saluki_bean_bench.jl`, `scripts/saluki_combo_bench.jl`, `scripts/saluki_dflash_bench.jl`, `scripts/saluki_draft_bench.jl`, `scripts/saluki_mtp_bench.jl`, `scripts/saluki_window_oracle.jl`, `scripts/stress_ornith_lava.jl`, `src/Inference/gguf_import.jl`, `test/runtests.jl`, `test/test_cuda_quant_dense.jl`, `test/test_gguf_import.jl`, `test/test_lava_quant.jl`, `test/test_quant_cpu_iq_s.jl`, `test/test_quant_cpu_kquants.jl`, `test/test_quant_cpu_simd.jl`, `test/test_qwen35_dense.jl` |
+| `GESSO_GGML_DIR` | `scripts/bench_35b.jl`, `scripts/bench_qwen38_27b.jl`, `scripts/gate_35b.jl`, `scripts/gen_qwen38_27b.jl`, `scripts/profile_35b.jl`, `scripts/profile_qwen38_27b.jl`, `scripts/routing_trace_35b.jl`, `scripts/saluki_bean_bench.jl`, `scripts/saluki_combo_bench.jl`, `scripts/saluki_dflash_bench.jl`, `scripts/saluki_draft_bench.jl`, `scripts/saluki_mtp_bench.jl`, `scripts/saluki_window_oracle.jl`, `scripts/stress_ornith_lava.jl`, `src/Inference/gguf_import.jl`, `test/runtests.jl`, `test/test_cuda_quant_dense.jl`, `test/test_gguf_import.jl`, `test/test_lava_quant.jl`, `test/test_lava_quant_flash_next.jl`, `test/test_lava_quant_half.jl`, `test/test_lava_quant_kexperts.jl`, `test/test_quant_cpu_iq_s.jl`, `test/test_quant_cpu_kquants.jl`, `test/test_quant_cpu_simd.jl`, `test/test_quant_flash_next_types.jl`, `test/test_qwen35_dense.jl` |
 | `GESSO_GGUF_UNREORDER_V` | `src/Inference/gguf_import.jl` |
-| `GESSO_GPU_BUDGET_MIB` | `ext/cuda_ops.jl`, `ext/lava_ops.jl`, `src/Inference/Inference.jl`, `test/test_cuda_moe.jl`, `test/test_cuda_quant_dense.jl`, `test/test_moe_routing.jl` |
+| `GESSO_GPU_BUDGET_MIB` | `ext/cuda_ops.jl`, `ext/lava_ops.jl`, `ext/lava_qwen4exp.jl`, `src/Inference/Inference.jl`, `test/test_cuda_moe.jl`, `test/test_cuda_quant_dense.jl`, `test/test_moe_routing.jl` |
 | `GESSO_GPU_DENSE_QUANT` | `ext/cuda_quant_dense.jl`, `test/test_cuda_quant_dense.jl` |
 | `GESSO_GPU_EXPERT_CACHE` | `ext/cuda_ops.jl`, `test/test_expert_cache.jl` |
 | `GESSO_GPU_EXPERT_CACHE_MIB` | `ext/cuda_ops.jl`, `test/test_expert_cache.jl` |
 | `GESSO_GPU_HOT_DECAY` | `ext/cuda_hot_experts.jl` |
-| `GESSO_GPU_HOT_EXPERTS` | `ext/cuda_hot_experts.jl`, `scripts/bench_35b.jl`, `test/test_cuda_moe.jl` |
-| `GESSO_GPU_HOT_EXPERTS_MIB` | `ext/cuda_hot_experts.jl`, `scripts/bench_35b.jl` |
+| `GESSO_GPU_HOT_EXPERTS` | `ext/cuda_hot_experts.jl`, `ext/lava_hot_experts.jl`, `scripts/bench_35b.jl`, `test/test_cuda_moe.jl`, `test/test_lava_hot_experts.jl` |
+| `GESSO_GPU_HOT_EXPERTS_MIB` | `ext/cuda_hot_experts.jl`, `ext/lava_hot_experts.jl`, `scripts/bench_35b.jl`, `test/test_lava_hot_experts.jl` |
 | `GESSO_GPU_HOT_FILL` | `ext/cuda_hot_experts.jl` |
 | `GESSO_GPU_HOT_MARGIN` | `ext/cuda_hot_experts.jl` |
 | `GESSO_GPU_HOT_PIN` | `ext/cuda_hot_experts.jl` |
@@ -68,14 +68,15 @@ only with `ext/cuda_*` files applies to the CUDA path. New GPU work goes into La
 | `GESSO_GPU_HOT_PREFILL_ROUND` | `ext/cuda_hot_experts.jl` |
 | `GESSO_GPU_HOT_PREFILL_SEG` | `ext/cuda_hot_experts.jl` |
 | `GESSO_GPU_HOT_PREFILL_STREAM` | `ext/cuda_hot_experts.jl` |
-| `GESSO_GPU_HOT_RESERVE_MIB` | `ext/cuda_hot_experts.jl` |
+| `GESSO_GPU_HOT_RESERVE_MIB` | `ext/cuda_hot_experts.jl`, `ext/lava_hot_experts.jl` |
+| `GESSO_GPU_HOT_STATS` | `ext/lava_hot_experts.jl` |
 | `GESSO_GPU_RESERVE_MIB` | `ext/cuda_ops.jl`, `test/test_expert_cache.jl` |
 | `GESSO_GPU_WEIGHT_DTYPE` | `ext/cuda_ops.jl`, `scripts/profile_35b.jl`, `test/test_cuda_hybrid.jl` |
 | `GESSO_GSQ_GGUF` | `test/test_cuda_moe.jl` |
 | `GESSO_HF_REFERENCE` | `test/regime_i_batch.jl`, `test/regime_i_containment.jl`, `test/regime_i_cuda.jl`, `test/regime_i_device.jl`, `test/regime_i_lava.jl`, `test/regime_i_numerics.jl`, `test/regime_i_observability.jl`, `test/regime_i_package.jl`, `test/regime_i_performance.jl`, `test/regime_i_probe.jl`, `test/regime_ii_attribution.jl`, `test/test_hf_parity.jl` |
 | `GESSO_IDS_TOL` | `scripts/profile_35b.jl` |
 | `GESSO_KOLIBRI_Q2K_GGUF` | `test/test_moe_kquant_experts.jl` |
-| `GESSO_KV_FORMAT` | `scripts/bench_35b.jl`, `src/Inference/Inference.jl`, `src/Inference/kv_format.jl`, `test/test_generate_state_io.jl`, `test/test_kv_format.jl` |
+| `GESSO_KV_FORMAT` | `ext/lava_kv_format.jl`, `scripts/bench_35b.jl`, `src/Inference/Inference.jl`, `src/Inference/kv_format.jl`, `test/test_generate_state_io.jl`, `test/test_kv_format.jl`, `test/test_lava_spark25.jl` |
 | `GESSO_L1_CANCEL` | `scripts/stress_ornith_lava.jl` |
 | `GESSO_L1_CANCEL_AFTER` | `scripts/stress_ornith_lava.jl` |
 | `GESSO_L1_CANCEL_CASE` | `scripts/stress_ornith_lava.jl` |
@@ -104,7 +105,7 @@ only with `ext/cuda_*` files applies to the CUDA path. New GPU work goes into La
 | `GESSO_NORMALIZATION_LABEL` | `test/regime_i_performance.jl` |
 | `GESSO_ORACLE_NEW` | `scripts/saluki_window_oracle.jl` |
 | `GESSO_ORACLE_T` | `scripts/saluki_window_oracle.jl` |
-| `GESSO_ORNITH35_GGUF` | `scripts/bench_35b.jl`, `scripts/gate_35b.jl`, `scripts/gesso-serve.jl`, `scripts/julia_runtime/ttft_probe.jl`, `scripts/profile_35b.jl`, `scripts/routing_trace_35b.jl`, `scripts/stress_ornith_lava.jl`, `test/test_cuda_moe.jl`, `test/test_cuda_quant_dense.jl`, `test/test_gguf_import.jl`, `test/test_gguf_tokenizer.jl`, `test/test_quant_cpu_kquants.jl`, `test/test_quant_cpu_simd.jl`, `test/test_qwen35_dense.jl`, `test/test_serve_engine.jl` |
+| `GESSO_ORNITH35_GGUF` | `scripts/bench_35b.jl`, `scripts/gate_35b.jl`, `scripts/gesso-serve.jl`, `scripts/julia_runtime/ttft_probe.jl`, `scripts/profile_35b.jl`, `scripts/routing_trace_35b.jl`, `scripts/stress_ornith_lava.jl`, `test/test_cuda_moe.jl`, `test/test_cuda_quant_dense.jl`, `test/test_gguf_import.jl`, `test/test_gguf_tokenizer.jl`, `test/test_lava_quant_kexperts.jl`, `test/test_quant_cpu_kquants.jl`, `test/test_quant_cpu_simd.jl`, `test/test_qwen35_dense.jl`, `test/test_serve_engine.jl` |
 | `GESSO_PREFILL_CHUNK` | `src/Inference/Inference.jl`, `test/test_cuda_hybrid.jl`, `test/test_prefill_profile.jl`, `test/test_qwen35_hybrid.jl`, `test/test_verify_window_batch.jl` |
 | `GESSO_PREFILL_MULTI` | `scripts/stress_ornith_lava.jl`, `src/Inference/moe_host.jl`, `src/Inference/quant_cpu_multi.jl`, `test/test_quant_cpu_multi.jl` |
 | `GESSO_PREFILL_PROFILE` | `src/Inference/decode_profile.jl`, `test/test_prefill_profile.jl` |
@@ -121,6 +122,8 @@ only with `ext/cuda_*` files applies to the CUDA path. New GPU work goes into La
 | `GESSO_QWEN38_27B_IQ4XS_GGUF` | `test/test_quant_cpu_kquants.jl` |
 | `GESSO_QWEN38_DFLASH_GGUF` | `scripts/saluki_dflash_bench.jl` |
 | `GESSO_QWEN38_MTP_GGUF` | `scripts/saluki_mtp_bench.jl`, `test/test_quant_cpu_kquants.jl` |
+| `GESSO_QWEN4EXP_FULL` | `test/test_qwen4exp.jl` |
+| `GESSO_QWEN4EXP_GGUF` | `test/runtests.jl`, `test/test_lava_quant_flash_next.jl`, `test/test_lava_qwen4exp.jl`, `test/test_qwen4exp.jl` |
 | `GESSO_REPO` | `scripts/stress_ornith_lava.jl` |
 | `GESSO_ROUTING_TRACE` | `scripts/routing_profile.jl`, `scripts/routing_trace_35b.jl`, `src/Inference/expert_residency.jl` |
 | `GESSO_SALUKI_GGUF` | `test/test_quant_cpu_iq_s.jl`, `test/test_quant_cpu_multi.jl` |

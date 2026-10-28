@@ -28,3 +28,6 @@ outputs(from chatgpt)/
 # Local agent instruction files, never part of the repo
 /CLAUDE.md
 /AGENTS.md
+
+# Kernel IR that vendored Lava dumps on every compile
+/vendor/tmp_kernels/
