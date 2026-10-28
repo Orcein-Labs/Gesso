@@ -33,6 +33,14 @@ function Base.setindex!(d::_OrderedDict, v, k)
     d.data[key] = v
     return d
 end
+function Base.delete!(d::_OrderedDict, k)
+    key = String(k)
+    if haskey(d.data, key)
+        delete!(d.data, key)
+        filter!(x -> x != key, d.keys)
+    end
+    return d
+end
 
 _chat_json_parse(text::AbstractString) = JSON.parse(String(text); dicttype=_OrderedDict)
 
@@ -443,13 +451,18 @@ Qwen3.5 XML family (`<function=`, `<tool_response>`, `<think>`). Any other
 template is an error.
 """
 function chat_family(template::AbstractString)::Symbol
+    if occursin("CONTINUE_FINAL_MESSAGE_TAG", template) && occursin("render_tool_calls", template)
+        return :lfm25
+    elseif occursin("<|tool_list_start|>", template) && occursin("<|tool_response_start|>", template)
+        return :lfm2
+    end
     if occursin("<function=", template) &&
        occursin("<tool_response>", template) &&
        occursin("<think>", template)
         return :qwen35_xml
     end
     error(
-        "chat_family: template is not a supported chat family (expected Qwen3.5 XML markers)",
+        "chat_family: template is not a supported chat family (expected Qwen3.5 XML or LFM markers)",
     )
 end
 

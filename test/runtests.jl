@@ -160,6 +160,8 @@ using Gesso: reference_prefill, reference_generate
     # random toy model, the QSA context refusal; the real-GGUF run against the
     # llama.cpp dump is gated on GESSO_QWEN4EXP_GGUF (skips without it)
     include("test_qwen4exp.jl")
+    include("test_lfm25.jl")
+    include("test_lfm_chat.jl")
 
     # Phase 3 (§LXXVI item D): the REAL-model gate — one named skip unless
     # GESSO_SMOLLM2_DIR points at a local snapshot; it never downloads

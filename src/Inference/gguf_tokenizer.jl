@@ -1,5 +1,5 @@
-# GGUF byte-level BPE tokenizer for the qwen35 (Ornith-35B) and spark2_5
-# (Spark-X2.6) pre-tokenizers.
+# GGUF byte-level BPE tokenizer for the qwen35 (Ornith-35B), spark2_5
+# (Spark-X2.6), and LFM2 pre-tokenizers.
 #
 # The tokenizer section of a GGUF header (tokens, token types, merges, special
 # ids, chat template) is read by its own scan. gguf_header and load_gguf are
@@ -68,7 +68,8 @@ struct GGUFBPE <: Tokenizer
     eos_token_id::Union{Nothing, Int}
     pad_token_id::Union{Nothing, Int}
     chat_template::Union{Nothing, String}
-    pre::Symbol                             # :qwen35 or :spark2_5
+    add_bos::Bool                           # tokenizer.ggml.add_bos_token: llama.cpp prepends BOS to raw text
+    pre::Symbol                             # :qwen35, :spark2_5, or :lfm2
 end
 
 # The qwen35 tokenizer, for callers that predate the `pre` field.
@@ -100,10 +101,45 @@ GGUFBPE(
     eos,
     pad,
     chat_template,
+    false,
     :qwen35,
 )
 
-const _GGUF_PRE = Dict("qwen35" => :qwen35, "spark2_5" => :spark2_5)
+# Callers that name `pre` but predate `add_bos` keep raw text BOS-free.
+GGUFBPE(
+    tokens,
+    token_type,
+    vocab,
+    byte_id,
+    merge_rank,
+    merge_left,
+    merge_right,
+    merge_target,
+    specials,
+    bos,
+    eos,
+    pad,
+    chat_template,
+    pre::Symbol,
+) = GGUFBPE(
+    tokens,
+    token_type,
+    vocab,
+    byte_id,
+    merge_rank,
+    merge_left,
+    merge_right,
+    merge_target,
+    specials,
+    bos,
+    eos,
+    pad,
+    chat_template,
+    false,
+    pre,
+)
+
+const _GGUF_PRE = Dict("qwen35" => :qwen35, "spark2_5" => :spark2_5, "lfm2" => :lfm2)
 
 # --- the GGUF tokenizer section ------------------------------------------------
 
@@ -256,6 +292,8 @@ function _load_gguf_tokenizer_impl(path::AbstractString)
         _special_id("tokenizer.ggml.eos_token_id"),
         _special_id("tokenizer.ggml.padding_token_id"),
         get(kv, "tokenizer.chat_template", nothing),
+        # llama.cpp turns BOS on for the lfm2 pre-tokenizer; the key overrides it.
+        Bool(get(kv, "tokenizer.ggml.add_bos_token", pre == "lfm2")),
         _GGUF_PRE[pre],
     )
 end
@@ -294,7 +332,7 @@ _q35_lower(c::UInt32) = (0x41 <= c <= 0x5a) ? c + 0x20 : c
 
 # Port of unicode_regex_split_custom_qwen35 for one segment (the whole fragment).
 # Returns half-open codepoint ranges (0-based) in order.
-function _qwen35_split(cp::Vector{UInt32})
+function _qwen35_split(cp::Vector{UInt32}; llama3::Bool=false)
     n = length(cp)
     fl = Vector{UInt8}(undef, n)
     for i in 1:n
@@ -302,8 +340,8 @@ function _qwen35_split(cp::Vector{UInt32})
     end
     getc(p) = (0 <= p < n) ? cp[p+1] : _Q35_OUT
     getf(p) = (0 <= p < n) ? fl[p+1] : 0x00
-    LM = _Q35_L | _Q35_M
-    WLMN = _Q35_WS | _Q35_L | _Q35_M | _Q35_N
+    LM = llama3 ? _Q35_L : _Q35_L | _Q35_M
+    WLMN = _Q35_WS | LM | _Q35_N
     out = Tuple{Int, Int}[]
     prev = 0
     pos = 0
@@ -347,6 +385,12 @@ function _qwen35_split(cp::Vector{UInt32})
         # \p{N}
         if (f & _Q35_N) != 0
             pos += 1
+            if llama3
+                for _ in 1:2
+                    (getf(pos) & _Q35_N) != 0 || break
+                    pos += 1
+                end
+            end
             push!(out, (prev, pos))
             prev = pos
             continue
@@ -551,7 +595,17 @@ function _encode_raw!(ids::Vector{Int}, tk::GGUFBPE, s::String)
     end
     push!(boff, ncodeunits(s) + 1)
     cu = codeunits(s)
-    for (a, b) in (tk.pre === :spark2_5 ? _spark25_split(cps) : _qwen35_split(cps))
+    ranges = tk.pre === :spark2_5 ? _spark25_split(cps) : _qwen35_split(cps; llama3=tk.pre === :lfm2)
+    for (a, b) in ranges
+        if tk.pre === :lfm2
+            # llama.cpp's Llama-3 path keeps an existing whole-word token before BPE.
+            word = String([_BYTES_TO_UNICODE[cu[k]] for k in boff[a+1]:(boff[b+1]-1)])
+            id = get(tk.vocab, word, -1)
+            if id >= 0
+                push!(ids, id)
+                continue
+            end
+        end
         syms = Int[]
         for k in boff[a+1]:(boff[b+1]-1)
             id = tk.byte_id[Int(cu[k])+1]
@@ -620,6 +674,12 @@ function encode(tk::GGUFBPE, text::AbstractString; parse_special::Bool=true)
     return ids
 end
 
+function _prompt_ids(tk::GGUFBPE, text::AbstractString)
+    ids = encode(tk, text)
+    tk.add_bos && tk.bos_token_id !== nothing && pushfirst!(ids, tk.bos_token_id)
+    return ids
+end
+
 # --- decode and streaming ---------------------------------------------------------
 
 function _token_bytes!(buf::Vector{UInt8}, tk::GGUFBPE, id::Integer)
@@ -659,7 +719,7 @@ function decode(tk::GGUFBPE, ids::AbstractVector{<:Integer})
 end
 
 tokenizer_metadata(tk::GGUFBPE) = (
-    kind=tk.pre === :spark2_5 ? :gguf_spark25_bpe : :gguf_qwen35_bpe,
+    kind=tk.pre === :spark2_5 ? :gguf_spark25_bpe : tk.pre === :lfm2 ? :gguf_lfm2_bpe : :gguf_qwen35_bpe,
     vocab_size=length(tk.tokens),
     bos_token_id=tk.bos_token_id,
     eos_token_id=tk.eos_token_id,

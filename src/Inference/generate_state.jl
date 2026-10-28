@@ -534,7 +534,7 @@ function load_state(
             length(gdn_rec) == nb || _state_refuse("block count differs from the model")
             for (i, bt) in enumerate(tensors.blocks)
                 rows =
-                    _block_mixer(bt) === :linear_attention ? 0 :
+                    _block_mixer(bt) !== :full_attention ? 0 :
                     (fmt === :f32 ? ctx : cld(ctx, 4) * 4)
                 _rows(x) = x isa AbstractArray ? size(x, 1) : -1
                 _rows(kc[i]) == rows && _rows(vc[i]) == rows ||
