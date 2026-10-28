@@ -821,6 +821,7 @@ function _gguf_array(hdr, info::GgufTensorInfo)
 end
 
 function _is_expert_tensor(name::AbstractString)
+    endswith(name, ".scale") && return false
     return occursin("ffn_gate_exps", name) ||
            occursin("ffn_up_exps", name) ||
            occursin("ffn_down_exps", name) ||

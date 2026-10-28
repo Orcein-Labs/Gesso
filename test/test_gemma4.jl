@@ -131,14 +131,26 @@ Gesso.supports(::_MockNonCPUBackend, ::Symbol) = false
     @test occursin("gemma4", report)
     @test occursin("Failure boundary: none", report)
 
-    # Explicit refusals for unsupported Gemma 4 features
-    bad = copy(kv)
-    bad["gemma4.embedding_length_per_layer_input"] = 256
-    @test_throws ArgumentError _gemma4_inf.spec_from_gguf_kv(bad)
-
-    bad = copy(kv)
-    bad["gemma4.attention.shared_kv_layers"] = 4
-    @test_throws ArgumentError _gemma4_inf.spec_from_gguf_kv(bad)
+    # Explicit typed refusals for unsupported Gemma 4 features & missing metadata
+    for (mut!, expected_reason) in (
+        (d -> (d["gemma4.embedding_length_per_layer_input"] = 256), :unsupported_architecture),
+        (d -> (d["gemma4.attention.shared_kv_layers"] = 4), :unsupported_architecture),
+        (d -> (d["gemma4.expert_count"] = 0), :unsupported_architecture),
+        (d -> delete!(d, "gemma4.expert_count"), :unsupported_architecture),
+        (d -> delete!(d, "gemma4.block_count"), :missing_metadata),
+        (d -> delete!(d, "gemma4.vocab_size"), :missing_metadata),
+    )
+        bad = copy(kv)
+        mut!(bad)
+        err = try
+            _gemma4_inf.spec_from_gguf_kv(bad)
+            nothing
+        catch e
+            e
+        end
+        @test err isa Gesso.GessoError
+        @test err.detail[:reason] === expected_reason
+    end
 end
 
 # -----------------------------------------------------------------------------
@@ -180,11 +192,11 @@ end
         # Direct lowering calls must refuse explicitly with LoweringNotImplemented
         @test_throws Gesso.LoweringNotImplemented _gemma4_inf._apply_embedding_scale!(be, h_dummy, tensors)
         @test_throws Gesso.LoweringNotImplemented _gemma4_inf._apply_logit_softcap!(be, logits_dummy, tensors)
-        @test_throws Gesso.LoweringNotImplemented _gemma4_inf._gemma4_v_norm!(be, zeros(Float32, 1, 2, 8), 1e-6)
+        @test_throws Gesso.LoweringNotImplemented _gemma4_inf._gemma4_v_norm!(be, zeros(Float32, 1, 16), 1e-6; nheads=2, hd=8)
         @test_throws Gesso.LoweringNotImplemented _gemma4_inf._gemma4_k_only_v!(be, zeros(Float32, 1, 16))
         @test_throws Gesso.LoweringNotImplemented _gemma4_inf._gemma4_parallel_moe_ffn!(be, h_dummy, bt, 1e-6)
         @test_throws Gesso.LoweringNotImplemented _gemma4_inf._gemma4_layer_output_scale!(be, zeros(Float32, 1, 32), Float32[1.0])
-        @test_throws Gesso.LoweringNotImplemented _gemma4_inf._gemma4_rope_with_factors!(be, zeros(Float32, 1, 32), 8, 8, 0, 1e4, nothing)
+        @test_throws Gesso.LoweringNotImplemented _gemma4_inf._apply_rope_neox!(be, zeros(Float32, 1, 16), 0:0, 2, 8, 8, [1.0, 0.5, 0.25, 0.125])
     end
 end
 
@@ -247,6 +259,20 @@ end
     finally
         _gemma4_inf._GEMMA4_SOFTCAP_ENABLED[] = true
     end
+
+    # Negative Control C: Optional layer_output_scale (omitted vs 1.0 vs 0.5)
+    by_noscale = Dict(k => v for (k, v) in by if !endswith(k, ".layer_output_scale.weight"))
+    spec_noscale = _gemma4_inf.spec_from_gguf_kv(_gemma4_toy_kv(); tensor_names=Set(keys(by_noscale)))
+    @test !(:layer_output_scale in spec_noscale.features)
+    model_noscale, tensors_noscale = _gemma4_bind(spec_noscale, by_noscale)
+    logits_noscale = Gesso.reference_prefill(model_noscale, tensors_noscale, short_prompt; eps=eps)[:, end]
+    @test logits_noscale == baseline_short
+
+    by_halfscale = copy(by)
+    by_halfscale["blk.0.layer_output_scale.weight"] = Float32[0.5]
+    model_halfscale, tensors_halfscale = _gemma4_bind(spec, by_halfscale)
+    logits_halfscale = Gesso.reference_prefill(model_halfscale, tensors_halfscale, short_prompt; eps=eps)[:, end]
+    @test maximum(abs.(logits_halfscale .- baseline_short)) > 1e-2
 end
 
 # -----------------------------------------------------------------------------

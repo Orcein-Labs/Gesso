@@ -9,6 +9,46 @@ const _G4_TOPK_CLAMP = 6.103515625f-5
 @inline _g4_gelu(x::Float32) =
     0.5f0 * x * (1.0f0 + tanh(_G4_SQRT_2_OVER_PI * x * (1.0f0 + 0.044715f0 * x * x)))
 
+Base.@kwdef mutable struct _Gemma4Scratch
+    xn::Matrix{Float32} = Matrix{Float32}(undef, 0, 0)
+    A::Matrix{Float32} = Matrix{Float32}(undef, 0, 0)
+    attn_out::Matrix{Float32} = Matrix{Float32}(undef, 0, 0)
+    xf::Matrix{Float32} = Matrix{Float32}(undef, 0, 0)
+    mlp::Matrix{Float32} = Matrix{Float32}(undef, 0, 0)
+    rin::Matrix{Float32} = Matrix{Float32}(undef, 0, 0)
+    x2::Matrix{Float32} = Matrix{Float32}(undef, 0, 0)
+    moe::Matrix{Float32} = Matrix{Float32}(undef, 0, 0)
+    gate::Matrix{Float32} = Matrix{Float32}(undef, 0, 0)
+    up::Matrix{Float32} = Matrix{Float32}(undef, 0, 0)
+    gu::Matrix{Float32} = Matrix{Float32}(undef, 0, 0)
+    act_exp::Matrix{Float32} = Matrix{Float32}(undef, 0, 0)
+    y_exp::Matrix{Float32} = Matrix{Float32}(undef, 0, 0)
+    Q::Matrix{Float32} = Matrix{Float32}(undef, 0, 0)
+    K::Matrix{Float32} = Matrix{Float32}(undef, 0, 0)
+    V::Matrix{Float32} = Matrix{Float32}(undef, 0, 0)
+    O::Matrix{Float32} = Matrix{Float32}(undef, 0, 0)
+    scores::Vector{Float32} = Float32[]
+    logits::Vector{Float32} = Float32[]
+    probs::Vector{Float32} = Float32[]
+    order::Vector{Int} = Int[]
+end
+
+const _GEMMA4_SCRATCH = _Gemma4Scratch()
+
+@inline function _g4_mat!(s::_Gemma4Scratch, field::Symbol, m::Int, n::Int)
+    M = getfield(s, field)
+    if size(M) != (m, n)
+        M = Matrix{Float32}(undef, m, n)
+        setfield!(s, field, M)
+    end
+    return M
+end
+
+@inline function _g4_vec!(v::Vector{T}, n::Int) where {T}
+    length(v) < n && resize!(v, n)
+    return view(v, 1:n)
+end
+
 # Row-wise RMSNorm: Y = X / rms(X) * w. w = nothing gives weightless norm.
 function _g4_rmsnorm_rows!(Y::AbstractMatrix{Float32}, X::AbstractMatrix{Float32}, w, eps::Real)
     E = size(X, 2)
@@ -61,39 +101,45 @@ function _g4_expert_matrix(s::GgufQuantSlice, e::Int)
     rb = div(s.bytes_per_expert, s.ne1)
     return QuantMatrix(
         s.data, s.offset0 + (e - 1) * s.bytes_per_expert, s.ggml_type,
-        s.ne0, s.ne1, rb, s.to_float, s.blck_size,
+        s.ne0, s.ne1, rb, s.blck_size,
     )
 end
 
-function _g4_eval_gate_up(w, e::Int, x::AbstractMatrix{Float32})
+function _g4_eval_gate_up!(s::_Gemma4Scratch, w, e::Int, x::AbstractMatrix{Float32})
     stor = w isa ExpertWeight ? w.storage : w
     if stor isa GgufQuantSlice
         qgu = _g4_expert_matrix(stor, e)
-        gu = Matrix{Float32}(undef, 1, qgu.ne1)
+        gu = _g4_mat!(s, :gu, 1, qgu.nrows)
         _quant_matmul!(gu, x, qgu)
-        return gu, qgu.ne1 ÷ 2
+        return gu, qgu.nrows ÷ 2
     else
         W = view(stor, e, :, :)
-        gu = x * transpose(W)
+        gu = _g4_mat!(s, :gu, 1, size(W, 1))
+        LinearAlgebra.mul!(gu, x, transpose(W))
         return gu, size(W, 1) ÷ 2
     end
 end
 
-function _g4_eval_down(w, e::Int, a::AbstractMatrix{Float32})
+function _g4_eval_down!(s::_Gemma4Scratch, w, e::Int, a::AbstractMatrix{Float32})
     stor = w isa ExpertWeight ? w.storage : w
     if stor isa GgufQuantSlice
         qd = _g4_expert_matrix(stor, e)
-        y = Matrix{Float32}(undef, 1, qd.ne1)
+        y = _g4_mat!(s, :y_exp, 1, qd.nrows)
         _quant_matmul!(y, a, qd)
         return y
     else
         W = view(stor, e, :, :)
-        return a * transpose(W)
+        y = _g4_mat!(s, :y_exp, 1, size(W, 1))
+        LinearAlgebra.mul!(y, a, transpose(W))
+        return y
     end
 end
 
-# NeoX RoPE: pair (d, d + n_rot/2) rotates by pos * inv_freq.
-function _apply_rope_neox!(A::AbstractMatrix{Float32}, positions, nheads::Int, hd::Int, n_rot::Int, inv_freq::Vector{Float64})
+# --- Named capability-checked lowering functions ------------------------------
+
+# NeoX RoPE: pair (d, d + n_rot/2) rotates by pos * inv_freq (with optional rope_freqs folded in).
+function _apply_rope_neox!(backend, A::AbstractMatrix{Float32}, positions, nheads::Int, hd::Int, n_rot::Int, inv_freq::Vector{Float64})
+    backend_name(backend) === :cpu || throw(LoweringNotImplemented(:rope_freq_factors, backend_name(backend)))
     half = n_rot ÷ 2
     N = size(A, 1)
     @inbounds for t in 1:N
@@ -114,8 +160,6 @@ function _apply_rope_neox!(A::AbstractMatrix{Float32}, positions, nheads::Int, h
     return A
 end
 
-# --- Named capability-checked lowering functions ------------------------------
-
 function _apply_embedding_scale!(backend, h, tensors)
     backend_name(backend) === :cpu || throw(LoweringNotImplemented(:embedding_scale, backend_name(backend)))
     scale = eltype(h.storage)(tensors.spec.embedding_scale)
@@ -134,34 +178,18 @@ function _apply_logit_softcap!(backend, logits, tensors)
     return logits
 end
 
-function _gemma4_v_norm!(backend, vh, eps; nheads::Int=1, hd::Int=size(vh, ndims(vh)))
+function _gemma4_v_norm!(backend, vh::AbstractMatrix{Float32}, eps; nheads::Int=1, hd::Int=size(vh, 2))
     backend_name(backend) === :cpu || throw(LoweringNotImplemented(:v_norm_weightless, backend_name(backend)))
     eps_f = Float32(eps)
-    if ndims(vh) == 3
-        @inbounds for t in axes(vh, 1), h in axes(vh, 2)
-            d_len = size(vh, 3)
-            ss = 0.0f0
-            for d in 1:d_len
-                ss += vh[t, h, d] * vh[t, h, d]
-            end
-            r = 1.0f0 / sqrt(ss / d_len + eps_f)
-            for d in 1:d_len
-                vh[t, h, d] *= r
-            end
+    @inbounds for t in axes(vh, 1), h in 1:nheads
+        o = (h - 1) * hd
+        ss = 0.0f0
+        for d in 1:hd
+            ss += vh[t, o + d] * vh[t, o + d]
         end
-    elseif ndims(vh) == 2
-        d_len = hd
-        nh = nheads
-        @inbounds for t in axes(vh, 1), h in 1:nh
-            o = (h - 1) * d_len
-            ss = 0.0f0
-            for d in 1:d_len
-                ss += vh[t, o + d] * vh[t, o + d]
-            end
-            r = 1.0f0 / sqrt(ss / d_len + eps_f)
-            for d in 1:d_len
-                vh[t, o + d] *= r
-            end
+        r = 1.0f0 / sqrt(ss / hd + eps_f)
+        for d in 1:hd
+            vh[t, o + d] *= r
         end
     end
     return vh
@@ -172,20 +200,6 @@ function _gemma4_k_only_v!(backend, k)
     return copy(k)
 end
 
-function _gemma4_rope_with_factors!(backend, X::AbstractMatrix{Float32}, d_head::Int, n_rot::Int, pos0::Int, theta_base::Float64, rope_ff)
-    backend_name(backend) === :cpu || throw(LoweringNotImplemented(:rope_freq_factors, backend_name(backend)))
-    half = n_rot ÷ 2
-    inv_freq = [theta_base^(-2.0 * i / n_rot) for i in 0:(half - 1)]
-    if rope_ff !== nothing
-        inv_freq = inv_freq ./ Float64.(vec(rope_ff))
-    end
-    N = size(X, 1)
-    nheads = size(X, 2) ÷ d_head
-    positions = [pos0 + t - 1 for t in 1:N]
-    _apply_rope_neox!(X, positions, nheads, d_head, n_rot, inv_freq)
-    return X
-end
-
 function _gemma4_layer_output_scale!(backend, out, scale_vec)
     backend_name(backend) === :cpu || throw(LoweringNotImplemented(:layer_output_scale, backend_name(backend)))
     s = scale_vec isa AbstractArray ? scale_vec[1] : scale_vec
@@ -193,53 +207,54 @@ function _gemma4_layer_output_scale!(backend, out, scale_vec)
     return out
 end
 
-function _gemma4_parallel_moe_ffn!(backend, attn, bt, eps::Real)
+function _gemma4_parallel_moe_ffn!(backend, attn, bt, eps::Real; scratch::_Gemma4Scratch=_GEMMA4_SCRATCH)
     backend_name(backend) === :cpu || throw(LoweringNotImplemented(:gemma4_parallel_moe, backend_name(backend)))
     X = attn isa Activation ? attn.storage : attn
     N, E = size(X)
     eps_f = Float32(eps)
 
-    # 1. Dense FFN
-    xf = Matrix{Float32}(undef, N, E)
+    # 1. Dense FFN (reuse hoisted N x E and N x n_ff buffers)
+    xf = _g4_mat!(scratch, :xf, N, E)
     _g4_rmsnorm_rows!(xf, X, bt.ffn_rms, eps_f)
     n_ff = bt.wgate.shape[1]
-    gate = Matrix{Float32}(undef, N, n_ff)
-    up = Matrix{Float32}(undef, N, n_ff)
+    gate = _g4_mat!(scratch, :gate, N, n_ff)
+    up = _g4_mat!(scratch, :up, N, n_ff)
     _g4_gemm!(gate, xf, bt.wgate)
     _g4_gemm!(up, xf, bt.wup)
     @inbounds for i in eachindex(gate)
         gate[i] = _g4_gelu(gate[i]) * up[i]
     end
-    mlp = Matrix{Float32}(undef, N, E)
+    mlp = _g4_mat!(scratch, :mlp, N, E)
     _g4_gemm!(mlp, gate, bt.wdown)
     _g4_rmsnorm_rows!(mlp, mlp, bt.ffn_post_rms_1, eps_f)
 
-    # 2. Routed MoE
+    # 2. Routed MoE (reuse hoisted N x E buffers)
     inv_sqrt_e = 1.0f0 / sqrt(Float32(E))
-    rin = Matrix{Float32}(undef, N, E)
+    rin = _g4_mat!(scratch, :rin, N, E)
     _g4_rmsnorm_rows!(rin, X, nothing, eps_f)
     r_scale = bt.wrouter_scale isa FrozenParameter ? bt.wrouter_scale.storage : bt.wrouter_scale
     @inbounds for t in 1:N, i in 1:E
         rin[t, i] = rin[t, i] * inv_sqrt_e * Float32(r_scale[i])
     end
-    x2 = Matrix{Float32}(undef, N, E)
+    x2 = _g4_mat!(scratch, :x2, N, E)
     _g4_rmsnorm_rows!(x2, X, bt.ffn_pre_rms_2, eps_f)
 
     r_stor = bt.wrouter.storage
-    n_expert = r_stor isa QuantMatrix ? r_stor.ne1 : size(r_stor, 1)
+    n_expert = r_stor isa QuantMatrix ? r_stor.nrows : size(r_stor, 1)
     n_used = bt.n_expert_used
     down_scale = bt.wexp_down_scale isa FrozenParameter ? bt.wexp_down_scale.storage : bt.wexp_down_scale
 
-    moe = zeros(Float32, N, E)
-    logits = Vector{Float32}(undef, n_expert)
-    probs = Vector{Float32}(undef, n_expert)
-    order = Vector{Int}(undef, n_expert)
+    moe = _g4_mat!(scratch, :moe, N, E)
+    fill!(moe, 0.0f0)
+    logits = _g4_vec!(scratch.logits, n_expert)
+    probs = _g4_vec!(scratch.probs, n_expert)
+    order = _g4_vec!(scratch.order, n_expert)
 
     for t in 1:N
         if r_stor isa QuantMatrix
             _quant_matmul!(reshape(logits, 1, n_expert), view(rin, t:t, :), r_stor)
         else
-            for e in 1:n_expert
+            @inbounds for e in 1:n_expert
                 s = 0.0f0
                 for i in 1:E
                     s += r_stor[e, i] * rin[t, i]
@@ -249,7 +264,7 @@ function _gemma4_parallel_moe_ffn!(backend, attn, bt, eps::Real)
         end
         mx = maximum(logits)
         den = 0.0f0
-        for e in 1:n_expert
+        @inbounds for e in 1:n_expert
             v = exp(logits[e] - mx)
             probs[e] = v
             den += v
@@ -257,7 +272,7 @@ function _gemma4_parallel_moe_ffn!(backend, attn, bt, eps::Real)
         probs ./= den
         partialsortperm!(order, probs, 1:n_used; rev=true)
         wsum = 0.0f0
-        for k in 1:n_used
+        @inbounds for k in 1:n_used
             wsum += probs[order[k]]
         end
         denom = max(wsum, _G4_TOPK_CLAMP)
@@ -266,12 +281,12 @@ function _gemma4_parallel_moe_ffn!(backend, attn, bt, eps::Real)
         for k in 1:n_used
             e = order[k]
             w = probs[e] / denom
-            gu, n_ff_exp = _g4_eval_gate_up(bt.wexp_gate_up, e, x2_row)
-            a = Matrix{Float32}(undef, 1, n_ff_exp)
+            gu, n_ff_exp = _g4_eval_gate_up!(scratch, bt.wexp_gate_up, e, x2_row)
+            a = _g4_mat!(scratch, :act_exp, 1, n_ff_exp)
             @inbounds for i in 1:n_ff_exp
                 a[1, i] = _g4_gelu(gu[1, i]) * gu[1, n_ff_exp + i]
             end
-            y = _g4_eval_down(bt.wexp_down, e, a)
+            y = _g4_eval_down!(scratch, bt.wexp_down, e, a)
             sc = w * Float32(down_scale[e])
             @inbounds for i in 1:E
                 moe[t, i] += sc * y[1, i]
@@ -280,15 +295,15 @@ function _gemma4_parallel_moe_ffn!(backend, attn, bt, eps::Real)
     end
     _g4_rmsnorm_rows!(moe, moe, bt.ffn_post_rms_2, eps_f)
 
-    # 3. Sum dense and moe, then post_ffw_norm
-    cur = mlp .+ moe
-    _g4_rmsnorm_rows!(cur, cur, bt.ffn_post_rms, eps_f)
-    return cur
+    # 3. Sum dense and moe in place into mlp, then post_ffw_norm
+    mlp .+= moe
+    _g4_rmsnorm_rows!(mlp, mlp, bt.ffn_post_rms, eps_f)
+    return mlp
 end
 
 # --- Block prefill and generate -----------------------------------------------
 
-function _gemma4_prefill_block!(backend, h, bt, tensors, positions, wl, eps, zeros_like)
+function _gemma4_prefill_block!(backend, h, bt, tensors, positions, wl, eps, zeros_like; scratch::_Gemma4Scratch=_GEMMA4_SCRATCH)
     X = h isa Activation ? h.storage : h
     N, E = size(X)
     hd = bt.d_head_layer
@@ -301,15 +316,15 @@ function _gemma4_prefill_block!(backend, h, bt, tensors, positions, wl, eps, zer
     eps_f = Float32(eps)
 
     # Attention pre-norm
-    xn = Matrix{Float32}(undef, N, E)
+    xn = _g4_mat!(scratch, :xn, N, E)
     _g4_rmsnorm_rows!(xn, X, bt.attn_rms, eps_f)
 
     # Q, K, V projections
-    Q = Matrix{Float32}(undef, N, qdim)
+    Q = _g4_mat!(scratch, :Q, N, qdim)
     _g4_gemm!(Q, xn, bt.wq)
-    K = Matrix{Float32}(undef, N, kvdim)
+    K = _g4_mat!(scratch, :K, N, kvdim)
     _g4_gemm!(K, xn, bt.wk)
-    V = Matrix{Float32}(undef, N, kvdim)
+    V = _g4_mat!(scratch, :V, N, kvdim)
     if haskey(bt, :wv) && bt.wv !== nothing
         _g4_gemm!(V, xn, bt.wv)
     else
@@ -322,22 +337,22 @@ function _gemma4_prefill_block!(backend, h, bt, tensors, positions, wl, eps, zer
     _gemma4_v_norm!(backend, V, eps_f; nheads=nkv, hd=hd)
 
     n_rot = bt.rope_layer.rotary_dim == 0 ? hd : bt.rope_layer.rotary_dim
-    _apply_rope_neox!(Q, positions, nh, hd, n_rot, bt.rope_layer.inv_freq)
-    _apply_rope_neox!(K, positions, nkv, hd, n_rot, bt.rope_layer.inv_freq)
+    _apply_rope_neox!(backend, Q, positions, nh, hd, n_rot, bt.rope_layer.inv_freq)
+    _apply_rope_neox!(backend, K, positions, nkv, hd, n_rot, bt.rope_layer.inv_freq)
 
-    # Causal attention with scale 1.0
-    O = Matrix{Float32}(undef, N, qdim)
+    # Causal attention with scale 1.0 (scores buffer hoisted outside loops)
+    O = _g4_mat!(scratch, :O, N, qdim)
     rep = nh ÷ nkv
     pos0 = first(positions)
     for t in 1:N
         p = pos0 + t - 1
         lo = win > 0 ? max(0, p - (win - 1)) : 0
         n_keys = p - lo + 1
+        scores = _g4_vec!(scratch.scores, n_keys)
         for h_idx in 1:nh
             kv_h = (h_idx - 1) ÷ rep
             qo = (h_idx - 1) * hd
             kvo = kv_h * hd
-            scores = Vector{Float32}(undef, n_keys)
             @inbounds for i in 1:n_keys
                 k_row = lo + i - 1 - pos0 + 1
                 s = 0.0f0
@@ -366,20 +381,23 @@ function _gemma4_prefill_block!(backend, h, bt, tensors, positions, wl, eps, zer
     end
 
     # Post attention norm & residual
-    A = Matrix{Float32}(undef, N, E)
+    A = _g4_mat!(scratch, :A, N, E)
     _g4_gemm!(A, O, bt.wo)
     _g4_rmsnorm_rows!(A, A, bt.attn_post_rms, eps_f)
-    attn_out = A .+ X
+    attn_out = _g4_mat!(scratch, :attn_out, N, E)
+    attn_out .= A .+ X
 
-    # Parallel MoE FFN & layer output scale
-    cur = _gemma4_parallel_moe_ffn!(backend, attn_out, bt, eps_f)
-    out = cur .+ attn_out
-    _gemma4_layer_output_scale!(backend, out, bt.layer_output_scale.storage)
-    X .= out
+    # Parallel MoE FFN & optional layer output scale
+    cur = _gemma4_parallel_moe_ffn!(backend, attn_out, bt, eps_f; scratch=scratch)
+    cur .+= attn_out
+    if haskey(bt, :layer_output_scale) && bt.layer_output_scale !== nothing
+        _gemma4_layer_output_scale!(backend, cur, bt.layer_output_scale.storage)
+    end
+    X .= cur
     return h
 end
 
-function _gemma4_generate_block!(backend, hp, kc_layer, vc_layer, bt, tensors, s0, s1, wl, eps, zeros_like)
+function _gemma4_generate_block!(backend, hp, kc_layer, vc_layer, bt, tensors, s0, s1, wl, eps, zeros_like; scratch::_Gemma4Scratch=_GEMMA4_SCRATCH)
     X = hp isa Activation ? hp.storage : hp
     N, E = size(X)
     hd = bt.d_head_layer
@@ -392,15 +410,15 @@ function _gemma4_generate_block!(backend, hp, kc_layer, vc_layer, bt, tensors, s
     eps_f = Float32(eps)
 
     # Attention pre-norm
-    xn = Matrix{Float32}(undef, N, E)
+    xn = _g4_mat!(scratch, :xn, N, E)
     _g4_rmsnorm_rows!(xn, X, bt.attn_rms, eps_f)
 
     # Q, K, V projections
-    Q = Matrix{Float32}(undef, N, qdim)
+    Q = _g4_mat!(scratch, :Q, N, qdim)
     _g4_gemm!(Q, xn, bt.wq)
-    K = Matrix{Float32}(undef, N, kvdim)
+    K = _g4_mat!(scratch, :K, N, kvdim)
     _g4_gemm!(K, xn, bt.wk)
-    V = Matrix{Float32}(undef, N, kvdim)
+    V = _g4_mat!(scratch, :V, N, kvdim)
     if haskey(bt, :wv) && bt.wv !== nothing
         _g4_gemm!(V, xn, bt.wv)
     else
@@ -414,8 +432,8 @@ function _gemma4_generate_block!(backend, hp, kc_layer, vc_layer, bt, tensors, s
 
     n_rot = bt.rope_layer.rotary_dim == 0 ? hd : bt.rope_layer.rotary_dim
     positions = (s0 - 1):(s1 - 1)
-    _apply_rope_neox!(Q, positions, nh, hd, n_rot, bt.rope_layer.inv_freq)
-    _apply_rope_neox!(K, positions, nkv, hd, n_rot, bt.rope_layer.inv_freq)
+    _apply_rope_neox!(backend, Q, positions, nh, hd, n_rot, bt.rope_layer.inv_freq)
+    _apply_rope_neox!(backend, K, positions, nkv, hd, n_rot, bt.rope_layer.inv_freq)
 
     # Write K and V into per-layer KV cache for rows s0:s1
     for t in 1:N
@@ -427,17 +445,17 @@ function _gemma4_generate_block!(backend, hp, kc_layer, vc_layer, bt, tensors, s
         end
     end
 
-    # Attend over keys in 1:s1 with scale 1.0 and sliding-window mask
-    O = Matrix{Float32}(undef, N, qdim)
+    # Attend over keys in 1:s1 with scale 1.0 and sliding-window mask (scores hoisted)
+    O = _g4_mat!(scratch, :O, N, qdim)
     rep = nh ÷ nkv
     for t in 1:N
         pos = s0 + t - 1
         lo = win > 0 ? max(1, pos - win + 1) : 1
         n_keys = pos - lo + 1
+        scores = _g4_vec!(scratch.scores, n_keys)
         for h_idx in 1:nh
             kv_h = (h_idx - 1) ÷ rep + 1
             qo = (h_idx - 1) * hd
-            scores = Vector{Float32}(undef, n_keys)
             @inbounds for i in 1:n_keys
                 k_idx = lo + i - 1
                 s = 0.0f0
@@ -466,16 +484,19 @@ function _gemma4_generate_block!(backend, hp, kc_layer, vc_layer, bt, tensors, s
     end
 
     # Post attention norm & residual
-    A = Matrix{Float32}(undef, N, E)
+    A = _g4_mat!(scratch, :A, N, E)
     _g4_gemm!(A, O, bt.wo)
     _g4_rmsnorm_rows!(A, A, bt.attn_post_rms, eps_f)
-    attn_out = A .+ X
+    attn_out = _g4_mat!(scratch, :attn_out, N, E)
+    attn_out .= A .+ X
 
-    # Parallel MoE FFN & layer output scale
-    cur = _gemma4_parallel_moe_ffn!(backend, attn_out, bt, eps_f)
-    out = cur .+ attn_out
-    _gemma4_layer_output_scale!(backend, out, bt.layer_output_scale.storage)
-    X .= out
+    # Parallel MoE FFN & optional layer output scale
+    cur = _gemma4_parallel_moe_ffn!(backend, attn_out, bt, eps_f; scratch=scratch)
+    cur .+= attn_out
+    if haskey(bt, :layer_output_scale) && bt.layer_output_scale !== nothing
+        _gemma4_layer_output_scale!(backend, cur, bt.layer_output_scale.storage)
+    end
+    X .= cur
     return hp
 end
 
@@ -483,43 +504,54 @@ end
 
 function _spec_from_gguf_gemma4(kv::AbstractDict, tensor_names)
     arch = "gemma4"
-    req(key) = get(kv, "$arch.$key") do
-        error("spec_from_gguf_kv: missing $arch.$key")
-    end
+    miss(k) = gesso_error(
+        ERR_RUNTIME,
+        "spec_from_gguf_kv: GGUF metadata has no $k, which this architecture needs. " *
+        "The file was not written by a converter Gesso supports.";
+        reason=:missing_metadata,
+        key=String(k),
+    )
+    unsup(msg) = gesso_error(
+        ERR_RUNTIME,
+        msg;
+        reason=:unsupported_architecture,
+        architecture=arch,
+    )
+    req(key) = (v = get(kv, "$arch.$key", nothing); v === nothing ? throw(miss("$arch.$key")) : v)
 
     Int(get(kv, "$arch.embedding_length_per_layer_input", 0)) == 0 ||
-        throw(ArgumentError("gemma4: embedding_length_per_layer_input != 0 (PLE) is unsupported"))
+        throw(unsup("gemma4: embedding_length_per_layer_input != 0 (PLE) is unsupported"))
     Int(get(kv, "$arch.attention.shared_kv_layers", 0)) == 0 ||
-        throw(ArgumentError("gemma4: attention.shared_kv_layers != 0 is unsupported"))
+        throw(unsup("gemma4: attention.shared_kv_layers != 0 is unsupported"))
 
     n_layers = Int(req("block_count"))
     h = Int(req("embedding_length"))
     nh = Int(req("attention.head_count"))
     raw_kv = req("attention.head_count_kv")
     kv_heads = raw_kv isa AbstractVector ? Int.(raw_kv) : fill(Int(raw_kv), n_layers)
-    length(kv_heads) == n_layers || error("gemma4: head_count_kv length differs from block_count")
+    length(kv_heads) == n_layers ||
+        throw(unsup("gemma4: head_count_kv length differs from block_count"))
 
     swa_pattern = collect(Bool, req("attention.sliding_window_pattern"))
-    length(swa_pattern) == n_layers || error("gemma4: sliding_window_pattern length differs from block_count")
+    length(swa_pattern) == n_layers ||
+        throw(unsup("gemma4: sliding_window_pattern length differs from block_count"))
 
     hd_global = Int(req("attention.key_length"))
     hd_swa = Int(req("attention.key_length_swa"))
     Int(req("attention.value_length")) == hd_global ||
-        error("gemma4: key_length != value_length (global)")
+        throw(unsup("gemma4: key_length != value_length (global)"))
     Int(req("attention.value_length_swa")) == hd_swa ||
-        error("gemma4: key_length_swa != value_length_swa")
+        throw(unsup("gemma4: key_length_swa != value_length_swa"))
 
     rot_global = Int(req("rope.dimension_count"))
     rot_swa = Int(get(kv, "$arch.rope.dimension_count_swa", hd_swa))
 
     n_expert = Int(get(kv, "$arch.expert_count", 0))
-    moe = if n_expert > 0
-        n_used = Int(req("expert_used_count"))
-        n_ff_exp = Int(req("expert_feed_forward_length"))
-        MoeSpec(; n_experts=n_expert, n_expert_used=n_used, expert_ff=n_ff_exp)
-    else
-        nothing
-    end
+    n_expert > 0 ||
+        throw(unsup("gemma4: dense variants (expert_count == 0) are not yet supported"))
+    n_used = Int(req("expert_used_count"))
+    n_ff_exp = Int(req("expert_feed_forward_length"))
+    moe = MoeSpec(; n_experts=n_expert, n_expert_used=n_used, expert_ff=n_ff_exp)
 
     tokens = get(kv, "tokenizer.ggml.tokens", nothing)
     token_count = if tokens isa Integer
@@ -527,13 +559,13 @@ function _spec_from_gguf_gemma4(kv::AbstractDict, tensor_names)
     elseif tokens isa AbstractVector
         length(tokens)
     elseif tokens === nothing
-        nothing
+        0
     else
-        error("gemma4: tokenizer.ggml.tokens must be an array or token count")
+        throw(miss("tokenizer.ggml.tokens"))
     end
     declared_vocab = get(kv, "$arch.vocab_size", nothing)
     vocab = declared_vocab === nothing ? token_count : Int(declared_vocab)
-    vocab === nothing && (vocab = 262144)
+    vocab > 0 || throw(miss("tokenizer.ggml.tokens"))
 
     features = Set{Symbol}([
         :qk_norm,
@@ -541,9 +573,11 @@ function _spec_from_gguf_gemma4(kv::AbstractDict, tensor_names)
         :logit_softcap,
         :v_norm_weightless,
         :k_only_global_attention,
-        :layer_output_scale,
+        :gemma4_parallel_moe,
     ])
-    moe !== nothing && push!(features, :gemma4_parallel_moe)
+    if tensor_names === nothing || any(n -> endswith(n, ".layer_output_scale.weight"), tensor_names)
+        push!(features, :layer_output_scale)
+    end
     if tensor_names === nothing || "rope_freqs.weight" in tensor_names
         push!(features, :rope_freq_factors)
     end
@@ -605,8 +639,10 @@ function _gguf_gemma4_param_map(spec::ArchitectureSpec)
         ref(ROLE_EXPERT_DOWN_SCALE, "ffn_down_exps.scale", :frozen),
         ref(ROLE_FFN_POST_NORM_2, "post_ffw_norm_2.weight", :frozen),
         ref(ROLE_FFN_POST_NORM, "post_ffw_norm.weight", :frozen),
-        ref(ROLE_LAYER_OUTPUT_SCALE, "layer_output_scale.weight", :frozen),
     ]
+    if :layer_output_scale in spec.features
+        push!(layer_refs, ref(ROLE_LAYER_OUTPUT_SCALE, "layer_output_scale.weight", :frozen))
+    end
     return FamilyParamMap(
         :gemma4,
         "blk.",
