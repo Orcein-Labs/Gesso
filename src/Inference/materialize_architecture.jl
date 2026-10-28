@@ -28,10 +28,12 @@ The SHAPE INVARIANT of a canonical identity under a spec — meaning, not
 spelling. A fused family's row slices satisfy it by construction; an
 unexpected shape is an error naming the identity and both shapes.
 """
-function expected_shape(spec::ArchitectureSpec, role::Symbol)
+function expected_shape(spec::ArchitectureSpec, role::Symbol, layer::Union{Nothing, Int}=nothing)
     h = spec.hidden_size
-    qd = spec.n_heads * spec.head_dim
-    kvd = spec.n_kv_heads * spec.head_dim
+    hd = layer === nothing ? spec.head_dim : layer_head_dim(spec, layer)
+    nkv = layer === nothing ? spec.n_kv_heads : layer_n_kv_heads(spec, layer)
+    qd = spec.n_heads * hd
+    kvd = nkv * hd
     mx = spec.mixer
     key_dim = mx isa LinearMixerSpec ? mx.num_key_heads * mx.key_head_dim : 0
     value_dim = mx isa LinearMixerSpec ? mx.num_value_heads * mx.value_head_dim : 0
@@ -40,8 +42,18 @@ function expected_shape(spec::ArchitectureSpec, role::Symbol)
         (spec.vocab_size, h)
     elseif role === ROLE_FINAL_NORM ||
            role === ROLE_NORM_PRE_ATTN ||
-           role === ROLE_NORM_POST_ATTN
+           role === ROLE_NORM_POST_ATTN ||
+           role === ROLE_ATTN_POST_NORM ||
+           role === ROLE_FFN_POST_NORM_1 ||
+           role === ROLE_FFN_PRE_NORM_2 ||
+           role === ROLE_FFN_POST_NORM_2 ||
+           role === ROLE_FFN_POST_NORM ||
+           role === ROLE_ROUTER_SCALE
         (h,)
+    elseif role === ROLE_LAYER_OUTPUT_SCALE
+        (1,)
+    elseif role === ROLE_ROPE_FREQS
+        ((spec.rope.rotary_dim == 0 ? spec.head_dim : spec.rope.rotary_dim) ÷ 2,)
     elseif role === ROLE_Q || role === ROLE_ATTN_GATE
         (qd, h)
     elseif role === ROLE_ATTN_HEAD_GATE
@@ -51,7 +63,7 @@ function expected_shape(spec::ArchitectureSpec, role::Symbol)
     elseif role === ROLE_K || role === ROLE_V
         (kvd, h)
     elseif role === ROLE_Q_NORM || role === ROLE_K_NORM
-        (spec.head_dim,)
+        (hd,)
     elseif role === ROLE_GATE || role === ROLE_UP
         (spec.intermediate_size, h)
     elseif role === ROLE_DOWN
@@ -82,12 +94,18 @@ function expected_shape(spec::ArchitectureSpec, role::Symbol)
     elseif role === ROLE_ROUTER
         spec.moe === nothing && error("expected_shape: ffn.router requires a MoeSpec")
         (spec.moe.n_experts, h)
+    elseif role === ROLE_EXPERT_GATE_UP
+        spec.moe === nothing && error("expected_shape: expert gate_up requires a MoeSpec")
+        (spec.moe.n_experts, 2 * spec.moe.expert_ff, h)
     elseif role === ROLE_EXPERT_GATE || role === ROLE_EXPERT_UP
         spec.moe === nothing && error("expected_shape: expert FFN requires a MoeSpec")
         (spec.moe.n_experts, spec.moe.expert_ff, h)
     elseif role === ROLE_EXPERT_DOWN
         spec.moe === nothing && error("expected_shape: expert FFN requires a MoeSpec")
         (spec.moe.n_experts, h, spec.moe.expert_ff)
+    elseif role === ROLE_EXPERT_DOWN_SCALE
+        spec.moe === nothing && error("expected_shape: expert down_scale requires a MoeSpec")
+        (spec.moe.n_experts,)
     elseif role === ROLE_SHARED_GATE || role === ROLE_SHARED_UP
         spec.moe === nothing && error("expected_shape: shared expert requires a MoeSpec")
         (spec.moe.shared_ff, h)
@@ -123,13 +141,17 @@ end
 # One layer's RoPE as the interpreter threads it to `rope!`. The inverse
 # frequencies are always explicit, so every block's slot has the same type;
 # `theta^(-2i / rd)` is the expression `rope!` evaluates when given none.
-function _layer_rope_slot(policy::RoPEPolicy, d_head::Integer)
+function _layer_rope_slot(policy::RoPEPolicy, d_head::Integer; rope_freqs=nothing)
     rd = policy.rotary_dim == 0 ? Int(d_head) : Int(policy.rotary_dim)
     inv = rope_inv_freq(policy, d_head)
     inv === nothing && (inv = [policy.theta^(-2i / rd) for i in 0:(rd÷2-1)])
+    inv = Vector{Float64}(inv)
+    if rope_freqs !== nothing
+        inv = inv ./ Float64.(vec(rope_freqs.storage))
+    end
     return (
         theta=Float64(policy.theta),
-        inv_freq=Vector{Float64}(inv),
+        inv_freq=inv,
         rotary_dim=Int(policy.rotary_dim),
     )
 end
@@ -200,6 +222,20 @@ function materialize_architecture(
     end
 
     # --- model level --------------------------------------------------------
+    rope_freqs_param = nothing
+    if pmap.rope_freqs_external !== nothing && haskey(tensors_by_name, pmap.rope_freqs_external)
+        rf_arr = grab(pmap.rope_freqs_external)
+        rf_shape = expected_shape(spec, ROLE_ROPE_FREQS)
+        size(rf_arr) == rf_shape || error(
+            "materialize_architecture: $(pmap.rope_freqs_external) shape $(size(rf_arr)) != $rf_shape",
+        )
+        rope_freqs_param = FrozenParameter(; shape=rf_shape, storage=rf_arr)
+        push!(
+            bindings,
+            SemanticParamId(ROLE_ROPE_FREQS, :frozen) => String(pmap.rope_freqs_external),
+        )
+    end
+
     emb_arr = grab(pmap.embedding_external)
     want = expected_shape(spec, ROLE_TOKEN_EMBEDDING)
     size(emb_arr) == want || error(
@@ -268,7 +304,13 @@ function materialize_architecture(
         if spec.sliding_window !== nothing
             slots[:attn_window] = layer_window(spec, layer)
         end
-        if spec.rope_swa !== nothing
+        if spec.family === :gemma4
+            slots[:gemma4_layer] = true
+            slots[:d_head_layer] = layer_head_dim(spec, layer)
+            slots[:n_kv_heads_layer] = layer_n_kv_heads(spec, layer)
+            rf = (layer_window(spec, layer) == 0) ? rope_freqs_param : nothing
+            slots[:rope_layer] = _layer_rope_slot(layer_rope(spec, layer), layer_head_dim(spec, layer); rope_freqs=rf)
+        elseif spec.rope_swa !== nothing
             slots[:rope_layer] = _layer_rope_slot(layer_rope(spec, layer), spec.head_dim)
         end
         if spec.activation_kind === :geglu
@@ -285,7 +327,7 @@ function materialize_architecture(
                 "materialize_architecture: canonical role $(repr(ref.id.role)) has no engine slot — " *
                 "it is not an identity the interpreter consumes",
             )
-            want = expected_shape(spec, ref.id.role)
+            want = expected_shape(spec, ref.id.role, layer)
             # Some converters write 1-D roles as a 2-D tensor with a unit axis
             # (GSQ Ornith stores ffn_gate_inp_shexp as 1x2048); the values are the same.
             if length(want) == 1 &&

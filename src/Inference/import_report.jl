@@ -241,6 +241,29 @@ function _matrix_specs(fam::Symbol)
             ))
         end
     end
+    # Gemma 4 capabilities
+    push!(specs, ArchitectureSpec(;
+        _matrix_base...,
+        family=fam,
+        activation_kind=:geglu,
+        head_dim_swa=4,
+        layer_kv_heads=[1, 1],
+        embedding_scale=sqrt(8.0),
+        final_logit_softcap=30.0,
+        sliding_window=64,
+        swa_layers=[true, false],
+        features=Set{Symbol}([
+            :qk_norm,
+            :embedding_scale,
+            :logit_softcap,
+            :v_norm_weightless,
+            :k_only_global_attention,
+            :gemma4_parallel_moe,
+            :layer_output_scale,
+            :rope_freq_factors,
+        ]),
+        moe=MoeSpec(; n_experts=4, n_expert_used=2, expert_ff=8),
+    ))
     return specs
 end
 

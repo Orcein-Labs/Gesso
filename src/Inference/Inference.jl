@@ -203,6 +203,9 @@ function reference_prefill(
     # hidden states: (seq, dim)
     h = Activation(; shape=(seq, dim), storage=zeros_like((seq, dim)))
     embedding_lookup!(cpu, h, tensors.embedding, tokens, wl)
+    if haskey(tensors, :spec) && tensors.spec !== nothing && :embedding_scale in tensors.spec.features
+        _apply_embedding_scale!(cpu, h, tensors)
+    end
 
     # scratch — allocated once per forward, written in place
     normed = Activation(; shape=(seq, dim), storage=zeros_like((seq, dim)))
@@ -250,89 +253,93 @@ function reference_prefill(
     for (bi, blk) in enumerate(model.blocks)
         bt = tensors.blocks[bi]
 
-        # --- attention sublayer (pre-norm) -----------------------------------
-        if _block_mixer(bt) === :short_convolution
-            _short_convolution_block!(cpu, h, normed, sub, bt, wl, eps, zeros_like)
-            h.storage .+= sub.storage
-        elseif _block_mixer(bt) === :linear_attention
-            _hybrid_linear_block!(
-                cpu,
-                h,
-                normed,
-                sub,
-                bt,
-                tensors.spec,
-                wl,
-                eps,
-                zeros_like,
-            )
-            h.storage .+= sub.storage
+        if haskey(bt, :gemma4_layer)
+            _gemma4_prefill_block!(cpu, h, bt, tensors, positions, wl, eps, zeros_like)
         else
-            rmsnorm!(cpu, normed, h, bt.attn_rms, wl; eps)
-            matmul!(cpu, q, normed, bt.wq, wl)
-            matmul!(cpu, k, normed, bt.wk, wl)
-            matmul!(cpu, v, normed, bt.wv, wl)
+            # --- attention sublayer (pre-norm) -----------------------------------
+            if _block_mixer(bt) === :short_convolution
+                _short_convolution_block!(cpu, h, normed, sub, bt, wl, eps, zeros_like)
+                h.storage .+= sub.storage
+            elseif _block_mixer(bt) === :linear_attention
+                _hybrid_linear_block!(
+                    cpu,
+                    h,
+                    normed,
+                    sub,
+                    bt,
+                    tensors.spec,
+                    wl,
+                    eps,
+                    zeros_like,
+                )
+                h.storage .+= sub.storage
+            else
+                rmsnorm!(cpu, normed, h, bt.attn_rms, wl; eps)
+                matmul!(cpu, q, normed, bt.wq, wl)
+                matmul!(cpu, k, normed, bt.wk, wl)
+                matmul!(cpu, v, normed, bt.wv, wl)
 
-            # split heads: feature f (0-based) = head * d_head + j (head-major
-            # packing, matching the packed Wk/Wv rows of the weight walk)
-            _split_heads!(qh, q, n_heads, d_head)
-            _split_heads!(kh, k, n_kv_heads, d_head)
-            _split_heads!(vh, v, n_kv_heads, d_head)
-            if haskey(bt, :wq_norm)
-                rmsnorm!(cpu, qh, qh, bt.wq_norm, wl; eps)
-                rmsnorm!(cpu, kh, kh, bt.wk_norm, wl; eps)
+                # split heads: feature f (0-based) = head * d_head + j (head-major
+                # packing, matching the packed Wk/Wv rows of the weight walk)
+                _split_heads!(qh, q, n_heads, d_head)
+                _split_heads!(kh, k, n_kv_heads, d_head)
+                _split_heads!(vh, v, n_kv_heads, d_head)
+                if haskey(bt, :wq_norm)
+                    rmsnorm!(cpu, qh, qh, bt.wq_norm, wl; eps)
+                    rmsnorm!(cpu, kh, kh, bt.wk_norm, wl; eps)
+                end
+
+                br = _block_rope(bt, theta, inv_freq, rotary_dim)
+                rope!(
+                    cpu,
+                    qh,
+                    kh,
+                    positions,
+                    wl;
+                    theta=br.theta,
+                    inv_freq=br.inv_freq,
+                    interleaved=_tensors_rope_interleaved(tensors),
+                    rotary_dim=br.rotary_dim,
+                )
+
+                # repeat KV heads for the contraction only (identity when MHA)
+                kx = _repeat_heads(kh, group)
+                vx = _repeat_heads(vh, group)
+
+                _attention_heads!(
+                    cpu,
+                    attn.storage,
+                    scores,
+                    scores_out,
+                    qh.storage,
+                    kx.storage,
+                    vx.storage,
+                    n_heads,
+                    d_head,
+                    seq,
+                    seq,
+                    wl;
+                    window=_block_window(bt),
+                )
+
+                _merge_heads!(merged, attn, n_heads, d_head)
+                if haskey(bt, :wattn_gate)
+                    matmul!(cpu, gate_attn, normed, bt.wattn_gate, wl)
+                    _sigmoid_mul!(cpu, merged.storage, merged.storage, gate_attn.storage)
+                end
+                if haskey(bt, :wattn_head_gate)
+                    matmul!(cpu, gate_head, normed, bt.wattn_head_gate, wl)
+                    _head_gate_mul!(cpu, merged.storage, gate_head.storage, d_head)
+                end
+                matmul!(cpu, sub, merged, bt.wo, wl)
+                h.storage .+= sub.storage               # residual (interpreter add)
             end
 
-            br = _block_rope(bt, theta, inv_freq, rotary_dim)
-            rope!(
-                cpu,
-                qh,
-                kh,
-                positions,
-                wl;
-                theta=br.theta,
-                inv_freq=br.inv_freq,
-                interleaved=_tensors_rope_interleaved(tensors),
-                rotary_dim=br.rotary_dim,
-            )
-
-            # repeat KV heads for the contraction only (identity when MHA)
-            kx = _repeat_heads(kh, group)
-            vx = _repeat_heads(vh, group)
-
-            _attention_heads!(
-                cpu,
-                attn.storage,
-                scores,
-                scores_out,
-                qh.storage,
-                kx.storage,
-                vx.storage,
-                n_heads,
-                d_head,
-                seq,
-                seq,
-                wl;
-                window=_block_window(bt),
-            )
-
-            _merge_heads!(merged, attn, n_heads, d_head)
-            if haskey(bt, :wattn_gate)
-                matmul!(cpu, gate_attn, normed, bt.wattn_gate, wl)
-                _sigmoid_mul!(cpu, merged.storage, merged.storage, gate_attn.storage)
-            end
-            if haskey(bt, :wattn_head_gate)
-                matmul!(cpu, gate_head, normed, bt.wattn_head_gate, wl)
-                _head_gate_mul!(cpu, merged.storage, gate_head.storage, d_head)
-            end
-            matmul!(cpu, sub, merged, bt.wo, wl)
-            h.storage .+= sub.storage               # residual (interpreter add)
+            # --- ffn sublayer (pre-norm) -----------------------------------------
+            rmsnorm!(cpu, normed2, h, bt.ffn_rms, wl; eps)
+            _ffn_block!(cpu, down, gate, up, act, normed2, bt, wl, zeros_like)
+            h.storage .+= down.storage              # residual
         end
-
-        # --- ffn sublayer (pre-norm) -----------------------------------------
-        rmsnorm!(cpu, normed2, h, bt.ffn_rms, wl; eps)
-        _ffn_block!(cpu, down, gate, up, act, normed2, bt, wl, zeros_like)
-        h.storage .+= down.storage              # residual
     end
 
     # Llama applies a final RMSNorm before the head (§LXXVI); toy2 has none
@@ -356,6 +363,9 @@ function reference_prefill(
         storage=zeros_like((seq, size(lm_head.storage, 1))),
     )
     matmul!(cpu, seqvocab, hhead, lm_head, wl)
+    if haskey(tensors, :spec) && tensors.spec !== nothing && :logit_softcap in tensors.spec.features
+        _apply_logit_softcap!(cpu, seqvocab, tensors)
+    end
     return _logits_transpose(seqvocab.storage)  # (vocab, seq)
 end
 
@@ -1716,13 +1726,17 @@ function reference_generate(
         # (linear-attention blocks keep no cache: a zero-row placeholder)
         kv_rows(bt) = _block_mixer(bt) !== :full_attention ? 0 : st.ctx
         kv_like = fresh ? zeros_like((0, 0, 0)) : nothing
+        layer_nkv(bt) = haskey(bt, :n_kv_heads_layer) ? bt.n_kv_heads_layer : n_kv_heads
+        layer_hd(bt) = haskey(bt, :d_head_layer) ? bt.d_head_layer : d_head
         function kv_cache(bt)
             rows = kv_rows(bt)
-            (kv_fmt === :f32 || rows == 0) && return zeros_like((rows, n_kv_heads, d_head))
+            nkv = layer_nkv(bt)
+            hd = layer_hd(bt)
+            (kv_fmt === :f32 || rows == 0) && return zeros_like((rows, nkv, hd))
             # storage rows padded to a multiple of 4: the CUDA decode reads 4
             # consecutive rows per load and needs every column 4-row aligned.
             # Readers take K rows explicitly, so the tail rows stay unread.
-            x = _kv_alloc(kv_fmt, kv_like, cld(rows, 4) * 4, n_kv_heads, d_head)
+            x = _kv_alloc(kv_fmt, kv_like, cld(rows, 4) * 4, nkv, hd)
             push!(zeros_like.held, x)
             return x
         end
@@ -1734,10 +1748,10 @@ function reference_generate(
                 2 * attn * cld(st.ctx, 4) * 4 * n_kv_heads * _kv_head_bytes(d_head, kv_fmt),
             )
             st.kc = [
-                Activation(; shape=(kv_rows(bt), n_kv_heads, d_head), storage=kv_cache(bt)) for bt in tensors.blocks
+                Activation(; shape=(kv_rows(bt), layer_nkv(bt), layer_hd(bt)), storage=kv_cache(bt)) for bt in tensors.blocks
             ]
             st.vc = [
-                Activation(; shape=(kv_rows(bt), n_kv_heads, d_head), storage=kv_cache(bt)) for bt in tensors.blocks
+                Activation(; shape=(kv_rows(bt), layer_nkv(bt), layer_hd(bt)), storage=kv_cache(bt)) for bt in tensors.blocks
             ]
             # the newest hidden row: the head reads it and each decode step
             # overwrites it in place (Activation fields are immutable, §CIX;
@@ -1884,9 +1898,14 @@ function reference_generate(
             # the pass's hidden rows s0..s1; the last pass hands its final row to h
             hp = Activation(; shape=(n, dim), storage=tmp((n, dim)))
             embedding_lookup!(cpu, hp, tensors.embedding, prompt[s0:s1], wp)
+            if haskey(tensors, :spec) && tensors.spec !== nothing && :embedding_scale in tensors.spec.features
+                _apply_embedding_scale!(cpu, hp, tensors)
+            end
             for (bi, blk) in enumerate(model.blocks)
                 bt = tensors.blocks[bi]
-                if _block_mixer(bt) === :short_convolution
+                if haskey(bt, :gemma4_layer)
+                    _gemma4_generate_block!(cpu, hp, kc[bi], vc[bi], bt, tensors, s0, s1, wp, eps, block_tmp)
+                elseif _block_mixer(bt) === :short_convolution
                     _short_convolution_block!(cpu, hp, normed, sub, bt, wp, eps, block_tmp; state=gdn_conv[bi])
                     hp.storage .+= sub.storage
                 elseif _block_mixer(bt) === :linear_attention
@@ -2015,9 +2034,11 @@ function reference_generate(
                         hp.storage .+= sub.storage
                     end
                 end
-                rmsnorm!(cpu, normed2, hp, bt.ffn_rms, wp; eps)
-                _ffn_block!(cpu, down, gate, up, act, normed2, bt, wp, block_tmp)
-                hp.storage .+= down.storage
+                if !haskey(bt, :gemma4_layer)
+                    rmsnorm!(cpu, normed2, hp, bt.ffn_rms, wp; eps)
+                    _ffn_block!(cpu, down, gate, up, act, normed2, bt, wp, block_tmp)
+                    hp.storage .+= down.storage
+                end
                 _arena_release!(block_tmp)
             end
             # every pass, not only the last: a stride checkpoint copies h at its boundary
@@ -2288,6 +2309,9 @@ function _last_logits(
         (tensors.lm_head,),
         wl,
     )
+    if haskey(tensors, :spec) && tensors.spec !== nothing && :logit_softcap in tensors.spec.features
+        _apply_logit_softcap!(cpu, out, tensors)
+    end
     return vec(out.storage)
 end
 
@@ -2740,13 +2764,18 @@ function _decode_step!(
     )
     hp = bufs.hp
     @decode_stage :embed cpu embedding_lookup!(cpu, hp, tensors.embedding, [tok], wl)
+    if haskey(tensors, :spec) && tensors.spec !== nothing && :embedding_scale in tensors.spec.features
+        _apply_embedding_scale!(cpu, hp, tensors)
+    end
     _T_GDN_NS[] = 0
     _T_ATTN_NS[] = 0
     _T_FFN_NS[] = 0
 
     for (bi, blk) in enumerate(model.blocks)
         bt = tensors.blocks[bi]
-        if _block_mixer(bt) === :short_convolution
+        if haskey(bt, :gemma4_layer)
+            _gemma4_generate_block!(cpu, hp, kc[bi], vc[bi], bt, tensors, pos0, pos0, wl, eps, zeros_like)
+        elseif _block_mixer(bt) === :short_convolution
             _short_convolution_block!(cpu, hp, bufs.normed, bufs.sub, bt, wl, eps, zeros_like;
                 state=gdn_conv === nothing ? nothing : gdn_conv[bi])
         elseif _block_mixer(bt) === :linear_attention
@@ -2793,9 +2822,11 @@ function _decode_step!(
             )
             _T_ATTN_NS[] += time_ns() - t0
         end
-        t1 = time_ns()
-        _decode_ffn_block!(bt, bufs, cpu, wl, zeros_like; eps)
-        _T_FFN_NS[] += time_ns() - t1
+        if !haskey(bt, :gemma4_layer)
+            t1 = time_ns()
+            _decode_ffn_block!(bt, bufs, cpu, wl, zeros_like; eps)
+            _T_FFN_NS[] += time_ns() - t1
+        end
     end
     # write the new hidden state into its row slot — storage CONTENT, not a
     # field reassignment (Activation is immutable, §CIX)
@@ -2851,6 +2882,7 @@ include("arch_adapters.jl")          # Pass A/B: the family boundary
 include("materialize_architecture.jl") # Pass B/E: the generic binder
 include("gguf_import.jl")          # qwen35moe GGUF mmap + lazy experts
 include("lfm2.jl")
+include("gemma4.jl")
 include("gguf_quants.jl")          # IQ2_XS / IQ3_XXS / IQ4_XS fused expert GEMV
 include("expert_residency.jl")     # per-expert device residency, profile, routing trace
 include("quant_q8k.jl")            # Q8_K activation quantization (ggml block_q8_K)
@@ -2869,6 +2901,7 @@ include("tokenizer_protocol.jl")   # Pass C: the tokenizer PROTOCOL
 include("gguf_tokenizer.jl")       # GGUF tokenizer section: qwen35 BPE, streaming decode
 include("chat_template.jl")         # Qwen3.5 XML chat template renderer (no Jinja)
 include("lfm2_chat.jl")
+include("gemma4_chat.jl")
 include("qwen4exp.jl")              # Flash-Next (qwen4exp) CPU forward
 include("import_report.jl")      # Passes I/J: report + generated matrix
 
