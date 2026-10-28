@@ -52,8 +52,6 @@ function _require_method(req::HTTPRequest, method::String)
     return nothing
 end
 
-# State of one chat request. `started` is set once a stream's headers are out:
-# after that an error can no longer become a 500, so the connection is closed.
 # The output parser of the model's chat family.
 const OutputParser = Union{QwenXMLParser, Gemma4Parser}
 
@@ -72,6 +70,8 @@ function _new_parser(model::ChatModel, prompt::AbstractString, tools, stop)::Out
     )
 end
 
+# State of one chat request. `started` is set once a stream's headers are out:
+# after that an error can no longer become a 500, so the connection is closed.
 mutable struct Turn
     model::ChatModel
     parser::OutputParser
