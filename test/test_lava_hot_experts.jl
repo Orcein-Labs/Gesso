@@ -404,6 +404,19 @@ else
                 end
             end
 
+            @test isempty(layer.free)
+
+            # A run longer than one stage chunk goes up in pieces, each to its own slots.
+            pool = _HOT_EXT._lhot_pool(up, 3)
+            es = [4, 1, 6]
+            _HOT_EXT._lhot_upload_run!(pool, up, es; per=2)
+            b = up.bytes_per_expert
+            got = Array(pool.data)
+            for (s, e) in enumerate(es)
+                off = _HOT_INF._quant_expert_off0(up, e)
+                @test got[((s - 1) * b + 1):(s * b)] == up.data[(off + 1):(off + b)]
+            end
+
             # Both picks hit at once, with no fill, and the output holds.
             hits, fills = layer.hits, layer.fills
             xrow = _hot_onehot(7)
@@ -413,6 +426,66 @@ else
             @test maximum(abs, y[1, :] .- ref) <= _hot_tol(ref)
             @test layer.hits == hits + 2
             @test layer.fills == fills
+        end
+    end
+
+    # Ten hits per token go to the device in a batch of eight and a batch of two,
+    # so the second batch accumulates onto the first. Experts sit in a permuted
+    # slot order, so reading slot j for hit j would show; swapping two slot
+    # entries without moving their bytes must then break the match.
+    @testset "batched hits: ten experts per token across two batches" begin
+        nexp, nused = 12, 10
+        rngb = MersenneTwister(20261028)
+        Bg = randn(rngb, Float32, nexp, _HOT_FF, _HOT_H) .* 0.05f0
+        Bu = randn(rngb, Float32, nexp, _HOT_FF, _HOT_H) .* 0.05f0
+        Bd = randn(rngb, Float32, nexp, _HOT_H, _HOT_FF) .* 0.05f0
+        bgate, bup, bdown = _hot_bank(Bg), _hot_bank(Bu), _hot_bank(Bd)
+        BR = randn(rngb, Float32, nexp, _HOT_H)
+        perm = [7, 3, 11, 1, 9, 5, 12, 2, 8, 4, 10, 6]
+        _hot_with(24) do
+            layer = _HOT_EXT._lhot_layer!(bgate, bup, bdown, 0)
+            @test layer.nslots == nexp
+            for e in 1:nexp
+                _HOT_EXT._lhot_fill!(layer, perm[e], e)
+                layer.slot_of[e] = perm[e]
+                layer.expert_in[perm[e]] = e
+            end
+            layer.free = Int[]
+            decode(xrow) = begin
+                x = Lava.LavaArray{Float32}(xrow)
+                y = Lava.LavaArray{Float32}(zeros(Float32, 1, _HOT_H))
+                _HOT_EXT._lhot_moe_decode!(y, x, xrow, BR, bgate, bup, bdown, nused)
+                Array(y)[1, :]
+            end
+            function ref(xrow)
+                l = Float64.(BR) * Float64.(vec(xrow))
+                p = exp.(l .- maximum(l))
+                p ./= sum(p)
+                ord = sortperm(p; rev=true)[1:nused]
+                w = p[ord] ./ sum(p[ord])
+                y = zeros(Float64, _HOT_H)
+                x = Float64.(vec(xrow))
+                for (k, e) in enumerate(ord)
+                    g = Float64.(Bg[e, :, :]) * x
+                    u = Float64.(Bu[e, :, :]) * x
+                    y .+= w[k] .* (Float64.(Bd[e, :, :]) * (_hot_silu(g) .* u))
+                end
+                return y, ord
+            end
+            for t in 1:3
+                xrow = randn(rngb, Float32, 1, _HOT_H) .* 0.1f0
+                y = decode(xrow)
+                r, _ = ref(xrow)
+                @test maximum(abs, y .- r) <= _hot_tol(r)
+            end
+            @test layer.hits == layer.picks == 3 * nused
+            @test layer.fills == 0
+
+            xrow = randn(rngb, Float32, 1, _HOT_H) .* 0.1f0
+            r, ord = ref(xrow)
+            a, b = ord[1], ord[9]
+            layer.slot_of[a], layer.slot_of[b] = layer.slot_of[b], layer.slot_of[a]
+            @test maximum(abs, decode(xrow) .- r) > _hot_tol(r)
         end
     end
 end
