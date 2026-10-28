@@ -263,15 +263,9 @@ end
 # Header and slice reads only; the 35B model is never loaded.
 @testset "Ornith expert slices: Q8_K path vs F32 path" begin
     gguf = get(ENV, "GESSO_ORNITH35_GGUF", "")
-    ggml_dir = get(ENV, "GESSO_GGML_DIR", "")
     if !isfile(gguf)
         _skip(
             "set GESSO_ORNITH35_GGUF to the Ornith 35B GGUF — Q8_K accuracy on real slices skipped",
-        )
-    elseif !isfile(joinpath(ggml_dir, "libggml-base.so"))
-        # _expert_slice reads ggml block traits (sizes) from libggml-base; no ggml compute runs here
-        _skip(
-            "set GESSO_GGML_DIR to a directory with libggml-base.so — Ornith slices skipped",
         )
     else
         hdr = Gesso.gguf_header(gguf)

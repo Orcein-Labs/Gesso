@@ -22,12 +22,6 @@ end
 
 if !CUDA_LOADED || !CUDA.functional()
     _skip("no NVIDIA device — CUDA dense quant GEMV tests skipped (§LXXVII skip law)")
-elseif !isfile(joinpath(get(ENV, "GESSO_GGML_DIR", ""), "libggml-base.so"))
-    # Every set here needs ggml's to_float: the host reference directly, and the
-    # placement fallback through the F32 dequant in to_device.
-    _skip(
-        "set GESSO_GGML_DIR to a directory with libggml-base.so — CUDA dense quant GEMV tests skipped",
-    )
 else
     _dq_ext = Base.get_extension(Gesso, :GessoCUDAExt)
     cuda = Gesso.CUDABackend()
@@ -68,7 +62,7 @@ else
                 data[(base+off+1):(base+off+2)] .= reinterpret(UInt8, [v])
             end
         end
-        return Inf_.QuantMatrix(data, 0, _DQ_TYPE[kind], k, nrows, rb, C_NULL, Int64(bvals))
+        return Inf_.QuantMatrix(data, 0, _DQ_TYPE[kind], k, nrows, rb, Int64(bvals))
     end
 
     # Device path: to_device places the weight; matmul! runs the GEMV.

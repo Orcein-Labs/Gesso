@@ -30,7 +30,6 @@ function _ec_f32_bank(A3::AbstractArray{Float32, 3}, ne0::Int, ne1::Int)
         ne0,
         ne1,
         ne0 * ne1 * 4,
-        C_NULL,
         Int64(1),
     )
 end

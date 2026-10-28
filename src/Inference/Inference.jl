@@ -2858,6 +2858,7 @@ include("quant_cpu_simd.jl")       # native Q8_K x IQ dot products: scalar ref +
 include("quant_cpu_kquants.jl")    # native Q8_K / Q8_0 x K-quant dot products: scalar ref + AVX2
 include("quant_cpu_multi.jl")      # multi-column Q8_K dots for prefill (K activation columns per row pass)
 include("gguf_quant_matrix.jl")    # quantized dense 2-D weights (QuantMatrix) + CPU matmul
+include("gguf_dequant.jl")         # native F32 dequant for every ggml type Gesso reads
 include("moe_host.jl")              # batched Q8_K top-k SwiGLU for host-resident expert slabs
 include("cpu_decode.jl")           # CPU seq = 1 GDN decode: preallocated F32 mixer
 include("sampling.jl")             # opt-in temperature/top-p sampler for reference_generate
