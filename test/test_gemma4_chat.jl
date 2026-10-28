@@ -7,23 +7,23 @@ if !isdefined(_G4_TK, :render_gemma4_chat)
     Base.include(_G4_TK, joinpath(@__DIR__, "..", "src", "Inference", "gemma4_chat.jl"))
 end
 const render_gemma4_chat = _G4_TK.render_gemma4_chat
-const chat_family = _G4_TK.chat_family
+const g4_chat_family = _G4_TK.chat_family
 
 @testset "chat_family detection" begin
     gemma4_tpl = "<bos><|turn>system\n<turn|><|turn>user\n<turn|><|channel>thought\n<channel|>"
-    @test chat_family(gemma4_tpl) === :gemma4
+    @test g4_chat_family(gemma4_tpl) === :gemma4
 
     # Regressions for existing templates
     lfm25_tpl = "CONTINUE_FINAL_MESSAGE_TAG ... render_tool_calls"
-    @test chat_family(lfm25_tpl) === :lfm25
+    @test g4_chat_family(lfm25_tpl) === :lfm25
 
     lfm2_tpl = "<|tool_list_start|> ... <|tool_response_start|>"
-    @test chat_family(lfm2_tpl) === :lfm2
+    @test g4_chat_family(lfm2_tpl) === :lfm2
 
     qwen_tpl = "<function=...><tool_response>...<think>..."
-    @test chat_family(qwen_tpl) === :qwen35_xml
+    @test g4_chat_family(qwen_tpl) === :qwen35_xml
 
-    @test_throws ErrorException chat_family("unknown template")
+    @test_throws ErrorException g4_chat_family("unknown template")
 end
 
 @testset "render_gemma4_chat: basic conversation and generation prompt" begin
