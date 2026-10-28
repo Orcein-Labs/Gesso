@@ -7,7 +7,7 @@
 # innermost axis (the input features).
 #
 # Matmul dispatch (CPU, correctness first):
-#   * native formats in `_qgemv_bytes!` (IQ2_XS, IQ3_XXS, IQ4_XS): the fused
+#   * native formats in `_qgemv_bytes!` (IQ2_XS, IQ3_XXS, IQ4_XS, IQ4_NL, Q5_1): the fused
 #     quant GEMV, no dequant buffer;
 #   * K-quants Q2_K..Q6_K, Q8_0, and IQ2_XXS / IQ2_S / IQ3_S / IQ1_S / IQ1_M:
 #     native integer kernels against Q8_K/Q8_0 activations (`_qgemv_q8k_f32!`,
@@ -57,6 +57,7 @@ _quant_native(t::Int32) =
     t == GGML_TYPE_IQ3_XXS ||
     t == GGML_TYPE_IQ4_XS ||
     t == GGML_TYPE_IQ4_NL ||
+    t == GGML_TYPE_Q5_1 ||
     t == GGML_TYPE_Q2_0 ||
     _quant_q8k_native(t)
 
