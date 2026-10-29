@@ -2905,6 +2905,7 @@ include("quant_cpu_multi.jl")      # multi-column Q8_K dots for prefill (K activ
 include("gguf_quant_matrix.jl")    # quantized dense 2-D weights (QuantMatrix) + CPU matmul
 include("gguf_dequant.jl")         # native F32 dequant for every ggml type Gesso reads
 include("moe_host.jl")              # batched Q8_K top-k SwiGLU for host-resident expert slabs
+include("gemma4_moe_host.jl")       # batched top-k GELU experts for Gemma 4 host slabs
 include("cpu_decode.jl")           # CPU seq = 1 GDN decode: preallocated F32 mixer
 include("sampling.jl")             # opt-in temperature/top-p sampler for reference_generate
 include("verify_window.jl")        # speculative verify window: layer-major rows, fused GDN, commit

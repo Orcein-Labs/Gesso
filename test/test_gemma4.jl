@@ -254,3 +254,77 @@ end
         @test count(!, spec.swa_layers) == 5
     end
 end
+
+# -----------------------------------------------------------------------------
+# Testset 5: batched decode experts over quantized slabs
+# -----------------------------------------------------------------------------
+# Random quant bytes for an expert bank, with a small finite fp16 scale at the
+# head of every block so the weights stay O(0.1).
+function _g4_quant_bank(rng, t::Int32, n_exp::Int, ne0::Int, ne1::Int)
+    blk_vals, blk_bytes = Dict(_gemma4_inf.GGML_TYPE_Q8_0 => (32, 34),
+                               _gemma4_inf.GGML_TYPE_IQ4_NL => (32, 18),
+                               _gemma4_inf.GGML_TYPE_IQ3_XXS => (256, 98))[t]
+    nblk = n_exp * ne1 * div(ne0, blk_vals)
+    bpe = div(nblk, n_exp) * blk_bytes
+    data = rand(rng, UInt8, nblk * blk_bytes)
+    for b in 0:(nblk-1)
+        data[(b*blk_bytes+1):(b*blk_bytes+2)] .= reinterpret(UInt8, [Float16(0.002 + 0.01 * rand(rng))])
+    end
+    return _gemma4_inf.GgufQuantSlice(data, 0, t, n_exp, ne0, ne1, bpe, Int64(blk_vals))
+end
+
+function _g4_quant_experts(bt, rng, gu_t, dn_t, E, ff)
+    n_exp = size(bt.wexp_gate_up.storage, 1)
+    gu = _g4_quant_bank(rng, gu_t, n_exp, E, 2ff)
+    dn = _g4_quant_bank(rng, dn_t, n_exp, ff, E)
+    return merge(bt, (; wexp_gate_up=Gesso.ExpertWeight((n_exp, 2ff, E), gu),
+                        wexp_down=Gesso.ExpertWeight((n_exp, E, ff), dn)))
+end
+
+function _g4_moe_out(bt, X; batched::Bool)
+    prev = _gemma4_inf._GEMMA4_BATCHED_EXPERTS[]
+    _gemma4_inf._GEMMA4_BATCHED_EXPERTS[] = batched
+    try
+        s = _gemma4_inf._Gemma4Scratch()
+        y = copy(_gemma4_inf._gemma4_parallel_moe_ffn!(Gesso.CPUBackend(), X, bt, 1e-6; scratch=s))
+        return y, s.experts
+    finally
+        _gemma4_inf._GEMMA4_BATCHED_EXPERTS[] = prev
+    end
+end
+
+@testset "Gemma4: batched quantized experts match the per-expert path bit for bit" begin
+    # Q8_K input (IQ3_XXS gate_up needs E a multiple of 256) and Q8_0 input
+    # (Q8_0 / IQ4_NL) both run; the 26B ships IQ2_XS/IQ3_XXS gate_up, IQ4_NL down.
+    for (E, gu_t, dn_t) in ((256, _gemma4_inf.GGML_TYPE_IQ3_XXS, _gemma4_inf.GGML_TYPE_IQ4_NL),
+                            (32, _gemma4_inf.GGML_TYPE_Q8_0, _gemma4_inf.GGML_TYPE_Q8_0))
+        kv = _gemma4_toy_kv()
+        kv["gemma4.embedding_length"] = E
+        spec = _gemma4_inf.spec_from_gguf_kv(kv)
+        _, tensors = _gemma4_bind(spec, _gemma4_toy(spec))
+        rng = MersenneTwister(20261028 + E)
+        bt = _g4_quant_experts(tensors.blocks[1], rng, gu_t, dn_t, E, 32)
+        X = randn(MersenneTwister(7), Float32, 3, E)
+
+        y_ref, s_ref = _g4_moe_out(bt, X; batched=false)
+        y_bat, s_bat = _g4_moe_out(bt, X; batched=true)
+        @test s_ref === nothing
+        @test s_bat isa _gemma4_inf._G4MoeScratch
+        @test all(isfinite, y_ref) && any(!iszero, y_ref)
+        @test y_bat == y_ref
+
+        # Negative control: the comparison sees the expert bytes. Changing one
+        # block scale of the down bank in every expert must move the output.
+        dn = bt.wexp_down.storage
+        data = copy(dn.data)
+        for e in 1:dn.n_exp
+            o = (e - 1) * dn.bytes_per_expert
+            data[(o+1):(o+2)] .= reinterpret(UInt8, [Float16(0.5)])
+        end
+        dn2 = _gemma4_inf.GgufQuantSlice(data, 0, dn.ggml_type, dn.n_exp, dn.ne0, dn.ne1,
+                                         dn.bytes_per_expert, dn.blck_size)
+        bt2 = merge(bt, (; wexp_down=Gesso.ExpertWeight(bt.wexp_down.shape, dn2)))
+        y_neg, _ = _g4_moe_out(bt2, X; batched=true)
+        @test y_neg != y_ref
+    end
+end
