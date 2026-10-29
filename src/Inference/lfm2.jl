@@ -154,6 +154,11 @@ function _biased_moe_ffn!(cpu, down, normed, bt)
     order = collect(1:ne)
     xr, g, u, a, out = Vector{T}(undef, dim), Vector{T}(undef, ff), Vector{T}(undef, ff), Vector{T}(undef, ff), Vector{T}(undef, dim)
     bias = haskey(bt, :wrouter_bias) ? bt.wrouter_bias.storage : zeros(T, ne)
+    gate_s, up_s, down_s = bt.wexp_gate.storage, bt.wexp_up.storage, bt.wexp_down.storage
+    if T === Float32 && gate_s isa GgufQuantSlice && up_s isa GgufQuantSlice && down_s isa GgufQuantSlice &&
+       _moe_host_batchable(gate_s, up_s, down_s, dim, ff)
+        return _biased_moe_batched!(down, x, router, bias, bt, logits, probs, order, gate_s, up_s, down_s)
+    end
     fill!(y, zero(T))
     for t in axes(x, 1)
         m = _cpu_router_logits!(logits, x, t, router)
@@ -178,5 +183,48 @@ function _biased_moe_ffn!(cpu, down, normed, bt)
             end
         end
     end
+    return down
+end
+
+# K-quant banks route every token first, then run the shared host MoE: the
+# batched Q8_K kernels for one token, the grouped multi-row tiles for a prompt.
+function _biased_moe_batched!(down, x, router, bias, bt, logits, probs, order, gate_s, up_s, down_s)
+    y = down.storage
+    seq, dim = size(x)
+    n_used = bt.n_expert_used
+    experts = Matrix{Int}(undef, n_used, seq)
+    wts = Matrix{Float32}(undef, n_used, seq)
+    for t in 1:seq
+        m = _cpu_router_logits!(logits, x, t, router)
+        if bt.router_gating === :sigmoid
+            probs .= _cpu_sigmoid.(logits)
+        else
+            probs .= exp.(logits .- m)
+            probs ./= sum(probs)
+        end
+        sort!(order; by=e -> (-Float64(probs[e] + bias[e]), e))
+        denom = max(sum(probs[order[k]] for k in 1:n_used), 6.103515625f-5)
+        @inbounds for k in 1:n_used
+            e = order[k]
+            experts[k, t] = e
+            wts[k, t] = probs[e] / denom
+        end
+    end
+    if seq == 1
+        xf = Vector{Float32}(undef, dim)
+        yrow = Vector{Float32}(undef, dim)
+        @inbounds for i in 1:dim
+            xf[i] = x[1, i]
+        end
+        _moe_host_experts_auto!(yrow, xf, view(experts, :, 1), view(wts, :, 1), n_used, gate_s, up_s, down_s)
+        @inbounds for i in 1:dim
+            y[1, i] = yrow[i]
+        end
+        return down
+    end
+    X = x isa Matrix{Float32} ? x : Matrix{Float32}(x)
+    Y = y isa Matrix{Float32} ? y : Matrix{Float32}(undef, seq, dim)
+    _moe_host_prefill!(Y, X, experts, wts, fill(true, seq), length(logits), gate_s, up_s, down_s)
+    Y === y || copyto!(y, Y)
     return down
 end
