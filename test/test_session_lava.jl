@@ -184,7 +184,8 @@ else
         @test pc1.shared == false                          # now privately owned
         @test pc1.filled == length(ltokens) + length(lm_child_ids)
         @test ps1.shared == true                           # parent still shared
-        @test Array(ps1.storage) == parent_page_before     # parent storage UNMOVED
+        # bitwise: rows past `filled` are uninitialized device memory and may hold NaN
+        @test reinterpret(UInt32, Array(ps1.storage)) == reinterpret(UInt32, parent_page_before)
         # the copied page's prefix rows equal the parent's (values carried over;
         # page storage is (page_size, d_head, n_kv_heads) — slice whole rows)
         @test Array(pc1.storage)[1:length(ltokens), :, :] ==
