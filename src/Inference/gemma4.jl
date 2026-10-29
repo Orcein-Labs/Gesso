@@ -57,11 +57,11 @@ _g4_rmsnorm_rows!(Y::AbstractMatrix{Float32}, X::AbstractMatrix{Float32}, w::Fro
 _g4_head_norm!(A::AbstractMatrix{Float32}, nheads::Int, hd::Int, w::FrozenParameter, eps::Real) =
     _g4_head_norm!(A, nheads, hd, w.storage, eps)
 
-# Runs f(rows) over contiguous chunks of 1:N on the CPU pool. Rows are
-# independent in every caller, so the result does not depend on the chunking.
-# Short inputs (decode) run inline.
-function _g4_rows!(f, N::Int)
-    nc = min(Threads.nthreads(), N ÷ 16)
+# Runs f(rows) over contiguous chunks of 1:N on the CPU pool, each at least
+# `minlen` long. Rows are independent in every caller, so the result does not
+# depend on the chunking. Short inputs (decode) run inline.
+function _g4_rows!(f, N::Int, minlen::Int=16)
+    nc = min(Threads.nthreads(), N ÷ minlen)
     if nc <= 1
         f(1:N)
         return nothing
@@ -70,6 +70,21 @@ function _g4_rows!(f, N::Int)
         f((div((c - 1) * N, nc) + 1):div(c * N, nc))
     end
     return nothing
+end
+
+# Elementwise loops split by linear index; a decode row stays below one chunk.
+const _G4_ELEMS_PER_CHUNK = 1 << 14
+
+_g4_elems!(f, n::Int) = _g4_rows!(f, n, _G4_ELEMS_PER_CHUNK)
+
+# Y = A + B elementwise. Y may alias A or B.
+function _g4_add!(Y::AbstractArray{Float32}, A::AbstractArray{Float32}, B::AbstractArray{Float32})
+    _g4_elems!(length(Y)) do r
+        @inbounds for i in r
+            Y[i] = A[i] + B[i]
+        end
+    end
+    return Y
 end
 
 # Row-wise RMSNorm: Y = X / rms(X) * w. w = nothing gives weightless norm.
@@ -340,15 +355,22 @@ end
 function _gemma4_layer_output_scale!(backend, out, scale_vec)
     backend_name(backend) === :cpu || throw(LoweringNotImplemented(:layer_output_scale, backend_name(backend)))
     s = scale_vec isa AbstractArray ? scale_vec[1] : scale_vec
-    out .*= s
+    _g4_elems!(length(out)) do r
+        @inbounds for i in r
+            out[i] *= s
+        end
+    end
     return out
 end
 
 # Parameter storage is untyped, so the router loops take the unwrapped arrays as
 # arguments and compile for their concrete types.
 function _g4_router_input!(rin::Matrix{Float32}, inv_sqrt_e::Float32, r_scale)
-    @inbounds for i in axes(rin, 2), t in axes(rin, 1)
-        rin[t, i] = rin[t, i] * inv_sqrt_e * Float32(r_scale[i])
+    N = size(rin, 1)
+    _g4_rows!(size(rin, 2), cld(_G4_ELEMS_PER_CHUNK, N)) do cols
+        @inbounds for i in cols, t in 1:N
+            rin[t, i] = rin[t, i] * inv_sqrt_e * Float32(r_scale[i])
+        end
     end
     return rin
 end
@@ -444,8 +466,10 @@ function _gemma4_parallel_moe_ffn!(backend, attn, bt, eps::Real; scratch::_Gemma
     up = _g4_mat!(scratch, :up, N, n_ff)
     _g4_gemm!(gate, xf, bt.wgate)
     _g4_gemm!(up, xf, bt.wup)
-    @inbounds for i in eachindex(gate)
-        gate[i] = _g4_gelu(gate[i]) * up[i]
+    _g4_elems!(length(gate)) do r
+        @inbounds for i in r
+            gate[i] = _g4_gelu(gate[i]) * up[i]
+        end
     end
     mlp = _g4_mat!(scratch, :mlp, N, E)
     _g4_gemm!(mlp, gate, bt.wdown)
@@ -509,7 +533,7 @@ function _gemma4_parallel_moe_ffn!(backend, attn, bt, eps::Real; scratch::_Gemma
     _g4_rmsnorm_rows!(moe, moe, bt.ffn_post_rms_2, eps_f)
 
     # 3. Sum dense and moe in place into mlp, then post_ffw_norm
-    mlp .+= moe
+    _g4_add!(mlp, mlp, moe)
     _g4_rmsnorm_rows!(mlp, mlp, bt.ffn_post_rms, eps_f)
     return mlp
 end
@@ -565,11 +589,11 @@ function _gemma4_prefill_block!(backend, h, bt, tensors, positions, wl, eps, zer
     _g4_gemm!(A, O, bt.wo)
     _g4_rmsnorm_rows!(A, A, bt.attn_post_rms, eps_f)
     attn_out = _g4_mat!(scratch, :attn_out, N, E)
-    attn_out .= A .+ X
+    _g4_add!(attn_out, A, X)
 
     # Parallel MoE FFN & optional layer output scale
     cur = _gemma4_parallel_moe_ffn!(backend, attn_out, bt, eps_f; scratch=scratch)
-    cur .+= attn_out
+    _g4_add!(cur, cur, attn_out)
     if haskey(bt, :layer_output_scale) && bt.layer_output_scale !== nothing
         _gemma4_layer_output_scale!(backend, cur, bt.layer_output_scale.storage)
     end
@@ -617,8 +641,8 @@ function _gemma4_generate_block!(backend, hp, kc_layer, vc_layer, bt, tensors, s
 
     # Write K and V into per-layer KV cache for rows s0:s1. A quantized cache
     # codes whole blocks, so the rows go through _kv_write_rows!.
-    _kv_write_rows!(kc_layer.storage, permutedims(reshape(K, N, hd, nkv), (1, 3, 2)), s0)
-    _kv_write_rows!(vc_layer.storage, permutedims(reshape(V, N, hd, nkv), (1, 3, 2)), s0)
+    _kv_write_rows!(kc_layer.storage, PermutedDimsArray(reshape(K, N, hd, nkv), (1, 3, 2)), s0)
+    _kv_write_rows!(vc_layer.storage, PermutedDimsArray(reshape(V, N, hd, nkv), (1, 3, 2)), s0)
 
     # Attend over keys in 1:s1 with scale 1.0 and the sliding-window mask
     O = _g4_mat!(scratch, :O, N, qdim)
@@ -629,11 +653,11 @@ function _gemma4_generate_block!(backend, hp, kc_layer, vc_layer, bt, tensors, s
     _g4_gemm!(A, O, bt.wo)
     _g4_rmsnorm_rows!(A, A, bt.attn_post_rms, eps_f)
     attn_out = _g4_mat!(scratch, :attn_out, N, E)
-    attn_out .= A .+ X
+    _g4_add!(attn_out, A, X)
 
     # Parallel MoE FFN & optional layer output scale
     cur = _gemma4_parallel_moe_ffn!(backend, attn_out, bt, eps_f; scratch=scratch)
-    cur .+= attn_out
+    _g4_add!(cur, cur, attn_out)
     if haskey(bt, :layer_output_scale) && bt.layer_output_scale !== nothing
         _gemma4_layer_output_scale!(backend, cur, bt.layer_output_scale.storage)
     end
