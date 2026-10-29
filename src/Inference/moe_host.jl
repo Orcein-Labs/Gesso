@@ -310,8 +310,8 @@ mutable struct MoePrefillScratch{X, H}
     xg::Vector{X}               # xq of each entry of `pairs`, so one expert's tokens are contiguous
     hg::Vector{H}               # hq of each entry of `pairs`
     cbuf::Vector{Vector{Float32}}  # per chunk, one row's dots over an expert's pairs
-    cdt::Vector{Vector{Float32}}   # per chunk, the d table of an expert's pairs
-    cqt::Vector{Vector{Int8}}      # per chunk, the packed quants of an expert's pairs
+    edt::Vector{Vector{Float32}}   # per expert, the d table of its pairs
+    eqt::Vector{Vector{Int8}}      # per expert, the packed quants of its pairs
 end
 
 MoePrefillScratch{X, H}() where {X, H} = MoePrefillScratch{X, H}(
@@ -429,19 +429,22 @@ function _moe_prefill_group!(
     return s
 end
 
-# Chunk c's row buffer and d table. Two chunks can split one expert's rows, so
-# buffers shared by expert would race.
+# Chunk c's row buffer. Two chunks can split one expert's rows, so a buffer
+# shared by expert would race.
 function _moe_prefill_bufs!(s::MoePrefillScratch, nc::Int, n::Int)
     while length(s.cbuf) < nc
         push!(s.cbuf, Float32[])
-        push!(s.cdt, Float32[])
-        push!(s.cqt, Int8[])
     end
     for c in 1:nc
         length(s.cbuf[c]) < n && resize!(s.cbuf[c], n)
     end
     return s
 end
+
+# Gate/up and down chunks per thread. An expert's rows cost its pair count,
+# which varies several-fold, so one chunk per thread left threads idle at the
+# end of each pass; four and eight measured the same.
+const _MOE_CHUNKS_PER_THREAD = 4
 
 # Raw dots of the weight row at `woff` with xv[1:n], tiled, into buf[1:n].
 @inline function _moe_prefill_row_multi!(
@@ -468,9 +471,42 @@ end
 # the expert pieces do not build.
 _moe_prefill_dt(t::Int32, simd::Bool) = simd && _multi_pack_type(t)
 
-# Chunk c's packed table for an expert piece: the d table plus the quants.
-_moe_prefill_tables!(s::MoePrefillScratch, c::Int, xv) =
-    _multi_packed!(s.cdt[c], s.cqt[c], xv)
+# Expert e's packed table, as `_MoePrefillPack` last built it.
+_moe_prefill_table(s::MoePrefillScratch, e::Int) = _MultiPacked(s.edt[e], s.eqt[e])
+
+# Packs each active expert's columns of `cols` (xg or hg) once per pass, so the
+# chunks that split an expert's rows share one table. Chunk c packs the experts
+# whose first pair falls in its share of the pairs.
+struct _MoePrefillPack{S <: MoePrefillScratch, V <: AbstractVector}
+    s::S
+    cols::V
+    nc::Int
+end
+
+function (g::_MoePrefillPack)(c::Int)
+    s = g.s
+    np = s.cost[end]
+    w0 = div((c - 1) * np, g.nc)
+    w1 = div(c * np, g.nc)
+    @inbounds for a in eachindex(s.active)
+        w0 <= s.cost[a] < w1 || continue
+        e = s.active[a]
+        p0 = s.start[e]
+        _multi_packed!(s.edt[e], s.eqt[e], view(g.cols, p0:(p0+s.cnt[e]-1)))
+    end
+    return nothing
+end
+
+function _moe_prefill_pack!(s::MoePrefillScratch, cols::AbstractVector, n_exp::Int)
+    while length(s.edt) < n_exp
+        push!(s.edt, Float32[])
+        push!(s.eqt, Int8[])
+    end
+    np = _moe_prefill_cost!(s, 1)
+    nc = clamp(_MOE_CHUNKS_PER_THREAD * Threads.nthreads(), 1, length(s.active))
+    _run_row_chunks!(_MoePrefillPack(s, cols, nc), nc, np * length(cols[1].qs))
+    return s
+end
 
 function _moe_prefill_cost!(s::MoePrefillScratch, rows::Int)
     na = length(s.active)
@@ -539,21 +575,19 @@ struct _MoePrefillGateUp{S <: MoePrefillScratch}
     nc::Int
     simd::Bool
     multi::Bool
+    packed::Bool
 end
 
 function (g::_MoePrefillGateUp)(c::Int)
     s = g.s
     ff = s.ff
     buf = g.multi ? s.cbuf[c] : Float32[]
-    usedt =
-        g.multi && _moe_prefill_dt(g.gate.ggml_type, g.simd) &&
-        _moe_prefill_dt(g.up.ggml_type, g.simd)
     _moe_prefill_pieces(s, 2ff, g.nc, c) do e, r0, r1
         p0 = s.start[e]
         n = s.cnt[e]
         p1 = p0 + n - 1
         xv = view(s.xg, p0:p1)
-        dt = usedt ? _moe_prefill_tables!(s, c, xv) : nothing
+        dt = g.packed ? _moe_prefill_table(s, e) : nothing
         for (sl, col, lo, hi, row0) in (
             (g.gate, 1, r0, min(r1, ff), 0),
             (g.up, 2, max(r0, ff + 1) - ff, r1 - ff, g.up_row0),
@@ -610,6 +644,7 @@ struct _MoePrefillDown{S <: MoePrefillScratch}
     nc::Int
     simd::Bool
     multi::Bool
+    packed::Bool
 end
 
 function (g::_MoePrefillDown)(c::Int)
@@ -618,13 +653,12 @@ function (g::_MoePrefillDown)(c::Int)
     t = sl.ggml_type
     rb = _qrow_bytes(t, sl.ne0)
     buf = g.multi ? s.cbuf[c] : Float32[]
-    usedt = g.multi && _moe_prefill_dt(t, g.simd)
     _moe_prefill_pieces(s, s.h, g.nc, c) do e, r0, r1
         p0 = s.start[e]
         n = s.cnt[e]
         p1 = p0 + n - 1
         hv = view(s.hg, p0:p1)
-        dt = usedt ? _moe_prefill_tables!(s, c, hv) : nothing
+        dt = g.packed ? _moe_prefill_table(s, e) : nothing
         off0 = _quant_expert_off0(sl, e)
         @inbounds for jj in r0:r1
             woff = off0 + (jj - 1) * rb
@@ -735,15 +769,23 @@ function _moe_prefill_run!(
     np = s.start[n_exp+1] - 1
     if np > 0
         multi = _prefill_multi_enabled()
-        multi && _moe_prefill_bufs!(s, nt, maximum(s.cnt))
+        cnc = _MOE_CHUNKS_PER_THREAD * nt
+        multi && _moe_prefill_bufs!(s, cnc, maximum(s.cnt))
+        packed =
+            multi && _moe_prefill_dt(gate_s.ggml_type, simd) &&
+            _moe_prefill_dt(up_s.ggml_type, simd)
+        packed && _moe_prefill_pack!(s, s.xg, n_exp)
         tot = _moe_prefill_cost!(s, 2ff)
-        nc = clamp(nt, 1, tot)
-        _run_row_chunks!(_MoePrefillGateUp(s, gate_s, up_s, up_row0, nc, simd, multi), nc, tot * h)
+        nc = clamp(cnc, 1, tot)
+        _run_row_chunks!(
+            _MoePrefillGateUp(s, gate_s, up_s, up_row0, nc, simd, multi, packed), nc, tot * h)
         snc = clamp(nt, 1, np)
         _run_row_chunks!(_MoePrefillGlu(s, act, np, snc), snc, np * ff)
+        packed = multi && _moe_prefill_dt(down_s.ggml_type, simd)
+        packed && _moe_prefill_pack!(s, s.hg, n_exp)
         tot = _moe_prefill_cost!(s, h)
-        nc = clamp(nt, 1, tot)
-        _run_row_chunks!(_MoePrefillDown(s, down_s, nc, simd, multi), nc, tot * ff)
+        nc = clamp(cnc, 1, tot)
+        _run_row_chunks!(_MoePrefillDown(s, down_s, nc, simd, multi, packed), nc, tot * ff)
     end
     _run_row_chunks!(
         _MoePrefillCombine(s, Y, experts, weights, cpu, live, seq, n_used, tnc),
