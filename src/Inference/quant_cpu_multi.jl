@@ -211,7 +211,7 @@ Base.@propagate_inbounds _multi_tile_d(
     i0::Int,
     ib::Int,
     dw::Float32,
-) where {K} = ntuple(c -> dw * dt[i0+_MULTI_TILE*ib+c], Val(K))
+) where {K} = ntuple(c -> @inbounds(dw * dt[i0+_MULTI_TILE*ib+c]), Val(K))
 
 # Checks that every column of the tile has the row's block count; a mismatch
 # would read past the end of a shorter activation.
@@ -1154,12 +1154,14 @@ end
     GC.@preserve w xqs begin
         xv = ntuple(c -> xqs[t0+c-1], Val(K))
         sums = ntuple(_ -> VecElement(0.0f0), Val(8K))
+        px = ntuple(c -> pointer(xv[c].xp), Val(K))
+        pmo = ntuple(c -> Ptr{Int8}(pointer(xv[c].mo)), Val(K))
         @inbounds for ib in 0:(nb-1)
             b = woff + ib * 210
             dw = _kq_f16(w, b + 208)
             d = _multi_q6k_scales(_multi_tile_d(dt, xv, i0, ib, dw))
-            pq = ntuple(c -> pointer(xv[c].xp, ib * QK_K + 1), Val(K))
-            pm = ntuple(c -> Ptr{Int8}(pointer(xv[c].mo, ib * (QK_K >> 1) + 1)), Val(K))
+            pq = ntuple(c -> px[c] + ib * QK_K, Val(K))
+            pm = ntuple(c -> pmo[c] + ib * QK_K, Val(K))
             sums = _q6k_prep_multi_step(pointer(w, b + 1), pq, pm, sums, d)
         end
         for c in 1:K
@@ -1284,6 +1286,34 @@ end
 @inline _q45k_src(x::Q8KVec) = x
 @inline _q45k_src(x::Q6KPrepVec) = x.q
 
+# The 16 Q3_K scales from their two words as Int16 lanes, minus 32.
+@inline _kq_q3_scale_vec(lo::UInt64, hi::UInt64) = Base.llvmcall(
+    """
+    %a = insertelement <2 x i64> poison, i64 %0, i32 0
+    %b = insertelement <2 x i64> %a, i64 %1, i32 1
+    %v = bitcast <2 x i64> %b to <16 x i8>
+    %z = zext <16 x i8> %v to <16 x i16>
+    %s = sub <16 x i16> %z, splat (i16 32)
+    ret <16 x i16> %s
+    """,
+    NTuple{16, VecElement{Int16}},
+    Tuple{UInt64, UInt64},
+    lo,
+    hi,
+)
+
+# The eight bytes of u as Int16 lanes, for the step's scale vector.
+@inline _kq_i16x8(u::UInt64) = Base.llvmcall(
+    """
+    %v = bitcast i64 %0 to <8 x i8>
+    %z = zext <8 x i8> %v to <8 x i16>
+    ret <8 x i16> %z
+    """,
+    NTuple{8, VecElement{Int16}},
+    Tuple{UInt64},
+    u,
+)
+
 @noinline function _dot_q45k_multi!(
     out::AbstractVector{Float32},
     w::AbstractVector{UInt8},
@@ -1305,19 +1335,20 @@ end
         xv = ntuple(c -> xqs[t0+c-1], Val(K))
         sums = ntuple(_ -> VecElement(0.0f0), Val(8K))
         sumf = ntuple(_ -> 0.0f0, Val(K))
+        # The column pointers, taken once: per block, the arrays' data pointers
+        # were reloaded from memory, sixteen loads a block at K = 8.
+        px = ntuple(c -> _q45k_xptr(xv[c], 0), Val(K))
+        pbs = ntuple(c -> pointer(_q45k_src(xv[c]).bsums), Val(K))
         @inbounds for ib in 0:(nb-1)
             b = woff + ib * bs
             d = _multi_q6k_scales(_multi_tile_d(dt, xv, i0, ib, _kq_f16(w, b)))
             dmin = _multi_tile_d(dt, xv, i0, ib, _kq_f16(w, b + 2))
-            sc, mn = _kq_scale_min_k4(w, b + 4)
-            pq = ntuple(c -> _q45k_xptr(xv[c], ib), Val(K))
-            scv = ntuple(i -> VecElement(Int16(sc[i])), Val(8))
-            sums = _q45k_multi_step(pointer(w, b + 1), pq, scv, sums, d, q5, prep)
+            sc, mn = _kq_scale_min_k4_words(w, b + 4)
+            pq = ntuple(c -> px[c] + ib * QK_K, Val(K))
+            sums = _q45k_multi_step(pointer(w, b + 1), pq, _kq_i16x8(sc), sums, d, q5, prep)
+            md = _kq_mins_multi(ntuple(c -> pbs[c] + 32 * ib, Val(K)), mn)
             sf = sumf
-            sumf = ntuple(
-                c -> sf[c] - dmin[c] * Float32(_kq_mins_dot(_q45k_src(xv[c]), ib, mn)),
-                Val(K),
-            )
+            sumf = ntuple(c -> sf[c] - dmin[c] * Float32(md[c].value), Val(K))
         end
         for c in 1:K
             s = sumf[c]
@@ -1438,13 +1469,13 @@ end
     GC.@preserve w xqs begin
         xv = ntuple(c -> xqs[t0+c-1], Val(K))
         sums = ntuple(_ -> VecElement(0.0f0), Val(8K))
+        px = ntuple(c -> _q45k_xptr(xv[c], 0), Val(K))
         @inbounds for ib in 0:(nb-1)
             b = woff + ib * 110
             d = _multi_q6k_scales(_multi_tile_d(dt, xv, i0, ib, _kq_f16(w, b + 108)))
-            sc = _kq_scales_q3(w, b + 96)
-            scv = ntuple(i -> VecElement(Int16(sc[i])), Val(16))
-            pq = ntuple(c -> _q45k_xptr(xv[c], ib), Val(K))
-            sums = _q3k_multi_step(pointer(w, b + 1), pq, scv, sums, d, prep)
+            lo, hi = _kq_scales_q3_words(w, b + 96)
+            pq = ntuple(c -> px[c] + ib * QK_K, Val(K))
+            sums = _q3k_multi_step(pointer(w, b + 1), pq, _kq_q3_scale_vec(lo, hi), sums, d, prep)
         end
         for c in 1:K
             sumf = 0.0f0
@@ -1520,6 +1551,48 @@ function _kq_ir_tile_sums(io::IOBuffer, K::Int)
         ">\n",
     )
     return nothing
+end
+
+# _kq_mins_dot for K columns at once: each column's 16 bsums of the block
+# against the mins (packed one per byte in m, each paired with two bsums) in
+# one vpmaddwd, then summed by the tile phadd tree. Integer throughout, so each
+# lane is exactly the scalar dot.
+function _kq_ir_mins_multi(K::Int)
+    io = IOBuffer()
+    bargs = join(("ptr %b$c" for c in 0:(K-1)), ", ")
+    print(
+        io,
+        "declare <8 x i32> @llvm.x86.avx2.pmadd.wd(<16 x i16>, <16 x i16>)\n",
+        "declare <8 x i32> @llvm.x86.avx2.phadd.d(<8 x i32>, <8 x i32>)\n",
+        "define <$K x i32> @entry($bargs, i64 %m) #0 {\n",
+        "  %mb = bitcast i64 %m to <8 x i8>\n",
+        "  %mz = zext <8 x i8> %mb to <8 x i16>\n",
+        "  %m2 = shufflevector <8 x i16> %mz, <8 x i16> poison, <16 x i32> <",
+        join(("i32 $(j >> 1)" for j in 0:15), ", "),
+        ">\n",
+    )
+    for c in 0:(K-1)
+        print(
+            io,
+            "  %v$c = load <16 x i16>, ptr %b$c, align 2\n",
+            "  %p$c = call <8 x i32> @llvm.x86.avx2.pmadd.wd(<16 x i16> %v$c, <16 x i16> %m2)\n",
+        )
+    end
+    _kq_ir_tile_sums(io, K)
+    print(io, "  ret <$K x i32> %tk\n}\n", _KQ_ATTRS)
+    return String(take!(io))
+end
+
+for K in 1:8
+    bs = [:(pb[$c]) for c in 1:K]
+    argt = Tuple{ntuple(_ -> Ptr{Int16}, K)..., UInt64}
+    @eval @inline _kq_mins_multi(pb::NTuple{$K, Ptr{Int16}}, m::UInt64) = Base.llvmcall(
+        ($(_kq_ir_mins_multi(K)), "entry"),
+        NTuple{$K, VecElement{Int32}},
+        $argt,
+        $(bs...),
+        m,
+    )
 end
 
 # With packed, the K columns' quants come from one tile pointer, column c at
