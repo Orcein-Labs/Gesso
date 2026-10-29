@@ -311,7 +311,7 @@ mutable struct MoePrefillScratch{X, H}
     hg::Vector{H}               # hq of each entry of `pairs`
     cbuf::Vector{Vector{Float32}}  # per chunk, one row's dots over an expert's pairs
     cdt::Vector{Vector{Float32}}   # per chunk, the d table of an expert's pairs
-    cqt::Vector{Vector{Int8}}      # per chunk, the packed IQ2_XS quants of an expert's pairs
+    cqt::Vector{Vector{Int8}}      # per chunk, the packed quants of an expert's pairs
 end
 
 MoePrefillScratch{X, H}() where {X, H} = MoePrefillScratch{X, H}(
@@ -463,15 +463,14 @@ end
     return buf
 end
 
-# The types whose tiles take a d table, built once per expert piece: the f16-d
-# block types and IQ2_XS, whose tiles load a table row as one vector. The K-quant
-# tables want prepped columns, which the expert pieces do not build.
-_moe_prefill_dt(t::Int32, simd::Bool) = simd && (_q80_act_type(t) || t == GGML_TYPE_IQ2_XS)
+# The types whose tiles take a packed table, built once per expert piece: the
+# f16-d block types and IQ2_XS. The K-quant tables want prepped columns, which
+# the expert pieces do not build.
+_moe_prefill_dt(t::Int32, simd::Bool) = simd && _multi_pack_type(t)
 
-# Chunk c's tables for an expert piece: with pack (an IQ2_XS slice reads them),
-# the d table plus the packed quants.
-_moe_prefill_tables!(s::MoePrefillScratch, c::Int, xv, pack::Bool) =
-    pack ? _multi_packed!(s.cdt[c], s.cqt[c], xv) : _multi_d_table!(s.cdt[c], xv)
+# Chunk c's packed table for an expert piece: the d table plus the quants.
+_moe_prefill_tables!(s::MoePrefillScratch, c::Int, xv) =
+    _multi_packed!(s.cdt[c], s.cqt[c], xv)
 
 function _moe_prefill_cost!(s::MoePrefillScratch, rows::Int)
     na = length(s.active)
@@ -549,14 +548,12 @@ function (g::_MoePrefillGateUp)(c::Int)
     usedt =
         g.multi && _moe_prefill_dt(g.gate.ggml_type, g.simd) &&
         _moe_prefill_dt(g.up.ggml_type, g.simd)
-    pack =
-        usedt && (g.gate.ggml_type == GGML_TYPE_IQ2_XS || g.up.ggml_type == GGML_TYPE_IQ2_XS)
     _moe_prefill_pieces(s, 2ff, g.nc, c) do e, r0, r1
         p0 = s.start[e]
         n = s.cnt[e]
         p1 = p0 + n - 1
         xv = view(s.xg, p0:p1)
-        dt = usedt ? _moe_prefill_tables!(s, c, xv, pack) : nothing
+        dt = usedt ? _moe_prefill_tables!(s, c, xv) : nothing
         for (sl, col, lo, hi, row0) in (
             (g.gate, 1, r0, min(r1, ff), 0),
             (g.up, 2, max(r0, ff + 1) - ff, r1 - ff, g.up_row0),
@@ -622,13 +619,12 @@ function (g::_MoePrefillDown)(c::Int)
     rb = _qrow_bytes(t, sl.ne0)
     buf = g.multi ? s.cbuf[c] : Float32[]
     usedt = g.multi && _moe_prefill_dt(t, g.simd)
-    pack = usedt && t == GGML_TYPE_IQ2_XS
     _moe_prefill_pieces(s, s.h, g.nc, c) do e, r0, r1
         p0 = s.start[e]
         n = s.cnt[e]
         p1 = p0 + n - 1
         hv = view(s.hg, p0:p1)
-        dt = usedt ? _moe_prefill_tables!(s, c, hv, pack) : nothing
+        dt = usedt ? _moe_prefill_tables!(s, c, hv) : nothing
         off0 = _quant_expert_off0(sl, e)
         @inbounds for jj in r0:r1
             woff = off0 + (jj - 1) * rb

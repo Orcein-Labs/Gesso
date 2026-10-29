@@ -154,10 +154,10 @@ end
 _multi_d_base(::Nothing, t0::Int, K::Int, nb::Int) = 0
 
 # A d table plus the tiles' quants interleaved: 32-byte chunk j of tile i's
-# column c at byte 32 * (T * (nch * i + j) + c), nch = QK_K / 32 * nb, zero past
-# the last column. An IQ2_XS sub-block then reads all eight columns from one
-# base pointer; with eight column pointers the kernel spent its issue slots
-# rotating and reloading them.
+# column c at byte 32 * (T * (nch * i + j) + c), nch = a column's length / 32,
+# zero past the last column. An IQ2_XS sub-block or a 32-value block then reads
+# all eight columns from one base pointer; with eight column pointers the
+# kernels spent their issue slots rotating and reloading them.
 struct _MultiPacked
     d::Vector{Float32}
     q::Vector{Int8}
@@ -169,7 +169,7 @@ function _multi_packed!(dt::Vector{Float32}, qt::Vector{Int8}, xqs::AbstractVect
     T = _MULTI_TILE
     _multi_d_table!(dt, xqs)
     nb = length(xqs[1].d)
-    nch = (QK_K ÷ 32) * nb
+    nch = length(xqs[1].qs) ÷ 32
     fill!(resize!(qt, 32 * T * nch * cld(length(xqs), T)), Int8(0))
     @inbounds for t in eachindex(xqs)
         i, c = divrem(t - 1, T)
@@ -181,13 +181,17 @@ function _multi_packed!(dt::Vector{Float32}, qt::Vector{Int8}, xqs::AbstractVect
     return _MultiPacked(dt, qt)
 end
 
-# Byte offset of the tile at t0 in the packed quants (the d offset times QK_K).
-function _multi_q_base(p::_MultiPacked, t0::Int, K::Int, nb::Int)
+# Byte offset of the tile at t0 in the packed quants: the d offset times qk, the
+# values per d (QK_K or 32), after checking that the table was packed from
+# blocks of qk.
+function _multi_q_base(p::_MultiPacked, t0::Int, K::Int, nb::Int, qk::Int)
     i0 = _multi_d_base(p.d, t0, K, nb)
-    length(p.q) >= QK_K * (i0 + _MULTI_TILE * nb) ||
-        error("q8k multi: tile $t0:$(t0 + K - 1) is not in the packed quants")
-    return QK_K * i0
+    length(p.q) == qk * length(p.d) ||
+        error("q8k multi: the packed quants are not in blocks of $qk")
+    return qk * i0
 end
+
+_multi_d_base(p::_MultiPacked, t0::Int, K::Int, nb::Int) = _multi_d_base(p.d, t0, K, nb)
 
 # The plain d table, for kernels that do not read the packed quants.
 _multi_d_only(p::_MultiPacked) = p.d
@@ -1034,6 +1038,9 @@ _q6k_prep_type(t::Int32) =
 # The types whose tiles read their columns' d values from a d table.
 _multi_dt_type(t::Int32) = _q6k_prep_type(t) || _q80_act_type(t) || t == GGML_TYPE_IQ2_XS
 
+# The types whose tiles read their columns' quants from a _MultiPacked table.
+_multi_pack_type(t::Int32) = _q80_act_type(t) || t == GGML_TYPE_IQ2_XS
+
 # The fallback for a prepped column is the plain Q8_K dot.
 @inline _dot_q8k(
     ggml_type::Int32,
@@ -1515,11 +1522,13 @@ function _kq_ir_tile_sums(io::IOBuffer, K::Int)
     return nothing
 end
 
-function _kq_ir_q80_multi(K::Int, weights::Symbol=:q80, dp::Bool=false)
+# With packed, the K columns' quants come from one tile pointer, column c at
+# byte 32c (the _MultiPacked layout); dp must be set with it.
+function _kq_ir_q80_multi(K::Int, weights::Symbol=:q80, dp::Bool=false, packed::Bool=false)
     io = IOBuffer()
     q4 = weights === :q40
     nl = weights === :iq4nl
-    qargs = join(("ptr %q$c" for c in 0:(K-1)), ", ")
+    qargs = packed ? "ptr %qb" : join(("ptr %q$c" for c in 0:(K-1)), ", ")
     dargs = dp ? "ptr %dp" : q4 ? "<$K x float> %dw, <$K x float> %d" : "<$K x float> %d"
     print(
         io,
@@ -1560,7 +1569,7 @@ function _kq_ir_q80_multi(K::Int, weights::Symbol=:q80, dp::Bool=false)
         )
     end
     for c in 0:(K-1)
-        _kq_ld(io, "x$c", "q$c", 0)
+        _kq_ld(io, "x$c", packed ? "qb" : "q$c", packed ? 32c : 0)
         if nl
             print(
                 io,
@@ -1604,11 +1613,21 @@ for K in 1:8
         Base.llvmcall(($(_kq_ir_q80_multi(K)), "entry"), $V, $argt, pw, $(qs...), s, d)
     @eval @inline _iq4nl_multi_step(pw::Ptr{UInt8}, pq::NTuple{$K, Ptr{Int8}}, s::$V, d::$V) =
         Base.llvmcall(($(_kq_ir_q80_multi(K, :iq4nl)), "entry"), $V, $argt, pw, $(qs...), s, d)
-    # The same steps with the tile's d-table row in place of the d vectors.
+    # The same steps with the tile's d-table row in place of the d vectors, and
+    # with the tile's packed quants in place of the column pointers.
     argtp = Tuple{Ptr{UInt8}, ntuple(_ -> Ptr{Int8}, K)..., V, Ptr{Float32}}
     for (f, wt) in ((:_q80_multi_step, :q80), (:_iq4nl_multi_step, :iq4nl), (:_q40_multi_step, :q40))
         @eval @inline $f(pw::Ptr{UInt8}, pq::NTuple{$K, Ptr{Int8}}, s::$V, dp::Ptr{Float32}) =
             Base.llvmcall(($(_kq_ir_q80_multi(K, wt, true)), "entry"), $V, $argtp, pw, $(qs...), s, dp)
+        @eval @inline $f(pw::Ptr{UInt8}, qb::Ptr{Int8}, s::$V, dp::Ptr{Float32}) = Base.llvmcall(
+            ($(_kq_ir_q80_multi(K, wt, true, true)), "entry"),
+            $V,
+            Tuple{Ptr{UInt8}, Ptr{Int8}, $V, Ptr{Float32}},
+            pw,
+            qb,
+            s,
+            dp,
+        )
     end
     argt4 = Tuple{Ptr{UInt8}, ntuple(_ -> Ptr{Int8}, K)..., V, V, V}
     @eval @inline _q40_multi_step(
@@ -1868,7 +1887,7 @@ end
     _multi_check(xqs, t0, K, nb)
     nb == 0 && return _multi_zero!(out, t0, K)
     i0 = _multi_d_base(p.d, t0, K, nb)
-    q0 = _multi_q_base(p, t0, K, nb)
+    q0 = _multi_q_base(p, t0, K, nb, QK_K)
     dt = p.d
     qt = p.q
     GC.@preserve w dt qt IQ2XS_GRID _IQ_SIGN8_TAB _IQ2XS_LS_TAB begin
@@ -1919,6 +1938,34 @@ end
     for ib in 0:(nb-1)
         pq = map(p -> p + 32 * ib, pq0)
         sumf = step(pw0 + bs * ib, pq, sumf, pd0 + 4 * _MULTI_TILE * ib)
+    end
+    return sumf
+end
+
+# The same from a packed table: block ib of the tile is one 32T-byte stride on.
+@inline function _multi_dp_sums(
+    step::F,
+    w::AbstractVector{UInt8},
+    woff::Int,
+    xqs,
+    t0::Int,
+    ::Val{K},
+    p::_MultiPacked,
+    i0::Int,
+    nb::Int,
+    bs::Int,
+) where {F, K}
+    q0 = _multi_q_base(p, t0, K, nb, 32)
+    dt = p.d
+    qt = p.q
+    GC.@preserve dt qt begin
+        pw0 = pointer(w, woff + 1)
+        pq0 = pointer(qt, q0 + 1)
+        pd0 = pointer(dt, i0 + 1)
+        sumf = ntuple(_ -> VecElement(0.0f0), Val(K))
+        for ib in 0:(nb-1)
+            sumf = step(pw0 + bs * ib, pq0 + 32 * _MULTI_TILE * ib, sumf, pd0 + 4 * _MULTI_TILE * ib)
+        end
     end
     return sumf
 end
@@ -2048,10 +2095,10 @@ function _dot_q8k_multi_kernel!(
     ggml_type == GGML_TYPE_Q4_K && return _dot_q45k_multi!(out, w, woff, xqs, t0, v, Val(false), d)
     ggml_type == GGML_TYPE_Q5_K && return _dot_q45k_multi!(out, w, woff, xqs, t0, v, Val(true), d)
     ggml_type == GGML_TYPE_Q6_K && return _dot_q6k_multi!(out, w, woff, xqs, t0, v, d)
-    ggml_type == GGML_TYPE_Q8_0 && return _dot_q80_multi!(out, w, woff, xqs, t0, v, d)
-    ggml_type == GGML_TYPE_Q4_0 && return _dot_q40_multi!(out, w, woff, xqs, t0, v, d)
+    ggml_type == GGML_TYPE_Q8_0 && return _dot_q80_multi!(out, w, woff, xqs, t0, v, dt)
+    ggml_type == GGML_TYPE_Q4_0 && return _dot_q40_multi!(out, w, woff, xqs, t0, v, dt)
     ggml_type == GGML_TYPE_IQ4_NL &&
-        return _dot_q80_multi!(out, w, woff, xqs, t0, v, d, Val(true))
+        return _dot_q80_multi!(out, w, woff, xqs, t0, v, dt, Val(true))
     return _dot_iq4_xs_multi!(out, w, woff, xqs, t0, v)
 end
 
@@ -2087,8 +2134,8 @@ bit-equal to `_dot_q8k(ggml_type, w, woff, xqs[t0+c-1], simd)`. `ntile` is
 1..8 so that any remainder is a tile. `dt`, from `_multi_d_table(xqs)`, gives
 the kernels of the `_multi_dt_type` types each tile's d values as one load; with it, `t0` must
 start one of the table's tiles and `ntile` be at most `_MULTI_TILE`.
-For IQ2_XS, `dt` may be `_multi_packed(xqs)`: the d table plus the tiles' quants
-interleaved, so that a sub-block reads every column from one pointer.
+For the `_multi_pack_type` types, `dt` may be `_multi_packed(xqs)`: the d table plus
+the tiles' quants interleaved, so that a block reads every column from one pointer.
 """
 function _dot_q8k_multi!(
     out::AbstractVector{Float32},
