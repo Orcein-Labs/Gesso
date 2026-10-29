@@ -37,6 +37,9 @@
 #                 value j + 16 is (qs[j] >> 4) - 8
 #   IQ4_NL (18 B) the Q4_0 layout, with each nibble an index into
 #                 KVALUES_IQ4NL instead of an offset value
+#   Q5_1 (24 B)   d@0, m@2 (Float16), qh u32@4, qs[16]@8: value j is
+#                 (qs[j] & 15) | bit j of qh << 4 and value j + 16 is
+#                 (qs[j] >> 4) | bit j + 16 of qh << 4; weight = value * d + m
 
 const _KQ_D_OFFSET = Dict{Int32, Int}(
     GGML_TYPE_Q2_K => 80,
@@ -47,16 +50,19 @@ const _KQ_D_OFFSET = Dict{Int32, Int}(
     GGML_TYPE_Q8_0 => 0,
     GGML_TYPE_Q4_0 => 0,
     GGML_TYPE_IQ4_NL => 0,
+    GGML_TYPE_Q5_1 => 0,
 )
 
 # Byte offset of the Float16 super-scale d inside a block (test and bench
 # generators write finite values there).
 _q8k_d_offset(ggml_type::Int32) = get(_KQ_D_OFFSET, ggml_type, 0)
 
-# Float16 min (dmin) offset for Q4_K, Q5_K and Q2_K; -1 when the format has none.
+# Float16 min (dmin) offset for Q4_K, Q5_K, Q2_K and Q5_1; -1 when the format
+# has none.
 _q8k_dmin_offset(ggml_type::Int32) =
     ggml_type == GGML_TYPE_Q2_K ? 82 :
-    (ggml_type == GGML_TYPE_Q4_K || ggml_type == GGML_TYPE_Q5_K) ? 2 : -1
+    (ggml_type == GGML_TYPE_Q4_K || ggml_type == GGML_TYPE_Q5_K || ggml_type == GGML_TYPE_Q5_1) ? 2 :
+    -1
 
 # ------------------------------------------------- unchecked loads and row checks
 #
@@ -698,6 +704,52 @@ end
 const _KQ_IR_Q40 = _kq_ir_nibble(_kq_q40_weights)
 const _KQ_IR_IQ4NL = _kq_ir_nibble(_kq_iq4nl_weights)
 
+# Q5_1 weights of the block at %w as %w32, <32 x i8> in 0..31 in value order:
+# the nibbles of qs, with bit j of qh as bit 4 of value j.
+_kq_q51_weights(io::IOBuffer) = print(
+    io,
+    "  %hp = getelementptr i8, ptr %w, i64 4\n",
+    "  %qh = load i32, ptr %hp, align 1\n",
+    "  %hb = bitcast i32 %qh to <32 x i1>\n",
+    "  %hz = zext <32 x i1> %hb to <32 x i8>\n",
+    "  %h16 = shl <32 x i8> %hz, splat (i8 4)\n",
+    "  %wp = getelementptr i8, ptr %w, i64 8\n",
+    "  %wb = load <16 x i8>, ptr %wp, align 1\n",
+    "  %wlo = and <16 x i8> %wb, splat (i8 15)\n",
+    "  %whi = lshr <16 x i8> %wb, splat (i8 4)\n",
+    "  %wn = shufflevector <16 x i8> %wlo, <16 x i8> %whi, <32 x i32> <$(_kq_idx(0, 32))>\n",
+    "  %w32 = or <32 x i8> %wn, %h16\n",
+)
+
+# Q5_1 block: <sumi, sumx>, the weight-value dot and the plain sum of the 32
+# activations (the m term needs it). Weights are unsigned and at most 31, so
+# the vpmaddubsw pair sums (at most 2 * 31 * 128) cannot saturate.
+const _KQ_IR_Q51 = let io = IOBuffer()
+    print(
+        io,
+        "declare <16 x i16> @llvm.x86.avx2.pmadd.ub.sw(<32 x i8>, <32 x i8>)\n",
+        "declare <8 x i32> @llvm.x86.avx2.pmadd.wd(<16 x i16>, <16 x i16>)\n",
+        "declare i32 @llvm.vector.reduce.add.v8i32(<8 x i32>)\n",
+        "define <2 x i32> @entry(ptr %w, ptr %q) #0 {\n",
+    )
+    _kq_q51_weights(io)
+    _kq_ld(io, "qv", "q", 0)
+    print(
+        io,
+        "  %u = call <16 x i16> @llvm.x86.avx2.pmadd.ub.sw(<32 x i8> %w32, <32 x i8> %qv)\n",
+        "  %p = call <8 x i32> @llvm.x86.avx2.pmadd.wd(<16 x i16> %u, <16 x i16> splat (i16 1))\n",
+        "  %ux = call <16 x i16> @llvm.x86.avx2.pmadd.ub.sw(<32 x i8> splat (i8 1), <32 x i8> %qv)\n",
+        "  %px = call <8 x i32> @llvm.x86.avx2.pmadd.wd(<16 x i16> %ux, <16 x i16> splat (i16 1))\n",
+        "  %si = call i32 @llvm.vector.reduce.add.v8i32(<8 x i32> %p)\n",
+        "  %sx = call i32 @llvm.vector.reduce.add.v8i32(<8 x i32> %px)\n",
+        "  %r0 = insertelement <2 x i32> poison, i32 %si, i64 0\n",
+        "  %r = insertelement <2 x i32> %r0, i32 %sx, i64 1\n",
+        "  ret <2 x i32> %r\n}\n",
+        _KQ_ATTRS,
+    )
+    String(take!(io))
+end
+
 # Each AVX2 block kernel: the same lane sums as the scalar reference, for one
 # block. @noinline so the AVX2 code is compiled only when a kernel runs.
 
@@ -838,7 +890,23 @@ end
     )
 end
 
-# ------------------------------------------------------------- scalar Q8_0, Q4_0, IQ4_NL
+@noinline function _q51_sumi_avx2(
+    w::AbstractVector{UInt8},
+    b::Int,
+    x::Q80Vec,
+    ib::Int,
+)::NTuple{2, Int32}
+    v = GC.@preserve w x Base.llvmcall(
+        (_KQ_IR_Q51, "entry"),
+        NTuple{2, VecElement{Int32}},
+        Tuple{Ptr{UInt8}, Ptr{Int8}},
+        pointer(w, b + 1),
+        pointer(x.qs, 32 * ib + 1),
+    )
+    return (v[1].value, v[2].value)
+end
+
+# ------------------------------------------------------------- scalar Q8_0, Q4_0, IQ4_NL, Q5_1
 
 @inline function _q80_sumi_ref(w::AbstractVector{UInt8}, b::Int, x::Q80Vec, ib::Int)::Int32
     s = Int32(0)
@@ -872,6 +940,24 @@ end
         s2 += Int32(KVALUES_IQ4NL[(q>>4)+1]) * Int32(x.qs[qo+j+17])
     end
     return s1 + s2
+end
+
+# (sumi, sumx): the weight-value dot and the activation sum of one block.
+@inline function _q51_sumi_ref(w::AbstractVector{UInt8}, b::Int, x::Q80Vec, ib::Int)::NTuple{2, Int32}
+    qh = _kq_u32(w, b + 4)
+    s = Int32(0)
+    sx = Int32(0)
+    qo = 32 * ib
+    for j in 0:15
+        q = _kq_u8(w, b + 8 + j)
+        v0 = Int32(q & 0x0f) | (Int32((qh >> j) & 0x01) << 4)
+        v1 = Int32(q >> 4) | (Int32((qh >> (j + 16)) & 0x01) << 4)
+        x0 = Int32(x.qs[qo+j+1])
+        x1 = Int32(x.qs[qo+j+17])
+        s += v0 * x0 + v1 * x1
+        sx += x0 + x1
+    end
+    return (s, sx)
 end
 
 # ------------------------------------------------------------- dot products
@@ -1015,6 +1101,21 @@ function _dot_iq4_nl_q8_0(w::AbstractVector{UInt8}, woff::Int, x::Q80Vec, simd::
     return sumf
 end
 
+# The generic Q5_1 kernel's order, (dw * dx) * sumi + m * s, with s = dx * sumx
+# standing in for the Q8_1 block sum.
+function _dot_q5_1_q8_0(w::AbstractVector{UInt8}, woff::Int, x::Q80Vec, simd::Bool)::Float32
+    nb = length(x.d)
+    _kq_check_row(w, woff, nb, 24, x)
+    sumf = 0.0f0
+    @inbounds for ib in 0:(nb-1)
+        b = woff + ib * 24
+        sumi, sumx = simd ? _q51_sumi_avx2(w, b, x, ib) : _q51_sumi_ref(w, b, x, ib)
+        dx = x.d[ib+1]
+        sumf += (_kq_f16(w, b) * dx) * Float32(sumi) + _kq_f16(w, b + 2) * (dx * Float32(sumx))
+    end
+    return sumf
+end
+
 # ------------------------------------------------------------- F32 dequant
 #
 # Ports of dequantize_row_* from ggml-quants.c, one row of ne0 values starting
@@ -1059,6 +1160,22 @@ function _kq_dequant_row!(
                 q = _kq_u8(w, b + 2 + j)
                 out[32*ib+j+1] = Float32(Int32(q & 0x0f) - Int32(8)) * d
                 out[32*ib+j+17] = Float32(Int32(q >> 4) - Int32(8)) * d
+            end
+        end
+        return out
+    elseif ggml_type == GGML_TYPE_Q5_1
+        nb = div(ne0, 32)
+        for ib in 0:(nb-1)
+            b = woff + ib * 24
+            d = _kq_f16(w, b)
+            m = _kq_f16(w, b + 2)
+            qh = _kq_u32(w, b + 4)
+            for j in 0:15
+                q = _kq_u8(w, b + 8 + j)
+                v0 = (q & 0x0f) | (UInt8((qh >> j) & 0x01) << 4)
+                v1 = (q >> 4) | (UInt8((qh >> (j + 16)) & 0x01) << 4)
+                out[32*ib+j+1] = Float32(v0) * d + m
+                out[32*ib+j+17] = Float32(v1) * d + m
             end
         end
         return out
@@ -1183,7 +1300,8 @@ end
 # True for the weight types that take a Q8_0 activation (32-value blocks)
 # rather than Q8_K, so a shared Q8_K input cannot serve them.
 _q80_act_type(ggml_type::Int32) =
-    ggml_type == GGML_TYPE_Q8_0 || ggml_type == GGML_TYPE_Q4_0 || ggml_type == GGML_TYPE_IQ4_NL
+    ggml_type == GGML_TYPE_Q8_0 || ggml_type == GGML_TYPE_Q4_0 || ggml_type == GGML_TYPE_IQ4_NL ||
+    ggml_type == GGML_TYPE_Q5_1
 
 # Activation block size and quantizer for a weight type.
 _q8k_block_values(ggml_type::Int32) = _q80_act_type(ggml_type) ? 32 : QK_K
@@ -1204,6 +1322,7 @@ _kq_supported(ggml_type::Int32) = ggml_type in (
     GGML_TYPE_Q8_0,
     GGML_TYPE_Q4_0,
     GGML_TYPE_IQ4_NL,
+    GGML_TYPE_Q5_1,
 )
 
 # Called from _dot_q8k in quant_cpu_simd.jl.
@@ -1226,6 +1345,8 @@ _kq_supported(ggml_type::Int32) = ggml_type in (
         return _dot_q4_0_q8_0(w, woff, x, simd)
     elseif ggml_type == GGML_TYPE_IQ4_NL
         return _dot_iq4_nl_q8_0(w, woff, x, simd)
+    elseif ggml_type == GGML_TYPE_Q5_1
+        return _dot_q5_1_q8_0(w, woff, x, simd)
     elseif ggml_type == GGML_TYPE_Q3_K
         return _dot_q3k_q8k(w, woff, x, simd)
     elseif ggml_type == GGML_TYPE_Q2_K

@@ -483,7 +483,7 @@ function _quant_matmul_multi!(dst::AbstractMatrix, x::AbstractMatrix, q::QuantMa
     # slowest thread (2-3x on the 27B's verify window). Rows are independent,
     # so the bits do not depend on the chunk count.
     nc = _qgemv_nchunks(q.nrows)
-    # The tiles of the K-quants, Q8_0, Q4_0, IQ4_NL and IQ2_XS read their
+    # The tiles of the K-quants, Q8_0, Q4_0, IQ4_NL, Q5_1 and IQ2_XS read their
     # columns' d values from one table; all but the K-quants also read their
     # columns' quants interleaved, one pointer per tile.
     dt =
@@ -612,7 +612,7 @@ end
 
 # True when `q` multiplies through the Q8_K integer kernel, so one Q8_K
 # quantization of its input serves every weight that reads that input. Q8_0 and
-# Q4_0 weights use a Q8_0 activation and fall back to the per-weight path.
+# Q4_0, IQ4_NL and Q5_1 weights use a Q8_0 activation and fall back to the per-weight path.
 _quant_q8k_kind(q::QuantMatrix) =
     _quant_q8k_native(q.ggml_type) && !_q80_act_type(q.ggml_type)
 

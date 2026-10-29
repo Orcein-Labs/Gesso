@@ -61,7 +61,7 @@ function _moe_host_scratch(h::Int, ff::Int, n_used::Int)
     return s
 end
 
-# Q8_0 and Q4_0 need a Q8_0 activation, so they stay on the per-expert path.
+# The 32-value block types need a Q8_0 activation, so they stay on the per-expert path.
 _moe_host_q8k_type(t::Int32) = _quant_q8k_native(t) && !_q80_act_type(t)
 
 function _moe_host_batchable(
@@ -313,6 +313,7 @@ mutable struct MoePrefillScratch{X, H}
     cdec::Vector{Vector{UInt8}}    # per chunk, one decoded IQ2_XS row
     edt::Vector{Vector{Float32}}   # per expert, the d table of its pairs
     eqt::Vector{Vector{Int8}}      # per expert, the packed quants of its pairs
+    est::Vector{Vector{Float32}}   # per expert, the s table of its pairs (Q8_0 activations)
 end
 
 MoePrefillScratch{X, H}() where {X, H} = MoePrefillScratch{X, H}(
@@ -333,6 +334,7 @@ MoePrefillScratch{X, H}() where {X, H} = MoePrefillScratch{X, H}(
     Vector{UInt8}[],
     Vector{Float32}[],
     Vector{Int8}[],
+    Vector{Float32}[],
 )
 MoePrefillScratch() = MoePrefillScratch{Q8KVec, Q8KVec}()
 
@@ -377,6 +379,7 @@ function _moe_prefill_scratch(
             Vector{UInt8}[],
             Vector{Float32}[],
             Vector{Int8}[],
+            Vector{Float32}[],
         )
         _MOE_PREFILL_SCRATCH[] = s
     end
@@ -480,7 +483,7 @@ end
 _moe_prefill_dt(t::Int32, simd::Bool) = simd && _multi_pack_type(t)
 
 # Expert e's packed table, as `_MoePrefillPack` last built it.
-_moe_prefill_table(s::MoePrefillScratch, e::Int) = _MultiPacked(s.edt[e], s.eqt[e])
+_moe_prefill_table(s::MoePrefillScratch, e::Int) = _MultiPacked(s.edt[e], s.eqt[e], s.est[e])
 
 # Packs each active expert's columns of `cols` (xg or hg) once per pass, so the
 # chunks that split an expert's rows share one table. Chunk c packs the experts
@@ -500,7 +503,7 @@ function (g::_MoePrefillPack)(c::Int)
         w0 <= s.cost[a] < w1 || continue
         e = s.active[a]
         p0 = s.start[e]
-        _multi_packed!(s.edt[e], s.eqt[e], view(g.cols, p0:(p0+s.cnt[e]-1)))
+        _multi_packed!(s.edt[e], s.eqt[e], view(g.cols, p0:(p0+s.cnt[e]-1)), s.est[e])
     end
     return nothing
 end
@@ -509,6 +512,7 @@ function _moe_prefill_pack!(s::MoePrefillScratch, cols::AbstractVector, n_exp::I
     while length(s.edt) < n_exp
         push!(s.edt, Float32[])
         push!(s.eqt, Int8[])
+        push!(s.est, Float32[])
     end
     np = _moe_prefill_cost!(s, 1)
     nc = clamp(_MOE_CHUNKS_PER_THREAD * Threads.nthreads(), 1, length(s.active))
