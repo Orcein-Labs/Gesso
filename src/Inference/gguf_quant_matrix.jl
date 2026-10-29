@@ -484,11 +484,11 @@ function _quant_matmul_multi!(dst::AbstractMatrix, x::AbstractMatrix, q::QuantMa
     # so the bits do not depend on the chunk count.
     nc = _qgemv_nchunks(q.nrows)
     # The tiles of the K-quants, Q8_0, Q4_0, IQ4_NL and IQ2_XS read their
-    # columns' d values from one table; IQ2_XS also reads its columns' quants
-    # interleaved, one pointer per tile.
+    # columns' d values from one table; all but the K-quants also read their
+    # columns' quants interleaved, one pointer per tile.
     dt =
         !(simd && _multi_dt_type(q.ggml_type)) ? nothing :
-        q.ggml_type == GGML_TYPE_IQ2_XS ? _multi_packed(xqs) : _multi_d_table(xqs)
+        _multi_pack_type(q.ggml_type) ? _multi_packed(xqs) : _multi_d_table(xqs)
     chunk =
         _PrefillChunk(dst, _quant_bytes(q), xqs, dt, q.ggml_type, q.ne0, q.nrows, nc, simd)
     _run_row_chunks!(chunk, nc, q.nrows * q.ne0 * seq)
