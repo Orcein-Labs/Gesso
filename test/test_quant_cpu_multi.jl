@@ -38,6 +38,7 @@ const _MQ_TYPES = (
     ("Q6_K", _MQ.GGML_TYPE_Q6_K),
     ("Q8_0", _MQ.GGML_TYPE_Q8_0),
     ("Q4_0", _MQ.GGML_TYPE_Q4_0),
+    ("IQ4_NL", _MQ.GGML_TYPE_IQ4_NL),
 )
 
 # Random valid rows: arbitrary bytes everywhere, with finite small f16 scales at

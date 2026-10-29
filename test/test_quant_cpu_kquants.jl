@@ -28,6 +28,7 @@ const _KQTYPES = (
     ("Q6_K", _KQ.GGML_TYPE_Q6_K),
     ("Q8_0", _KQ.GGML_TYPE_Q8_0),
     ("Q4_0", _KQ.GGML_TYPE_Q4_0),
+    ("IQ4_NL", _KQ.GGML_TYPE_IQ4_NL),
 )
 
 _kq_nvals(ty::Int32) = _KQ._q80_act_type(ty) ? 32 : _KQ.QK_K
@@ -395,6 +396,7 @@ function _kq_ggml_generic_sym(ty::Int32)
         _KQ.GGML_TYPE_Q6_K => :ggml_vec_dot_q6_K_q8_K_generic,
         _KQ.GGML_TYPE_Q8_0 => :ggml_vec_dot_q8_0_q8_0_generic,
         _KQ.GGML_TYPE_Q4_0 => :ggml_vec_dot_q4_0_q8_0_generic,
+        _KQ.GGML_TYPE_IQ4_NL => :ggml_vec_dot_iq4_nl_q8_0_generic,
     )
     _KQ._ensure_ggml!()
     hcpu = _KQ._GGML_LIBS[][2]
@@ -561,6 +563,7 @@ end
             _KQ.GGML_TYPE_Q2_K,
             _KQ.GGML_TYPE_Q8_0,
             _KQ.GGML_TYPE_Q4_0,
+            _KQ.GGML_TYPE_IQ4_NL,
         )
             haskey(found, ty) && push!(targets, found[ty])
         end
