@@ -169,8 +169,8 @@ function _g4_moe_prefill!(moe::Matrix{Float32}, x2::Matrix{Float32}, experts::Ma
     N, E = size(x2)
     n_used = size(experts, 1)
     ff = dn_s.ne0
-    X = _q80_act_type(gu_s.ggml_type) ? Q80Vec : Q8KVec
-    H = _q80_act_type(dn_s.ggml_type) ? Q80Vec : Q8KVec
+    X = _q80_act_type(gu_s.ggml_type) ? Q80Vec : _moe_act_type(q8k_simd_enabled(), gu_s.ggml_type)
+    H = _q80_act_type(dn_s.ggml_type) ? Q80Vec : _moe_act_type(q8k_simd_enabled(), dn_s.ggml_type)
     live = fill(true, min(N, _G4_PREFILL_TOKENS))
     for t0 in 1:_G4_PREFILL_TOKENS:N
         t1 = min(N, t0 + _G4_PREFILL_TOKENS - 1)

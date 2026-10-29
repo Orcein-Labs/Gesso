@@ -1046,17 +1046,21 @@ const _Q6K_SRC =
 
 function _q6k_prep(x::Q8KVec)
     n = length(x.qs)
-    xp = Vector{Int8}(undef, n)
-    mo = Vector{Int16}(undef, n >> 1)
-    @inbounds for o in 0:32:(n-1)
+    return _q6k_prep!(Q6KPrepVec(x.d, x, Vector{Int8}(undef, n), Vector{Int16}(undef, n >> 1)))
+end
+
+# Refills p.xp and p.mo from p.q, for a column reused across batches.
+function _q6k_prep!(p::Q6KPrepVec)
+    qs, xp, mo = p.q.qs, p.xp, p.mo
+    @inbounds for o in 0:32:(length(qs)-1)
         for k in 1:32
-            xp[o+k] = x.qs[o+_Q6K_SRC[k]+1]
+            xp[o+k] = qs[o+_Q6K_SRC[k]+1]
         end
         for m in 1:16
             mo[o>>1+m] = Int16(32) * (Int16(xp[o+2m-1]) + Int16(xp[o+2m]))
         end
     end
-    return Q6KPrepVec(x.d, x, xp, mo)
+    return p
 end
 
 # The types whose multi kernel reads prepped columns: Q6_K uses xp and mo; Q3_K,

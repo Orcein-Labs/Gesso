@@ -342,9 +342,17 @@ const _MOE_PREFILL_SCRATCH = Ref{MoePrefillScratch}(MoePrefillScratch())
 
 _act_vec(::Type{Q8KVec}, n::Int) = Q8KVec(div(n, QK_K))
 _act_vec(::Type{Q80Vec}, n::Int) = Q80Vec(div(n, 32))
+_act_vec(::Type{Q6KPrepVec}, n::Int) = _q6k_prep(Q8KVec(div(n, QK_K)))
 
 _quantize_act!(y::Q8KVec, x) = quantize_q8_K!(y, x)
 _quantize_act!(y::Q80Vec, x) = quantize_q8_0!(y, x)
+_quantize_act!(y::Q6KPrepVec, x) = (quantize_q8_K!(y.q, x); _q6k_prep!(y))
+
+# The Q8_K activation vector for weights of types `ts`. The K-quant tiles read
+# pair-ordered columns, so prepping each token once spares every row of every
+# expert the reorder; a mix of types keeps plain Q8_K.
+_moe_act_type(simd::Bool, ts::Int32...) =
+    simd && _prefill_multi_enabled() && all(_q6k_prep_type, ts) ? Q6KPrepVec : Q8KVec
 
 function _moe_prefill_scratch(
     h::Int,
@@ -478,8 +486,8 @@ const _MOE_CHUNKS_PER_THREAD = 4
 end
 
 # The types whose tiles take a packed table, built once per expert piece: the
-# f16-d block types and IQ2_XS. The K-quant tables want prepped columns, which
-# the expert pieces do not build.
+# f16-d block types and IQ2_XS. The K-quant tiles read prepped columns instead,
+# which the scratch holds when `_moe_act_type` picks Q6KPrepVec.
 _moe_prefill_dt(t::Int32, simd::Bool) = simd && _multi_pack_type(t)
 
 # Expert e's packed table, as `_MoePrefillPack` last built it.
@@ -746,7 +754,10 @@ function _moe_host_prefill!(
     down_s::GgufQuantSlice;
     cpu::Vector{Bool}=Bool[],
 )
-    s = _moe_prefill_scratch(size(X, 2), gate_s.ne1, size(X, 1), size(experts, 1), n_exp)
+    simd = q8k_simd_enabled()
+    XT = _moe_act_type(simd, gate_s.ggml_type, up_s.ggml_type)
+    HT = _moe_act_type(simd, down_s.ggml_type)
+    s = _moe_prefill_scratch(size(X, 2), gate_s.ne1, size(X, 1), size(experts, 1), n_exp, XT, HT)
     return _moe_prefill_run!(s, Y, X, experts, weights, live, n_exp, gate_s, up_s, 0, down_s, _cpu_silu, cpu)
 end
 
