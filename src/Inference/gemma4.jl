@@ -28,6 +28,8 @@ Base.@kwdef mutable struct _Gemma4Scratch
     V::Matrix{Float32} = Matrix{Float32}(undef, 0, 0)
     O::Matrix{Float32} = Matrix{Float32}(undef, 0, 0)
     attn_probs::Matrix{Float32} = Matrix{Float32}(undef, 0, 0)
+    attn_tile::Matrix{Float32} = Matrix{Float32}(undef, 0, 0)
+    attn_qtile::Matrix{Float32} = Matrix{Float32}(undef, 0, 0)
     logits::Vector{Float32} = Float32[]
     probs::Vector{Float32} = Float32[]
     order::Vector{Int} = Int[]
@@ -171,24 +173,59 @@ end
 # CPU pool. Within a head the arithmetic is the plain loop's: each score sums
 # over the head dim in order, the softmax runs in Float32, and each output sums
 # over the keys in order, so the result does not depend on the thread count.
+# Plain Float32 caches run eight query rows per pass through
+# _g4_attend_tile8!, which does the same arithmetic in vector lanes; the last
+# N % 8 rows and every other cache format take the one-row loop.
 function _g4_attend!(s::_Gemma4Scratch, O::AbstractMatrix{Float32}, Q::AbstractMatrix{Float32},
     kc, vc, s0::Int, koff::Int, win::Int, nh::Int, nkv::Int, hd::Int)
-    rows = s0 + size(Q, 1) - 1 - koff
-    if size(s.attn_probs, 1) < rows || size(s.attn_probs, 2) != nh
+    N = size(Q, 1)
+    rows = s0 + N - 1 - koff
+    span = win > 0 ? min(rows, win + 7) : rows
+    tiled = N >= 8 && _g4_tile_cache(kc) && _g4_tile_cache(vc) && 8 * span * nh <= _G4_TILE_MAX_FLOATS
+    tail = tiled ? ((N - N % 8 + 1):N) : (1:N)
+    if !isempty(tail) && (size(s.attn_probs, 1) < rows || size(s.attn_probs, 2) != nh)
         s.attn_probs = Matrix{Float32}(undef, max(rows, 2 * size(s.attn_probs, 1)), nh)
     end
+    if tiled
+        if size(s.attn_tile, 1) < 8 * span || size(s.attn_tile, 2) != nh
+            s.attn_tile = Matrix{Float32}(undef, max(8 * span, 2 * size(s.attn_tile, 1)), nh)
+        end
+        if size(s.attn_qtile) != (8 * hd, nh)
+            s.attn_qtile = Matrix{Float32}(undef, 8 * hd, nh)
+        end
+    end
     probs = s.attn_probs
+    ptile = s.attn_tile
+    qtile = s.attn_qtile
     rep = nh ÷ nkv
     _pool_run_chunks!(nh) do h
-        _g4_attend_head!(O, Q, kc, vc, view(probs, :, h), s0, koff, win, h, (h - 1) ÷ rep + 1, hd)
+        hk = (h - 1) ÷ rep + 1
+        if tiled
+            P = view(ptile, :, h)
+            Qp = view(qtile, :, h)
+            for t0 in 1:8:(N - 7)
+                _g4_attend_tile8!(O, Q, kc, vc, P, Qp, t0, s0, koff, win, (h - 1) * hd, hk, hd)
+            end
+        end
+        isempty(tail) || _g4_attend_head!(O, Q, kc, vc, view(probs, :, h), s0, koff, win, h, hk, hd, tail)
     end
     return O
 end
 
-function _g4_attend_head!(O, Q, kc, vc, p, s0::Int, koff::Int, win::Int, h::Int, hk::Int, hd::Int)
+# The tile path reads K and V through raw pointers: dim 1 must be contiguous.
+_g4_tile_cache(x::Array{Float32, 3}) = true
+_g4_tile_cache(x::PermutedDimsArray{Float32, 3, <:Any, <:Any, Array{Float32, 3}}) = stride(x, 1) == 1
+_g4_tile_cache(x) = false
+
+# Past this the tile scratch (8 scores per key per head) is too big to keep,
+# so very long global layers fall back to the one-row loop.
+const _G4_TILE_MAX_FLOATS = 1 << 26
+
+function _g4_attend_head!(O, Q, kc, vc, p, s0::Int, koff::Int, win::Int, h::Int, hk::Int, hd::Int,
+    ts::AbstractUnitRange{Int}=axes(Q, 1))
     qo = (h - 1) * hd
     jt = hd - hd % 8
-    @inbounds for t in axes(Q, 1)
+    @inbounds for t in ts
         pos = s0 + t - 1
         a = (win > 0 ? max(1, pos - win + 1) : 1) - koff
         b = pos - koff
