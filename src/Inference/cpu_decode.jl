@@ -618,14 +618,21 @@ function (g::_AttnDecodeChunk)(c::Int)
 end
 
 function _attention_decode_head!(g::_AttnDecodeChunk, hh::Int, off::Int)
-    (; attn, q, kc, vc, probs, scale, d_head, lo, K) = g
-    hk = div(hh - 1, g.group) + 1
+    _attention_row_head!(g.attn, g.q, 1, g.kc, g.vc, g.probs, off, g.scale, hh,
+        div(hh - 1, g.group) + 1, g.d_head, g.lo, g.K)
+    return nothing
+end
+
+# Row `row` of `q`, head `hh`, against cache rows lo:K of kv head `hk`, into row
+# `row` of `attn`. `probs[off+lo:off+K]` holds the scores, then the probabilities.
+function _attention_row_head!(attn, q, row::Int, kc, vc, probs, off::Int, scale, hh::Int,
+    hk::Int, d_head::Int, lo::Int, K::Int)
     @inbounds begin
         for u in lo:K
             probs[off+u] = zero(eltype(probs))
         end
         for j in 1:d_head
-            qv = q[1, hh, j]
+            qv = q[row, hh, j]
             for u in lo:K
                 probs[off+u] = _score_add(probs[off+u], qv * kc[u, hk, j], scale)
             end
@@ -658,10 +665,10 @@ function _attention_decode_head!(g::_AttnDecodeChunk, hh::Int, off::Int)
                 a3 += p * vc[u, hk, j+2]
                 a4 += p * vc[u, hk, j+3]
             end
-            attn[1, hh, j] = a1
-            attn[1, hh, j+1] = a2
-            attn[1, hh, j+2] = a3
-            attn[1, hh, j+3] = a4
+            attn[row, hh, j] = a1
+            attn[row, hh, j+1] = a2
+            attn[row, hh, j+2] = a3
+            attn[row, hh, j+3] = a4
             j += 4
         end
         while j <= d_head
@@ -669,9 +676,84 @@ function _attention_decode_head!(g::_AttnDecodeChunk, hh::Int, off::Int)
             for u in lo:K
                 a += probs[off+u] * vc[u, hk, j]
             end
-            attn[1, hh, j] = a
+            attn[row, hh, j] = a
             j += 1
         end
     end
     return nothing
+end
+
+# Window prefill attention: row t of `q` attends cache rows up to base+t-1, and
+# every (row, head) pair is independent once the window's KV is appended. Items
+# are numbered row-major over (row, head); chunk c takes items c, c + nc, ...
+# and scores them in probs slot c of `Kmax` rows. Each pair runs the decode
+# arithmetic of `_attention_row_head!`, so a row's output matches decode.
+struct _AttnWindowChunk{A, Q, KC, VC, P, S}
+    attn::A
+    q::Q
+    kc::KC
+    vc::VC
+    probs::P
+    scale::S
+    n_heads::Int
+    d_head::Int
+    group::Int
+    base::Int
+    window::Int
+    Kmax::Int
+    nc::Int
+end
+
+function (g::_AttnWindowChunk)(c::Int)
+    off = (c - 1) * g.Kmax
+    for i in c:g.nc:(size(g.q, 1)*g.n_heads)
+        t, hh = divrem(i - 1, g.n_heads) .+ 1
+        K = g.base + t - 1
+        lo = g.window > 0 ? max(1, K - g.window + 1) : 1
+        _attention_row_head!(g.attn, g.q, t, g.kc, g.vc, g.probs, off, g.scale, hh,
+            div(hh - 1, g.group) + 1, g.d_head, lo, K)
+    end
+    return nothing
+end
+
+# All rows of a window at once. `q` and `attn` are (T, n_heads, d_head); the KV
+# for rows base:base+T-1 must already be in the cache.
+function _attention_window_cpu!(
+    attn,
+    q,
+    kc,
+    vc,
+    n_heads::Int,
+    d_head::Int,
+    group::Int,
+    base::Int,
+    ::Type{P};
+    window::Int=0,
+) where {P}
+    T = size(q, 1)
+    Kmax = base + T - 1
+    nc = min(T * n_heads, Threads.nthreads())
+    nc > 1 && T * Kmax * d_head * n_heads < _ATTN_DECODE_POOL_MIN && (nc = 1)
+    probs = Vector{P}(undef, nc * Kmax)
+    f = _AttnWindowChunk(
+        attn,
+        q,
+        kc,
+        vc,
+        probs,
+        _attention_score_scale(d_head),
+        n_heads,
+        d_head,
+        group,
+        base,
+        window,
+        Kmax,
+        nc,
+    )
+    if nc > 1
+        _pool_run_chunks!(f, nc)
+    else
+        f(1)
+    end
+    return attn
 end

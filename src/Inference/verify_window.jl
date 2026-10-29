@@ -356,6 +356,31 @@ function _window_attn_block!(
     gated = haskey(bt, :wattn_gate)
     gated && _window_matmul!(cpu, W.gate, W.normed, bt.wattn_gate, wl, zeros_like)
 
+    if cpu_scratch !== nothing && T > 1
+        _window_attn_rows_cpu!(
+            bt,
+            bi,
+            kc,
+            vc,
+            W,
+            bufs,
+            cpu,
+            wl,
+            tensors,
+            cpu_scratch,
+            base;
+            n_heads,
+            n_kv_heads,
+            d_head,
+            group,
+            eps,
+            theta,
+            inv_freq,
+            rotary_dim,
+        )
+        _window_matmul!(cpu, W.sub, W.attn_merged, bt.wo, wl, zeros_like)
+        return W.sub
+    end
     for t in 1:T
         _win_load!(bufs.q.storage, W.q, t)
         _win_load!(bufs.k.storage, W.k, t)
@@ -391,6 +416,94 @@ function _window_attn_block!(
     end
     _window_matmul!(cpu, W.sub, W.attn_merged, bt.wo, wl, zeros_like)
     return W.sub
+end
+
+# The CPU attention core for all rows of the window, in three passes. Each row's
+# heads, norms and RoPE run and its KV is appended, in row order. Then every
+# (row, head) pair attends across the pool, row t over cache rows up to
+# base+t-1. Last, each row's heads are merged and gated. Row by row the
+# arithmetic is the decode core's, so the window and decode give the same bits.
+function _window_attn_rows_cpu!(
+    bt,
+    bi::Int,
+    kc,
+    vc,
+    W,
+    bufs,
+    cpu,
+    wl,
+    tensors,
+    cpu_scratch,
+    base::Int;
+    n_heads::Int,
+    n_kv_heads::Int,
+    d_head::Int,
+    group::Int,
+    eps,
+    theta,
+    inv_freq,
+    rotary_dim::Int=0,
+)
+    T = size(W.q, 1)
+    gated = haskey(bt, :wattn_gate)
+    head_gated = haskey(bt, :wattn_head_gate)
+    qs = bufs.qh.storage
+    as = bufs.attn.storage
+    Qw = similar(qs, T, n_heads, d_head)
+    Aw = similar(as, T, n_heads, d_head)
+    GH = head_gated ? similar(bufs.gate_head.storage, T, n_heads) : nothing
+    kv_rot = false
+    for t in 1:T
+        _win_load!(bufs.q.storage, W.q, t)
+        _win_load!(bufs.k.storage, W.k, t)
+        _win_load!(bufs.v.storage, W.v, t)
+        if head_gated
+            _win_load!(bufs.normed.storage, W.normed, t)
+            matmul!(cpu, bufs.gate_head, bufs.normed, bt.wattn_head_gate, wl)
+            _win_store!(GH, t, bufs.gate_head.storage)
+        end
+        kv_rot = _decode_attn_qkv!(
+            bt,
+            bi,
+            kc,
+            vc,
+            bufs,
+            cpu,
+            wl,
+            tensors,
+            cpu_scratch,
+            base + t - 1;
+            n_heads,
+            n_kv_heads,
+            d_head,
+            eps,
+            theta,
+            inv_freq,
+            rotary_dim,
+        )
+        @views Qw[t, :, :] .= qs[1, :, :]
+    end
+    @decode_sub :attn_core cpu _attention_window_cpu!(
+        Aw,
+        Qw,
+        kc[bi].storage,
+        vc[bi].storage,
+        n_heads,
+        d_head,
+        group,
+        base,
+        eltype(cpu_scratch.probs);
+        window=_block_window(bt),
+    )
+    for t in 1:T
+        @views as[1, :, :] .= Aw[t, :, :]
+        kv_rot && _kv_rotate!(as, false)
+        gated && _win_load!(bufs.gate_attn.storage, W.gate, t)
+        head_gated && _win_load!(bufs.gate_head.storage, GH, t)
+        _attn_merge_gate!(bt, bufs, cpu, n_heads, d_head)
+        _win_store!(W.attn_merged, t, bufs.merged.storage)
+    end
+    return W.attn_merged
 end
 
 # The FFN half of a block over all rows. `subT` is the mixer output for every

@@ -83,3 +83,27 @@ end
         end
     end
 end
+
+@testset "window rows across the pool equal decode one row at a time (bit-exact)" begin
+    rng = Xoshiro(20261030)
+    # base 1 is a window from the first cache row; base 90 starts after a
+    # committed prefix. Both are big enough to take the pool.
+    for (n_heads, n_kv, d, base, T) in ((8, 2, 64, 1, 120), (16, 4, 128, 90, 70))
+        group = div(n_heads, n_kv)
+        Kmax = base + T - 1
+        kc = randn(rng, Float32, Kmax, n_kv, d)
+        vc = randn(rng, Float32, Kmax, n_kv, d)
+        q = randn(rng, Float32, T, n_heads, d)
+        for window in (0, 37)
+            rows = fill(NaN32, T, n_heads, d)
+            _GI._attention_window_cpu!(rows, q, kc, vc, n_heads, d, group, base, Float32;
+                window)
+            for t in 1:T
+                one = fill(NaN32, 1, n_heads, d)
+                _GI._attention_decode_cpu!(one, q[t:t, :, :], kc, vc, zeros(Float32, Kmax),
+                    n_heads, d, group, base + t - 1; window)
+                @test _adec_bits(rows[t:t, :, :]) == _adec_bits(one)
+            end
+        end
+    end
+end
