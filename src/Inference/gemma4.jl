@@ -27,7 +27,7 @@ Base.@kwdef mutable struct _Gemma4Scratch
     K::Matrix{Float32} = Matrix{Float32}(undef, 0, 0)
     V::Matrix{Float32} = Matrix{Float32}(undef, 0, 0)
     O::Matrix{Float32} = Matrix{Float32}(undef, 0, 0)
-    scores::Vector{Float32} = Float32[]
+    attn_probs::Matrix{Float32} = Matrix{Float32}(undef, 0, 0)
     logits::Vector{Float32} = Float32[]
     probs::Vector{Float32} = Float32[]
     order::Vector{Int} = Int[]
@@ -47,11 +47,17 @@ end
     return view(v, 1:n)
 end
 
+# Parameter storage is untyped, so the norms take the unwrapped weight vector
+# as an argument and compile for its concrete type.
+_g4_rmsnorm_rows!(Y::AbstractMatrix{Float32}, X::AbstractMatrix{Float32}, w::FrozenParameter, eps::Real) =
+    _g4_rmsnorm_rows!(Y, X, w.storage, eps)
+_g4_head_norm!(A::AbstractMatrix{Float32}, nheads::Int, hd::Int, w::FrozenParameter, eps::Real) =
+    _g4_head_norm!(A, nheads, hd, w.storage, eps)
+
 # Row-wise RMSNorm: Y = X / rms(X) * w. w = nothing gives weightless norm.
-function _g4_rmsnorm_rows!(Y::AbstractMatrix{Float32}, X::AbstractMatrix{Float32}, w, eps::Real)
+function _g4_rmsnorm_rows!(Y::AbstractMatrix{Float32}, X::AbstractMatrix{Float32}, w_vec, eps::Real)
     E = size(X, 2)
     eps_f = Float32(eps)
-    w_vec = w isa FrozenParameter ? w.storage : w
     @inbounds for t in axes(X, 1)
         ss = 0.0f0
         for i in 1:E
@@ -66,9 +72,8 @@ function _g4_rmsnorm_rows!(Y::AbstractMatrix{Float32}, X::AbstractMatrix{Float32
 end
 
 # Per-head RMSNorm in place: each head segment of length hd is normalised.
-function _g4_head_norm!(A::AbstractMatrix{Float32}, nheads::Int, hd::Int, w, eps::Real)
+function _g4_head_norm!(A::AbstractMatrix{Float32}, nheads::Int, hd::Int, w_vec, eps::Real)
     eps_f = Float32(eps)
-    w_vec = w isa FrozenParameter ? w.storage : w
     @inbounds for t in axes(A, 1), h in 1:nheads
         o = (h - 1) * hd
         ss = 0.0f0
@@ -133,6 +138,78 @@ function _g4_eval_down!(s::_Gemma4Scratch, w, e::Int, a::AbstractMatrix{Float32}
     end
 end
 
+# Attention with scale 1 for query rows t = 1:N at 1-based positions
+# s0:s0+N-1. Row t reads the keys at positions lo:pos, where lo starts the
+# sliding window (win = 0 reads them all). Key position p sits at row p - koff
+# of kc and vc, which are laid out (rows, n_kv, hd) like the KV cache, so every
+# inner loop walks one contiguous column. The query heads are split across the
+# CPU pool. Within a head the arithmetic is the plain loop's: each score sums
+# over the head dim in order, the softmax runs in Float32, and each output sums
+# over the keys in order, so the result does not depend on the thread count.
+function _g4_attend!(s::_Gemma4Scratch, O::AbstractMatrix{Float32}, Q::AbstractMatrix{Float32},
+    kc, vc, s0::Int, koff::Int, win::Int, nh::Int, nkv::Int, hd::Int)
+    rows = s0 + size(Q, 1) - 1 - koff
+    if size(s.attn_probs, 1) < rows || size(s.attn_probs, 2) != nh
+        s.attn_probs = Matrix{Float32}(undef, max(rows, 2 * size(s.attn_probs, 1)), nh)
+    end
+    probs = s.attn_probs
+    rep = nh ÷ nkv
+    _pool_run_chunks!(nh) do h
+        _g4_attend_head!(O, Q, kc, vc, view(probs, :, h), s0, koff, win, h, (h - 1) ÷ rep + 1, hd)
+    end
+    return O
+end
+
+function _g4_attend_head!(O, Q, kc, vc, p, s0::Int, koff::Int, win::Int, h::Int, hk::Int, hd::Int)
+    qo = (h - 1) * hd
+    jt = hd - hd % 8
+    @inbounds for t in axes(Q, 1)
+        pos = s0 + t - 1
+        a = (win > 0 ? max(1, pos - win + 1) : 1) - koff
+        b = pos - koff
+        for u in a:b
+            p[u] = 0.0f0
+        end
+        for j in 1:hd
+            qv = Q[t, qo + j]
+            for u in a:b
+                p[u] += qv * kc[u, hk, j]
+            end
+        end
+        mx = p[a]
+        for u in (a + 1):b
+            mx = max(mx, p[u])
+        end
+        den = 0.0f0
+        for u in a:b
+            v = exp(p[u] - mx)
+            p[u] = v
+            den += v
+        end
+        inv_den = 1.0f0 / den
+        for u in a:b
+            p[u] *= inv_den
+        end
+        # eight output dims at a time: eight independent sums, one per column
+        for jb in 0:8:(jt - 8)
+            Base.Cartesian.@nexprs 8 i -> acc_i = 0.0f0
+            for u in a:b
+                pu = p[u]
+                Base.Cartesian.@nexprs 8 i -> acc_i += pu * vc[u, hk, jb + i]
+            end
+            Base.Cartesian.@nexprs 8 i -> O[t, qo + jb + i] = acc_i
+        end
+        for j in (jt + 1):hd
+            acc = 0.0f0
+            for u in a:b
+                acc += p[u] * vc[u, hk, j]
+            end
+            O[t, qo + j] = acc
+        end
+    end
+    return O
+end
+
 # --- Named capability-checked lowering functions ------------------------------
 
 # NeoX RoPE: pair (d, d + n_rot/2) rotates by pos * inv_freq (with optional rope_freqs folded in).
@@ -168,12 +245,17 @@ end
 function _apply_logit_softcap!(backend, logits, tensors)
     backend_name(backend) === :cpu || throw(LoweringNotImplemented(:logit_softcap, backend_name(backend)))
     if _GEMMA4_SOFTCAP_ENABLED[] && tensors.spec.final_logit_softcap > 0
-        cap = eltype(logits.storage)(tensors.spec.final_logit_softcap)
-        @inbounds for i in eachindex(logits.storage)
-            logits.storage[i] = cap * tanh(logits.storage[i] / cap)
-        end
+        _g4_softcap!(logits.storage, tensors.spec.final_logit_softcap)
     end
     return logits
+end
+
+function _g4_softcap!(L::AbstractArray{T}, softcap) where {T}
+    cap = T(softcap)
+    @inbounds for i in eachindex(L)
+        L[i] = cap * tanh(L[i] / cap)
+    end
+    return L
 end
 
 function _gemma4_v_norm!(backend, vh::AbstractMatrix{Float32}, eps; nheads::Int=1, hd::Int=size(vh, 2))
@@ -205,6 +287,40 @@ function _gemma4_layer_output_scale!(backend, out, scale_vec)
     return out
 end
 
+# Parameter storage is untyped, so the router loops take the unwrapped arrays as
+# arguments and compile for their concrete types.
+function _g4_router_input!(rin::Matrix{Float32}, inv_sqrt_e::Float32, r_scale)
+    @inbounds for i in axes(rin, 2), t in axes(rin, 1)
+        rin[t, i] = rin[t, i] * inv_sqrt_e * Float32(r_scale[i])
+    end
+    return rin
+end
+
+# logits[e] = sum over i in order of r[e, i] * rin[t, i]. Eight experts at a
+# time, so the inner loop reads eight neighbours in one column of r.
+function _g4_router_logits!(logits::AbstractVector{Float32}, r::AbstractMatrix, rin::Matrix{Float32}, t::Int)
+    n_expert, E = size(r)
+    et = n_expert - n_expert % 8
+    @inbounds begin
+        for eb in 0:8:(et - 8)
+            Base.Cartesian.@nexprs 8 k -> s_k = 0.0f0
+            for i in 1:E
+                x = rin[t, i]
+                Base.Cartesian.@nexprs 8 k -> s_k += r[eb + k, i] * x
+            end
+            Base.Cartesian.@nexprs 8 k -> logits[eb + k] = s_k
+        end
+        for e in (et + 1):n_expert
+            s = 0.0f0
+            for i in 1:E
+                s += r[e, i] * rin[t, i]
+            end
+            logits[e] = s
+        end
+    end
+    return logits
+end
+
 function _gemma4_parallel_moe_ffn!(backend, attn, bt, eps::Real; scratch::_Gemma4Scratch=_Gemma4Scratch())
     backend_name(backend) === :cpu || throw(LoweringNotImplemented(:gemma4_parallel_moe, backend_name(backend)))
     X = attn isa Activation ? attn.storage : attn
@@ -231,9 +347,7 @@ function _gemma4_parallel_moe_ffn!(backend, attn, bt, eps::Real; scratch::_Gemma
     rin = _g4_mat!(scratch, :rin, N, E)
     _g4_rmsnorm_rows!(rin, X, nothing, eps_f)
     r_scale = bt.wrouter_scale isa FrozenParameter ? bt.wrouter_scale.storage : bt.wrouter_scale
-    @inbounds for t in 1:N, i in 1:E
-        rin[t, i] = rin[t, i] * inv_sqrt_e * Float32(r_scale[i])
-    end
+    _g4_router_input!(rin, inv_sqrt_e, r_scale)
     x2 = _g4_mat!(scratch, :x2, N, E)
     _g4_rmsnorm_rows!(x2, X, bt.ffn_pre_rms_2, eps_f)
 
@@ -252,13 +366,7 @@ function _gemma4_parallel_moe_ffn!(backend, attn, bt, eps::Real; scratch::_Gemma
         if r_stor isa QuantMatrix
             _quant_matmul!(reshape(logits, 1, n_expert), view(rin, t:t, :), r_stor)
         else
-            @inbounds for e in 1:n_expert
-                s = 0.0f0
-                for i in 1:E
-                    s += r_stor[e, i] * rin[t, i]
-                end
-                logits[e] = s
-            end
+            _g4_router_logits!(logits, r_stor, rin, t)
         end
         mx = maximum(logits)
         den = 0.0f0
@@ -338,45 +446,12 @@ function _gemma4_prefill_block!(backend, h, bt, tensors, positions, wl, eps, zer
     _apply_rope_neox!(backend, Q, positions, nh, hd, n_rot, bt.rope_layer.inv_freq)
     _apply_rope_neox!(backend, K, positions, nkv, hd, n_rot, bt.rope_layer.inv_freq)
 
-    # Causal attention with scale 1.0 (scores buffer hoisted outside loops)
+    # Causal attention with scale 1.0 over this pass's own rows
     O = _g4_mat!(scratch, :O, N, qdim)
-    rep = nh ÷ nkv
     pos0 = first(positions)
-    for t in 1:N
-        p = pos0 + t - 1
-        lo = win > 0 ? max(0, p - (win - 1)) : 0
-        n_keys = p - lo + 1
-        scores = _g4_vec!(scratch.scores, n_keys)
-        for h_idx in 1:nh
-            kv_h = (h_idx - 1) ÷ rep
-            qo = (h_idx - 1) * hd
-            kvo = kv_h * hd
-            @inbounds for i in 1:n_keys
-                k_row = lo + i - 1 - pos0 + 1
-                s = 0.0f0
-                for d in 1:hd
-                    s += Q[t, qo + d] * K[k_row, kvo + d]
-                end
-                scores[i] = s
-            end
-            mx = maximum(scores)
-            den = 0.0f0
-            @inbounds for i in 1:n_keys
-                v = exp(scores[i] - mx)
-                scores[i] = v
-                den += v
-            end
-            inv_den = 1.0f0 / den
-            @inbounds for d in 1:hd
-                acc = 0.0f0
-                for i in 1:n_keys
-                    k_row = lo + i - 1 - pos0 + 1
-                    acc += (scores[i] * inv_den) * V[k_row, kvo + d]
-                end
-                O[t, qo + d] = acc
-            end
-        end
-    end
+    K3 = PermutedDimsArray(reshape(K, N, hd, nkv), (1, 3, 2))
+    V3 = PermutedDimsArray(reshape(V, N, hd, nkv), (1, 3, 2))
+    _g4_attend!(scratch, O, Q, K3, V3, pos0 + 1, pos0, win, nh, nkv, hd)
 
     # Post attention norm & residual
     A = _g4_mat!(scratch, :A, N, E)
@@ -438,43 +513,9 @@ function _gemma4_generate_block!(backend, hp, kc_layer, vc_layer, bt, tensors, s
     _kv_write_rows!(kc_layer.storage, permutedims(reshape(K, N, hd, nkv), (1, 3, 2)), s0)
     _kv_write_rows!(vc_layer.storage, permutedims(reshape(V, N, hd, nkv), (1, 3, 2)), s0)
 
-    # Attend over keys in 1:s1 with scale 1.0 and sliding-window mask (scores hoisted)
+    # Attend over keys in 1:s1 with scale 1.0 and the sliding-window mask
     O = _g4_mat!(scratch, :O, N, qdim)
-    rep = nh ÷ nkv
-    for t in 1:N
-        pos = s0 + t - 1
-        lo = win > 0 ? max(1, pos - win + 1) : 1
-        n_keys = pos - lo + 1
-        scores = _g4_vec!(scratch.scores, n_keys)
-        for h_idx in 1:nh
-            kv_h = (h_idx - 1) ÷ rep + 1
-            qo = (h_idx - 1) * hd
-            @inbounds for i in 1:n_keys
-                k_idx = lo + i - 1
-                s = 0.0f0
-                for d in 1:hd
-                    s += Q[t, qo + d] * kc_layer.storage[k_idx, kv_h, d]
-                end
-                scores[i] = s
-            end
-            mx = maximum(scores)
-            den = 0.0f0
-            @inbounds for i in 1:n_keys
-                v = exp(scores[i] - mx)
-                scores[i] = v
-                den += v
-            end
-            inv_den = 1.0f0 / den
-            @inbounds for d in 1:hd
-                acc = 0.0f0
-                for i in 1:n_keys
-                    k_idx = lo + i - 1
-                    acc += (scores[i] * inv_den) * vc_layer.storage[k_idx, kv_h, d]
-                end
-                O[t, qo + d] = acc
-            end
-        end
-    end
+    _g4_attend!(scratch, O, Q, kc_layer.storage, vc_layer.storage, s0, 0, win, nh, nkv, hd)
 
     # Post attention norm & residual
     A = _g4_mat!(scratch, :A, N, E)
