@@ -354,3 +354,15 @@ end
     @test endswith(off, "<channel|>")
     @test on == Gesso.Inference.render_gemma4_chat(msgs; add_generation_prompt=true, enable_thinking=true)
 end
+
+@testset "engine: a gemma4 turn that ends on <|tool_response> stops there" begin
+    vocab = Dict("<turn|>" => 106, "<|tool_response>" => 107)
+    tk = sv_gemma_bpe(eos=1, vocab=vocab, template="<|turn>user\n{{ m }}<turn|>")
+    eos = _engine_eos_ids(tk)
+    @test 107 in eos
+    seen = Int[]
+    gen = sv_engine([20, 21, 107, 22]; eos=eos)
+    out = gen(Int[1, 2]; max_new_tokens=16, on_token=id -> (push!(seen, id); true))
+    @test out.generated == [20, 21]
+    @test seen == [20, 21]
+end
