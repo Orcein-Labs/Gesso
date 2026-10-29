@@ -68,7 +68,7 @@ struct CPUDecodeScratch{R <: AbstractFloat}
     gate::Matrix{R}         # (1, ff)
     up::Matrix{R}           # (1, ff)
     act::Matrix{R}          # (1, ff)
-    probs::Vector{R}        # (ctx,) one head's scores, then probabilities
+    probs::Vector{R}        # (ctx * slots,) per attention chunk: scores, then probabilities
     pos1::Vector{Int}       # (1,) RoPE position of the decode token
     logits::Matrix{R}       # (1, vocab)
     lastrow::Matrix{R}      # (1, dim) final hidden row before the head
@@ -141,7 +141,7 @@ function _cpu_decode_scratch(
         zeros(R, 1, ff),
         zeros(R, 1, ff),
         zeros(R, 1, ff),
-        zeros(R, ctx),
+        zeros(R, ctx * max(1, min(Int(n_heads), Threads.nthreads()))),
         [0],
         zeros(R, 1, vocab),
         zeros(R, 1, dim),
@@ -548,6 +548,11 @@ end
 # A sliding `window` reads only the last `window` rows. The reference masks the
 # rows before them to -Inf, which the softmax turns into exact zeros, so the
 # skipped rows add nothing there either and the outputs stay identical.
+#
+# Heads are independent, so they run across the CPU pool when `probs` holds a
+# K-row slot per chunk (the decode scratch sizes it for that). Each head's
+# arithmetic is the same on any thread, so the outputs do not depend on the
+# thread count.
 function _attention_decode_cpu!(
     attn,
     q,
@@ -560,40 +565,113 @@ function _attention_decode_cpu!(
     K::Int;
     window::Int=0,
 )
-    fill!(attn, 0.0f0)
+    fill!(attn, zero(eltype(attn)))
     lo = window > 0 ? max(1, K - window + 1) : 1
-    sqd = sqrt(d_head)
-    @inbounds for hh in 1:n_heads
-        hk = div(hh - 1, group) + 1
+    nc = min(n_heads, Threads.nthreads(), div(length(probs), K))
+    nc > 1 && (K - lo + 1) * d_head * n_heads < _ATTN_DECODE_POOL_MIN && (nc = 1)
+    f = _AttnDecodeChunk(
+        attn,
+        q,
+        kc,
+        vc,
+        probs,
+        _attention_score_scale(d_head),
+        n_heads,
+        d_head,
+        group,
+        lo,
+        K,
+        nc,
+    )
+    if nc > 1
+        _pool_run_chunks!(f, nc)
+    else
+        f(1)
+    end
+    return attn
+end
+
+# Below this many score multiply-adds the pool hand-off costs more than it saves.
+const _ATTN_DECODE_POOL_MIN = 1 << 15
+
+struct _AttnDecodeChunk{A, Q, KC, VC, P, S}
+    attn::A
+    q::Q
+    kc::KC
+    vc::VC
+    probs::P
+    scale::S
+    n_heads::Int
+    d_head::Int
+    group::Int
+    lo::Int
+    K::Int
+    nc::Int
+end
+
+# Chunk c takes heads c, c + nc, ... and scores them in probs slot c.
+function (g::_AttnDecodeChunk)(c::Int)
+    for hh in c:g.nc:g.n_heads
+        _attention_decode_head!(g, hh, (c - 1) * g.K)
+    end
+    return nothing
+end
+
+function _attention_decode_head!(g::_AttnDecodeChunk, hh::Int, off::Int)
+    (; attn, q, kc, vc, probs, scale, d_head, lo, K) = g
+    hk = div(hh - 1, g.group) + 1
+    @inbounds begin
         for u in lo:K
-            probs[u] = 0.0f0
+            probs[off+u] = zero(eltype(probs))
         end
         for j in 1:d_head
             qv = q[1, hh, j]
             for u in lo:K
-                probs[u] += qv * kc[u, hk, j] / sqd
+                probs[off+u] = _score_add(probs[off+u], qv * kc[u, hk, j], scale)
             end
         end
-        row_max = probs[lo]
+        row_max = probs[off+lo]
         for u in (lo+1):K
-            row_max = max(row_max, probs[u])
+            row_max = max(row_max, probs[off+u])
         end
         isfinite(row_max) || throw(
             gesso_error(ERR_NUMERICAL_INSTABILITY, "softmax!: no finite unmasked maximum"),
         )
-        acc = 0.0
+        total = 0.0
         for u in lo:K
-            probs[u] = exp(probs[u] - row_max)
-            acc += probs[u]
+            probs[off+u] = exp(probs[off+u] - row_max)
+            total += probs[off+u]
         end
         for u in lo:K
-            probs[u] /= acc
+            probs[off+u] /= total
         end
-        for j in 1:d_head
+        # Four outputs per pass over the keys: each output still sums its
+        # keys in order, and the four chains overlap their add latencies.
+        T = eltype(attn)
+        j = 1
+        while j + 3 <= d_head
+            a1 = a2 = a3 = a4 = zero(T)
             for u in lo:K
-                attn[1, hh, j] += probs[u] * vc[u, hk, j]
+                p = probs[off+u]
+                a1 += p * vc[u, hk, j]
+                a2 += p * vc[u, hk, j+1]
+                a3 += p * vc[u, hk, j+2]
+                a4 += p * vc[u, hk, j+3]
             end
+            attn[1, hh, j] = a1
+            attn[1, hh, j+1] = a2
+            attn[1, hh, j+2] = a3
+            attn[1, hh, j+3] = a4
+            j += 4
+        end
+        while j <= d_head
+            a = zero(T)
+            for u in lo:K
+                a += probs[off+u] * vc[u, hk, j]
+            end
+            attn[1, hh, j] = a
+            j += 1
         end
     end
-    return attn
+    return nothing
 end
