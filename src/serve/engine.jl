@@ -171,12 +171,13 @@ function _system_prefix_len(
 end
 
 # The end-of-turn ids the sampler must stop on. The GGUF's eos key is not always
-# the token the chat template ends a turn with, so the two named turn-end tokens
-# are added whenever the vocabulary has them.
+# the token the chat template ends a turn with, so the named turn-end tokens are
+# added whenever the vocabulary has them. "<|tool_response>" ends a Gemma 4 turn
+# too: after a tool call the model would otherwise invent the tool's reply.
 function _engine_eos_ids(tk::Union{GGUFBPE, GGUFGemma4BPE})::Vector{Int}
     ids = Int[]
     tk.eos_token_id === nothing || push!(ids, tk.eos_token_id)
-    for name in ("<|im_end|>", "<|endoftext|>", "<turn|>")
+    for name in ("<|im_end|>", "<|endoftext|>", "<turn|>", "<|tool_response>")
         id = get(tk.vocab, name, nothing)
         id === nothing || push!(ids, id)
     end

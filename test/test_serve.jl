@@ -841,3 +841,12 @@ end
         @test sv_g4_parse(text; chunks=ch) == expected
     end
 end
+
+@testset "gemma4: a tool call finished by its turn end leaves no tool-response text" begin
+    p = Gemma4Parser(; start_in_reasoning=false, stop=String[])
+    text = "<|tool_call>call:get_weather{city:<|\"|>Paris<|\"|>}<tool_call|>"
+    events = feed!(p, Vector{UInt8}(codeunits(text)))
+    append!(events, Gesso.Serve.finish!(p))
+    @test p.n_calls == 1
+    @test !occursin("tool_response", repr(events))
+end
