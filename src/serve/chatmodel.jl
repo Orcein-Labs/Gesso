@@ -27,6 +27,8 @@ The engine as seen by the server. See the comment block in chatmodel.jl for the
 contract of each function. `prefix_len` defaults to a function that finds no
 boundary, so an engine without one is unchanged. `accepts_tools` defaults to true.
 `family` names the chat format; the handlers use it to pick the output parser.
+`thinking_default` is what a request that does not set `enable_thinking` gets:
+the template's own default (Qwen3.5 thinks, Gemma 4 does not).
 """
 struct ChatModel
     tokenize::Function
@@ -38,6 +40,7 @@ struct ChatModel
     prefix_len::Function
     accepts_tools::Bool
     family::Symbol
+    thinking_default::Bool
 
     function ChatModel(;
         tokenize::Function,
@@ -49,6 +52,7 @@ struct ChatModel
         prefix_len::Function=(msgs, tools, thinking, ids) -> 0,
         accepts_tools::Bool=true,
         family::Symbol=:qwen35_xml,
+        thinking_default::Bool=true,
     )
         n_ctx > 0 || throw(ArgumentError("n_ctx must be positive, got $n_ctx"))
         isempty(model_id) && throw(ArgumentError("model_id must not be empty"))
@@ -62,6 +66,7 @@ struct ChatModel
             prefix_len,
             accepts_tools,
             family,
+            thinking_default,
         )
     end
 end

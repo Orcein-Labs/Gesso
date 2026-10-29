@@ -113,7 +113,7 @@ function handle_chat(srv::Server, req::HTTPRequest, io::IO, keepalive::Bool)::Bo
     stream isa Bool || throw(HTTPError(400, "stream must be a boolean"))
     include_usage = stream && _flag(get(body, "stream_options", nothing), "include_usage")
     stop = _stop_list(get(body, "stop", nothing))
-    thinking = _thinking(body)
+    thinking = _thinking(body, model.thinking_default)
     requested = _max_tokens(body)
     sampling = _sampling(body)
 
@@ -425,15 +425,15 @@ function _normalize_call(c)
     )
 end
 
-# `enable_thinking` may come at the top level or inside chat_template_kwargs. The
-# template defaults to thinking on.
-function _thinking(body::AbstractDict)
+# `enable_thinking` may come at the top level or inside chat_template_kwargs.
+# Unset, the model's template default applies.
+function _thinking(body::AbstractDict, default::Bool)
     kw = get(body, "chat_template_kwargs", nothing)
     if kw isa AbstractDict && haskey(kw, "enable_thinking")
         return kw["enable_thinking"] !== false
     end
     haskey(body, "enable_thinking") && return body["enable_thinking"] !== false
-    return true
+    return default
 end
 
 # Greedy unless the request sets a temperature above 0. top_p and seed only
