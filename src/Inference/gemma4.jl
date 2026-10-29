@@ -400,6 +400,30 @@ function _g4_router_logits!(logits::AbstractVector{Float32}, r::AbstractMatrix, 
     return logits
 end
 
+# The logits of eight tokens at once, column k of L for the token whose router
+# input is row k of xt (8 x E, so one token's inputs sit eight floats apart).
+# A vector lane is one expert and each lane runs _g4_router_logits!'s
+# mul-then-add chain in i, so the two agree bit for bit. Reading the inputs
+# from xt rather than rin keeps them in cache: a row of rin is strided by the
+# token count, a page per element on a long prefill.
+function _g4_router_logits8!(L::Matrix{Float32}, r::Matrix{Float32}, xt::Matrix{Float32})
+    n_expert, E = size(r)
+    GC.@preserve L r xt begin
+        pr = pointer(r)
+        px = pointer(xt)
+        pl = pointer(L)
+        @inbounds for eb in 0:8:(n_expert - 8)
+            Base.Cartesian.@nexprs 8 k -> a_k = _v8splat(0.0f0)
+            for i in 0:(E - 1)
+                rv = _v8load(pr + 4 * (i * n_expert + eb))
+                Base.Cartesian.@nexprs 8 k -> a_k = _v8muladd(a_k, rv, _v8splat(unsafe_load(px, 8i + k)))
+            end
+            Base.Cartesian.@nexprs 8 k -> _v8store(pl + 4 * ((k - 1) * n_expert + eb), a_k)
+        end
+    end
+    return L
+end
+
 # Router softmax and top-k for token t. Fills probs and the first n_used
 # entries of order, and returns the renormalisation denominator.
 function _g4_route_token!(logits, probs, order, rin::Matrix{Float32}, t::Int, r_stor, n_used::Int)
@@ -409,6 +433,11 @@ function _g4_route_token!(logits, probs, order, rin::Matrix{Float32}, t::Int, r_
     else
         _g4_router_logits!(logits, r_stor, rin, t)
     end
+    return _g4_route_probs!(logits, probs, order, n_used)
+end
+
+function _g4_route_probs!(logits, probs, order, n_used::Int)
+    n_expert = length(logits)
     mx = maximum(logits)
     den = 0.0f0
     @inbounds for e in 1:n_expert
@@ -431,12 +460,34 @@ end
 function _g4_route_rows!(experts::Matrix{Int}, weights::Matrix{Float32}, rin::Matrix{Float32},
                          r_stor, n_used::Int, down_scale)
     n_expert = r_stor isa QuantMatrix ? r_stor.nrows : size(r_stor, 1)
+    tiled = r_stor isa Matrix{Float32} && n_expert % 8 == 0
     route = rows -> begin
         logits = Vector{Float32}(undef, n_expert)
         probs = Vector{Float32}(undef, n_expert)
         order = Vector{Int}(undef, n_expert)
+        if tiled
+            E = size(rin, 2)
+            xt = Matrix{Float32}(undef, 8, E)
+            L = Matrix{Float32}(undef, n_expert, 8)
+        end
         for t in rows
-            denom = _g4_route_token!(logits, probs, order, rin, t, r_stor, n_used)
+            if tiled
+                lane = (t - first(rows)) % 8 + 1
+                if lane == 1 && t + 7 <= last(rows)
+                    @inbounds for i in 1:E, j in 1:8
+                        xt[j, i] = rin[t + j - 1, i]
+                    end
+                    _g4_router_logits8!(L, r_stor, xt)
+                end
+                if t - lane + 8 <= last(rows)
+                    copyto!(logits, 1, L, (lane - 1) * n_expert + 1, n_expert)
+                else
+                    _g4_router_logits!(logits, r_stor, rin, t)
+                end
+                denom = _g4_route_probs!(logits, probs, order, n_used)
+            else
+                denom = _g4_route_token!(logits, probs, order, rin, t, r_stor, n_used)
+            end
             @inbounds for k in 1:n_used
                 e = order[k]
                 experts[k, t] = e
