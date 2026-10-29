@@ -86,6 +86,7 @@ function gguf_chat_model(
             _system_prefix_len(tk, family, msgs, tools, thinking, ids),
         accepts_tools=family in (:qwen35_xml, :gemma4),
         family=family,
+        thinking_default=family !== :gemma4,
     )
 end
 

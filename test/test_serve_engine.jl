@@ -134,6 +134,29 @@ end
     end
 end
 
+@testset "engine: a request that leaves enable_thinking unset gets the model's default" begin
+    seen = Bool[]
+    engine = ChatModel(
+        tokenize=s -> Int.(codeunits(s)),
+        detokenize=ids -> String(UInt8.(filter(<(256), ids))),
+        render=(msgs, tools, thinking) -> (push!(seen, thinking); "p"),
+        generate=sv_engine(Int[Int(c) for c in "ok"]; eos=[300], cached=0),
+        n_ctx=4096,
+        model_id="no-think",
+        thinking_default=false,
+    )
+    srv = serve(engine; port=0, block=false)
+    try
+        unset = sv_chat(SV_USER)
+        on = sv_chat(SV_USER; chat_template_kwargs=Dict("enable_thinking" => true))
+        @test sv_request(srv.port, sv_post("/v1/chat/completions", unset)).status == 200
+        @test sv_request(srv.port, sv_post("/v1/chat/completions", on)).status == 200
+        @test seen == [false, true]
+    finally
+        close(srv)
+    end
+end
+
 const SV_ORDERED_BODY = """
 {"messages":[{"role":"user","content":"hi"},
   {"role":"assistant","content":"","tool_calls":[{"id":"c1","type":"function",
@@ -292,6 +315,7 @@ end
         backend=nothing, n_ctx=4096, model_id="x",
     )
     @test qwen.accepts_tools
+    @test qwen.thinking_default
     @test endswith(qwen.render(msgs, Any[], true), "<think>\n")
     @test endswith(qwen.render(msgs, Any[], false), "<think>\n\n</think>\n\n")
 end
@@ -345,6 +369,7 @@ end
     )
     @test cm.family === :gemma4
     @test cm.accepts_tools
+    @test !cm.thinking_default
     @test 106 in _engine_eos_ids(tk)
     msgs = Dict{String, Any}[Dict{String, Any}("role" => "user", "content" => "hi")]
     on = cm.render(msgs, Any[], true)
