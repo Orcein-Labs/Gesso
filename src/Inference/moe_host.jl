@@ -310,6 +310,7 @@ mutable struct MoePrefillScratch{X, H}
     xg::Vector{X}               # xq of each entry of `pairs`, so one expert's tokens are contiguous
     hg::Vector{H}               # hq of each entry of `pairs`
     cbuf::Vector{Vector{Float32}}  # per chunk, one row's dots over an expert's pairs
+    cdt::Vector{Vector{Float32}}   # per chunk, the d table of an expert's pairs
 end
 
 MoePrefillScratch{X, H}() where {X, H} = MoePrefillScratch{X, H}(
@@ -326,6 +327,7 @@ MoePrefillScratch{X, H}() where {X, H} = MoePrefillScratch{X, H}(
     Int[],
     X[],
     H[],
+    Vector{Float32}[],
     Vector{Float32}[],
 )
 MoePrefillScratch() = MoePrefillScratch{Q8KVec, Q8KVec}()
@@ -367,6 +369,7 @@ function _moe_prefill_scratch(
             Int[],
             Vector{X}(undef, cap),
             Vector{H}(undef, cap),
+            Vector{Float32}[],
             Vector{Float32}[],
         )
         _MOE_PREFILL_SCRATCH[] = s
@@ -423,11 +426,12 @@ function _moe_prefill_group!(
     return s
 end
 
-# Chunk c's row buffer. Two chunks can split one expert's rows, so a buffer
-# shared by expert would race.
+# Chunk c's row buffer and d table. Two chunks can split one expert's rows, so
+# buffers shared by expert would race.
 function _moe_prefill_bufs!(s::MoePrefillScratch, nc::Int, n::Int)
     while length(s.cbuf) < nc
         push!(s.cbuf, Float32[])
+        push!(s.cdt, Float32[])
     end
     for c in 1:nc
         length(s.cbuf[c]) < n && resize!(s.cbuf[c], n)
@@ -444,15 +448,20 @@ end
     xv,
     n::Int,
     simd::Bool,
+    dt=nothing,
 )
     i0 = 1
     while i0 <= n
         K = min(_MULTI_TILE, n - i0 + 1)
-        _dot_q8k_multi!(buf, t, w, woff, xv, i0, K, simd)
+        _dot_q8k_multi!(buf, t, w, woff, xv, i0, K, simd, dt)
         i0 += K
     end
     return buf
 end
+
+# The types whose tiles take a d table, built once per expert piece: the f16-d
+# block types, whose tiles load a table row as one vector.
+_moe_prefill_dt(t::Int32, simd::Bool) = simd && _q80_act_type(t)
 
 function _moe_prefill_cost!(s::MoePrefillScratch, rows::Int)
     na = length(s.active)
@@ -527,11 +536,15 @@ function (g::_MoePrefillGateUp)(c::Int)
     s = g.s
     ff = s.ff
     buf = g.multi ? s.cbuf[c] : Float32[]
+    usedt =
+        g.multi && _moe_prefill_dt(g.gate.ggml_type, g.simd) &&
+        _moe_prefill_dt(g.up.ggml_type, g.simd)
     _moe_prefill_pieces(s, 2ff, g.nc, c) do e, r0, r1
         p0 = s.start[e]
         n = s.cnt[e]
         p1 = p0 + n - 1
         xv = view(s.xg, p0:p1)
+        dt = usedt ? _multi_d_table!(s.cdt[c], xv) : nothing
         for (sl, col, lo, hi, row0) in (
             (g.gate, 1, r0, min(r1, ff), 0),
             (g.up, 2, max(r0, ff + 1) - ff, r1 - ff, g.up_row0),
@@ -543,7 +556,7 @@ function (g::_MoePrefillGateUp)(c::Int)
             @inbounds for jj in lo:hi
                 woff = off0 + (row0 + jj - 1) * rb
                 if g.multi
-                    _moe_prefill_row_multi!(buf, t, sl.data, woff, xv, n, g.simd)
+                    _moe_prefill_row_multi!(buf, t, sl.data, woff, xv, n, g.simd, dt)
                     for i in 1:n
                         # Same expression as the per-pair path, so -0.0 becomes +0.0 identically.
                         s.gu[jj, col, s.pairs[p0+i-1]] = 1.0f0 * buf[i] + 0.0f0
@@ -596,16 +609,18 @@ function (g::_MoePrefillDown)(c::Int)
     t = sl.ggml_type
     rb = _qrow_bytes(t, sl.ne0)
     buf = g.multi ? s.cbuf[c] : Float32[]
+    usedt = g.multi && _moe_prefill_dt(t, g.simd)
     _moe_prefill_pieces(s, s.h, g.nc, c) do e, r0, r1
         p0 = s.start[e]
         n = s.cnt[e]
         p1 = p0 + n - 1
         hv = view(s.hg, p0:p1)
+        dt = usedt ? _multi_d_table!(s.cdt[c], hv) : nothing
         off0 = _quant_expert_off0(sl, e)
         @inbounds for jj in r0:r1
             woff = off0 + (jj - 1) * rb
             if g.multi
-                _moe_prefill_row_multi!(buf, t, sl.data, woff, hv, n, g.simd)
+                _moe_prefill_row_multi!(buf, t, sl.data, woff, hv, n, g.simd, dt)
                 for i in 1:n
                     s.dn[jj, s.pairs[p0+i-1]] = 1.0f0 * buf[i] + 0.0f0
                 end

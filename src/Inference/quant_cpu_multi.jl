@@ -126,10 +126,13 @@ end, Val(K))
 # columns' d values side by side, so the Q8_0 and Q6_K tile kernels read them as
 # one vector instead of gathering one per column. Tile i (0-based, columns
 # T*i + 1 ...) keeps block ib's column c at index T*(nb*i + ib) + c.
-function _multi_d_table(xqs::AbstractVector)
+_multi_d_table(xqs::AbstractVector) = _multi_d_table!(Float32[], xqs)
+
+# The same table built into dt, resized to fit.
+function _multi_d_table!(dt::Vector{Float32}, xqs::AbstractVector)
     T = _MULTI_TILE
     nb = length(xqs[1].d)
-    dt = zeros(Float32, T * nb * cld(length(xqs), T))
+    fill!(resize!(dt, T * nb * cld(length(xqs), T)), 0.0f0)
     @inbounds for t in eachindex(xqs)
         i, c = divrem(t - 1, T)
         d = xqs[t].d
@@ -1452,23 +1455,48 @@ end
 # (Float32(sumi) * dw) * x.d + sumf, with dw and x.d passed as two vectors.
 # With :iq4nl they are IQ4_NL nibbles; its single kernel's (x.d * dw) * sumi is
 # the Q8_0 float step, since one product does not depend on operand order.
+# IQ4_NL weights fit in i8 (-127..113), so a block's 32 products take one
+# vpmaddubsw of |x| (unsigned, so -128 is 128) by sign(x) * w. A pair sum is at
+# most 2 * 128 * 127 = 32512, so nothing saturates and the totals are exact.
+#
+# With dp the entry takes a pointer to the tile's d-table row in place of the d
+# vectors, and forms dw * x.d itself from the block's f16 dw: the products of
+# _multi_tile_d, without assembling the vector from K scalars.
 
-function _kq_ir_q80_multi(K::Int, weights::Symbol=:q80)
+function _kq_ir_q80_multi(K::Int, weights::Symbol=:q80, dp::Bool=false)
     io = IOBuffer()
     q4 = weights === :q40
+    nl = weights === :iq4nl
     qargs = join(("ptr %q$c" for c in 0:(K-1)), ", ")
-    dargs = q4 ? "<$K x float> %dw, <$K x float> %d" : "<$K x float> %d"
+    dargs = dp ? "ptr %dp" : q4 ? "<$K x float> %dw, <$K x float> %d" : "<$K x float> %d"
     print(
         io,
         "declare <8 x i32> @llvm.x86.avx2.pmadd.wd(<16 x i16>, <16 x i16>)\n",
         "declare <8 x i32> @llvm.x86.avx2.phadd.d(<8 x i32>, <8 x i32>)\n",
         "declare <16 x i8> @llvm.x86.ssse3.pshuf.b.128(<16 x i8>, <16 x i8>)\n",
+        "declare <32 x i8> @llvm.x86.avx2.psign.b(<32 x i8>, <32 x i8>)\n",
+        "declare <16 x i16> @llvm.x86.avx2.pmadd.ub.sw(<32 x i8>, <32 x i8>)\n",
         "define <$K x float> @entry(ptr %w, $qargs, <$K x float> %s, $dargs) #0 {\n",
     )
+    if dp
+        print(
+            io,
+            "  %dh = load half, ptr %w, align 1\n",
+            "  %dwf = fpext half %dh to float\n",
+            "  %dw1 = insertelement <$K x float> poison, float %dwf, i64 0\n",
+            "  %dw = shufflevector <$K x float> %dw1, <$K x float> poison, <$K x i32> zeroinitializer\n",
+            q4 ? "  %d = load <$K x float>, ptr %dp, align 4\n" :
+            "  %dx = load <$K x float>, ptr %dp, align 4\n  %d = fmul <$K x float> %dw, %dx\n",
+        )
+    end
     if q4
         _kq_q40_weights(io)
-    elseif weights === :iq4nl
+    elseif nl
         _kq_iq4nl_weights(io)
+        print(
+            io,
+            "  %w32 = shufflevector <16 x i8> %kl, <16 x i8> %kh, <32 x i32> <$(_kq_idx(0, 32))>\n",
+        )
     else
         _kq_ld(io, "wv", "w", 2)
         _kq_half(io, "wl", "wv", 0)
@@ -1481,6 +1509,16 @@ function _kq_ir_q80_multi(K::Int, weights::Symbol=:q80)
     end
     for c in 0:(K-1)
         _kq_ld(io, "x$c", "q$c", 0)
+        if nl
+            print(
+                io,
+                "  %ax$c = call <32 x i8> @llvm.x86.avx2.psign.b(<32 x i8> %x$c, <32 x i8> %x$c)\n",
+                "  %sw$c = call <32 x i8> @llvm.x86.avx2.psign.b(<32 x i8> %w32, <32 x i8> %x$c)\n",
+                "  %m$c = call <16 x i16> @llvm.x86.avx2.pmadd.ub.sw(<32 x i8> %ax$c, <32 x i8> %sw$c)\n",
+                "  %p$c = call <8 x i32> @llvm.x86.avx2.pmadd.wd(<16 x i16> %m$c, <16 x i16> $(_kq_rep("i16", 1, 16)))\n",
+            )
+            continue
+        end
         _kq_half(io, "xl$c", "x$c", 0)
         _kq_half(io, "xh$c", "x$c", 1)
         print(
@@ -1547,6 +1585,12 @@ for K in 1:8
         Base.llvmcall(($(_kq_ir_q80_multi(K)), "entry"), $V, $argt, pw, $(qs...), s, d)
     @eval @inline _iq4nl_multi_step(pw::Ptr{UInt8}, pq::NTuple{$K, Ptr{Int8}}, s::$V, d::$V) =
         Base.llvmcall(($(_kq_ir_q80_multi(K, :iq4nl)), "entry"), $V, $argt, pw, $(qs...), s, d)
+    # The same steps with the tile's d-table row in place of the d vectors.
+    argtp = Tuple{Ptr{UInt8}, ntuple(_ -> Ptr{Int8}, K)..., V, Ptr{Float32}}
+    for (f, wt) in ((:_q80_multi_step, :q80), (:_iq4nl_multi_step, :iq4nl), (:_q40_multi_step, :q40))
+        @eval @inline $f(pw::Ptr{UInt8}, pq::NTuple{$K, Ptr{Int8}}, s::$V, dp::Ptr{Float32}) =
+            Base.llvmcall(($(_kq_ir_q80_multi(K, wt, true)), "entry"), $V, $argtp, pw, $(qs...), s, dp)
+    end
     argt4 = Tuple{Ptr{UInt8}, ntuple(_ -> Ptr{Int8}, K)..., V, V, V}
     @eval @inline _q40_multi_step(
         pw::Ptr{UInt8},
@@ -1566,8 +1610,34 @@ for K in 1:8
     )
 end
 
-# Q4_0 tile: the d table holds each column's x.d, and 1.0f0 * x.d is exact, so
-# _multi_tile_d with dw = 1 reads it back unchanged.
+# A tile's float sums through a d-table step. The base pointers are taken once
+# and block ib sits at fixed strides from them: bs bytes of weights, 32
+# activations per column and one T-wide d row.
+@inline function _multi_dp_sums(
+    step::F,
+    w::AbstractVector{UInt8},
+    woff::Int,
+    xqs,
+    t0::Int,
+    ::Val{K},
+    dt::Vector{Float32},
+    i0::Int,
+    nb::Int,
+    bs::Int,
+) where {F, K}
+    pw0 = pointer(w, woff + 1)
+    pq0 = ntuple(c -> pointer(xqs[t0+c-1].qs), Val(K))
+    pd0 = pointer(dt, i0 + 1)
+    sumf = ntuple(_ -> VecElement(0.0f0), Val(K))
+    for ib in 0:(nb-1)
+        pq = map(p -> p + 32 * ib, pq0)
+        sumf = step(pw0 + bs * ib, pq, sumf, pd0 + 4 * _MULTI_TILE * ib)
+    end
+    return sumf
+end
+
+# Q4_0 tile. The d table holds each column's x.d unscaled, which is the d the
+# Q4_0 float step takes.
 @noinline function _dot_q40_multi!(
     out::AbstractVector{Float32},
     w::AbstractVector{UInt8},
@@ -1582,22 +1652,26 @@ end
     _multi_check(xqs, t0, K, nb)
     nb == 0 && return _multi_zero!(out, t0, K)
     i0 = _multi_d_base(dt, t0, K, nb)
-    GC.@preserve w xqs begin
-        xv = ntuple(c -> xqs[t0+c-1], Val(K))
-        sumf = ntuple(_ -> VecElement(0.0f0), Val(K))
-        @inbounds for ib in 0:(nb-1)
-            b = woff + ib * 18
-            dw = ntuple(_ -> VecElement(_kq_f16(w, b)), Val(K))
-            d = map(VecElement, _multi_tile_d(dt, xv, i0, ib, 1.0f0))
-            sumf = _q40_multi_step(
-                pointer(w, b + 1),
-                ntuple(c -> pointer(xv[c].qs, 32 * ib + 1), Val(K)),
-                sumf,
-                dw,
-                d,
-            )
+    GC.@preserve w xqs dt begin
+        if dt === nothing
+            xv = ntuple(c -> xqs[t0+c-1], Val(K))
+            sumf = ntuple(_ -> VecElement(0.0f0), Val(K))
+            @inbounds for ib in 0:(nb-1)
+                b = woff + ib * 18
+                dw = ntuple(_ -> VecElement(_kq_f16(w, b)), Val(K))
+                d = map(VecElement, _multi_tile_d(nothing, xv, 0, ib, 1.0f0))
+                sumf = _q40_multi_step(
+                    pointer(w, b + 1),
+                    ntuple(c -> pointer(xv[c].qs, 32 * ib + 1), Val(K)),
+                    sumf,
+                    dw,
+                    d,
+                )
+            end
+        else
+            sumf = _multi_dp_sums(_q40_multi_step, w, woff, xqs, t0, Val(K), dt, i0, nb, 18)
         end
-        for c in 1:K
+        @inbounds for c in 1:K
             out[t0+c-1] = sumf[c].value
         end
     end
@@ -1616,23 +1690,26 @@ end
     ::Val{nl}=Val(false),
 ) where {K, nl}
     bs = nl ? 18 : 34
+    step = nl ? _iq4nl_multi_step : _q80_multi_step
     nb = length(xqs[t0].d)
     _q8k_check_row(w, woff, bs * nb)
     _multi_check(xqs, t0, K, nb)
     nb == 0 && return _multi_zero!(out, t0, K)
     i0 = _multi_d_base(dt, t0, K, nb)
-    GC.@preserve w xqs begin
-        xv = ntuple(c -> xqs[t0+c-1], Val(K))
-        sumf = ntuple(_ -> VecElement(0.0f0), Val(K))
-        @inbounds for ib in 0:(nb-1)
-            b = woff + ib * bs
-            dw = _kq_f16(w, b)
-            d = map(VecElement, _multi_tile_d(dt, xv, i0, ib, dw))
-            pw = pointer(w, b + 1)
-            pq = ntuple(c -> pointer(xv[c].qs, 32 * ib + 1), Val(K))
-            sumf = nl ? _iq4nl_multi_step(pw, pq, sumf, d) : _q80_multi_step(pw, pq, sumf, d)
+    GC.@preserve w xqs dt begin
+        if dt === nothing
+            xv = ntuple(c -> xqs[t0+c-1], Val(K))
+            sumf = ntuple(_ -> VecElement(0.0f0), Val(K))
+            @inbounds for ib in 0:(nb-1)
+                b = woff + ib * bs
+                d = map(VecElement, _multi_tile_d(nothing, xv, 0, ib, _kq_f16(w, b)))
+                pq = ntuple(c -> pointer(xv[c].qs, 32 * ib + 1), Val(K))
+                sumf = step(pointer(w, b + 1), pq, sumf, d)
+            end
+        else
+            sumf = _multi_dp_sums(step, w, woff, xqs, t0, Val(K), dt, i0, nb, bs)
         end
-        for c in 1:K
+        @inbounds for c in 1:K
             out[t0+c-1] = sumf[c].value
         end
     end
