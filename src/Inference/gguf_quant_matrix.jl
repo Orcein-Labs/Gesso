@@ -483,11 +483,9 @@ function _quant_matmul_multi!(dst::AbstractMatrix, x::AbstractMatrix, q::QuantMa
     # slowest thread (2-3x on the 27B's verify window). Rows are independent,
     # so the bits do not depend on the chunk count.
     nc = _qgemv_nchunks(q.nrows)
-    # The Q3_K to Q6_K, Q8_0 and Q4_0 tiles read their columns' d values from
-    # one table.
-    dt =
-        simd && (_q6k_prep_type(q.ggml_type) || _q80_act_type(q.ggml_type)) ?
-        _multi_d_table(xqs) : nothing
+    # The tiles of the K-quants, Q8_0, Q4_0, IQ4_NL and IQ2_XS read their
+    # columns' d values from one table.
+    dt = simd && _multi_dt_type(q.ggml_type) ? _multi_d_table(xqs) : nothing
     chunk =
         _PrefillChunk(dst, _quant_bytes(q), xqs, dt, q.ggml_type, q.ne0, q.nrows, nc, simd)
     _run_row_chunks!(chunk, nc, q.nrows * q.ne0 * seq)

@@ -460,8 +460,9 @@ end
 end
 
 # The types whose tiles take a d table, built once per expert piece: the f16-d
-# block types, whose tiles load a table row as one vector.
-_moe_prefill_dt(t::Int32, simd::Bool) = simd && _q80_act_type(t)
+# block types and IQ2_XS, whose tiles load a table row as one vector. The K-quant
+# tables want prepped columns, which the expert pieces do not build.
+_moe_prefill_dt(t::Int32, simd::Bool) = simd && (_q80_act_type(t) || t == GGML_TYPE_IQ2_XS)
 
 function _moe_prefill_cost!(s::MoePrefillScratch, rows::Int)
     na = length(s.active)

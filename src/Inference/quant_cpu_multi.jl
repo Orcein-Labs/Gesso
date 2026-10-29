@@ -328,27 +328,6 @@ end
     return g, s, ls1, ls2
 end
 
-# IQ2_XS: 9-bit grid index and 7-bit sign index per group, scales at b+66.
-@inline function _iq2xs_sub_ops(pg, ps, b::Ptr{UInt8}, ib32::Int)
-    sc = unsafe_load(b + 66 + ib32)
-    ls1 = Int32(2 * (sc & 0x0f) + 1)
-    ls2 = Int32(2 * (sc >> 4) + 1)
-    qw = ltoh(unsafe_load(Ptr{UInt64}(b + 2 + 8 * ib32)))
-    g = (
-        VecElement(unsafe_load(pg, Int(qw & 0x1ff) + 1)),
-        VecElement(unsafe_load(pg, Int((qw >> 16) & 0x1ff) + 1)),
-        VecElement(unsafe_load(pg, Int((qw >> 32) & 0x1ff) + 1)),
-        VecElement(unsafe_load(pg, Int((qw >> 48) & 0x1ff) + 1)),
-    )
-    s = (
-        VecElement(unsafe_load(ps, Int((qw >> 9) & 0x7f) + 1)),
-        VecElement(unsafe_load(ps, Int((qw >> 25) & 0x7f) + 1)),
-        VecElement(unsafe_load(ps, Int((qw >> 41) & 0x7f) + 1)),
-        VecElement(unsafe_load(ps, Int((qw >> 57) & 0x7f) + 1)),
-    )
-    return g, s, ls1, ls2
-end
-
 @noinline _dot_iq2xxs_multi!(out, w, woff, xqs, t0, v::Val) = _iq2_multi_core!(
     out,
     w,
@@ -374,20 +353,6 @@ end
     IQ2S_GRID,
     _IQ_SIGN8_FULL_TAB,
     _iq2s_sub_ops,
-    0.125f0,
-)
-
-@noinline _dot_iq2xs_multi!(out, w, woff, xqs, t0, v::Val) = _iq2_multi_core!(
-    out,
-    w,
-    woff,
-    xqs,
-    t0,
-    v,
-    74,
-    IQ2XS_GRID,
-    _IQ_SIGN8_TAB,
-    _iq2xs_sub_ops,
     0.125f0,
 )
 
@@ -1026,6 +991,9 @@ end
 _q6k_prep_type(t::Int32) =
     t == GGML_TYPE_Q3_K || t == GGML_TYPE_Q4_K || t == GGML_TYPE_Q5_K || t == GGML_TYPE_Q6_K
 
+# The types whose tiles read their columns' d values from a d table.
+_multi_dt_type(t::Int32) = _q6k_prep_type(t) || _q80_act_type(t) || t == GGML_TYPE_IQ2_XS
+
 # The fallback for a prepped column is the plain Q8_K dot.
 @inline _dot_q8k(
     ggml_type::Int32,
@@ -1463,6 +1431,50 @@ end
 # vectors, and forms dw * x.d itself from the block's f16 dw: the products of
 # _multi_tile_d, without assembling the vector from K scalars.
 
+# The K per-column <8 x i32> lane vectors %p0..%p(K-1) as one <K x i32> %tk of
+# column totals, column c in lane c. A phadd tree transposes them; the adds are
+# integer, so the totals do not depend on their order.
+function _kq_ir_tile_sums(io::IOBuffer, K::Int)
+    p(c) = c < K ? "%p$c" : "zeroinitializer"
+    hadd(dst, a, b) = print(
+        io,
+        "  %$dst = call <8 x i32> @llvm.x86.avx2.phadd.d(<8 x i32> $a, <8 x i32> $b)\n",
+    )
+    # h_j lanes: [p2j 01, p2j 23, p2j+1 01, p2j+1 23 | the same for 45, 67].
+    nh = cld(K, 2)
+    for j in 0:(nh-1)
+        hadd("h$j", p(2j), p(2j + 1))
+    end
+    h(j) = j < nh ? "%h$j" : "zeroinitializer"
+    # g lanes: [p0..p3 low-half totals | p0..p3 high-half totals], g1 for p4..p7.
+    hadd("g0", h(0), h(1))
+    K > 4 && hadd("g1", h(2), h(3))
+    if K > 4
+        print(
+            io,
+            "  %lo = shufflevector <8 x i32> %g0, <8 x i32> %g1, <8 x i32> <i32 0, i32 1, i32 2, i32 3, i32 8, i32 9, i32 10, i32 11>\n",
+            "  %hi = shufflevector <8 x i32> %g0, <8 x i32> %g1, <8 x i32> <i32 4, i32 5, i32 6, i32 7, i32 12, i32 13, i32 14, i32 15>\n",
+            "  %t = add <8 x i32> %lo, %hi\n",
+        )
+        n = 8
+    else
+        print(
+            io,
+            "  %lo = shufflevector <8 x i32> %g0, <8 x i32> poison, <4 x i32> <i32 0, i32 1, i32 2, i32 3>\n",
+            "  %hi = shufflevector <8 x i32> %g0, <8 x i32> poison, <4 x i32> <i32 4, i32 5, i32 6, i32 7>\n",
+            "  %t = add <4 x i32> %lo, %hi\n",
+        )
+        n = 4
+    end
+    print(
+        io,
+        "  %tk = shufflevector <$n x i32> %t, <$n x i32> poison, <$K x i32> <",
+        join(("i32 $c" for c in 0:(K-1)), ", "),
+        ">\n",
+    )
+    return nothing
+end
+
 function _kq_ir_q80_multi(K::Int, weights::Symbol=:q80, dp::Bool=false)
     io = IOBuffer()
     q4 = weights === :q40
@@ -1530,42 +1542,9 @@ function _kq_ir_q80_multi(K::Int, weights::Symbol=:q80, dp::Bool=false)
             "  %p$c = add <8 x i32> %pl$c, %ph$c\n",
         )
     end
-    p(c) = c < K ? "%p$c" : "zeroinitializer"
-    hadd(dst, a, b) = print(
-        io,
-        "  %$dst = call <8 x i32> @llvm.x86.avx2.phadd.d(<8 x i32> $a, <8 x i32> $b)\n",
-    )
-    # h_j lanes: [p2j 01, p2j 23, p2j+1 01, p2j+1 23 | the same for 45, 67].
-    nh = cld(K, 2)
-    for j in 0:(nh-1)
-        hadd("h$j", p(2j), p(2j + 1))
-    end
-    h(j) = j < nh ? "%h$j" : "zeroinitializer"
-    # g lanes: [p0..p3 low-half totals | p0..p3 high-half totals], g1 for p4..p7.
-    hadd("g0", h(0), h(1))
-    K > 4 && hadd("g1", h(2), h(3))
-    if K > 4
-        print(
-            io,
-            "  %lo = shufflevector <8 x i32> %g0, <8 x i32> %g1, <8 x i32> <i32 0, i32 1, i32 2, i32 3, i32 8, i32 9, i32 10, i32 11>\n",
-            "  %hi = shufflevector <8 x i32> %g0, <8 x i32> %g1, <8 x i32> <i32 4, i32 5, i32 6, i32 7, i32 12, i32 13, i32 14, i32 15>\n",
-            "  %t = add <8 x i32> %lo, %hi\n",
-        )
-        n = 8
-    else
-        print(
-            io,
-            "  %lo = shufflevector <8 x i32> %g0, <8 x i32> poison, <4 x i32> <i32 0, i32 1, i32 2, i32 3>\n",
-            "  %hi = shufflevector <8 x i32> %g0, <8 x i32> poison, <4 x i32> <i32 4, i32 5, i32 6, i32 7>\n",
-            "  %t = add <4 x i32> %lo, %hi\n",
-        )
-        n = 4
-    end
+    _kq_ir_tile_sums(io, K)
     print(
         io,
-        "  %tk = shufflevector <$n x i32> %t, <$n x i32> poison, <$K x i32> <",
-        join(("i32 $c" for c in 0:(K-1)), ", "),
-        ">\n",
         "  %fa = sitofp <$K x i32> %tk to <$K x float>\n",
         q4 ? "  %fw = fmul <$K x float> %fa, %dw\n  %fm = fmul <$K x float> %fw, %d\n" :
         "  %fm = fmul <$K x float> %fa, %d\n",
@@ -1608,6 +1587,200 @@ for K in 1:8
         dw,
         d,
     )
+end
+
+# ---------------------------------------------------------------- IQ2_XS
+#
+# One llvmcall per 256-value block for all K columns. Driving the shared IQ2
+# core one sub-block at a time left the kernel issue-bound: the scale splats,
+# the scalar gathers, register spills and K separate horizontal sums cost more
+# than the vpmaddubsw work. Here the eight sub-blocks run inside the call with
+# the K accumulators in registers, the sub-block multiplier is one load from
+# _IQ2XS_LS_TAB, and the K accumulators reduce through _kq_ir_tile_sums.
+#
+# Each column still runs the single kernel's integer steps (psign of its quants
+# by the group signs, vpmaddubsw against the grid bytes, vpmaddwd by the
+# sub-block scales, int32 adds), so its block total is the same integer. The
+# float step is the single kernel's sumf + (dw * x.d) * Float32(total), unfused.
+
+# The vpmaddwd multiplier of each scale byte sc: lanes 0-7 hold 2 * (sc & 15) + 1
+# (groups 0-1), lanes 8-15 hold 2 * (sc >> 4) + 1 (groups 2-3). Entry sc starts
+# at byte 32 * sc.
+const _IQ2XS_LS_TAB =
+    vec(Int16[2 * ((sc >> (l < 8 ? 0 : 4)) & 0x0f) + 1 for l in 0:15, sc in 0:255])
+
+function _kq_ir_iq2xs_multi(K::Int, dp::Bool=false)
+    io = IOBuffer()
+    qargs = join(("ptr %q$c" for c in 0:(K-1)), ", ")
+    dargs = dp ? "ptr %dp" : "<$K x float> %d"
+    print(
+        io,
+        _Q8K_GRID_DECLS,
+        "declare <8 x i32> @llvm.x86.avx2.phadd.d(<8 x i32>, <8 x i32>)\n",
+        "define <$K x float> @entry(ptr %b, ptr %pg, ptr %ps, ptr %pl, $qargs, <$K x float> %s, $dargs) #0 {\nentry:\n",
+    )
+    if dp
+        print(
+            io,
+            "  %dh = load half, ptr %b, align 1\n",
+            "  %dwf = fpext half %dh to float\n",
+            "  %dw1 = insertelement <$K x float> poison, float %dwf, i64 0\n",
+            "  %dw = shufflevector <$K x float> %dw1, <$K x float> poison, <$K x i32> zeroinitializer\n",
+            "  %dx = load <$K x float>, ptr %dp, align 4\n",
+            "  %d = fmul <$K x float> %dw, %dx\n",
+        )
+    end
+    # Group l of sub-block k: grid index bits 16l..16l+8, sign index 16l+9..16l+15.
+    lookup(dst, tab, qw, sh, mask) = print(
+        io,
+        sh == 0 ? "  %$(dst)_s = add i64 %$qw, 0\n" : "  %$(dst)_s = lshr i64 %$qw, $sh\n",
+        "  %$(dst)_i = and i64 %$(dst)_s, $mask\n",
+        "  %$(dst)_p = getelementptr i64, ptr %$tab, i64 %$(dst)_i\n",
+        "  %$dst = load i64, ptr %$(dst)_p, align 8\n",
+    )
+    vec4(dst, x) = print(
+        io,
+        "  %$(dst)_v0 = insertelement <4 x i64> poison, i64 %$(x)0, i64 0\n",
+        "  %$(dst)_v1 = insertelement <4 x i64> %$(dst)_v0, i64 %$(x)1, i64 1\n",
+        "  %$(dst)_v2 = insertelement <4 x i64> %$(dst)_v1, i64 %$(x)2, i64 2\n",
+        "  %$(dst)_v3 = insertelement <4 x i64> %$(dst)_v2, i64 %$(x)3, i64 3\n",
+        "  %$dst = bitcast <4 x i64> %$(dst)_v3 to <32 x i8>\n",
+    )
+    # The sub-blocks run as a loop the unroller is told to leave alone: unrolled,
+    # a block is ~800 instructions, too big for the uop cache, and the legacy
+    # decoder then caps the kernel near 2.7 instructions per cycle.
+    print(io, "  br label %loop\nloop:\n", "  %k = phi i64 [ 0, %entry ], [ %kn, %loop ]\n")
+    for c in 0:(K-1)
+        print(io, "  %a$c = phi <8 x i32> [ zeroinitializer, %entry ], [ %p$c, %loop ]\n")
+    end
+    print(
+        io,
+        "  %qo = shl i64 %k, 3\n",
+        "  %qwo = add i64 %qo, 2\n",
+        "  %qwp = getelementptr i8, ptr %b, i64 %qwo\n",
+        "  %qw = load i64, ptr %qwp, align 1\n",
+    )
+    for l in 0:3
+        lookup("lg$l", "pg", "qw", 16l, 511)
+        lookup("ls$l", "ps", "qw", 16l + 9, 127)
+    end
+    vec4("gv", "lg")
+    vec4("sv", "ls")
+    print(
+        io,
+        "  %sco0 = add i64 %k, 66\n",
+        "  %scp = getelementptr i8, ptr %b, i64 %sco0\n",
+        "  %sc = load i8, ptr %scp, align 1\n",
+        "  %sci = zext i8 %sc to i64\n",
+        "  %sco = shl i64 %sci, 5\n",
+        "  %mp = getelementptr i8, ptr %pl, i64 %sco\n",
+        "  %m = load <16 x i16>, ptr %mp, align 1\n",
+        "  %xo = shl i64 %k, 5\n",
+    )
+    for c in 0:(K-1)
+        print(
+            io,
+            "  %xp$c = getelementptr i8, ptr %q$c, i64 %xo\n",
+            "  %x$c = load <32 x i8>, ptr %xp$c, align 1\n",
+            "  %bs$c = call <32 x i8> @llvm.x86.avx2.psign.b(<32 x i8> %x$c, <32 x i8> %sv)\n",
+            "  %u$c = call <16 x i16> @llvm.x86.avx2.pmadd.ub.sw(<32 x i8> %gv, <32 x i8> %bs$c)\n",
+            "  %v$c = call <8 x i32> @llvm.x86.avx2.pmadd.wd(<16 x i16> %u$c, <16 x i16> %m)\n",
+            "  %p$c = add <8 x i32> %a$c, %v$c\n",
+        )
+    end
+    print(
+        io,
+        "  %kn = add i64 %k, 1\n",
+        "  %kd = icmp eq i64 %kn, 8\n",
+        "  br i1 %kd, label %done, label %loop, !llvm.loop !0\n",
+        "done:\n",
+    )
+    _kq_ir_tile_sums(io, K)
+    print(
+        io,
+        "  %fa = sitofp <$K x i32> %tk to <$K x float>\n",
+        "  %fm = fmul <$K x float> %d, %fa\n",
+        "  %fs = fadd <$K x float> %s, %fm\n",
+        "  ret <$K x float> %fs\n}\n",
+        _KQ_ATTRS,
+        "!0 = distinct !{!0, !1}\n!1 = !{!\"llvm.loop.unroll.disable\"}\n",
+    )
+    return String(take!(io))
+end
+
+# One block of K columns: s + (dw * x.d) * Float32(total) per column. q holds
+# the columns' pointers at the block's first quant; d is either the K products
+# dw * x.d or a pointer to the block's d-table row.
+for K in 1:8
+    qs = [:(q[$c]) for c in 1:K]
+    V = NTuple{K, VecElement{Float32}}
+    head = (Ptr{UInt8}, Ptr{UInt64}, Ptr{UInt64}, Ptr{Int16}, ntuple(_ -> Ptr{Int8}, K)...)
+    for (D, dp) in ((V, false), (Ptr{Float32}, true))
+        @eval @inline _iq2xs_multi_step(
+            b::Ptr{UInt8},
+            pg::Ptr{UInt64},
+            ps::Ptr{UInt64},
+            pl::Ptr{Int16},
+            q::NTuple{$K, Ptr{Int8}},
+            s::$V,
+            d::$D,
+        ) = Base.llvmcall(
+            ($(_kq_ir_iq2xs_multi(K, dp)), "entry"),
+            $V,
+            Tuple{$(head...), $V, $D},
+            b,
+            pg,
+            ps,
+            pl,
+            $(qs...),
+            s,
+            d,
+        )
+    end
+end
+
+@inline _iq2xs_block_d(
+    ::Nothing,
+    xv::NTuple{K, Any},
+    i0::Int,
+    ib::Int,
+    b::Ptr{UInt8},
+) where {K} = ntuple(c -> VecElement(_iq_f16_at(b) * xv[c].d[ib+1]), Val(K))
+@inline _iq2xs_block_d(dt::Vector{Float32}, xv, i0::Int, ib::Int, b::Ptr{UInt8}) =
+    pointer(dt, i0 + _MULTI_TILE * ib + 1)
+
+@noinline function _dot_iq2xs_multi!(
+    out::AbstractVector{Float32},
+    w::AbstractVector{UInt8},
+    woff::Int,
+    xqs,
+    t0::Int,
+    ::Val{K},
+    dt=nothing,
+) where {K}
+    nb = length(xqs[t0].d)
+    _q8k_check_row(w, woff, 74 * nb)
+    _multi_check(xqs, t0, K, nb)
+    nb == 0 && return _multi_zero!(out, t0, K)
+    i0 = _multi_d_base(dt, t0, K, nb)
+    xv = ntuple(c -> xqs[t0+c-1], Val(K))
+    GC.@preserve w xv dt IQ2XS_GRID _IQ_SIGN8_TAB _IQ2XS_LS_TAB begin
+        pw = pointer(w, woff + 1)
+        pg = pointer(IQ2XS_GRID)
+        ps = pointer(_IQ_SIGN8_TAB)
+        pl = pointer(_IQ2XS_LS_TAB)
+        pq = ntuple(c -> pointer(xv[c].qs), Val(K))
+        s = ntuple(_ -> VecElement(0.0f0), Val(K))
+        @inbounds for ib in 0:(nb-1)
+            b = pw + 74 * ib
+            q = ntuple(c -> pq[c] + QK_K * ib, Val(K))
+            s = _iq2xs_multi_step(b, pg, ps, pl, q, s, _iq2xs_block_d(dt, xv, i0, ib, b))
+        end
+        for c in 1:K
+            out[t0+c-1] = 0.125f0 * s[c].value
+        end
+    end
+    return out
 end
 
 # A tile's float sums through a d-table step. The base pointers are taken once
@@ -1751,7 +1924,7 @@ function _dot_q8k_multi_kernel!(
     ggml_type == GGML_TYPE_IQ2_XXS && return _dot_iq2xxs_multi!(out, w, woff, xqs, t0, v)
     ggml_type == GGML_TYPE_IQ3_S && return _dot_iq3s_multi!(out, w, woff, xqs, t0, v)
     ggml_type == GGML_TYPE_IQ2_S && return _dot_iq2s_multi!(out, w, woff, xqs, t0, v)
-    ggml_type == GGML_TYPE_IQ2_XS && return _dot_iq2xs_multi!(out, w, woff, xqs, t0, v)
+    ggml_type == GGML_TYPE_IQ2_XS && return _dot_iq2xs_multi!(out, w, woff, xqs, t0, v, dt)
     ggml_type == GGML_TYPE_IQ3_XXS && return _dot_iq3xxs_multi!(out, w, woff, xqs, t0, v)
     ggml_type == GGML_TYPE_IQ1_S && return _dot_iq1s_multi!(out, w, woff, xqs, t0, v)
     ggml_type == GGML_TYPE_IQ1_M && return _dot_iq1m_multi!(out, w, woff, xqs, t0, v)
@@ -1797,7 +1970,7 @@ Raw dots of the weight row at 0-based byte `woff` of `w` with the `ntile`
 Q8_K activations `xqs[t0:t0+ntile-1]`, written to `out[t0:...]`. Column c is
 bit-equal to `_dot_q8k(ggml_type, w, woff, xqs[t0+c-1], simd)`. `ntile` is
 1..8 so that any remainder is a tile. `dt`, from `_multi_d_table(xqs)`, gives
-the Q6_K and Q8_0 kernels each tile's d values as one load; with it, `t0` must
+the kernels of the `_multi_dt_type` types each tile's d values as one load; with it, `t0` must
 start one of the table's tiles and `ntile` be at most `_MULTI_TILE`.
 """
 function _dot_q8k_multi!(
