@@ -10,6 +10,8 @@
 #     mins at 0 and 63, activations at -128 and 127), plain and prepped
 #   * Q3_K at the integer extremes (u = 0 and 7, scales at -32 and 31,
 #     activations at -128 and 127), plain and prepped
+#   * Q8_0, Q4_0 and IQ4_NL at the integer extremes (weight bytes 0x00 and 0xff,
+#     activations at -128 and 127), with and without a d table
 #   * prepped Q3_K, Q4_K, Q5_K and Q6_K activations (_q6k_prep) give the same bits,
 #     extremes included
 #   * the tile kernels do not allocate after warm-up
@@ -249,6 +251,40 @@ end
     for ntile in 1:8, t0 in (1, 2)
         @test _mq_check_tiles(ty, w, length(rows), rb, xqs, t0, ntile) == 0
         @test _mq_check_tiles(ty, w, length(rows), rb, xps, t0, ntile) == 0
+    end
+end
+
+@testset "multi-column dot: Q8_0, Q4_0 and IQ4_NL at the integer extremes" begin
+    # Bytes 0xff and 0x00 give the 4-bit formats their end weights (Q4_0 7 and
+    # -8, IQ4_NL 113 and -127), 0x80 and 0x7f give Q8_0 -128 and 127; the mix
+    # sets each byte to one of these. d = 1.0, activations at -128 and 127 built
+    # by hand.
+    rng = Xoshiro(0x40e1)
+    nb = 16
+    for ty in (_MQ.GGML_TYPE_Q8_0, _MQ.GGML_TYPE_Q4_0, _MQ.GGML_TYPE_IQ4_NL)
+        bsz = _MQ._iq_block_bytes(ty)
+        rb = _MQ._qrow_bytes(ty, 32 * nb)
+        rows = (fill(0xff, rb), zeros(UInt8, rb), rand(rng, (0x00, 0xff, 0x80, 0x7f), rb), rand(rng, UInt8, rb))
+        w = UInt8[]
+        for row in rows
+            for blk in 0:(nb-1)
+                row[blk*bsz+1] = 0x00
+                row[blk*bsz+2] = 0x3c    # d = 1.0 in f16
+            end
+            append!(w, row)
+        end
+        pick = (Int8(-128), Int8(127), Int8(-127), Int8(0), Int8(1))
+        xqs = map(1:9) do c
+            x = _MQ.Q80Vec(nb)
+            for i in eachindex(x.qs)
+                x.qs[i] = c <= 2 ? (c == 1 ? Int8(-128) : Int8(127)) : rand(rng, pick)
+            end
+            x.d .= 1.0f0
+            x
+        end
+        for ntile in 1:8, t0 in (1, 2)
+            @test _mq_check_tiles(ty, w, length(rows), rb, xqs, t0, ntile) == 0
+        end
     end
 end
 
