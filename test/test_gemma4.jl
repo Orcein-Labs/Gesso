@@ -1,78 +1,8 @@
 using Test, Random
 using Gesso
 
-const _gemma4_inf = Gesso.Inference
+include(joinpath(@__DIR__, "gemma4_toy.jl"))
 
-function _gemma4_toy_kv()
-    return Dict{String, Any}(
-        "general.architecture" => "gemma4",
-        "gemma4.block_count" => 2,
-        "gemma4.embedding_length" => 32,
-        "gemma4.attention.head_count" => 4,
-        "gemma4.attention.head_count_kv" => [2, 1],
-        "gemma4.attention.sliding_window_pattern" => [true, false],
-        "gemma4.attention.sliding_window" => 4,
-        "gemma4.attention.key_length" => 16,
-        "gemma4.attention.key_length_swa" => 8,
-        "gemma4.attention.value_length" => 16,
-        "gemma4.attention.value_length_swa" => 8,
-        "gemma4.feed_forward_length" => 24,
-        "gemma4.expert_feed_forward_length" => 12,
-        "gemma4.expert_count" => 4,
-        "gemma4.expert_used_count" => 2,
-        "gemma4.rope.dimension_count" => 16,
-        "gemma4.rope.dimension_count_swa" => 8,
-        "gemma4.rope.freq_base" => 1e6,
-        "gemma4.rope.freq_base_swa" => 1e4,
-        "gemma4.final_logit_softcapping" => 30.0f0,
-        "gemma4.attention.layer_norm_rms_epsilon" => 1.0f-6,
-        "gemma4.vocab_size" => 40,
-    )
-end
-
-function _gemma4_toy(spec)
-    rng = MersenneTwister(20261028)
-    hidden = spec.hidden_size
-    vocab = spec.vocab_size
-    by = Dict{String, Any}()
-    by["token_embd.weight"] = randn(rng, Float32, vocab, hidden)
-    by["output_norm.weight"] = ones(Float32, hidden) .+ 0.05f0 .* randn(rng, Float32, hidden)
-    if :rope_freq_factors in spec.features
-        by["rope_freqs.weight"] = ones(Float32, spec.head_dim ÷ 2)
-    end
-
-    map = _gemma4_inf._gguf_gemma4_param_map(spec)
-    for l in 0:(spec.num_layers - 1)
-        for ref in _gemma4_inf._layer_param_refs(map, spec, l)
-            shape = _gemma4_inf.expected_shape(spec, ref.id.role, l)
-            name = _gemma4_inf.external_name(map, ref, l)
-            by[name] = if length(shape) == 1
-                (ref.id.role === _gemma4_inf.ROLE_LAYER_OUTPUT_SCALE ? Float32[1.0] :
-                 ref.id.role === _gemma4_inf.ROLE_EXPERT_DOWN_SCALE ? ones(Float32, shape...) :
-                 ones(Float32, shape...) .+ 0.05f0 .* randn(rng, Float32, shape...))
-            elseif length(shape) == 2
-                randn(rng, Float32, shape...) ./ sqrt(Float32(shape[end]))
-            elseif length(shape) == 3
-                randn(rng, Float32, shape...) ./ sqrt(Float32(shape[end]))
-            else
-                error("unexpected shape $shape for role $(ref.id.role)")
-            end
-        end
-    end
-    return by
-end
-
-function _gemma4_bind(spec, by)
-    b = _gemma4_inf.materialize_architecture(spec, _gemma4_inf._gguf_gemma4_param_map(spec), by)
-    return _gemma4_inf.spec_to_model(spec), (
-        embedding=b.embedding,
-        blocks=b.blocks,
-        lm_head=b.lm_head,
-        final_rms=b.final_rms,
-        rope=b.rope,
-        spec=spec,
-    )
-end
 
 mutable struct _Gemma4Capture
     rows::Vector{Vector{Float32}}
@@ -164,9 +94,7 @@ end
     if isdefined(Gesso, :CUDABackend)
         push!(backends, Gesso.CUDABackend())
     end
-    if isdefined(Gesso, :LavaBackend)
-        push!(backends, Gesso.LavaBackend())
-    end
+    # LavaBackend is not listed: it lowers these hooks (test_lava_gemma4.jl).
 
     spec = _gemma4_inf.spec_from_gguf_kv(_gemma4_toy_kv())
     by = _gemma4_toy(spec)
@@ -286,6 +214,23 @@ end
     model_halfscale, tensors_halfscale = _gemma4_bind(spec, by_halfscale)
     logits_halfscale = Gesso.reference_prefill(model_halfscale, tensors_halfscale, short_prompt; eps=eps)[:, end]
     @test maximum(abs.(logits_halfscale .- baseline_short)) > 1e-2
+end
+
+@testset "Gemma4: q8 KV cache decodes on CPU" begin
+    spec = _gemma4_inf.spec_from_gguf_kv(_gemma4_toy_kv_wide())
+    model, tensors = _gemma4_bind(spec, _gemma4_toy(spec))
+    gen(fmt) = withenv("GESSO_KV_FORMAT" => fmt) do
+        rows = Matrix{Float32}[]
+        ids = Gesso.reference_generate(model, tensors, [3, 7, 1, 12, 5, 9, 2];
+            max_new_tokens=6, eos_ids=(), eps=spec.rms_norm_eps,
+            on_rows=(pos, M) -> push!(rows, Float32.(Array(M))))
+        return ids, rows
+    end
+    ids_f, rows_f = gen("f32")
+    ids_q, rows_q = gen("q8")
+    @test ids_q == ids_f
+    # The rows move, so the cache really is quantized.
+    @test any(rows_q[i] != rows_f[i] for i in eachindex(rows_f, rows_q))
 end
 
 # -----------------------------------------------------------------------------

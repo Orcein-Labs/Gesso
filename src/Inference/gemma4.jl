@@ -433,15 +433,10 @@ function _gemma4_generate_block!(backend, hp, kc_layer, vc_layer, bt, tensors, s
     _apply_rope_neox!(backend, Q, positions, nh, hd, n_rot, bt.rope_layer.inv_freq)
     _apply_rope_neox!(backend, K, positions, nkv, hd, n_rot, bt.rope_layer.inv_freq)
 
-    # Write K and V into per-layer KV cache for rows s0:s1
-    for t in 1:N
-        p = s0 + t - 1
-        for h in 1:nkv
-            kvo = (h - 1) * hd
-            kc_layer.storage[p, h, :] .= view(K, t, (kvo+1):(kvo+hd))
-            vc_layer.storage[p, h, :] .= view(V, t, (kvo+1):(kvo+hd))
-        end
-    end
+    # Write K and V into per-layer KV cache for rows s0:s1. A quantized cache
+    # codes whole blocks, so the rows go through _kv_write_rows!.
+    _kv_write_rows!(kc_layer.storage, permutedims(reshape(K, N, hd, nkv), (1, 3, 2)), s0)
+    _kv_write_rows!(vc_layer.storage, permutedims(reshape(V, N, hd, nkv), (1, 3, 2)), s0)
 
     # Attend over keys in 1:s1 with scale 1.0 and sliding-window mask (scores hoisted)
     O = _g4_mat!(scratch, :O, N, qdim)
