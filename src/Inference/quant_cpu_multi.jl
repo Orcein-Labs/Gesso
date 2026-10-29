@@ -120,8 +120,6 @@ end, Val(K))
     t::NTuple{K, Int32},
 ) where {K} = ntuple(c -> sumf[c] + (d4d8[c] * Float32(ls)) * Float32(t[c]), Val(K))
 
-# Column count of a tile after checking that every column has the row's block
-# count; a mismatch would read past the end of a shorter activation.
 # A prefill's d table: per tile of _MULTI_TILE columns and per block, the
 # columns' d values side by side, so the Q8_0 and Q6_K tile kernels read them as
 # one vector instead of gathering one per column. Tile i (0-based, columns
@@ -155,6 +153,46 @@ function _multi_d_base(dt::Vector{Float32}, t0::Int, K::Int, nb::Int)
 end
 _multi_d_base(::Nothing, t0::Int, K::Int, nb::Int) = 0
 
+# A d table plus the tiles' quants interleaved: 32-byte chunk j of tile i's
+# column c at byte 32 * (T * (nch * i + j) + c), nch = QK_K / 32 * nb, zero past
+# the last column. An IQ2_XS sub-block then reads all eight columns from one
+# base pointer; with eight column pointers the kernel spent its issue slots
+# rotating and reloading them.
+struct _MultiPacked
+    d::Vector{Float32}
+    q::Vector{Int8}
+end
+
+_multi_packed(xqs::AbstractVector) = _multi_packed!(Float32[], Int8[], xqs)
+
+function _multi_packed!(dt::Vector{Float32}, qt::Vector{Int8}, xqs::AbstractVector)
+    T = _MULTI_TILE
+    _multi_d_table!(dt, xqs)
+    nb = length(xqs[1].d)
+    nch = (QK_K ÷ 32) * nb
+    fill!(resize!(qt, 32 * T * nch * cld(length(xqs), T)), Int8(0))
+    @inbounds for t in eachindex(xqs)
+        i, c = divrem(t - 1, T)
+        qs = xqs[t].qs
+        for j in 0:(nch-1)
+            copyto!(qt, 32 * (T * (nch * i + j) + c) + 1, qs, 32 * j + 1, 32)
+        end
+    end
+    return _MultiPacked(dt, qt)
+end
+
+# Byte offset of the tile at t0 in the packed quants (the d offset times QK_K).
+function _multi_q_base(p::_MultiPacked, t0::Int, K::Int, nb::Int)
+    i0 = _multi_d_base(p.d, t0, K, nb)
+    length(p.q) >= QK_K * (i0 + _MULTI_TILE * nb) ||
+        error("q8k multi: tile $t0:$(t0 + K - 1) is not in the packed quants")
+    return QK_K * i0
+end
+
+# The plain d table, for kernels that do not read the packed quants.
+_multi_d_only(p::_MultiPacked) = p.d
+_multi_d_only(dt) = dt
+
 # dw * d for each tile column at block ib: the same products either way.
 Base.@propagate_inbounds _multi_tile_d(
     ::Nothing,
@@ -171,6 +209,8 @@ Base.@propagate_inbounds _multi_tile_d(
     dw::Float32,
 ) where {K} = ntuple(c -> dw * dt[i0+_MULTI_TILE*ib+c], Val(K))
 
+# Checks that every column of the tile has the row's block count; a mismatch
+# would read past the end of a shorter activation.
 function _multi_check(xqs, t0::Int, K::Int, nb::Int)
     for c in 1:K
         length(xqs[t0+c-1].d) == nb || error(
@@ -1609,9 +1649,10 @@ end
 const _IQ2XS_LS_TAB =
     vec(Int16[2 * ((sc >> (l < 8 ? 0 : 4)) & 0x0f) + 1 for l in 0:15, sc in 0:255])
 
-function _kq_ir_iq2xs_multi(K::Int, dp::Bool=false)
+# packed: one pointer %qb into a _MultiPacked tile (needs dp) instead of K.
+function _kq_ir_iq2xs_multi(K::Int, dp::Bool=false, packed::Bool=false)
     io = IOBuffer()
-    qargs = join(("ptr %q$c" for c in 0:(K-1)), ", ")
+    qargs = packed ? "ptr %qb" : join(("ptr %q$c" for c in 0:(K-1)), ", ")
     dargs = dp ? "ptr %dp" : "<$K x float> %d"
     print(
         io,
@@ -1675,11 +1716,20 @@ function _kq_ir_iq2xs_multi(K::Int, dp::Bool=false)
         "  %sco = shl i64 %sci, 5\n",
         "  %mp = getelementptr i8, ptr %pl, i64 %sco\n",
         "  %m = load <16 x i16>, ptr %mp, align 1\n",
-        "  %xo = shl i64 %k, 5\n",
     )
+    if packed
+        print(
+            io,
+            "  %xo = shl i64 %k, $(trailing_zeros(32 * _MULTI_TILE))\n",
+            "  %xb = getelementptr i8, ptr %qb, i64 %xo\n",
+        )
+    else
+        print(io, "  %xo = shl i64 %k, 5\n")
+    end
     for c in 0:(K-1)
         print(
             io,
+            packed ? "  %xp$c = getelementptr i8, ptr %xb, i64 $(32c)\n" :
             "  %xp$c = getelementptr i8, ptr %q$c, i64 %xo\n",
             "  %x$c = load <32 x i8>, ptr %xp$c, align 1\n",
             "  %bs$c = call <32 x i8> @llvm.x86.avx2.psign.b(<32 x i8> %x$c, <32 x i8> %sv)\n",
@@ -1737,6 +1787,26 @@ for K in 1:8
             d,
         )
     end
+    @eval @inline _iq2xs_multi_step(
+        b::Ptr{UInt8},
+        pg::Ptr{UInt64},
+        ps::Ptr{UInt64},
+        pl::Ptr{Int16},
+        qb::Ptr{Int8},
+        s::$V,
+        dp::Ptr{Float32},
+    ) = Base.llvmcall(
+        ($(_kq_ir_iq2xs_multi(K, true, true)), "entry"),
+        $V,
+        Tuple{Ptr{UInt8}, Ptr{UInt64}, Ptr{UInt64}, Ptr{Int16}, Ptr{Int8}, $V, Ptr{Float32}},
+        b,
+        pg,
+        ps,
+        pl,
+        qb,
+        s,
+        dp,
+    )
 end
 
 @inline _iq2xs_block_d(
@@ -1775,6 +1845,50 @@ end
             b = pw + 74 * ib
             q = ntuple(c -> pq[c] + QK_K * ib, Val(K))
             s = _iq2xs_multi_step(b, pg, ps, pl, q, s, _iq2xs_block_d(dt, xv, i0, ib, b))
+        end
+        for c in 1:K
+            out[t0+c-1] = 0.125f0 * s[c].value
+        end
+    end
+    return out
+end
+
+# The same tile with its quants and d values read from a _MultiPacked.
+@noinline function _dot_iq2xs_multi!(
+    out::AbstractVector{Float32},
+    w::AbstractVector{UInt8},
+    woff::Int,
+    xqs,
+    t0::Int,
+    ::Val{K},
+    p::_MultiPacked,
+) where {K}
+    nb = length(xqs[t0].d)
+    _q8k_check_row(w, woff, 74 * nb)
+    _multi_check(xqs, t0, K, nb)
+    nb == 0 && return _multi_zero!(out, t0, K)
+    i0 = _multi_d_base(p.d, t0, K, nb)
+    q0 = _multi_q_base(p, t0, K, nb)
+    dt = p.d
+    qt = p.q
+    GC.@preserve w dt qt IQ2XS_GRID _IQ_SIGN8_TAB _IQ2XS_LS_TAB begin
+        pw = pointer(w, woff + 1)
+        pg = pointer(IQ2XS_GRID)
+        ps = pointer(_IQ_SIGN8_TAB)
+        pl = pointer(_IQ2XS_LS_TAB)
+        pq = pointer(qt, q0 + 1)
+        pd = pointer(dt, i0 + 1)
+        s = ntuple(_ -> VecElement(0.0f0), Val(K))
+        @inbounds for ib in 0:(nb-1)
+            s = _iq2xs_multi_step(
+                pw + 74 * ib,
+                pg,
+                ps,
+                pl,
+                pq + QK_K * _MULTI_TILE * ib,
+                s,
+                pd + 4 * _MULTI_TILE * ib,
+            )
         end
         for c in 1:K
             out[t0+c-1] = 0.125f0 * s[c].value
@@ -1921,6 +2035,7 @@ function _dot_q8k_multi_kernel!(
     v::Val,
     dt=nothing,
 )
+    d = _multi_d_only(dt)
     ggml_type == GGML_TYPE_IQ2_XXS && return _dot_iq2xxs_multi!(out, w, woff, xqs, t0, v)
     ggml_type == GGML_TYPE_IQ3_S && return _dot_iq3s_multi!(out, w, woff, xqs, t0, v)
     ggml_type == GGML_TYPE_IQ2_S && return _dot_iq2s_multi!(out, w, woff, xqs, t0, v)
@@ -1929,14 +2044,14 @@ function _dot_q8k_multi_kernel!(
     ggml_type == GGML_TYPE_IQ1_S && return _dot_iq1s_multi!(out, w, woff, xqs, t0, v)
     ggml_type == GGML_TYPE_IQ1_M && return _dot_iq1m_multi!(out, w, woff, xqs, t0, v)
     ggml_type == GGML_TYPE_Q2_K && return _dot_q2k_multi!(out, w, woff, xqs, t0, v)
-    ggml_type == GGML_TYPE_Q3_K && return _dot_q3k_multi!(out, w, woff, xqs, t0, v, dt)
-    ggml_type == GGML_TYPE_Q4_K && return _dot_q45k_multi!(out, w, woff, xqs, t0, v, Val(false), dt)
-    ggml_type == GGML_TYPE_Q5_K && return _dot_q45k_multi!(out, w, woff, xqs, t0, v, Val(true), dt)
-    ggml_type == GGML_TYPE_Q6_K && return _dot_q6k_multi!(out, w, woff, xqs, t0, v, dt)
-    ggml_type == GGML_TYPE_Q8_0 && return _dot_q80_multi!(out, w, woff, xqs, t0, v, dt)
-    ggml_type == GGML_TYPE_Q4_0 && return _dot_q40_multi!(out, w, woff, xqs, t0, v, dt)
+    ggml_type == GGML_TYPE_Q3_K && return _dot_q3k_multi!(out, w, woff, xqs, t0, v, d)
+    ggml_type == GGML_TYPE_Q4_K && return _dot_q45k_multi!(out, w, woff, xqs, t0, v, Val(false), d)
+    ggml_type == GGML_TYPE_Q5_K && return _dot_q45k_multi!(out, w, woff, xqs, t0, v, Val(true), d)
+    ggml_type == GGML_TYPE_Q6_K && return _dot_q6k_multi!(out, w, woff, xqs, t0, v, d)
+    ggml_type == GGML_TYPE_Q8_0 && return _dot_q80_multi!(out, w, woff, xqs, t0, v, d)
+    ggml_type == GGML_TYPE_Q4_0 && return _dot_q40_multi!(out, w, woff, xqs, t0, v, d)
     ggml_type == GGML_TYPE_IQ4_NL &&
-        return _dot_q80_multi!(out, w, woff, xqs, t0, v, dt, Val(true))
+        return _dot_q80_multi!(out, w, woff, xqs, t0, v, d, Val(true))
     return _dot_iq4_xs_multi!(out, w, woff, xqs, t0, v)
 end
 
@@ -1972,6 +2087,8 @@ bit-equal to `_dot_q8k(ggml_type, w, woff, xqs[t0+c-1], simd)`. `ntile` is
 1..8 so that any remainder is a tile. `dt`, from `_multi_d_table(xqs)`, gives
 the kernels of the `_multi_dt_type` types each tile's d values as one load; with it, `t0` must
 start one of the table's tiles and `ntile` be at most `_MULTI_TILE`.
+For IQ2_XS, `dt` may be `_multi_packed(xqs)`: the d table plus the tiles' quants
+interleaved, so that a sub-block reads every column from one pointer.
 """
 function _dot_q8k_multi!(
     out::AbstractVector{Float32},
