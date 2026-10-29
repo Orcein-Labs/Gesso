@@ -12,6 +12,8 @@
 #     activations at -128 and 127), plain and prepped
 #   * Q8_0, Q4_0 and IQ4_NL at the integer extremes (weight bytes 0x00 and 0xff,
 #     activations at -128 and 127), with and without a d table
+#   * IQ2_XS at the integer extremes (grid 511 and 0, every sign set or none,
+#     ls = 31 and 1, activations at -128 and 127), with and without a d table
 #   * prepped Q3_K, Q4_K, Q5_K and Q6_K activations (_q6k_prep) give the same bits,
 #     extremes included
 #   * the tile kernels do not allocate after warm-up
@@ -84,10 +86,10 @@ _mq_acts(rng, ne0::Int, n::Int, ggml_type::Int32=_MQ.GGML_TYPE_Q4_K) =
 
 # Checks every column of a tile of `ntile` activations starting at t0 against
 # the single-column kernel, for both simd modes, on the rows of w. Q4_K, Q5_K,
-# Q6_K, Q8_0 and Q4_0 tiles that start a d-table tile are also checked through
-# the table.
+# Q6_K, Q8_0, Q4_0, IQ4_NL and IQ2_XS tiles that start a d-table tile are also
+# checked through the table.
 _mq_uses_table(ggml_type::Int32, t0::Int, ntile::Int) =
-    (_MQ._q6k_prep_type(ggml_type) || _MQ._q80_act_type(ggml_type)) &&
+    _MQ._multi_dt_type(ggml_type) &&
     (t0 - 1) % _MQ._MULTI_TILE == 0 &&
     ntile <= _MQ._MULTI_TILE
 
@@ -288,6 +290,41 @@ end
     end
 end
 
+@testset "multi-column dot: IQ2_XS at the integer extremes" begin
+    # 0xff bytes give grid 511, every sign set and scale nibbles 15 (ls = 31);
+    # 0x00 bytes give grid 0, no signs and ls = 1. Activations at -128 (which
+    # psign cannot negate) and 127, d = 1.0, with and without a d table.
+    rng = Xoshiro(0x1a2b)
+    nb = 2
+    ty = _MQ.GGML_TYPE_IQ2_XS
+    bsz = _MQ._iq_block_bytes(ty)
+    rb = _MQ._qrow_bytes(ty, 256 * nb)
+    rows = (fill(0xff, rb), zeros(UInt8, rb), rand(rng, (0x00, 0xff), rb), rand(rng, UInt8, rb))
+    w = UInt8[]
+    for row in rows
+        for blk in 0:(nb-1)
+            row[blk*bsz+1] = 0x00
+            row[blk*bsz+2] = 0x3c    # d = 1.0 in f16
+        end
+        append!(w, row)
+    end
+    pick = (Int8(-128), Int8(127), Int8(-127), Int8(0), Int8(1))
+    xqs = map(1:9) do c
+        x = _MQ.Q8KVec(nb)
+        for i in eachindex(x.qs)
+            x.qs[i] = c <= 2 ? (c == 1 ? Int8(-128) : Int8(127)) : rand(rng, pick)
+        end
+        for i in eachindex(x.bsums)
+            x.bsums[i] = sum(Int16, @view x.qs[(16(i-1)+1):(16i)])
+        end
+        x.d .= 1.0f0
+        x
+    end
+    for ntile in 1:8, t0 in (1, 2)
+        @test _mq_check_tiles(ty, w, length(rows), rb, xqs, t0, ntile) == 0
+    end
+end
+
 @testset "multi-column dot: prepped activations, every tile size, bit-equal to _dot_q8k" begin
     rng = Xoshiro(0x9b6c)
     nb = 3
@@ -318,6 +355,7 @@ end
         _MQ.GGML_TYPE_Q8_0,
         _MQ.GGML_TYPE_Q4_0,
         _MQ.GGML_TYPE_IQ4_NL,
+        _MQ.GGML_TYPE_IQ2_XS,
     )
         rb = _MQ._qrow_bytes(ty, 256 * nb)
         w = _mq_random_rows(rng, ty, 2, nb)
