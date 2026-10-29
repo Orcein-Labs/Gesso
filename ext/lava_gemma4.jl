@@ -275,14 +275,21 @@ end
 const _G4L_HOST_QUANT = Dict{UInt, Tuple{WeakRef, Any}}()
 const _G4L_HOST_QUANT_LOCK = ReentrantLock()
 
+# The quant structs are immutable, so a WeakRef to one holds a fresh box that
+# the next GC frees, and every call after it pulls the whole tensor down
+# again. Anchor the entry on the mutable device buffer the quant owns instead.
+_g4l_quant_anchor(q::LavaBlockQuant) = q.data
+_g4l_quant_anchor(q::LavaQ8Quant) = q.qs
+
 function _g4l_quant_host(q)
-    k = objectid(q)
+    a = _g4l_quant_anchor(q)
+    k = objectid(a)
     lock(_G4L_HOST_QUANT_LOCK) do
         e = get(_G4L_HOST_QUANT, k, nothing)
-        e !== nothing && e[1].value === q && return e[2]
+        e !== nothing && e[1].value === a && return e[2]
         filter!(p -> p.second[1].value !== nothing, _G4L_HOST_QUANT)
         h = _g4l_quant_host_uncached(q)
-        _G4L_HOST_QUANT[k] = (WeakRef(q), h)
+        _G4L_HOST_QUANT[k] = (WeakRef(a), h)
         return h
     end
 end
