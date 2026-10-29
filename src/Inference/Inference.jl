@@ -2590,35 +2590,27 @@ function _decode_attn_core!(
     inv_freq,
     rotary_dim=0,
 )
-    (; q, k, v, qh, kh, vh, attn) = bufs
+    (; qh, attn) = bufs
     K = pos0                                    # cache rows now: P + steps
-    @decode_sub :attn_headnorm_rope cpu begin
-        _split_heads!(qh, q, n_heads, d_head)
-        _split_heads!(kh, k, n_kv_heads, d_head)
-        _split_heads!(vh, v, n_kv_heads, d_head)
-        if haskey(bt, :wq_norm)
-            rmsnorm!(cpu, qh, qh, bt.wq_norm, wl; eps)
-            rmsnorm!(cpu, kh, kh, bt.wk_norm, wl; eps)
-        end
-        br = _block_rope(bt, theta, inv_freq, rotary_dim)
-        rope!(
-            cpu,
-            qh,
-            kh,
-            _decode_pos(cpu_scratch, pos0 - 1),
-            wl;
-            theta=br.theta,
-            inv_freq=br.inv_freq,
-            interleaved=_tensors_rope_interleaved(tensors),
-            rotary_dim=br.rotary_dim,
-        )  # 0-based position
-    end
-    @decode_sub :attn_kv_append cpu begin
-        # KV APPEND: exactly one row per layer per step, at n_kv_heads
-        _kv_append_storage!(kc[bi].storage, vc[bi].storage, kh.storage, vh.storage, pos0)
-    end
-    kv_rot = _kv_rotated(kc[bi].storage)
-    kv_rot && _kv_rotate!(qh.storage, true)
+    kv_rot = _decode_attn_qkv!(
+        bt,
+        bi,
+        kc,
+        vc,
+        bufs,
+        cpu,
+        wl,
+        tensors,
+        cpu_scratch,
+        pos0;
+        n_heads,
+        n_kv_heads,
+        d_head,
+        eps,
+        theta,
+        inv_freq,
+        rotary_dim,
+    )
     window = _block_window(bt)
     if cpu_scratch === nothing
         # the query is the LAST position: it attends to the whole cache.
@@ -2682,6 +2674,59 @@ function _decode_attn_core!(
     end
     kv_rot && _kv_rotate!(attn.storage, false)
     return attn
+end
+
+# The query/key half of one decode attention row: split heads, head norms and
+# RoPE, then the row's KV appended at cache row `pos0`. The query is left
+# rotated when the cache is, and the result says whether it was.
+function _decode_attn_qkv!(
+    bt,
+    bi::Int,
+    kc,
+    vc,
+    bufs,
+    cpu,
+    wl,
+    tensors,
+    cpu_scratch,
+    pos0::Int;
+    n_heads,
+    n_kv_heads,
+    d_head,
+    eps,
+    theta,
+    inv_freq,
+    rotary_dim=0,
+)
+    (; q, k, v, qh, kh, vh) = bufs
+    @decode_sub :attn_headnorm_rope cpu begin
+        _split_heads!(qh, q, n_heads, d_head)
+        _split_heads!(kh, k, n_kv_heads, d_head)
+        _split_heads!(vh, v, n_kv_heads, d_head)
+        if haskey(bt, :wq_norm)
+            rmsnorm!(cpu, qh, qh, bt.wq_norm, wl; eps)
+            rmsnorm!(cpu, kh, kh, bt.wk_norm, wl; eps)
+        end
+        br = _block_rope(bt, theta, inv_freq, rotary_dim)
+        rope!(
+            cpu,
+            qh,
+            kh,
+            _decode_pos(cpu_scratch, pos0 - 1),
+            wl;
+            theta=br.theta,
+            inv_freq=br.inv_freq,
+            interleaved=_tensors_rope_interleaved(tensors),
+            rotary_dim=br.rotary_dim,
+        )  # 0-based position
+    end
+    @decode_sub :attn_kv_append cpu begin
+        # KV APPEND: exactly one row per layer per step, at n_kv_heads
+        _kv_append_storage!(kc[bi].storage, vc[bi].storage, kh.storage, vh.storage, pos0)
+    end
+    kv_rot = _kv_rotated(kc[bi].storage)
+    kv_rot && _kv_rotate!(qh.storage, true)
+    return kv_rot
 end
 
 # Heads back to the merged (1, qdim) row, with the attention output gate applied.
