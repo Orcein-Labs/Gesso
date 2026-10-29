@@ -99,8 +99,9 @@ _kq_x_holds(x::Q80Vec, nb::Int) = length(x.d) >= nb && length(x.qs) >= 32 * nb
     ntuple(j -> Int32(((j <= 4 ? p : q) >> (8 * ((j - 1) & 3))) & 0xff), Val(8))
 
 # Q4_K and Q5_K: the 12 packed bytes at byte offset sb hold 8 six-bit scales
-# and 8 six-bit mins (ggml's kmask unpacking, get_scale_min_k4 equivalent).
-@inline function _kq_scale_min_k4(w, sb::Int)
+# and 8 six-bit mins (ggml's kmask unpacking, get_scale_min_k4 equivalent),
+# returned one per byte: the scales in one word, the mins in the other.
+@inline function _kq_scale_min_k4_words(w, sb::Int)
     u0 = _kq_u32(w, sb)
     u1 = _kq_u32(w, sb + 4)
     u2 = _kq_u32(w, sb + 8)
@@ -111,11 +112,18 @@ _kq_x_holds(x::Q80Vec, nb::Int) = length(x.d) >= nb && length(x.qs) >= 32 * nb
     t2 = u1 & m1
     t1 = (u2 & m2) | (((u0 >> 6) & m3) << 4)
     t0 = u0 & m1
-    return _kq_bytes8(t0, t1), _kq_bytes8(t2, t3)
+    return UInt64(t0) | UInt64(t1) << 32, UInt64(t2) | UInt64(t3) << 32
 end
 
-# Q3_K: 16 signed scales (6-bit value minus 32) from the 12 packed bytes.
-@inline function _kq_scales_q3(w, sb::Int)::NTuple{16, Int32}
+# The same scales and mins as eight Int32 each.
+@inline function _kq_scale_min_k4(w, sb::Int)
+    s, m = _kq_scale_min_k4_words(w, sb)
+    return _kq_bytes8(s % UInt32, (s >> 32) % UInt32), _kq_bytes8(m % UInt32, (m >> 32) % UInt32)
+end
+
+# Q3_K: the 16 six-bit scale fields from the 12 packed bytes, one per byte,
+# scales 1-8 in the first word and 9-16 in the second.
+@inline function _kq_scales_q3_words(w, sb::Int)
     a0 = _kq_u32(w, sb)
     a1 = _kq_u32(w, sb + 4)
     a2 = _kq_u32(w, sb + 8)
@@ -125,9 +133,14 @@ end
     n3 = ((a1 >> 4) & k2) | (((a2 >> 6) & k1) << 4)
     n0 = (a0 & k2) | (((a2 >> 0) & k1) << 4)
     n1 = (a1 & k2) | (((a2 >> 2) & k1) << 4)
-    ws = (n0, n1, n2, n3)
+    return UInt64(n0) | UInt64(n1) << 32, UInt64(n2) | UInt64(n3) << 32
+end
+
+# Q3_K: 16 signed scales (6-bit value minus 32) from the 12 packed bytes.
+@inline function _kq_scales_q3(w, sb::Int)::NTuple{16, Int32}
+    lo, hi = _kq_scales_q3_words(w, sb)
     return ntuple(
-        j -> Int32((ws[((j-1)>>2)+1] >> (8 * ((j - 1) & 3))) & 0xff) - Int32(32),
+        j -> Int32(((j <= 8 ? lo : hi) >> (8 * ((j - 1) & 7))) & 0xff) - Int32(32),
         Val(16),
     )
 end
