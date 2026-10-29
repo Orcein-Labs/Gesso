@@ -5,7 +5,6 @@
 
 const GGML_TYPE_Q4_1 = Int32(3)
 const GGML_TYPE_Q5_0 = Int32(6)
-const GGML_TYPE_Q5_1 = Int32(7)
 
 function _dq_half!(y, w, off0::Int, n::Int, bf16::Bool)
     @inbounds for i in 1:n

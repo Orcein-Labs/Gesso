@@ -29,6 +29,7 @@ const _KQTYPES = (
     ("Q8_0", _KQ.GGML_TYPE_Q8_0),
     ("Q4_0", _KQ.GGML_TYPE_Q4_0),
     ("IQ4_NL", _KQ.GGML_TYPE_IQ4_NL),
+    ("Q5_1", _KQ.GGML_TYPE_Q5_1),
 )
 
 _kq_nvals(ty::Int32) = _KQ._q80_act_type(ty) ? 32 : _KQ.QK_K
@@ -397,11 +398,41 @@ function _kq_ggml_generic_sym(ty::Int32)
         _KQ.GGML_TYPE_Q8_0 => :ggml_vec_dot_q8_0_q8_0_generic,
         _KQ.GGML_TYPE_Q4_0 => :ggml_vec_dot_q4_0_q8_0_generic,
         _KQ.GGML_TYPE_IQ4_NL => :ggml_vec_dot_iq4_nl_q8_0_generic,
+        _KQ.GGML_TYPE_Q5_1 => :ggml_vec_dot_q5_1_q8_1_generic,
     )
     _KQ._ensure_ggml!()
     hcpu = _KQ._GGML_LIBS[][2]
     hcpu == C_NULL && return C_NULL
     return _KQ.Libdl.dlsym(hcpu, names[ty]; throw_error=false)
+end
+
+# ggml pairs Q5_1 with Q8_1: the Q8_0 block plus s = d * sum(qs) as f16, which
+# _kq_q51_s16 rounds the same way.
+_kq_q51_s16(xq::_KQ.Q80Vec, i::Int) =
+    Float16(xq.d[i] * Float32(sum(Int32, xq.qs[(32*(i-1)+1):(32*i)])))
+
+function _kq_ggml_q81_bytes(xq::_KQ.Q80Vec)
+    nb = length(xq.d)
+    out = Vector{UInt8}(undef, 36 * nb)
+    for i in 1:nb
+        o = 36 * (i - 1)
+        out[(o+1):(o+2)] = reinterpret(UInt8, [Float16(xq.d[i])])
+        out[(o+3):(o+4)] = reinterpret(UInt8, [_kq_q51_s16(xq, i)])
+        out[(o+5):(o+36)] = reinterpret(UInt8, xq.qs[(32*(i-1)+1):(32*i)])
+    end
+    return out
+end
+
+# What the f16 s moves ggml's Q5_1 sum by: sum over blocks of m * (s16 - s),
+# with s the f32 product Gesso uses.
+function _kq_q51_s_shift(W::Vector{UInt8}, xq::_KQ.Q80Vec)
+    t = 0.0
+    for i in 1:length(xq.d)
+        m = Float64(reinterpret(Float16, UInt16(W[24*(i-1)+3]) | (UInt16(W[24*(i-1)+4]) << 8)))
+        s = xq.d[i] * Float32(sum(Int32, xq.qs[(32*(i-1)+1):(32*i)]))
+        t += m * (Float64(_kq_q51_s16(xq, i)) - Float64(s))
+    end
+    return t
 end
 
 function _kq_ggml_act_bytes(xq)
@@ -469,8 +500,11 @@ end
                 x = randn(rng, Float32, ne0) .* Float32(0.1 + 10 * rand(rng))
                 trial % 7 == 0 && (x .= x .* 1000.0f0)
                 xq = _KQ._q8k_quantize_act(ty, x)
-                g = _kq_ggml_generic_dot(fp, ne0, W, _kq_ggml_act_bytes(xq))
+                q51 = ty == _KQ.GGML_TYPE_Q5_1
+                ab = q51 ? _kq_ggml_q81_bytes(xq) : _kq_ggml_act_bytes(xq)
+                g = _kq_ggml_generic_dot(fp, ne0, W, ab)
                 r = _KQ._dot_q8k(ty, W, 0, xq, false)
+                q51 && (g = Float32(Float64(g) - _kq_q51_s_shift(W, xq)))
                 a = _KQ._dot_q8k(ty, W, 0, xq, true)
                 ntrial += 1
                 _, mag = _kq_ref_dot(ty, W, 0, ne0, xq)
@@ -564,6 +598,7 @@ end
             _KQ.GGML_TYPE_Q8_0,
             _KQ.GGML_TYPE_Q4_0,
             _KQ.GGML_TYPE_IQ4_NL,
+            _KQ.GGML_TYPE_Q5_1,
         )
             haskey(found, ty) && push!(targets, found[ty])
         end

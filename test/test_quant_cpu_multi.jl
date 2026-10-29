@@ -51,13 +51,14 @@ const _MQ_TYPES = (
     ("Q8_0", _MQ.GGML_TYPE_Q8_0),
     ("Q4_0", _MQ.GGML_TYPE_Q4_0),
     ("IQ4_NL", _MQ.GGML_TYPE_IQ4_NL),
+    ("Q5_1", _MQ.GGML_TYPE_Q5_1),
 )
 
 # Random valid rows: arbitrary bytes everywhere, with finite small f16 scales at
 # each format's super-scale offsets (random f16 bits are often NaN or Inf).
 function _mq_scale_offsets(ggml_type::Int32)
     ggml_type == _MQ.GGML_TYPE_Q2_K && return (80, 82)
-    ggml_type in (_MQ.GGML_TYPE_Q4_K, _MQ.GGML_TYPE_Q5_K) && return (0, 2)
+    ggml_type in (_MQ.GGML_TYPE_Q4_K, _MQ.GGML_TYPE_Q5_K, _MQ.GGML_TYPE_Q5_1) && return (0, 2)
     ggml_type == _MQ.GGML_TYPE_Q3_K && return (108,)
     ggml_type == _MQ.GGML_TYPE_Q6_K && return (208,)
     return (0,)
@@ -500,6 +501,42 @@ end
         @test (@allocated _MQ._dot_q8k_multi!(out, ty, w, 0, xqs, 1, 8, true, p)) == 0
     end
 end
+@testset "multi-column dot: the packed Q5_1 table" begin
+    rng = Xoshiro(0x51b1)
+    T = _MQ._MULTI_TILE
+    ty = _MQ.GGML_TYPE_Q5_1
+    for n in (8, 64, 65, 72)
+        rb = _MQ._qrow_bytes(ty, 512)
+        w = _mq_random_rows(rng, ty, 2, 2)
+        xqs = _mq_acts(rng, 512, n, ty)
+        p = _MQ._multi_packed(xqs)
+        nch = length(xqs[1].d)
+        # s holds each block's activation sum times its scale, laid out like d
+        @test length(p.s) == length(p.d)
+        @test all(t -> all(j -> p.s[T*(nch*((t-1)÷T)+j)+(t-1)%T+1] ===
+            xqs[t].d[j+1] * Float32(sum(Int, @view xqs[t].qs[32j+1:32j+32])), 0:(nch-1)), 1:n)
+        out = zeros(Float32, n)
+        for t0 in 1:T:n
+            K = min(T, n + 1 - t0)
+            _MQ._dot_q8k_multi!(out, ty, w, rb, xqs, t0, K, true, p)
+            @test all(c -> out[t0+c-1] === _MQ._dot_q8k(ty, w, rb, xqs[t0+c-1], true), 1:K)
+        end
+    end
+    xqs = _mq_acts(rng, 512, 8, ty)
+    w = _mq_random_rows(rng, ty, 1, 2)
+    p = _MQ._multi_packed(xqs)
+    out = zeros(Float32, 8)
+    # without the s table the tile falls back to the single-column kernel
+    _MQ._dot_q8k_multi!(out, ty, w, 0, xqs, 1, 8, true, _MQ._MultiPacked(p.d, p.q))
+    @test all(c -> out[c] === _MQ._dot_q8k(ty, w, 0, xqs[c], true), 1:8)
+    @test_throws ErrorException _MQ._dot_q8k_multi!(out, ty, w, 0, xqs, 1, 8, true,
+        _MQ._MultiPacked(p.d, p.q[1:(end-32)], p.s))
+    @test_throws ErrorException _MQ._dot_q8k_multi!(out, ty, w, 0, xqs, 1, 8, true,
+        _MQ._MultiPacked(p.d, p.q, p.s[1:(end-1)]))
+    _MQ._dot_q8k_multi!(out, ty, w, 0, xqs, 1, 8, true, p)
+    @test (@allocated _MQ._dot_q8k_multi!(out, ty, w, 0, xqs, 1, 8, true, p)) == 0
+end
+
 @testset "multi-column dot: the tile kernels do not allocate" begin
     rng = Xoshiro(7)
     nb = 4
@@ -515,6 +552,7 @@ end
         _MQ.GGML_TYPE_Q8_0,
         _MQ.GGML_TYPE_Q4_0,
         _MQ.GGML_TYPE_IQ4_NL,
+        _MQ.GGML_TYPE_Q5_1,
     )
         rb = _MQ._qrow_bytes(ty, ne0)
         w = _mq_random_rows(rng, ty, 1, nb)
