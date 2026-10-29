@@ -342,6 +342,10 @@ using Gesso: reference_prefill, reference_generate
     # @test_broken gates are already recorded when the alloc gates report.
     include("test_decode_scratch.jl")
 
+    # The fused CPU attention (decode heads and the prefill window rows across
+    # the pool) against the reference attention, bit for bit.
+    include("test_cpu_attention_decode.jl")
+
     @testset "package loads" begin
         @test Gesso.Log isa Module
         @test isdefined(Gesso, :CPUBackend)
