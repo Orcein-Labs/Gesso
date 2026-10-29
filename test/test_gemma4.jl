@@ -395,3 +395,51 @@ end
     end
     @test length(unique(experts)) > n_used
 end
+
+@testset "Gemma4: eight-row attention tiles match the one-row loop bit for bit" begin
+    inf = _gemma4_inf
+    rng = MersenneTwister(31)
+    function by_rows(Q, kc, vc, s0, koff, win, nh, nkv, hd)
+        O = zeros(Float32, size(Q, 1), nh * hd)
+        p = zeros(Float32, s0 + size(Q, 1) - 1 - koff)
+        for h in 1:nh
+            inf._g4_attend_head!(O, Q, kc, vc, p, s0, koff, win, h, (h - 1) ÷ (nh ÷ nkv) + 1, hd)
+        end
+        return O
+    end
+    # (N, cache rows, s0, win, nh, nkv, hd): N % 8 != 0 leaves tail rows for
+    # the one-row loop, hd = 20 leaves a tail of output dims, s0 > 1 attends
+    # a cache that already holds earlier keys.
+    for (N, R, s0, win, nh, nkv, hd) in ((37, 37, 1, 0, 4, 2, 16), (37, 37, 1, 10, 4, 2, 20),
+        (21, 60, 40, 0, 4, 1, 16), (21, 60, 40, 12, 2, 2, 24), (8, 8, 1, 0, 2, 2, 8))
+        Q = 0.3f0 .* randn(rng, Float32, N, nh * hd)
+        kc = randn(rng, Float32, R, nkv, hd)
+        vc = randn(rng, Float32, R, nkv, hd)
+        s = inf._Gemma4Scratch()
+        O = inf._g4_attend!(s, zeros(Float32, N, nh * hd), Q, kc, vc, s0, 0, win, nh, nkv, hd)
+        @test size(s.attn_tile, 1) > 0
+        @test O == by_rows(Q, kc, vc, s0, 0, win, nh, nkv, hd)
+        win > 0 && @test O != by_rows(Q, kc, vc, s0, 0, 0, nh, nkv, hd)
+    end
+
+    # K and V as the prefill pass passes them: permuted views of (N, nkv * hd)
+    N, nh, nkv, hd = 29, 4, 2, 16
+    Q = 0.3f0 .* randn(rng, Float32, N, nh * hd)
+    K = randn(rng, Float32, N, nkv * hd)
+    V = randn(rng, Float32, N, nkv * hd)
+    K3 = PermutedDimsArray(reshape(K, N, hd, nkv), (1, 3, 2))
+    V3 = PermutedDimsArray(reshape(V, N, hd, nkv), (1, 3, 2))
+    s = inf._Gemma4Scratch()
+    O = inf._g4_attend!(s, zeros(Float32, N, nh * hd), Q, K3, V3, 1, 0, 6, nh, nkv, hd)
+    @test size(s.attn_tile, 1) > 0
+    @test O == by_rows(Q, K3, V3, 1, 0, 6, nh, nkv, hd)
+    @test O == by_rows(Q, permutedims(reshape(K, N, hd, nkv), (1, 3, 2)), permutedims(reshape(V, N, hd, nkv), (1, 3, 2)), 1, 0, 6, nh, nkv, hd)
+
+    # caches the tile cannot read through pointers take the one-row loop
+    @test !inf._g4_tile_cache(view(randn(Float32, 4, 8, 2), 1:2:3, :, :))
+    s = inf._Gemma4Scratch()
+    kv = view(randn(rng, Float32, 2N, nkv, hd), 1:2:(2N), :, :)
+    O = inf._g4_attend!(s, zeros(Float32, N, nh * hd), Q, kv, kv, 1, 0, 0, nh, nkv, hd)
+    @test size(s.attn_tile, 1) == 0
+    @test O == by_rows(Q, kv, kv, 1, 0, 0, nh, nkv, hd)
+end
