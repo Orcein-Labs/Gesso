@@ -52,3 +52,34 @@ _adec_bits(a::AbstractArray{Float32}) = reinterpret(UInt32, vec(a))
         @test _adec_bits(fused) == _adec_bits(ref)
     end
 end
+
+@testset "pooled heads equal the reference and the one-slot loop (bit-exact)" begin
+    rng = Xoshiro(20261029)
+    backend = _GI.CPUBackend()
+    wl = Gesso.Semantics.DecodeWorkload()
+    # d_head 64 scales by a multiply, 128 by a divide; both are big enough to
+    # take the pool when the scratch holds a slot per head
+    for (n_heads, n_kv, d, K) in ((8, 2, 64, 400), (16, 4, 128, 600))
+        group = div(n_heads, n_kv)
+        q = randn(rng, Float32, 1, n_heads, d)
+        kc = randn(rng, Float32, K, n_kv, d)
+        vc = randn(rng, Float32, K, n_kv, d)
+        kx = _GI._repeat_heads(_GI.Activation(; shape=(K, n_kv, d), storage=kc), group)
+        vx = _GI._repeat_heads(_GI.Activation(; shape=(K, n_kv, d), storage=vc), group)
+        scores = _GI.TemporaryWorkspace(; shape=(1, K), storage=zeros(Float32, 1, K))
+        probs = _GI.TemporaryWorkspace(; shape=(1, K), storage=zeros(Float32, 1, K))
+        ref = zeros(Float32, 1, n_heads, d)
+        _GI._attention_heads!(backend, ref, scores, probs, q, kx.storage, vx.storage,
+            n_heads, d, 1, K, wl)
+        for window in (0, 37)
+            one = fill(NaN32, 1, n_heads, d)
+            _GI._attention_decode_cpu!(one, q, kc, vc, zeros(Float32, K), n_heads, d, group, K;
+                window)
+            pooled = fill(NaN32, 1, n_heads, d)
+            _GI._attention_decode_cpu!(pooled, q, kc, vc, zeros(Float32, K * n_heads), n_heads,
+                d, group, K; window)
+            @test _adec_bits(pooled) == _adec_bits(one)
+            window == 0 && @test _adec_bits(pooled) == _adec_bits(ref)
+        end
+    end
+end
