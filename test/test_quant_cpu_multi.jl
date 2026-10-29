@@ -14,6 +14,7 @@
 #     activations at -128 and 127), with and without a d table
 #   * IQ2_XS at the integer extremes (grid 511 and 0, every sign set or none,
 #     ls = 31 and 1, activations at -128 and 127), with and without a d table
+#   * IQ2_XS rows decoded once and run over several tiles, bit-equal to _dot_q8k
 #   * prepped Q3_K, Q4_K, Q5_K and Q6_K activations (_q6k_prep) give the same bits,
 #     extremes included
 #   * the tile kernels do not allocate after warm-up
@@ -438,6 +439,41 @@ end
     @test_throws ErrorException _MQ._dot_q8k_multi!(out, ty, w, 0, xqs, 9, 3, true, short)
     _MQ._dot_q8k_multi!(out, ty, w, 0, xqs, 1, 8, true, p)
     @test (@allocated _MQ._dot_q8k_multi!(out, ty, w, 0, xqs, 1, 8, true, p)) == 0
+end
+
+@testset "multi-column dot: IQ2_XS decoded once per row" begin
+    # Random rows plus an all-0xff row (grid 511, every sign, ls = 31) at d = 1.0,
+    # against activations at -128 and 127: every column bit-equal to _dot_q8k.
+    rng = Xoshiro(0x2dec)
+    nb = 3
+    ty = _MQ.GGML_TYPE_IQ2_XS
+    rb = _MQ._qrow_bytes(ty, 256 * nb)
+    w = _mq_random_rows(rng, ty, 3, nb)
+    hi = fill(0xff, rb)
+    for blk in 0:(nb-1)
+        hi[74blk+1] = 0x00
+        hi[74blk+2] = 0x3c
+    end
+    append!(w, hi)
+    xqs = _mq_acts(rng, 256 * nb, 23, ty)
+    xqs[1].qs .= Int8(-128)
+    xqs[2].qs .= Int8(127)
+    for x in xqs[1:2], i in eachindex(x.bsums)
+        x.bsums[i] = sum(Int16, @view x.qs[(16(i-1)+1):(16i)])
+    end
+    p = _MQ._multi_packed(xqs)
+    u = UInt8[]
+    for n in (1, 9, 16, 17, 23), j in 0:3
+        out = fill(NaN32, n)
+        _MQ._dot_iq2xs_decoded_row!(out, u, w, j * rb, xqs, n, p)
+        @test all(c -> out[c] === _MQ._dot_q8k(ty, w, j * rb, xqs[c], true), 1:n)
+    end
+    @test length(u) == _MQ._iq2xs_decoded_bytes(nb)
+    o23 = zeros(Float32, 23)
+    @test_throws ErrorException _MQ._dot_iq2xs_decoded_row!(o23, u, w, 0, xqs, 24, p)
+    @test_throws ErrorException _MQ._dot_iq2xs_decoded!(o23, UInt8[], xqs, 1, Val(8), p)
+    _MQ._dot_iq2xs_decoded_row!(o23, u, w, rb, xqs, 23, p)
+    @test (@allocated _MQ._dot_iq2xs_decoded_row!(o23, u, w, rb, xqs, 23, p)) == 0
 end
 
 @testset "multi-column dot: the packed Q8_0-family tables" begin
