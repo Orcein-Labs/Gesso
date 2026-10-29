@@ -158,6 +158,13 @@ const LAVA_SUPPORTED_CAPS = Set([
     :short_convolution,
     :sigmoid_moe_routing,
     :moe_selection_bias,
+    :embedding_scale,
+    :logit_softcap,
+    :v_norm_weightless,
+    :k_only_global_attention,
+    :gemma4_parallel_moe,
+    :layer_output_scale,
+    :rope_freq_factors,
 ])
 
 supports(::LavaBackend, cap::Symbol) = cap in LAVA_SUPPORTED_CAPS
@@ -189,6 +196,9 @@ include("lava_qwen4exp.jl")
 
 # LFM2 / LFM2.5: the gated short convolution and the biased host MoE route.
 include("lava_lfm2.jl")
+
+# Gemma 4: device attention, norms, RoPE and KV writes; the routed FFN runs on host.
+include("lava_gemma4.jl")
 
 # Bind the backend into the package's namespace: after this ext triggers,
 # `Gesso.LavaBackend` resolves to the type defined HERE — while a Lava-less

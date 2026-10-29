@@ -1495,7 +1495,7 @@ function _lava_to_device(tensors)
     # Routed expert banks stay on the host (the CUDA GESSO_MOE_HOST_EXPERTS
     # split): a GGUF slab is never dequantized to device F32 here. The host
     # MoE route in lava_hybrid.jl reads these banks in place.
-    _host_expert_key(k) = k in (:wexp_gate, :wexp_up, :wexp_down)
+    _host_expert_key(k) = k in (:wexp_gate, :wexp_up, :wexp_gate_up, :wexp_down)
     _host_expert_t(t) =
         hasproperty(t, :storage) && t.storage isa Gesso.Inference.GgufQuantSlice
     _conv_blk(b) = NamedTuple{keys(b)}(
