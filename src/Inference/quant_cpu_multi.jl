@@ -1989,6 +1989,197 @@ end
     return out
 end
 
+# The packed tile above looks up every sub-block's grid, signs and scales again
+# for each 8-column tile: about half its uops, repeated ~9 times per row at an
+# expert's typical 65 columns. A row with several tiles is instead decoded once
+# into a buffer that stays in L1 (8 * 96 bytes per block: 32 grid bytes, 32 sign
+# bytes, the 16 x i16 multiplier, then nb dw floats at the end) and every tile
+# runs over that. The integer steps and the float order are the packed tile's,
+# so the sums are bitwise the same.
+const _IQ2XS_DEC_SUB = 96
+
+_iq2xs_decoded_bytes(nb::Int) = (8 * _IQ2XS_DEC_SUB + 4) * nb
+
+function _iq2xs_decode_row!(u::Vector{UInt8}, w::AbstractVector{UInt8}, woff::Int, nb::Int)
+    _q8k_check_row(w, woff, 74 * nb)
+    length(u) >= _iq2xs_decoded_bytes(nb) || resize!(u, _iq2xs_decoded_bytes(nb))
+    grid = IQ2XS_GRID
+    sgn = _IQ_SIGN8_TAB
+    ls = _IQ2XS_LS_TAB
+    GC.@preserve u w grid sgn ls begin
+        pu = pointer(u)
+        pdw = Ptr{Float32}(pu + 8 * _IQ2XS_DEC_SUB * nb)
+        pw = pointer(w, woff + 1)
+        pl = Ptr{UInt8}(pointer(ls))
+        @inbounds for ib in 0:(nb-1)
+            b = pw + 74 * ib
+            unsafe_store!(pdw, _iq_f16_at(b), ib + 1)
+            for k in 0:7
+                o = pu + _IQ2XS_DEC_SUB * (8ib + k)
+                for l in 0:3
+                    q = unsafe_load(Ptr{UInt16}(b + 2 + 8k + 2l))
+                    unsafe_store!(Ptr{UInt64}(o + 8l), grid[(q&0x01ff)+1])
+                    unsafe_store!(Ptr{UInt64}(o + 32 + 8l), sgn[(q>>9)+1])
+                end
+                sc = unsafe_load(b + 66 + k)
+                Base.unsafe_copyto!(o + 64, pl + (Int(sc) << 5), 32)
+            end
+        end
+    end
+    return u
+end
+
+function _kq_ir_iq2xs_decoded(K::Int)
+    io = IOBuffer()
+    print(
+        io,
+        _Q8K_GRID_DECLS,
+        "declare <8 x i32> @llvm.x86.avx2.phadd.d(<8 x i32>, <8 x i32>)\n",
+        "define <$K x float> @entry(ptr %u, ptr %qb, <$K x float> %s, ptr %dp, float %dwf) #0 {\nentry:\n",
+        "  %dw1 = insertelement <$K x float> poison, float %dwf, i64 0\n",
+        "  %dw = shufflevector <$K x float> %dw1, <$K x float> poison, <$K x i32> zeroinitializer\n",
+        "  %dx = load <$K x float>, ptr %dp, align 4\n",
+        "  %d = fmul <$K x float> %dw, %dx\n",
+        "  br label %loop\nloop:\n",
+        "  %k = phi i64 [ 0, %entry ], [ %kn, %loop ]\n",
+    )
+    for c in 0:(K-1)
+        print(io, "  %a$c = phi <8 x i32> [ zeroinitializer, %entry ], [ %p$c, %loop ]\n")
+    end
+    print(
+        io,
+        "  %uo = mul i64 %k, $_IQ2XS_DEC_SUB\n",
+        "  %gp = getelementptr i8, ptr %u, i64 %uo\n",
+        "  %gv = load <32 x i8>, ptr %gp, align 1\n",
+        "  %sp = getelementptr i8, ptr %gp, i64 32\n",
+        "  %sv = load <32 x i8>, ptr %sp, align 1\n",
+        "  %mp = getelementptr i8, ptr %gp, i64 64\n",
+        "  %m = load <16 x i16>, ptr %mp, align 1\n",
+        "  %xo = shl i64 %k, $(trailing_zeros(32 * _MULTI_TILE))\n",
+        "  %xb = getelementptr i8, ptr %qb, i64 %xo\n",
+    )
+    for c in 0:(K-1)
+        print(
+            io,
+            "  %xp$c = getelementptr i8, ptr %xb, i64 $(32c)\n",
+            "  %x$c = load <32 x i8>, ptr %xp$c, align 1\n",
+            "  %bs$c = call <32 x i8> @llvm.x86.avx2.psign.b(<32 x i8> %x$c, <32 x i8> %sv)\n",
+            "  %u$c = call <16 x i16> @llvm.x86.avx2.pmadd.ub.sw(<32 x i8> %gv, <32 x i8> %bs$c)\n",
+            "  %v$c = call <8 x i32> @llvm.x86.avx2.pmadd.wd(<16 x i16> %u$c, <16 x i16> %m)\n",
+            "  %p$c = add <8 x i32> %a$c, %v$c\n",
+        )
+    end
+    # Unrolling measured the same, so the loop stays small.
+    print(
+        io,
+        "  %kn = add i64 %k, 1\n",
+        "  %kd = icmp eq i64 %kn, 8\n",
+        "  br i1 %kd, label %done, label %loop, !llvm.loop !0\n",
+        "done:\n",
+    )
+    _kq_ir_tile_sums(io, K)
+    print(
+        io,
+        "  %fa = sitofp <$K x i32> %tk to <$K x float>\n",
+        "  %fm = fmul <$K x float> %d, %fa\n",
+        "  %fs = fadd <$K x float> %s, %fm\n",
+        "  ret <$K x float> %fs\n}\n",
+        _KQ_ATTRS,
+        "!0 = distinct !{!0, !1}\n!1 = !{!\"llvm.loop.unroll.disable\"}\n",
+    )
+    return String(take!(io))
+end
+
+for K in 1:8
+    V = NTuple{K, VecElement{Float32}}
+    @eval @inline _iq2xs_decoded_step(
+        u::Ptr{UInt8},
+        qb::Ptr{Int8},
+        s::$V,
+        dp::Ptr{Float32},
+        dwf::Float32,
+    ) = Base.llvmcall(
+        ($(_kq_ir_iq2xs_decoded(K)), "entry"),
+        $V,
+        Tuple{Ptr{UInt8}, Ptr{Int8}, $V, Ptr{Float32}, Float32},
+        u,
+        qb,
+        s,
+        dp,
+        dwf,
+    )
+end
+
+@noinline function _dot_iq2xs_decoded!(
+    out::AbstractVector{Float32},
+    u::Vector{UInt8},
+    xqs,
+    t0::Int,
+    ::Val{K},
+    p::_MultiPacked,
+) where {K}
+    nb = length(xqs[t0].d)
+    _multi_check(xqs, t0, K, nb)
+    nb == 0 && return _multi_zero!(out, t0, K)
+    length(u) >= _iq2xs_decoded_bytes(nb) || error("iq2_xs decoded: buffer too short")
+    i0 = _multi_d_base(p.d, t0, K, nb)
+    q0 = _multi_q_base(p, t0, K, nb, QK_K)
+    dt = p.d
+    qt = p.q
+    GC.@preserve u dt qt begin
+        pu = pointer(u)
+        pdw = Ptr{Float32}(pu + 8 * _IQ2XS_DEC_SUB * nb)
+        pq = pointer(qt, q0 + 1)
+        pd = pointer(dt, i0 + 1)
+        s = ntuple(_ -> VecElement(0.0f0), Val(K))
+        @inbounds for ib in 0:(nb-1)
+            s = _iq2xs_decoded_step(
+                pu + 8 * _IQ2XS_DEC_SUB * ib,
+                pq + QK_K * _MULTI_TILE * ib,
+                s,
+                pd + 4 * _MULTI_TILE * ib,
+                unsafe_load(pdw, ib + 1),
+            )
+        end
+        for c in 1:K
+            out[t0+c-1] = 0.125f0 * s[c].value
+        end
+    end
+    return out
+end
+
+# Columns 1:n of one IQ2_XS row, decoded once into u, tiles of _MULTI_TILE.
+function _dot_iq2xs_decoded_row!(
+    out::AbstractVector{Float32},
+    u::Vector{UInt8},
+    w::AbstractVector{UInt8},
+    woff::Int,
+    xqs,
+    n::Int,
+    p::_MultiPacked,
+)
+    n <= length(xqs) || error("iq2_xs decoded: $n columns exceed $(length(xqs))")
+    n == 0 && return out
+    _iq2xs_decode_row!(u, w, woff, length(xqs[1].d))
+    t0 = 1
+    while t0 <= n
+        K = min(_MULTI_TILE, n - t0 + 1)
+        if K == _MULTI_TILE
+            _dot_iq2xs_decoded!(out, u, xqs, t0, Val(_MULTI_TILE), p)
+        else
+            K == 1 && _dot_iq2xs_decoded!(out, u, xqs, t0, Val(1), p)
+            K == 2 && _dot_iq2xs_decoded!(out, u, xqs, t0, Val(2), p)
+            K == 3 && _dot_iq2xs_decoded!(out, u, xqs, t0, Val(3), p)
+            K == 4 && _dot_iq2xs_decoded!(out, u, xqs, t0, Val(4), p)
+            K == 5 && _dot_iq2xs_decoded!(out, u, xqs, t0, Val(5), p)
+            K == 6 && _dot_iq2xs_decoded!(out, u, xqs, t0, Val(6), p)
+            K == 7 && _dot_iq2xs_decoded!(out, u, xqs, t0, Val(7), p)
+        end
+        t0 += K
+    end
+    return out
+end
+
 # A tile's float sums through a d-table step. The base pointers are taken once
 # and block ib sits at fixed strides from them: bs bytes of weights, 32
 # activations per column and one T-wide d row.

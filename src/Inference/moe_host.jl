@@ -310,6 +310,7 @@ mutable struct MoePrefillScratch{X, H}
     xg::Vector{X}               # xq of each entry of `pairs`, so one expert's tokens are contiguous
     hg::Vector{H}               # hq of each entry of `pairs`
     cbuf::Vector{Vector{Float32}}  # per chunk, one row's dots over an expert's pairs
+    cdec::Vector{Vector{UInt8}}    # per chunk, one decoded IQ2_XS row
     edt::Vector{Vector{Float32}}   # per expert, the d table of its pairs
     eqt::Vector{Vector{Int8}}      # per expert, the packed quants of its pairs
 end
@@ -329,6 +330,7 @@ MoePrefillScratch{X, H}() where {X, H} = MoePrefillScratch{X, H}(
     X[],
     H[],
     Vector{Float32}[],
+    Vector{UInt8}[],
     Vector{Float32}[],
     Vector{Int8}[],
 )
@@ -372,6 +374,7 @@ function _moe_prefill_scratch(
             Vector{X}(undef, cap),
             Vector{H}(undef, cap),
             Vector{Float32}[],
+            Vector{UInt8}[],
             Vector{Float32}[],
             Vector{Int8}[],
         )
@@ -434,6 +437,7 @@ end
 function _moe_prefill_bufs!(s::MoePrefillScratch, nc::Int, n::Int)
     while length(s.cbuf) < nc
         push!(s.cbuf, Float32[])
+        push!(s.cdec, UInt8[])
     end
     for c in 1:nc
         length(s.cbuf[c]) < n && resize!(s.cbuf[c], n)
@@ -446,7 +450,8 @@ end
 # end of each pass; four and eight measured the same.
 const _MOE_CHUNKS_PER_THREAD = 4
 
-# Raw dots of the weight row at `woff` with xv[1:n], tiled, into buf[1:n].
+# Raw dots of the weight row at `woff` with xv[1:n], tiled, into buf[1:n]. An
+# IQ2_XS row with a packed table and more than one tile decodes once into u.
 @inline function _moe_prefill_row_multi!(
     buf::Vector{Float32},
     t::Int32,
@@ -456,7 +461,10 @@ const _MOE_CHUNKS_PER_THREAD = 4
     n::Int,
     simd::Bool,
     dt=nothing,
+    u::Union{Nothing, Vector{UInt8}}=nothing,
 )
+    u !== nothing && dt isa _MultiPacked && t == GGML_TYPE_IQ2_XS && n > _MULTI_TILE &&
+        return _dot_iq2xs_decoded_row!(buf, u, w, woff, xv, n, dt)
     i0 = 1
     while i0 <= n
         K = min(_MULTI_TILE, n - i0 + 1)
@@ -582,6 +590,7 @@ function (g::_MoePrefillGateUp)(c::Int)
     s = g.s
     ff = s.ff
     buf = g.multi ? s.cbuf[c] : Float32[]
+    u = g.multi ? s.cdec[c] : nothing
     _moe_prefill_pieces(s, 2ff, g.nc, c) do e, r0, r1
         p0 = s.start[e]
         n = s.cnt[e]
@@ -599,7 +608,7 @@ function (g::_MoePrefillGateUp)(c::Int)
             @inbounds for jj in lo:hi
                 woff = off0 + (row0 + jj - 1) * rb
                 if g.multi
-                    _moe_prefill_row_multi!(buf, t, sl.data, woff, xv, n, g.simd, dt)
+                    _moe_prefill_row_multi!(buf, t, sl.data, woff, xv, n, g.simd, dt, u)
                     for i in 1:n
                         # Same expression as the per-pair path, so -0.0 becomes +0.0 identically.
                         s.gu[jj, col, s.pairs[p0+i-1]] = 1.0f0 * buf[i] + 0.0f0
