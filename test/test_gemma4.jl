@@ -353,3 +353,45 @@ end
         @test y_neg != y_ref
     end
 end
+
+# -----------------------------------------------------------------------------
+# Testset 6: row-parallel prefill helpers
+# -----------------------------------------------------------------------------
+@testset "Gemma4: row-chunked norms, RoPE and router match one row at a time" begin
+    # 64 rows split into chunks whenever the suite runs with more than one
+    # thread; each row must come out exactly as it does on its own.
+    N, nh, hd, n_exp, n_used = 64, 4, 16, 8, 2
+    rng = MersenneTwister(29)
+    X = randn(rng, Float32, N, nh * hd)
+    w = 1.0f0 .+ 0.1f0 .* randn(rng, Float32, nh * hd)
+    wh = 1.0f0 .+ 0.1f0 .* randn(rng, Float32, hd)
+    inv_freq = [1.0e4^(-2(i - 1) / hd) for i in 1:(hd ÷ 2)]
+    positions = collect(0:(N - 1)) .+ 100
+    eps = 1.0f-6
+    by_row(f) = reduce(vcat, (f(t) for t in 1:N))
+
+    Y = _gemma4_inf._g4_rmsnorm_rows!(similar(X), X, w, eps)
+    @test Y == by_row(t -> _gemma4_inf._g4_rmsnorm_rows!(zeros(Float32, 1, nh * hd), X[t:t, :], w, eps))
+
+    H = _gemma4_inf._g4_head_norm!(copy(X), nh, hd, wh, eps)
+    @test H == by_row(t -> _gemma4_inf._g4_head_norm!(X[t:t, :], nh, hd, wh, eps))
+    @test H != Y
+
+    R = _gemma4_inf._apply_rope_neox!(Gesso.CPUBackend(), copy(X), positions, nh, hd, hd, inv_freq)
+    @test R == by_row(t -> _gemma4_inf._apply_rope_neox!(Gesso.CPUBackend(), X[t:t, :], positions[t:t], nh, hd, hd, inv_freq))
+    @test R != X
+
+    r = randn(rng, Float32, n_exp, nh * hd)
+    scale = 0.5f0 .+ rand(rng, Float32, n_exp)
+    experts = zeros(Int, n_used, N)
+    weights = zeros(Float32, n_used, N)
+    _gemma4_inf._g4_route_rows!(experts, weights, X, r, n_used, scale)
+    for t in 1:N
+        e1 = zeros(Int, n_used, 1)
+        w1 = zeros(Float32, n_used, 1)
+        _gemma4_inf._g4_route_rows!(e1, w1, X[t:t, :], r, n_used, scale)
+        @test experts[:, t] == e1[:, 1]
+        @test weights[:, t] == w1[:, 1]
+    end
+    @test length(unique(experts)) > n_used
+end

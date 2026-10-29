@@ -55,18 +55,48 @@ _g4_rmsnorm_rows!(Y::AbstractMatrix{Float32}, X::AbstractMatrix{Float32}, w::Fro
 _g4_head_norm!(A::AbstractMatrix{Float32}, nheads::Int, hd::Int, w::FrozenParameter, eps::Real) =
     _g4_head_norm!(A, nheads, hd, w.storage, eps)
 
+# Runs f(rows) over contiguous chunks of 1:N on the CPU pool. Rows are
+# independent in every caller, so the result does not depend on the chunking.
+# Short inputs (decode) run inline.
+function _g4_rows!(f, N::Int)
+    nc = min(Threads.nthreads(), N ÷ 16)
+    if nc <= 1
+        f(1:N)
+        return nothing
+    end
+    _pool_run_chunks!(nc) do c
+        f((div((c - 1) * N, nc) + 1):div(c * N, nc))
+    end
+    return nothing
+end
+
 # Row-wise RMSNorm: Y = X / rms(X) * w. w = nothing gives weightless norm.
 function _g4_rmsnorm_rows!(Y::AbstractMatrix{Float32}, X::AbstractMatrix{Float32}, w_vec, eps::Real)
-    E = size(X, 2)
     eps_f = Float32(eps)
-    @inbounds for t in axes(X, 1)
-        ss = 0.0f0
-        for i in 1:E
-            ss += X[t, i] * X[t, i]
+    _g4_rows!(size(X, 1)) do rows
+        _g4_rmsnorm_block!(Y, X, w_vec, eps_f, 0, size(X, 2), rows)
+    end
+    return Y
+end
+
+# RMSNorm of columns o+1:o+n over `rows`, Y = X * r * w. The loops walk down
+# each column of the row block; every row still sums its squares in column
+# order, as a loop over one row would.
+function _g4_rmsnorm_block!(Y, X, w_vec, eps_f::Float32, o::Int, n::Int, rows::UnitRange{Int})
+    r0 = first(rows) - 1
+    ss = zeros(Float32, length(rows))
+    @inbounds begin
+        for i in 1:n, t in rows
+            ss[t - r0] += X[t, o + i] * X[t, o + i]
         end
-        r = 1.0f0 / sqrt(ss / E + eps_f)
-        for i in 1:E
-            Y[t, i] = X[t, i] * r * (w_vec === nothing ? 1.0f0 : Float32(w_vec[i]))
+        for t in rows
+            ss[t - r0] = 1.0f0 / sqrt(ss[t - r0] / n + eps_f)
+        end
+        for i in 1:n
+            wi = w_vec === nothing ? 1.0f0 : Float32(w_vec[i])
+            for t in rows
+                Y[t, o + i] = X[t, o + i] * ss[t - r0] * wi
+            end
         end
     end
     return Y
@@ -75,15 +105,9 @@ end
 # Per-head RMSNorm in place: each head segment of length hd is normalised.
 function _g4_head_norm!(A::AbstractMatrix{Float32}, nheads::Int, hd::Int, w_vec, eps::Real)
     eps_f = Float32(eps)
-    @inbounds for t in axes(A, 1), h in 1:nheads
-        o = (h - 1) * hd
-        ss = 0.0f0
-        for d in 1:hd
-            ss += A[t, o + d] * A[t, o + d]
-        end
-        r = 1.0f0 / sqrt(ss / hd + eps_f)
-        for d in 1:hd
-            A[t, o + d] = A[t, o + d] * r * (w_vec === nothing ? 1.0f0 : Float32(w_vec[d]))
+    _g4_rows!(size(A, 1)) do rows
+        for h in 1:nheads
+            _g4_rmsnorm_block!(A, A, w_vec, eps_f, (h - 1) * hd, hd, rows)
         end
     end
     return A
@@ -216,9 +240,15 @@ end
 # NeoX RoPE: pair (d, d + n_rot/2) rotates by pos * inv_freq (with optional rope_freqs folded in).
 function _apply_rope_neox!(backend, A::AbstractMatrix{Float32}, positions, nheads::Int, hd::Int, n_rot::Int, inv_freq::Vector{Float64})
     backend_name(backend) === :cpu || throw(LoweringNotImplemented(:rope_freq_factors, backend_name(backend)))
+    _g4_rows!(size(A, 1)) do rows
+        _g4_rope_rows!(A, positions, nheads, hd, n_rot, inv_freq, rows)
+    end
+    return A
+end
+
+function _g4_rope_rows!(A, positions, nheads::Int, hd::Int, n_rot::Int, inv_freq::Vector{Float64}, rows::UnitRange{Int})
     half = n_rot ÷ 2
-    N = size(A, 1)
-    @inbounds for t in 1:N
+    @inbounds for t in rows
         pos = Float64(positions[t])
         for i in 1:half
             theta = pos * inv_freq[i]
@@ -261,18 +291,7 @@ end
 
 function _gemma4_v_norm!(backend, vh::AbstractMatrix{Float32}, eps; nheads::Int=1, hd::Int=size(vh, 2))
     backend_name(backend) === :cpu || throw(LoweringNotImplemented(:v_norm_weightless, backend_name(backend)))
-    eps_f = Float32(eps)
-    @inbounds for t in axes(vh, 1), h in 1:nheads
-        o = (h - 1) * hd
-        ss = 0.0f0
-        for d in 1:hd
-            ss += vh[t, o + d] * vh[t, o + d]
-        end
-        r = 1.0f0 / sqrt(ss / hd + eps_f)
-        for d in 1:hd
-            vh[t, o + d] *= r
-        end
-    end
+    _g4_head_norm!(vh, nheads, hd, nothing, eps)
     return vh
 end
 
@@ -320,6 +339,58 @@ function _g4_router_logits!(logits::AbstractVector{Float32}, r::AbstractMatrix, 
         end
     end
     return logits
+end
+
+# Router softmax and top-k for token t. Fills probs and the first n_used
+# entries of order, and returns the renormalisation denominator.
+function _g4_route_token!(logits, probs, order, rin::Matrix{Float32}, t::Int, r_stor, n_used::Int)
+    n_expert = length(logits)
+    if r_stor isa QuantMatrix
+        _quant_matmul!(reshape(logits, 1, n_expert), view(rin, t:t, :), r_stor)
+    else
+        _g4_router_logits!(logits, r_stor, rin, t)
+    end
+    mx = maximum(logits)
+    den = 0.0f0
+    @inbounds for e in 1:n_expert
+        v = exp(logits[e] - mx)
+        probs[e] = v
+        den += v
+    end
+    probs ./= den
+    partialsortperm!(order, probs, 1:n_used; rev=true)
+    wsum = 0.0f0
+    @inbounds for k in 1:n_used
+        wsum += probs[order[k]]
+    end
+    return max(wsum, _G4_TOPK_CLAMP)
+end
+
+# Routes every row of rin into experts/weights (n_used x N) for the grouped
+# prefill. A dense router splits the tokens over the pool, each chunk with its
+# own buffers; a quantized one runs its own threaded matmul, so it stays serial.
+function _g4_route_rows!(experts::Matrix{Int}, weights::Matrix{Float32}, rin::Matrix{Float32},
+                         r_stor, n_used::Int, down_scale)
+    n_expert = r_stor isa QuantMatrix ? r_stor.nrows : size(r_stor, 1)
+    route = rows -> begin
+        logits = Vector{Float32}(undef, n_expert)
+        probs = Vector{Float32}(undef, n_expert)
+        order = Vector{Int}(undef, n_expert)
+        for t in rows
+            denom = _g4_route_token!(logits, probs, order, rin, t, r_stor, n_used)
+            @inbounds for k in 1:n_used
+                e = order[k]
+                experts[k, t] = e
+                weights[k, t] = (probs[e] / denom) * Float32(down_scale[e])
+            end
+        end
+    end
+    if r_stor isa QuantMatrix
+        route(1:size(rin, 1))
+    else
+        _g4_rows!(route, size(rin, 1))
+    end
+    return experts
 end
 
 function _gemma4_parallel_moe_ffn!(backend, attn, bt, eps::Real; scratch::_Gemma4Scratch=_Gemma4Scratch())
@@ -370,34 +441,13 @@ function _gemma4_parallel_moe_ffn!(backend, attn, bt, eps::Real; scratch::_Gemma
     experts = grouped ? Matrix{Int}(undef, n_used, N) : Matrix{Int}(undef, 0, 0)
     weights = grouped ? Matrix{Float32}(undef, n_used, N) : Matrix{Float32}(undef, 0, 0)
 
-    for t in 1:N
-        if r_stor isa QuantMatrix
-            _quant_matmul!(reshape(logits, 1, n_expert), view(rin, t:t, :), r_stor)
-        else
-            _g4_router_logits!(logits, r_stor, rin, t)
-        end
-        mx = maximum(logits)
-        den = 0.0f0
-        @inbounds for e in 1:n_expert
-            v = exp(logits[e] - mx)
-            probs[e] = v
-            den += v
-        end
-        probs ./= den
-        partialsortperm!(order, probs, 1:n_used; rev=true)
-        wsum = 0.0f0
-        @inbounds for k in 1:n_used
-            wsum += probs[order[k]]
-        end
-        denom = max(wsum, _G4_TOPK_CLAMP)
-        if grouped
-            @inbounds for k in 1:n_used
-                e = order[k]
-                experts[k, t] = e
-                weights[k, t] = (probs[e] / denom) * Float32(down_scale[e])
-            end
-            continue
-        elseif batched
+    if grouped
+        _g4_route_rows!(experts, weights, rin, r_stor, n_used, down_scale)
+        _g4_moe_prefill!(moe, x2, experts, weights, gu_stor, dn_stor)
+    end
+    for t in 1:(grouped ? 0 : N)
+        denom = _g4_route_token!(logits, probs, order, rin, t, r_stor, n_used)
+        if batched
             _g4_moe_token_batched!(moe, t, x2, scratch.order, probs, denom, down_scale, n_used,
                                    gu_stor, dn_stor, moe_s)
             continue
@@ -419,7 +469,6 @@ function _gemma4_parallel_moe_ffn!(backend, attn, bt, eps::Real; scratch::_Gemma
             end
         end
     end
-    grouped && _g4_moe_prefill!(moe, x2, experts, weights, gu_stor, dn_stor)
     _g4_rmsnorm_rows!(moe, moe, bt.ffn_post_rms_2, eps_f)
 
     # 3. Sum dense and moe in place into mlp, then post_ffw_norm
