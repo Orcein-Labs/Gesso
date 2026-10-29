@@ -475,16 +475,18 @@ end
 function _quant_matmul_multi!(dst::AbstractMatrix, x::AbstractMatrix, q::QuantMatrix)
     seq = size(x, 1)
     simd = q8k_simd_enabled()
-    # Q6_K: shuffle each activation once here rather than once per weight row.
+    # Q4_K, Q5_K and Q6_K: shuffle each activation once here rather than once per
+    # weight row.
     xqs =
-        _prefill_quantize(q.ggml_type, x, seq, q.ne0, simd && q.ggml_type == GGML_TYPE_Q6_K)
+        _prefill_quantize(q.ggml_type, x, seq, q.ne0, simd && _q6k_prep_type(q.ggml_type))
     # Ticketed chunks as in the decode GEMV: one chunk per thread waits on the
     # slowest thread (2-3x on the 27B's verify window). Rows are independent,
     # so the bits do not depend on the chunk count.
     nc = _qgemv_nchunks(q.nrows)
-    # The Q6_K, Q8_0 and Q4_0 tiles read their columns' d values from one table.
+    # The Q4_K, Q5_K, Q6_K, Q8_0 and Q4_0 tiles read their columns' d values from
+    # one table.
     dt =
-        simd && (q.ggml_type == GGML_TYPE_Q6_K || _q80_act_type(q.ggml_type)) ?
+        simd && (_q6k_prep_type(q.ggml_type) || _q80_act_type(q.ggml_type)) ?
         _multi_d_table(xqs) : nothing
     chunk =
         _PrefillChunk(dst, _quant_bytes(q), xqs, dt, q.ggml_type, q.ne0, q.nrows, nc, simd)
@@ -492,8 +494,8 @@ function _quant_matmul_multi!(dst::AbstractMatrix, x::AbstractMatrix, q::QuantMa
     return dst
 end
 
-# Quantizes each token row (and preps it, for Q6_K), with the tokens split
-# across threads.
+# Quantizes each token row (and preps it, for Q4_K, Q5_K and Q6_K), with the
+# tokens split across threads.
 function _prefill_quantize(
     ggml_type::Int32,
     x::AbstractMatrix,

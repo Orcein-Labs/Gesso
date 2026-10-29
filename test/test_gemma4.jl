@@ -263,6 +263,7 @@ end
 function _g4_quant_bank(rng, t::Int32, n_exp::Int, ne0::Int, ne1::Int)
     blk_vals, blk_bytes = Dict(_gemma4_inf.GGML_TYPE_Q8_0 => (32, 34),
                                _gemma4_inf.GGML_TYPE_IQ4_NL => (32, 18),
+                               _gemma4_inf.GGML_TYPE_IQ2_XS => (256, 74),
                                _gemma4_inf.GGML_TYPE_IQ3_XXS => (256, 98))[t]
     nblk = n_exp * ne1 * div(ne0, blk_vals)
     bpe = div(nblk, n_exp) * blk_bytes
@@ -297,6 +298,7 @@ end
     # Q8_K input (IQ3_XXS gate_up needs E a multiple of 256) and Q8_0 input
     # (Q8_0 / IQ4_NL) both run; the 26B ships IQ2_XS/IQ3_XXS gate_up, IQ4_NL down.
     for (E, gu_t, dn_t) in ((256, _gemma4_inf.GGML_TYPE_IQ3_XXS, _gemma4_inf.GGML_TYPE_IQ4_NL),
+                            (256, _gemma4_inf.GGML_TYPE_IQ2_XS, _gemma4_inf.GGML_TYPE_IQ4_NL),
                             (32, _gemma4_inf.GGML_TYPE_Q8_0, _gemma4_inf.GGML_TYPE_Q8_0))
         kv = _gemma4_toy_kv()
         kv["gemma4.embedding_length"] = E
@@ -312,6 +314,29 @@ end
         @test s_bat isa _gemma4_inf._G4MoeScratch
         @test all(isfinite, y_ref) && any(!iszero, y_ref)
         @test y_bat == y_ref
+
+        # Prefill groups tokens by expert, in batches of _G4_PREFILL_TOKENS; the
+        # decode path runs the same routing one token at a time. Crossing a
+        # batch boundary must not change a bit. (The whole FFN is not compared:
+        # its dense matmuls sum in a different order at N=1.)
+        gu, dn = bt.wexp_gate_up.storage, bt.wexp_down.storage
+        n_exp, n_used, ff = gu.n_exp, 2, dn.ne0
+        N = _gemma4_inf._G4_PREFILL_TOKENS + 5
+        r = MersenneTwister(8)
+        x2 = randn(r, Float32, N, E)
+        experts = reduce(hcat, (randperm(r, n_exp)[1:n_used] for _ in 1:N))
+        weights = rand(r, Float32, n_used, N)
+        y_grp = _gemma4_inf._g4_moe_prefill!(zeros(Float32, N, E), x2, experts, weights, gu, dn)
+        y_tok = zeros(Float32, N, E)
+        ms = _gemma4_inf._G4MoeScratch(E, ff, n_used, gu.ggml_type, dn.ggml_type)
+        probs = zeros(Float32, n_exp)
+        for t in 1:N
+            probs[experts[:, t]] .= weights[:, t]
+            _gemma4_inf._g4_moe_token_batched!(y_tok, t, x2, experts[:, t], probs, 1.0f0,
+                                               ones(Float32, n_exp), n_used, gu, dn, ms)
+        end
+        @test any(!iszero, y_grp)
+        @test y_grp == y_tok
 
         # Negative control: the comparison sees the expert bytes. Changing one
         # block scale of the down bank in every expert must move the output.

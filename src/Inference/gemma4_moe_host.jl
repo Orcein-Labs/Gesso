@@ -113,14 +113,11 @@ struct _G4GeluQuant{V}
     ff::Int
 end
 
-_g4_quantize_act!(y::Q80Vec, x) = quantize_q8_0!(y, x)
-_g4_quantize_act!(y::Q8KVec, x) = quantize_q8_K!(y, x)
-
 function (g::_G4GeluQuant)(k::Int)
     @inbounds for i in 1:g.ff
         g.act[i, k] = _g4_gelu(g.gu[i, k]) * g.gu[g.ff + i, k]
     end
-    _g4_quantize_act!(g.aq[k], view(g.act, :, k))
+    _quantize_act!(g.aq[k], view(g.act, :, k))
     return nothing
 end
 
@@ -135,10 +132,10 @@ function _g4_moe_token_batched!(moe::Matrix{Float32}, t::Int, x2::Matrix{Float32
         s.xf[i] = x2[t, i]
     end
     if _q80_act_type(gu_s.ggml_type)
-        _g4_quantize_act!(s.x0[1], s.xf)
+        _quantize_act!(s.x0[1], s.xf)
         _g4_expert_rows!(gu_s, order, s.x0, true, s.gu, n_used, simd)
     else
-        _g4_quantize_act!(s.xk[1], s.xf)
+        _quantize_act!(s.xk[1], s.xf)
         _g4_expert_rows!(gu_s, order, s.xk, true, s.gu, n_used, simd)
     end
     if _q80_act_type(dn_s.ggml_type)
@@ -155,6 +152,33 @@ function _g4_moe_token_batched!(moe::Matrix{Float32}, t::Int, x2::Matrix{Float32
         for i in 1:E
             moe[t, i] += sc * s.dn[i, k]
         end
+    end
+    return moe
+end
+
+# Prefill groups the tokens by expert (moe_host.jl), so each expert's weight
+# rows stream from DRAM once per batch instead of once per token that picked
+# it. The dots, GELU, activation quantization and k-order sum are the ones
+# `_g4_moe_token_batched!` runs, so `moe` matches the token loop bit for bit.
+# Batches of `_G4_PREFILL_TOKENS` keep the pair scratch near 150 MB at any
+# prompt length.
+const _G4_PREFILL_TOKENS = 1024
+
+function _g4_moe_prefill!(moe::Matrix{Float32}, x2::Matrix{Float32}, experts::Matrix{Int},
+                          weights::Matrix{Float32}, gu_s::GgufQuantSlice, dn_s::GgufQuantSlice)
+    N, E = size(x2)
+    n_used = size(experts, 1)
+    ff = dn_s.ne0
+    X = _q80_act_type(gu_s.ggml_type) ? Q80Vec : Q8KVec
+    H = _q80_act_type(dn_s.ggml_type) ? Q80Vec : Q8KVec
+    live = fill(true, min(N, _G4_PREFILL_TOKENS))
+    for t0 in 1:_G4_PREFILL_TOKENS:N
+        t1 = min(N, t0 + _G4_PREFILL_TOKENS - 1)
+        n = t1 - t0 + 1
+        s = _moe_prefill_scratch(E, ff, n, n_used, gu_s.n_exp, X, H)
+        _moe_prefill_run!(s, view(moe, t0:t1, :), view(x2, t0:t1, :), view(experts, :, t0:t1),
+                          view(weights, :, t0:t1), resize!(live, n), gu_s.n_exp, gu_s, gu_s, ff,
+                          dn_s, _g4_gelu, Bool[])
     end
     return moe
 end

@@ -17,9 +17,8 @@
 # inside the llvmcall, so each column repeats that step. Its scale decode and
 # the row pointers are still shared.
 #
-# Q2_K shares its unpack through a different integer core; Q6_K and Q8_0 share
-# the rebuilt weights; Q4_K runs the per-column single dot in every tile. Each
-# is explained in its section below.
+# Q2_K shares its unpack through a different integer core; Q4_K, Q5_K, Q6_K and
+# Q8_0 share the rebuilt weights. Each is explained in its section below.
 
 const _MULTI_TILE = 8
 
@@ -667,9 +666,6 @@ end
 # unsigned operand, so a pair sums to at most 2*3*128 and cannot saturate)
 # followed by one vpmaddwd against the two sub-block scales. The planes, scales
 # and mins are built once per block and shared by the K columns.
-#
-# Q4_K still takes the per-column single dot: a shared-unpack kernel for it was
-# measured slower than the single path.
 
 function _kq_ir_q2k_multi(K::Int)
     io = IOBuffer()
@@ -1016,6 +1012,10 @@ function _q6k_prep(x::Q8KVec)
     return Q6KPrepVec(x.d, x, xp, mo)
 end
 
+# The types whose multi kernel reads prepped columns: Q6_K uses xp and mo, Q4_K
+# and Q5_K use xp.
+_q6k_prep_type(t::Int32) = t == GGML_TYPE_Q4_K || t == GGML_TYPE_Q5_K || t == GGML_TYPE_Q6_K
+
 # The fallback for a prepped column is the plain Q8_K dot.
 @inline _dot_q8k(
     ggml_type::Int32,
@@ -1159,6 +1159,179 @@ end
                 sumf += sums[8*(c-1)+l].value
             end
             out[t0+c-1] = sumf
+        end
+    end
+    return out
+end
+
+# ---------------------------------------------------------------- Q4_K and Q5_K
+#
+# A 32-value chunk is one sub-block with one scale, so the Q6_K pair order
+# carries over: after it, vpmaddubsw then vpmaddwd against the sub-block scale
+# leave in i32 slot l the scaled sum of the values with index l mod 8, which is
+# lane l of _q4k_ints_avx2 and _q5k_ints_avx2. The weights go in unsigned (0..31)
+# so a pair sums to at most 2*31*128 and cannot saturate, and every later step is
+# exact, so each lane equals the single kernel's and the float steps repeat it.
+# The pair order is a byte permutation and the nibble and high-bit extraction
+# are bytewise, so the four qs loads (and the qh load) are reordered once per
+# block, before the split, and shared by the K columns. A prepped column
+# (Q6KPrepVec) brings its activations already in pair order; a plain Q8KVec
+# column reorders each chunk itself. The mins term is the single kernel's own
+# _kq_mins_dot per column.
+
+function _kq_ir_q45k_multi(K::Int, q5::Bool, prep::Bool)
+    io = IOBuffer()
+    qargs = join(("ptr %q$c" for c in 0:(K-1)), ", ")
+    qs = q5 ? 48 : 16
+    print(
+        io,
+        "declare <8 x i32> @llvm.x86.avx2.permd(<8 x i32>, <8 x i32>)\n",
+        "declare <32 x i8> @llvm.x86.avx2.pshuf.b(<32 x i8>, <32 x i8>)\n",
+        "declare <16 x i16> @llvm.x86.avx2.pmadd.ub.sw(<32 x i8>, <32 x i8>)\n",
+        "declare <8 x i32> @llvm.x86.avx2.pmadd.wd(<16 x i16>, <16 x i16>)\n",
+        "define <$(8K) x float> @entry(ptr %w, $qargs, <8 x i16> %sc, <$(8K) x float> %s, <$(8K) x float> %d) #0 {\n",
+    )
+    for j in 0:3
+        _kq_ld(io, "qr$j", "w", qs + 32 * j)
+        _q6k_pair_order(io, "qp$j", "qr$j")
+    end
+    if q5
+        _kq_ld(io, "hr", "w", 16)
+        _q6k_pair_order(io, "hp", "hr")
+    end
+    acc = ["zeroinitializer" for _ in 0:(K-1)]
+    for s in 0:7
+        j = s >> 1
+        if iseven(s)
+            print(io, "  %nb$s = and <32 x i8> %qp$j, splat (i8 15)\n")
+        else
+            print(io, "  %nb$s = lshr <32 x i8> %qp$j, splat (i8 4)\n")
+        end
+        u = "%nb$s"
+        if q5
+            print(
+                io,
+                "  %hs$s = lshr <32 x i8> %hp, splat (i8 $s)\n",
+                "  %hm$s = and <32 x i8> %hs$s, splat (i8 1)\n",
+                "  %hb$s = shl <32 x i8> %hm$s, splat (i8 4)\n",
+                "  %uv$s = or <32 x i8> %nb$s, %hb$s\n",
+            )
+            u = "%uv$s"
+        end
+        print(
+            io,
+            "  %sw$s = shufflevector <8 x i16> %sc, <8 x i16> poison, <16 x i32> <",
+            join(("i32 $s" for _ in 1:16), ", "),
+            ">\n",
+        )
+        for c in 0:(K-1)
+            if prep
+                _kq_ld(io, "xp$c.$s", "q$c", 32 * s)
+            else
+                _kq_ld(io, "x$c.$s", "q$c", 32 * s)
+                _q6k_pair_order(io, "xp$c.$s", "x$c.$s")
+            end
+            print(
+                io,
+                "  %mu$c.$s = call <16 x i16> @llvm.x86.avx2.pmadd.ub.sw(<32 x i8> $u, <32 x i8> %xp$c.$s)\n",
+                "  %ms$c.$s = call <8 x i32> @llvm.x86.avx2.pmadd.wd(<16 x i16> %mu$c.$s, <16 x i16> %sw$s)\n",
+                "  %A$c.$s = add <8 x i32> $(acc[c + 1]), %ms$c.$s\n",
+            )
+            acc[c+1] = "%A$c.$s"
+        end
+    end
+    res = "poison"
+    for c in 0:(K-1), e in 0:7
+        print(
+            io,
+            "  %o$c.$e = extractelement <8 x i32> $(acc[c + 1]), i32 $e\n",
+            "  %r$c.$e = insertelement <$(8K) x i32> $res, i32 %o$c.$e, i32 $(8c + e)\n",
+        )
+        res = "%r$c.$e"
+    end
+    print(
+        io,
+        "  %fa = sitofp <$(8K) x i32> $res to <$(8K) x float>\n",
+        "  %fm = fmul <$(8K) x float> %d, %fa\n",
+        "  %fs = fadd <$(8K) x float> %s, %fm\n",
+        "  ret <$(8K) x float> %fs\n}\n",
+        _KQ_ATTRS,
+    )
+    return String(take!(io))
+end
+
+for K in 1:8, q5 in (false, true), prep in (false, true)
+    qs = [:(pq[$c]) for c in 1:K]
+    V = NTuple{8K, VecElement{Float32}}
+    S = NTuple{8, VecElement{Int16}}
+    argt = Tuple{Ptr{UInt8}, ntuple(_ -> Ptr{Int8}, K)..., S, V, V}
+    @eval @inline _q45k_multi_step(
+        pw::Ptr{UInt8},
+        pq::NTuple{$K, Ptr{Int8}},
+        sc::$S,
+        s::$V,
+        d::$V,
+        ::Val{$q5},
+        ::Val{$prep},
+    ) = Base.llvmcall(
+        ($(_kq_ir_q45k_multi(K, q5, prep)), "entry"),
+        $V,
+        $argt,
+        pw,
+        $(qs...),
+        sc,
+        s,
+        d,
+    )
+end
+
+# The activation chunk pointer and the Q8_K source of a column.
+@inline _q45k_xptr(x::Q8KVec, ib::Int) = pointer(x.qs, ib * QK_K + 1)
+@inline _q45k_xptr(x::Q6KPrepVec, ib::Int) = pointer(x.xp, ib * QK_K + 1)
+@inline _q45k_src(x::Q8KVec) = x
+@inline _q45k_src(x::Q6KPrepVec) = x.q
+
+@noinline function _dot_q45k_multi!(
+    out::AbstractVector{Float32},
+    w::AbstractVector{UInt8},
+    woff::Int,
+    xqs::AbstractVector{T},
+    t0::Int,
+    ::Val{K},
+    q5::Val{Q5},
+    dt=nothing,
+) where {K, Q5, T <: Union{Q8KVec, Q6KPrepVec}}
+    bs = Q5 ? 176 : 144
+    nb = length(xqs[t0].d)
+    _q8k_check_row(w, woff, bs * nb)
+    _multi_check(xqs, t0, K, nb)
+    nb == 0 && return _multi_zero!(out, t0, K)
+    i0 = _multi_d_base(dt, t0, K, nb)
+    prep = Val(T === Q6KPrepVec)
+    GC.@preserve w xqs begin
+        xv = ntuple(c -> xqs[t0+c-1], Val(K))
+        sums = ntuple(_ -> VecElement(0.0f0), Val(8K))
+        sumf = ntuple(_ -> 0.0f0, Val(K))
+        @inbounds for ib in 0:(nb-1)
+            b = woff + ib * bs
+            d = _multi_q6k_scales(_multi_tile_d(dt, xv, i0, ib, _kq_f16(w, b)))
+            dmin = _multi_tile_d(dt, xv, i0, ib, _kq_f16(w, b + 2))
+            sc, mn = _kq_scale_min_k4(w, b + 4)
+            pq = ntuple(c -> _q45k_xptr(xv[c], ib), Val(K))
+            scv = ntuple(i -> VecElement(Int16(sc[i])), Val(8))
+            sums = _q45k_multi_step(pointer(w, b + 1), pq, scv, sums, d, q5, prep)
+            sf = sumf
+            sumf = ntuple(
+                c -> sf[c] - dmin[c] * Float32(_kq_mins_dot(_q45k_src(xv[c]), ib, mn)),
+                Val(K),
+            )
+        end
+        for c in 1:K
+            s = sumf[c]
+            for l in 1:8
+                s += sums[8*(c-1)+l].value
+            end
+            out[t0+c-1] = s
         end
     end
     return out
@@ -1370,6 +1543,8 @@ _q8k_multi_type(t::Int32) =
     t == GGML_TYPE_IQ1_M ||
     t == GGML_TYPE_IQ4_XS ||
     t == GGML_TYPE_Q2_K ||
+    t == GGML_TYPE_Q4_K ||
+    t == GGML_TYPE_Q5_K ||
     t == GGML_TYPE_Q6_K ||
     t == GGML_TYPE_Q8_0 ||
     t == GGML_TYPE_Q4_0
@@ -1392,6 +1567,8 @@ function _dot_q8k_multi_kernel!(
     ggml_type == GGML_TYPE_IQ1_S && return _dot_iq1s_multi!(out, w, woff, xqs, t0, v)
     ggml_type == GGML_TYPE_IQ1_M && return _dot_iq1m_multi!(out, w, woff, xqs, t0, v)
     ggml_type == GGML_TYPE_Q2_K && return _dot_q2k_multi!(out, w, woff, xqs, t0, v)
+    ggml_type == GGML_TYPE_Q4_K && return _dot_q45k_multi!(out, w, woff, xqs, t0, v, Val(false), dt)
+    ggml_type == GGML_TYPE_Q5_K && return _dot_q45k_multi!(out, w, woff, xqs, t0, v, Val(true), dt)
     ggml_type == GGML_TYPE_Q6_K && return _dot_q6k_multi!(out, w, woff, xqs, t0, v, dt)
     ggml_type == GGML_TYPE_Q8_0 && return _dot_q80_multi!(out, w, woff, xqs, t0, v, dt)
     ggml_type == GGML_TYPE_Q4_0 && return _dot_q40_multi!(out, w, woff, xqs, t0, v, dt)

@@ -366,6 +366,9 @@ function _gemma4_parallel_moe_ffn!(backend, attn, bt, eps::Real; scratch::_Gemma
     dn_stor = bt.wexp_down isa ExpertWeight ? bt.wexp_down.storage : bt.wexp_down
     batched = _g4_moe_batched_ok(gu_stor, dn_stor, E)
     moe_s = batched ? _g4_moe_scratch!(scratch, E, dn_stor.ne0, n_used, gu_stor.ggml_type, dn_stor.ggml_type) : nothing
+    grouped = batched && N > 1
+    experts = grouped ? Matrix{Int}(undef, n_used, N) : Matrix{Int}(undef, 0, 0)
+    weights = grouped ? Matrix{Float32}(undef, n_used, N) : Matrix{Float32}(undef, 0, 0)
 
     for t in 1:N
         if r_stor isa QuantMatrix
@@ -387,7 +390,14 @@ function _gemma4_parallel_moe_ffn!(backend, attn, bt, eps::Real; scratch::_Gemma
             wsum += probs[order[k]]
         end
         denom = max(wsum, _G4_TOPK_CLAMP)
-        if batched
+        if grouped
+            @inbounds for k in 1:n_used
+                e = order[k]
+                experts[k, t] = e
+                weights[k, t] = (probs[e] / denom) * Float32(down_scale[e])
+            end
+            continue
+        elseif batched
             _g4_moe_token_batched!(moe, t, x2, scratch.order, probs, denom, down_scale, n_used,
                                    gu_stor, dn_stor, moe_s)
             continue
@@ -409,6 +419,7 @@ function _gemma4_parallel_moe_ffn!(backend, attn, bt, eps::Real; scratch::_Gemma
             end
         end
     end
+    grouped && _g4_moe_prefill!(moe, x2, experts, weights, gu_stor, dn_stor)
     _g4_rmsnorm_rows!(moe, moe, bt.ffn_post_rms_2, eps_f)
 
     # 3. Sum dense and moe in place into mlp, then post_ffw_norm
