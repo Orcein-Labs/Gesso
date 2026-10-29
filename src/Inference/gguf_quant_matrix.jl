@@ -475,7 +475,7 @@ end
 function _quant_matmul_multi!(dst::AbstractMatrix, x::AbstractMatrix, q::QuantMatrix)
     seq = size(x, 1)
     simd = q8k_simd_enabled()
-    # Q4_K, Q5_K and Q6_K: shuffle each activation once here rather than once per
+    # Q3_K to Q6_K: shuffle each activation once here rather than once per
     # weight row.
     xqs =
         _prefill_quantize(q.ggml_type, x, seq, q.ne0, simd && _q6k_prep_type(q.ggml_type))
@@ -483,7 +483,7 @@ function _quant_matmul_multi!(dst::AbstractMatrix, x::AbstractMatrix, q::QuantMa
     # slowest thread (2-3x on the 27B's verify window). Rows are independent,
     # so the bits do not depend on the chunk count.
     nc = _qgemv_nchunks(q.nrows)
-    # The Q4_K, Q5_K, Q6_K, Q8_0 and Q4_0 tiles read their columns' d values from
+    # The Q3_K to Q6_K, Q8_0 and Q4_0 tiles read their columns' d values from
     # one table.
     dt =
         simd && (_q6k_prep_type(q.ggml_type) || _q80_act_type(q.ggml_type)) ?
@@ -494,7 +494,7 @@ function _quant_matmul_multi!(dst::AbstractMatrix, x::AbstractMatrix, q::QuantMa
     return dst
 end
 
-# Quantizes each token row (and preps it, for Q4_K, Q5_K and Q6_K), with the
+# Quantizes each token row (and preps it, for Q3_K to Q6_K), with the
 # tokens split across threads.
 function _prefill_quantize(
     ggml_type::Int32,
