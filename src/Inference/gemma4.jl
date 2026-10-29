@@ -31,6 +31,7 @@ Base.@kwdef mutable struct _Gemma4Scratch
     logits::Vector{Float32} = Float32[]
     probs::Vector{Float32} = Float32[]
     order::Vector{Int} = Int[]
+    experts::Any = nothing  # _G4MoeScratch, built on first batched decode
 end
 
 @inline function _g4_mat!(s::_Gemma4Scratch, field::Symbol, m::Int, n::Int)
@@ -361,6 +362,10 @@ function _gemma4_parallel_moe_ffn!(backend, attn, bt, eps::Real; scratch::_Gemma
     logits = _g4_vec!(scratch.logits, n_expert)
     probs = _g4_vec!(scratch.probs, n_expert)
     order = _g4_vec!(scratch.order, n_expert)
+    gu_stor = bt.wexp_gate_up isa ExpertWeight ? bt.wexp_gate_up.storage : bt.wexp_gate_up
+    dn_stor = bt.wexp_down isa ExpertWeight ? bt.wexp_down.storage : bt.wexp_down
+    batched = _g4_moe_batched_ok(gu_stor, dn_stor, E)
+    moe_s = batched ? _g4_moe_scratch!(scratch, E, dn_stor.ne0, n_used, gu_stor.ggml_type, dn_stor.ggml_type) : nothing
 
     for t in 1:N
         if r_stor isa QuantMatrix
@@ -382,6 +387,11 @@ function _gemma4_parallel_moe_ffn!(backend, attn, bt, eps::Real; scratch::_Gemma
             wsum += probs[order[k]]
         end
         denom = max(wsum, _G4_TOPK_CLAMP)
+        if batched
+            _g4_moe_token_batched!(moe, t, x2, scratch.order, probs, denom, down_scale, n_used,
+                                   gu_stor, dn_stor, moe_s)
+            continue
+        end
         x2_row = view(x2, t:t, :)
 
         for k in 1:n_used
