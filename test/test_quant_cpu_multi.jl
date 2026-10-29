@@ -6,7 +6,10 @@
 #     bit, with the GESSO_PREFILL_MULTI switch on and off
 #   * Q6_K at the integer extremes (u = 0 and 63, scales and activations at
 #     -128 and 127), bit-equal to the single-column kernel
-#   * prepped Q6_K activations (_q6k_prep) give the same bits, extremes included
+#   * Q4_K and Q5_K at the integer extremes (weights 0 and 15/31, scales and
+#     mins at 0 and 63, activations at -128 and 127), plain and prepped
+#   * prepped Q4_K, Q5_K and Q6_K activations (_q6k_prep) give the same bits,
+#     extremes included
 #   * the tile kernels do not allocate after warm-up
 #   * the single-column path through _quant_matmul! reuses its scratch buffers
 #     across shapes (large, small, large) and stays bit-equal to fresh buffers
@@ -35,6 +38,7 @@ const _MQ_TYPES = (
     ("IQ4_XS", _MQ.GGML_TYPE_IQ4_XS),
     ("Q2_K", _MQ.GGML_TYPE_Q2_K),
     ("Q4_K", _MQ.GGML_TYPE_Q4_K),
+    ("Q5_K", _MQ.GGML_TYPE_Q5_K),
     ("Q6_K", _MQ.GGML_TYPE_Q6_K),
     ("Q8_0", _MQ.GGML_TYPE_Q8_0),
     ("Q4_0", _MQ.GGML_TYPE_Q4_0),
@@ -45,7 +49,7 @@ const _MQ_TYPES = (
 # each format's super-scale offsets (random f16 bits are often NaN or Inf).
 function _mq_scale_offsets(ggml_type::Int32)
     ggml_type == _MQ.GGML_TYPE_Q2_K && return (80, 82)
-    ggml_type == _MQ.GGML_TYPE_Q4_K && return (0, 2)
+    ggml_type in (_MQ.GGML_TYPE_Q4_K, _MQ.GGML_TYPE_Q5_K) && return (0, 2)
     ggml_type == _MQ.GGML_TYPE_Q6_K && return (208,)
     return (0,)
 end
@@ -73,10 +77,11 @@ _mq_acts(rng, ne0::Int, n::Int, ggml_type::Int32=_MQ.GGML_TYPE_Q4_K) =
     [_MQ._q8k_quantize_act(ggml_type, randn(rng, Float32, ne0)) for _ in 1:n]
 
 # Checks every column of a tile of `ntile` activations starting at t0 against
-# the single-column kernel, for both simd modes, on the rows of w. Q6_K, Q8_0
-# and Q4_0 tiles that start a d-table tile are also checked through the table.
+# the single-column kernel, for both simd modes, on the rows of w. Q4_K, Q5_K,
+# Q6_K, Q8_0 and Q4_0 tiles that start a d-table tile are also checked through
+# the table.
 _mq_uses_table(ggml_type::Int32, t0::Int, ntile::Int) =
-    (ggml_type == _MQ.GGML_TYPE_Q6_K || _MQ._q80_act_type(ggml_type)) &&
+    (_MQ._q6k_prep_type(ggml_type) || _MQ._q80_act_type(ggml_type)) &&
     (t0 - 1) % _MQ._MULTI_TILE == 0 &&
     ntile <= _MQ._MULTI_TILE
 
@@ -163,28 +168,77 @@ end
     end
 end
 
-@testset "multi-column dot: prepped Q6_K activations, every tile size, bit-equal to _dot_q8k" begin
+@testset "multi-column dot: Q4_K and Q5_K at the integer extremes" begin
+    # All-ones bytes give weight 15 (Q4_K) or 31 (Q5_K) with every scale and min
+    # at 63; zero bytes give weight, scale and min 0; the mix sets each byte to
+    # one or the other. d = dmin = 1.0, activations at -128 and 127 built by
+    # hand, so the 16-bit pair sums reach 2*31*128.
+    rng = Xoshiro(0x45c5)
+    nb = 2
+    for ty in (_MQ.GGML_TYPE_Q4_K, _MQ.GGML_TYPE_Q5_K)
+        bsz = _MQ._iq_block_bytes(ty)
+        rb = _MQ._qrow_bytes(ty, 256 * nb)
+        rows = (fill(0xff, rb), zeros(UInt8, rb), rand(rng, (0x00, 0xff), rb))
+        w = UInt8[]
+        for row in rows
+            for blk in 0:(nb-1)
+                o = blk * bsz
+                row[o+1] = 0x00
+                row[o+2] = 0x3c
+                row[o+3] = 0x00
+                row[o+4] = 0x3c
+            end
+            append!(w, row)
+        end
+        pick = (Int8(-128), Int8(127), Int8(-127), Int8(0), Int8(1))
+        xqs = map(1:9) do c
+            x = _MQ.Q8KVec(nb)
+            for i in eachindex(x.qs)
+                x.qs[i] = c <= 2 ? (c == 1 ? Int8(-128) : Int8(127)) : rand(rng, pick)
+            end
+            for i in eachindex(x.bsums)
+                x.bsums[i] = sum(Int16, @view x.qs[(16(i-1)+1):(16i)])
+            end
+            x.d .= 1.0f0
+            x
+        end
+        xps = map(_MQ._q6k_prep, xqs)
+        for ntile in 1:8, t0 in (1, 2)
+            @test _mq_check_tiles(ty, w, length(rows), rb, xqs, t0, ntile) == 0
+            @test _mq_check_tiles(ty, w, length(rows), rb, xps, t0, ntile) == 0
+        end
+    end
+end
+
+@testset "multi-column dot: prepped activations, every tile size, bit-equal to _dot_q8k" begin
     rng = Xoshiro(0x9b6c)
     nb = 3
-    ty = _MQ.GGML_TYPE_Q6_K
-    rb = _MQ._qrow_bytes(ty, 256 * nb)
-    w = _mq_random_rows(rng, ty, 4, nb)
-    xps = map(_MQ._q6k_prep, _mq_acts(rng, 256 * nb, 9, ty))
-    for ntile in 1:8, t0 in (1, 2)
-        @test _mq_check_tiles(ty, w, 4, rb, xps, t0, ntile) == 0
+    for ty in (_MQ.GGML_TYPE_Q4_K, _MQ.GGML_TYPE_Q5_K, _MQ.GGML_TYPE_Q6_K)
+        rb = _MQ._qrow_bytes(ty, 256 * nb)
+        w = _mq_random_rows(rng, ty, 4, nb)
+        xps = map(_MQ._q6k_prep, _mq_acts(rng, 256 * nb, 9, ty))
+        for ntile in 1:8, t0 in (1, 2)
+            @test _mq_check_tiles(ty, w, 4, rb, xps, t0, ntile) == 0
+        end
+        out = zeros(Float32, 4)
+        _MQ._dot_q8k_multi!(out, ty, w, 0, xps, 1, 4, true)
+        @test (@allocated _MQ._dot_q8k_multi!(out, ty, w, 0, xps, 1, 4, true)) == 0
+        dt = _MQ._multi_d_table(xps)
+        _MQ._dot_q8k_multi!(out, ty, w, 0, xps, 1, 4, true, dt)
+        @test (@allocated _MQ._dot_q8k_multi!(out, ty, w, 0, xps, 1, 4, true, dt)) == 0
     end
-    out = zeros(Float32, 4)
-    _MQ._dot_q8k_multi!(out, ty, w, 0, xps, 1, 4, true)
-    @test (@allocated _MQ._dot_q8k_multi!(out, ty, w, 0, xps, 1, 4, true)) == 0
-    dt = _MQ._multi_d_table(xps)
-    _MQ._dot_q8k_multi!(out, ty, w, 0, xps, 1, 4, true, dt)
-    @test (@allocated _MQ._dot_q8k_multi!(out, ty, w, 0, xps, 1, 4, true, dt)) == 0
 end
 
 @testset "multi-column dot: the d table" begin
     rng = Xoshiro(0xd7ab)
     nb = 3
-    for ty in (_MQ.GGML_TYPE_Q6_K, _MQ.GGML_TYPE_Q8_0, _MQ.GGML_TYPE_Q4_0)
+    for ty in (
+        _MQ.GGML_TYPE_Q4_K,
+        _MQ.GGML_TYPE_Q5_K,
+        _MQ.GGML_TYPE_Q6_K,
+        _MQ.GGML_TYPE_Q8_0,
+        _MQ.GGML_TYPE_Q4_0,
+    )
         rb = _MQ._qrow_bytes(ty, 256 * nb)
         w = _mq_random_rows(rng, ty, 2, nb)
         xqs = _mq_acts(rng, 256 * nb, 9, ty)
@@ -235,6 +289,7 @@ end
         _MQ.GGML_TYPE_IQ3_S,
         _MQ.GGML_TYPE_Q2_K,
         _MQ.GGML_TYPE_Q4_K,
+        _MQ.GGML_TYPE_Q5_K,
         _MQ.GGML_TYPE_Q6_K,
         _MQ.GGML_TYPE_Q8_0,
         _MQ.GGML_TYPE_Q4_0,
