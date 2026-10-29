@@ -396,6 +396,30 @@ end
     @test length(unique(experts)) > n_used
 end
 
+@testset "Gemma4: eight-token router tiles match the one-token logits bit for bit" begin
+    inf = _gemma4_inf
+    rng = MersenneTwister(37)
+    N, E, n_exp, n_used = 67, 96, 16, 4
+    rin = randn(rng, Float32, N, E)
+    r = randn(rng, Float32, n_exp, E)
+    xt = Matrix{Float32}(rin[9:16, :])
+    L = inf._g4_router_logits8!(zeros(Float32, n_exp, 8), r, xt)
+    for k in 1:8
+        @test L[:, k] == inf._g4_router_logits!(zeros(Float32, n_exp), r, rin, 8 + k)
+    end
+    # 67 rows leave a ragged tail in at least one chunk.
+    scale = 0.5f0 .+ rand(rng, Float32, n_exp)
+    experts = zeros(Int, n_used, N)
+    weights = zeros(Float32, n_used, N)
+    inf._g4_route_rows!(experts, weights, rin, r, n_used, scale)
+    logits, probs, order = zeros(Float32, n_exp), zeros(Float32, n_exp), zeros(Int, n_exp)
+    for t in 1:N
+        den = inf._g4_route_token!(logits, probs, order, rin, t, r, n_used)
+        @test experts[:, t] == order[1:n_used]
+        @test weights[:, t] == [(probs[e] / den) * scale[e] for e in order[1:n_used]]
+    end
+end
+
 @testset "Gemma4: eight-row attention tiles match the one-row loop bit for bit" begin
     inf = _gemma4_inf
     rng = MersenneTwister(31)
