@@ -153,7 +153,13 @@ end
 
 _connection_header(keepalive::Bool) = keepalive ? "keep-alive" : "close"
 
-function write_json(io::IO, status::Int, obj; keepalive::Bool=true)
+function write_json(
+    io::IO,
+    status::Int,
+    obj;
+    keepalive::Bool=true,
+    headers::Vector{Pair{String, String}}=Pair{String, String}[],
+)
     body = Vector{UInt8}(codeunits(JSON.json(obj)))
     _write_head(
         io,
@@ -162,6 +168,7 @@ function write_json(io::IO, status::Int, obj; keepalive::Bool=true)
             "Content-Type" => "application/json",
             "Content-Length" => string(length(body)),
             "Connection" => _connection_header(keepalive),
+            headers...,
         ],
     )
     write(io, body)
@@ -176,6 +183,7 @@ function write_error(
     keepalive::Bool=true,
     code::Union{Nothing, AbstractString}=nothing,
     param::Union{Nothing, AbstractString}=nothing,
+    headers::Vector{Pair{String, String}}=Pair{String, String}[],
 )
     kind =
         status == 404 ? "not_found_error" :
@@ -186,7 +194,7 @@ function write_error(
         "code" => code === nothing ? status : code,
     )
     param === nothing || (err["param"] = param)
-    write_json(io, status, Dict("error" => err); keepalive=keepalive)
+    write_json(io, status, Dict("error" => err); keepalive=keepalive, headers=headers)
 end
 
 # Chunked framing for SSE: each event is one chunk, so the connection can be

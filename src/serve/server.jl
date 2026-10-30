@@ -1,5 +1,28 @@
 # Listener, connection loop and dispatch. One listener task accepts; each
-# connection gets its own task; generation is single-flight behind `gate`.
+# connection gets its own task; generation is single-flight behind `gate`, which
+# holds a bounded queue of requests waiting for their turn.
+
+"""
+    GenerationGate
+
+Single-flight access to the engine. `busy` is set while one generation runs.
+Requests that arrive meanwhile wait in a queue of at most `max_queue`, each for
+at most `queue_timeout` seconds. `changed` wakes the waiters whenever the slot is
+released or a waiter's client goes away.
+"""
+mutable struct GenerationGate
+    lock::ReentrantLock
+    changed::Threads.Condition
+    busy::Bool
+    waiting::Int
+    max_queue::Int
+    queue_timeout::Float64
+end
+
+function GenerationGate(max_queue::Int, queue_timeout::Float64)
+    lock = ReentrantLock()
+    return GenerationGate(lock, Threads.Condition(lock), false, 0, max_queue, queue_timeout)
+end
 
 """
     Server
@@ -12,7 +35,7 @@ mutable struct Server
     listener::Sockets.TCPServer
     host::String
     port::Int
-    gate::ReentrantLock
+    gate::GenerationGate
     task::Union{Nothing, Task}
     read_timeout::Float64
     max_connections::Int
@@ -21,7 +44,8 @@ end
 
 """
     serve(model; host="127.0.0.1", port=8080, block=true,
-          read_timeout=30, max_connections=64) -> Server
+          read_timeout=30, max_connections=64,
+          max_queue=16, queue_timeout=300) -> Server
 
 Listen on `host:port` and serve `model`. With `block=true` this call returns when
 the server is closed. With `block=false` it returns at once with the listener
@@ -34,6 +58,13 @@ keep-alive connection and a client that sends its request a byte at a time.
 When it runs out the connection is closed. `max_connections` caps how many
 connections are open at once; past it a new connection gets a 503 and is
 closed. Neither limit applies while a response is being written.
+
+Generation runs one request at a time. `max_queue` caps how many chat requests
+may wait behind the one running; a request arriving to a full queue gets a 503
+with `Retry-After`. `queue_timeout` is how many seconds a queued request waits
+for its turn before it gets a 503 and its connection is closed. A client that
+disconnects while queued leaves the queue at once. `max_queue=0` refuses every
+chat request that arrives while another is running.
 """
 function serve(
     model::ChatModel;
@@ -42,9 +73,13 @@ function serve(
     block::Bool=true,
     read_timeout::Real=30,
     max_connections::Integer=64,
+    max_queue::Integer=16,
+    queue_timeout::Real=300,
 )
     read_timeout > 0 || throw(ArgumentError("read_timeout must be positive"))
     max_connections > 0 || throw(ArgumentError("max_connections must be positive"))
+    max_queue >= 0 || throw(ArgumentError("max_queue must not be negative"))
+    queue_timeout > 0 || throw(ArgumentError("queue_timeout must be positive"))
     ip = parse(Sockets.IPv4, host)
     listener = Sockets.listen(ip, port)
     _, bound = Sockets.getsockname(listener)
@@ -53,7 +88,7 @@ function serve(
         listener,
         String(host),
         Int(bound),
-        ReentrantLock(),
+        GenerationGate(Int(max_queue), Float64(queue_timeout)),
         nothing,
         Float64(read_timeout),
         Int(max_connections),
@@ -181,6 +216,58 @@ end
 _wants_keepalive(req::HTTPRequest) = begin
     conn = lowercase(get(req.headers, "connection", ""))
     req.version == "HTTP/1.1" ? conn != "close" : conn == "keep-alive"
+end
+
+# Waits for the generation slot. Returns :acquired (the caller must then call
+# _release_slot!), :full when the queue is at its limit, :timeout when the wait
+# outlasted the queue timeout, or :cancelled when the client left while queued.
+# A request that arrives while others wait joins the back of the queue even if
+# the slot is free, so a queued request is not overtaken.
+function _acquire_slot!(gate::GenerationGate, cancelled::Ref{Bool})::Symbol
+    lock(gate.lock) do
+        if !gate.busy && gate.waiting == 0
+            gate.busy = true
+            return :acquired
+        end
+        gate.waiting >= gate.max_queue && return :full
+        gate.waiting += 1
+        expired = Ref(false)
+        timer = Timer(gate.queue_timeout) do _
+            expired[] = true
+            _wake_waiters(gate)
+        end
+        try
+            while true
+                if !gate.busy
+                    gate.busy = true
+                    return :acquired
+                end
+                cancelled[] && return :cancelled
+                expired[] && return :timeout
+                wait(gate.changed)
+            end
+        finally
+            gate.waiting -= 1
+            close(timer)
+        end
+    end
+end
+
+function _release_slot!(gate::GenerationGate)
+    lock(gate.lock) do
+        gate.busy = false
+        notify(gate.changed)
+    end
+    return nothing
+end
+
+# Called when a queued client goes away, so its waiter leaves the queue now
+# instead of when its turn would have come.
+function _wake_waiters(gate::GenerationGate)
+    lock(gate.lock) do
+        notify(gate.changed)
+    end
+    return nothing
 end
 
 # Used only to send an error response. The socket may already be gone, and an
