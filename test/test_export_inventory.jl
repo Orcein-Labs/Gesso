@@ -100,6 +100,7 @@ const INVENTORY = Dict{Symbol, Tuple{Symbol, Vector{String}}}(
     # --- chat server (src/serve) -------------------------------------------
     :ChatModel => (:live, ["test_serve.jl"]),
     :serve => (:live, ["test_serve.jl"]),
+    :on_engine_thread => (:live, ["test_serve.jl"]),
     :gguf_chat_model => (:live, ["test_serve_engine.jl"]),
     :DecodeWorkload => (:live, ["test_semantics.jl", "test_operators.jl"]),
 
