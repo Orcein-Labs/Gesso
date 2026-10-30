@@ -5,7 +5,8 @@
 #
 # Env: GESSO_BENCH_GGUF (colon-separated GGUF paths) adds the first ffn_gate
 # shape of each file, and for MoE files its per-expert shape, at that tensor's
-# own type. Without it only the built-in shapes run.
+# own type. Without it only the built-in shapes run. GESSO_BENCH_ONLY keeps the
+# shapes whose name contains that text.
 using Gesso
 using Printf
 using Random: Xoshiro, rand
@@ -77,6 +78,8 @@ shapes = [
 for p in split(get(ENV, "GESSO_BENCH_GGUF", ""), ':'; keepempty=false)
     append!(shapes, gguf_shapes(p))
 end
+only = get(ENV, "GESSO_BENCH_ONLY", "")
+filter!(s -> occursin(only, s[1]), shapes)
 println("PGEMM threads=$(Threads.nthreads()) simd=$(INF.q8k_simd_enabled())")
 for (name, ty, ne0, nrows) in shapes, seq in seqs
     bench(name, ty, ne0, nrows, seq)
