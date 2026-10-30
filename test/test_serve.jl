@@ -563,13 +563,16 @@ end
     end
 end
 
-# An engine that computes for a while without yielding, like a long CPU prefill.
-# /health must still answer while it runs, which needs generation off thread 1.
+# An engine that computes without yielding, like a long CPU prefill, until the
+# probe has its /health answer. /health must still answer while it runs, which
+# needs generation off thread 1. The spin waits on the probe rather than a fixed
+# time so a slow start under a loaded suite cannot end it before the probe.
 @testset "health answers while a generation computes" begin
     if Gesso.Serve._engine_tid() == 1
         @test_skip "needs a default thread other than this one"
     else
         busy = Threads.Atomic{Bool}(false)
+        probed = Threads.Atomic{Bool}(false)
         base = sv_fake(script="ok")
         spin = ChatModel(
             tokenize=base.tokenize,
@@ -579,7 +582,7 @@ end
             generate=(prompt_ids; max_new_tokens, on_token) -> begin
                 busy[] = true
                 t0 = time_ns()
-                while time_ns() - t0 < 2_000_000_000
+                while !probed[] && time_ns() - t0 < 60_000_000_000
                     GC.safepoint()
                 end
                 busy[] = false
@@ -596,13 +599,19 @@ end
             )
             probe = Threads.@spawn :default begin
                 t0 = time()
-                while !busy[] && time() - t0 < 10
+                while !busy[] && time() - t0 < 60
                     sleep(0.01)
                 end
                 started = busy[]
                 t1 = time()
-                r = sv_request(srv.port, sv_get("/health"))
-                (started, r.status, time() - t1, busy[])
+                still_busy = false
+                r = try
+                    sv_request(srv.port, sv_get("/health"))
+                finally
+                    still_busy = busy[]
+                    probed[] = true
+                end
+                (started, r.status, time() - t1, still_busy)
             end
             started, status, waited, still_busy = fetch(probe)
             @test started
