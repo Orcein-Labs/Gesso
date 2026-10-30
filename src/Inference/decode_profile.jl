@@ -36,6 +36,7 @@ const DECODE_STAGES = (
 const DECODE_GDN_SUBSTAGES = (
     :gdn_norm,
     :gdn_proj,
+    :gdn_rows,
     :gdn_conv,
     :gdn_split,
     :gdn_gates,
@@ -47,7 +48,7 @@ const DECODE_GDN_SUBSTAGES = (
 
 # Full-attention decode sub-stages (inside :attn_mixer).
 const DECODE_ATTN_SUBSTAGES =
-    (:attn_proj, :attn_headnorm_rope, :attn_kv_append, :attn_core, :attn_outproj)
+    (:attn_proj, :attn_rows, :attn_headnorm_rope, :attn_kv_append, :attn_core, :attn_outproj)
 
 # Dense FFN decode sub-stages (inside :dense_ffn).
 const DECODE_FFN_SUBSTAGES = (:ffn_gateup, :ffn_act, :ffn_down)
@@ -560,6 +561,7 @@ function _prefill_pass_close(tok::PrefillPassToken)
     )
     push!(pp.passes, rec)
     _print_prefill_pass(stdout, rec)
+    _print_prefill_subs(stdout, rec.pass, dp)
     if K == tok.P
         pp.done = true
         _print_prefill_summary(stdout, pp)
@@ -592,6 +594,19 @@ function _print_prefill_pass(io::IO, r::PrefillPassRecord)
         " h2d_ms=",
         _prefill_ms(getfield(r.stage_ns, :moe_h2d)),
     )
+    flush(io)
+    return nothing
+end
+
+# The pass's nonzero sub-stages, nested inside the stages of its PFPASS line.
+function _print_prefill_subs(io::IO, pass::Int, dp::DecodeProfile)
+    any(s -> dp.sub_ns[s] > 0, DECODE_SUBSTAGES) || return nothing
+    print(io, "PFSUB i=", pass)
+    for s in DECODE_SUBSTAGES
+        ns = dp.sub_ns[s]
+        ns > 0 && print(io, " ", s, "=", _prefill_ms(ns))
+    end
+    println(io)
     flush(io)
     return nothing
 end

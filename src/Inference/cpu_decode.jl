@@ -398,53 +398,72 @@ end
 # and the gate projections in `sc.a` and `sc.b`; writes `sc.beta`, `sc.decay` and
 # the value and normalized q/k columns that the delta rule consumes.
 function _gdn_gates_qk!(cpu, bt, spec, sc::CPUDecodeScratch)
-    nk, nv, dk, dv = sc.nk, sc.nv, sc.dk, sc.dv
-    key_dim = nk * dk
-    group = div(nv, nk)
-    tiled = spec.mixer.v_head_tiled
-    conv = sc.convout
-    av = vec(sc.a)
-    bv = vec(sc.b)
     # FrozenParameter storage is `Any`; assert the concrete type once so the
     # per-head loops are not dynamically dispatched.
     A_log = bt.wgdn_A_log.storage::Vector{Float32}
     dt_bias = bt.wgdn_dt_bias.storage::Vector{Float32}
+    @decode_sub :gdn_gates cpu _gdn_gates_row!(
+        sc.beta,
+        sc.decay,
+        vec(sc.a),
+        vec(sc.b),
+        A_log,
+        dt_bias,
+        sc.nv,
+    )
+    @decode_sub :gdn_qk cpu _gdn_qk_row!(
+        sc.vn,
+        sc.qn,
+        sc.kn,
+        sc.convout,
+        sc.nk,
+        sc.nv,
+        sc.dk,
+        sc.dv,
+        spec.mixer.v_head_tiled,
+    )
+    return nothing
+end
 
-    @decode_sub :gdn_gates cpu begin
-        @inbounds for hh in 1:nv
-            sc.beta[hh] = _cpu_sigmoid(bv[hh])
-            sc.decay[hh] = exp(-exp(A_log[hh]) * _cpu_softplus(av[hh] + dt_bias[hh]))
-        end
+# The per-token gate and q/k kernels behind `_gdn_gates_qk!`. They take explicit
+# arrays, so the verify window can run them on per-row columns from several tasks.
+function _gdn_gates_row!(beta, decay, av, bv, A_log::Vector{Float32}, dt_bias::Vector{Float32}, nv::Int)
+    @inbounds for hh in 1:nv
+        beta[hh] = _cpu_sigmoid(bv[hh])
+        decay[hh] = exp(-exp(A_log[hh]) * _cpu_softplus(av[hh] + dt_bias[hh]))
     end
+    return nothing
+end
 
-    @decode_sub :gdn_qk cpu begin
-        # value heads: head-major in conv output, (nv, dv) in scratch
-        @inbounds for hh in 1:nv, j in 1:dv
-            sc.vn[hh+nv*(j-1)] = conv[2*key_dim+(hh-1)*dv+j]
+function _gdn_qk_row!(vn, qn, kn, conv, nk::Int, nv::Int, dk::Int, dv::Int, tiled::Bool)
+    key_dim = nk * dk
+    group = div(nv, nk)
+    # value heads: head-major in conv output, (nv, dv) in scratch
+    @inbounds for hh in 1:nv, j in 1:dv
+        vn[hh+nv*(j-1)] = conv[2*key_dim+(hh-1)*dv+j]
+    end
+    # L2-normalize each key head once (q and k), then map key heads onto
+    # value heads with the same pairing as the reference rule.
+    @inbounds for hk in 1:nk
+        qss = 0.0f0
+        kss = 0.0f0
+        for d in 1:dk
+            qv = conv[(hk-1)*dk+d]
+            kv = conv[key_dim+(hk-1)*dk+d]
+            qss += qv * qv
+            kss += kv * kv
         end
-        # L2-normalize each key head once (q and k), then map key heads onto
-        # value heads with the same pairing as the reference rule.
-        @inbounds for hk in 1:nk
-            qss = 0.0f0
-            kss = 0.0f0
+        qinv = 1.0f0 / sqrt(qss + 1.0f-6)
+        kinv = 1.0f0 / sqrt(kss + 1.0f-6)
+        scale = 1.0f0 / sqrt(Float32(dk))
+        for hh in 1:nv
+            kh = tiled ? mod(hh - 1, nk) + 1 : div(hh - 1, group) + 1
+            kh == hk || continue
             for d in 1:dk
                 qv = conv[(hk-1)*dk+d]
                 kv = conv[key_dim+(hk-1)*dk+d]
-                qss += qv * qv
-                kss += kv * kv
-            end
-            qinv = 1.0f0 / sqrt(qss + 1.0f-6)
-            kinv = 1.0f0 / sqrt(kss + 1.0f-6)
-            scale = 1.0f0 / sqrt(Float32(dk))
-            for hh in 1:nv
-                kh = tiled ? mod(hh - 1, nk) + 1 : div(hh - 1, group) + 1
-                kh == hk || continue
-                for d in 1:dk
-                    qv = conv[(hk-1)*dk+d]
-                    kv = conv[key_dim+(hk-1)*dk+d]
-                    sc.qn[hh+nv*(d-1)] = (qv * qinv) * scale
-                    sc.kn[hh+nv*(d-1)] = kv * kinv
-                end
+                qn[hh+nv*(d-1)] = (qv * qinv) * scale
+                kn[hh+nv*(d-1)] = kv * kinv
             end
         end
     end

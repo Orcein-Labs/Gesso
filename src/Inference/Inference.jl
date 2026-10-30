@@ -64,6 +64,7 @@ using ..Gesso:
     _cpu_sigmoid_mul!,
     _cpu_geglu!,
     _cpu_rethrow_task_error,
+    _cpu_split_rows!,
     _cpu_silu,
     _cpu_sigmoid,
     _cpu_softplus,
