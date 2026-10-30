@@ -15,16 +15,29 @@
 """
     kv_bytes_per_token(spec::ArchitectureSpec, kv_format::Symbol) -> Int
 
-Bytes of KV cache one token costs across all layers that hold KV. A linear
-attention (GDN) layer keeps a fixed-size recurrent state instead, so a hybrid
-family counts only its full-attention layers. Quantized formats need a head
+Bytes of KV cache one token costs, summed over the layers that hold KV. A
+linear attention (GDN) layer keeps a fixed-size recurrent state instead, so a
+hybrid family counts only its full-attention layers. Each layer contributes its
+own KV head count and head dimension (`layer_n_kv_heads`, `layer_head_dim`),
+as the cache allocator sizes it, so Gemma 4 sliding and global layers and
+Spark's per-layer geometry are counted exactly. Quantized formats need a head
 dimension that fills whole scale blocks, as the cache allocator requires.
 """
 function kv_bytes_per_token(spec::ArchitectureSpec, kv_format::Symbol)
     kv_format in KV_FORMATS || throw(
         gesso_error(ERR_INVALID_PLAN, "kv_bytes_per_token: unknown KV format $kv_format"),
     )
-    d = spec.head_dim
+    total = 0
+    for l in 0:(spec.num_layers-1)
+        layer_mixer(spec, l) === :full_attention || continue
+        d = layer_head_dim(spec, l)
+        _check_kv_head_dim(d, kv_format)
+        total += 2 * layer_n_kv_heads(spec, l) * _kv_head_bytes(d, kv_format)  # K and V
+    end
+    return total
+end
+
+function _check_kv_head_dim(d::Integer, kv_format::Symbol)
     if kv_format in (:q8, :q4h)
         d % _KV_BLOCK == 0 || throw(
             gesso_error(
@@ -41,8 +54,7 @@ function kv_bytes_per_token(spec::ArchitectureSpec, kv_format::Symbol)
                 "kv_bytes_per_token: q4h needs a power-of-two head_dim, got $d",
             ),
         )
-    attn = count(l -> layer_mixer(spec, l) === :full_attention, 0:(spec.num_layers-1))
-    return attn * 2 * spec.n_kv_heads * _kv_head_bytes(d, kv_format)  # K and V
+    return nothing
 end
 
 # One head's row of K (or V) in a cache of this format.
