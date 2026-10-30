@@ -44,9 +44,10 @@ only with `ext/cuda_*` files applies to the CUDA path. New GPU work goes into La
 | `GESSO_GDN_PREFILL_GNORM` | `ext/cuda_ops.jl` |
 | `GESSO_GDN_RECUR_REG` | `ext/cuda_ops.jl`, `test/test_cuda_hybrid.jl` |
 | `GESSO_GDN_REFERENCE_FIXTURE` | `test/test_lava_gdn_reference.jl` |
+| `GESSO_GEMMA4_GGUF` | `test/test_gemma4.jl`, `test/test_gemma4_tokenizer.jl`, `test/test_quant_cpu_legacy32.jl` |
 | `GESSO_GEMV_CHUNKS_PER_THREAD` | `src/Inference/gguf_quants.jl` |
 | `GESSO_GEMV_POOL` | `src/Inference/gguf_quants.jl` |
-| `GESSO_GGML_DIR` | `scripts/bench_35b.jl`, `scripts/bench_qwen38_27b.jl`, `scripts/gate_35b.jl`, `scripts/gen_qwen38_27b.jl`, `scripts/profile_35b.jl`, `scripts/profile_qwen38_27b.jl`, `scripts/routing_trace_35b.jl`, `scripts/saluki_bean_bench.jl`, `scripts/saluki_combo_bench.jl`, `scripts/saluki_dflash_bench.jl`, `scripts/saluki_draft_bench.jl`, `scripts/saluki_mtp_bench.jl`, `scripts/saluki_window_oracle.jl`, `scripts/stress_ornith_lava.jl`, `src/Inference/gguf_import.jl`, `test/runtests.jl`, `test/test_cuda_quant_dense.jl`, `test/test_gguf_import.jl`, `test/test_lava_quant.jl`, `test/test_lava_quant_flash_next.jl`, `test/test_lava_quant_half.jl`, `test/test_lava_quant_kexperts.jl`, `test/test_quant_cpu_iq_s.jl`, `test/test_quant_cpu_kquants.jl`, `test/test_quant_cpu_simd.jl`, `test/test_quant_flash_next_types.jl`, `test/test_qwen35_dense.jl` |
+| `GESSO_GGML_DIR` | `scripts/bench_35b.jl`, `scripts/bench_qwen38_27b.jl`, `scripts/gate_35b.jl`, `scripts/gen_qwen38_27b.jl`, `scripts/profile_35b.jl`, `scripts/profile_qwen38_27b.jl`, `scripts/routing_trace_35b.jl`, `scripts/saluki_bean_bench.jl`, `scripts/saluki_combo_bench.jl`, `scripts/saluki_dflash_bench.jl`, `scripts/saluki_draft_bench.jl`, `scripts/saluki_mtp_bench.jl`, `scripts/saluki_window_oracle.jl`, `scripts/stress_ornith_lava.jl`, `src/Inference/gguf_dequant.jl`, `src/Inference/gguf_import.jl`, `test/runtests.jl`, `test/test_gguf_dequant.jl`, `test/test_gguf_import.jl`, `test/test_quant_cpu_iq_s.jl`, `test/test_quant_cpu_kquants.jl`, `test/test_quant_cpu_legacy32.jl`, `test/test_quant_flash_next_types.jl` |
 | `GESSO_GGUF_UNREORDER_V` | `src/Inference/gguf_import.jl` |
 | `GESSO_GPU_BUDGET_MIB` | `ext/cuda_ops.jl`, `ext/lava_ops.jl`, `ext/lava_qwen4exp.jl`, `src/Inference/Inference.jl`, `test/test_cuda_moe.jl`, `test/test_cuda_quant_dense.jl`, `test/test_moe_routing.jl` |
 | `GESSO_GPU_DENSE_QUANT` | `ext/cuda_quant_dense.jl`, `test/test_cuda_quant_dense.jl` |
@@ -76,7 +77,7 @@ only with `ext/cuda_*` files applies to the CUDA path. New GPU work goes into La
 | `GESSO_HF_REFERENCE` | `test/regime_i_batch.jl`, `test/regime_i_containment.jl`, `test/regime_i_cuda.jl`, `test/regime_i_device.jl`, `test/regime_i_lava.jl`, `test/regime_i_numerics.jl`, `test/regime_i_observability.jl`, `test/regime_i_package.jl`, `test/regime_i_performance.jl`, `test/regime_i_probe.jl`, `test/regime_ii_attribution.jl`, `test/test_hf_parity.jl` |
 | `GESSO_IDS_TOL` | `scripts/profile_35b.jl` |
 | `GESSO_KOLIBRI_Q2K_GGUF` | `test/test_moe_kquant_experts.jl` |
-| `GESSO_KV_FORMAT` | `ext/lava_kv_format.jl`, `scripts/bench_35b.jl`, `src/Inference/Inference.jl`, `src/Inference/kv_format.jl`, `test/test_generate_state_io.jl`, `test/test_kv_format.jl`, `test/test_lava_spark25.jl` |
+| `GESSO_KV_FORMAT` | `ext/lava_kv_format.jl`, `scripts/bench_35b.jl`, `src/Inference/Inference.jl`, `src/Inference/kv_format.jl`, `test/test_gemma4.jl`, `test/test_generate_state_io.jl`, `test/test_kv_format.jl`, `test/test_lava_gemma4.jl`, `test/test_lava_lfm25.jl`, `test/test_lava_spark25.jl` |
 | `GESSO_L1_CANCEL` | `scripts/stress_ornith_lava.jl` |
 | `GESSO_L1_CANCEL_AFTER` | `scripts/stress_ornith_lava.jl` |
 | `GESSO_L1_CANCEL_CASE` | `scripts/stress_ornith_lava.jl` |
