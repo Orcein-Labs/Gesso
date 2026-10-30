@@ -1,7 +1,9 @@
 # Serving
 
 Gesso includes an OpenAI-compatible chat server. It serves one model and runs
-one generation at a time; other requests wait their turn.
+one generation at a time. Up to 16 chat requests wait in a queue behind the
+running one; past that, or after 300 seconds of waiting, a request gets `503`
+with `Retry-After`.
 
 ## Start it
 
@@ -28,9 +30,13 @@ to stderr and exit with status 2.
 Memory use grows with `--n-ctx`; see [memory.md](memory.md).
 
 From Julia, `Gesso.serve(model; host="127.0.0.1", port=8080, block=true,
-read_timeout=30, max_connections=64)` starts the same server. `port=0` picks
+read_timeout=30, max_connections=64, max_queue=16, queue_timeout=300)` starts
+the same server. `port=0` picks
 a free port (read it from the returned server's `port`). `close(server)` stops
-it. Connections past `max_connections` receive `503`.
+it. Connections past `max_connections` receive `503`. `max_queue` caps the
+chat requests waiting behind the running generation (`0` refuses any request
+that arrives while one runs), and `queue_timeout` is how many seconds one may
+wait. A client that disconnects while queued leaves the queue at once.
 
 ## Chat families
 
@@ -130,4 +136,5 @@ Errors use the OpenAI shape:
   `Expect: 100-continue` are supported; connections are kept alive.
 - A prompt with `n_ctx` tokens or more is refused with
   `context_length_exceeded`.
-- The launcher does not expose `read_timeout` or `max_connections`.
+- The launcher does not expose `read_timeout`, `max_connections`, `max_queue`
+  or `queue_timeout`; use `Gesso.serve` from Julia to change them.

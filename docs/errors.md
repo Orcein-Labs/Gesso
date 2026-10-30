@@ -62,6 +62,8 @@ and the connection is closed. Errors the server detects itself use this body:
 | 431 | `invalid_request_error` | Headers over 64 KiB. |
 | 500 | `server_error` | `internal error`. |
 | 503 | `server_error` | `too many open connections`. |
+| 503 | `server_error`, header `Retry-After: 1` | `the generation queue is full, retry later`: `max_queue` chat requests are already waiting. |
+| 503 | `server_error`, header `Retry-After: 1` | `waited too long for the generation queue, retry later`: the request waited `queue_timeout` seconds; the connection is closed. |
 
 If a streamed response fails after it has started, the status line is already
 sent, so the connection is simply closed.
