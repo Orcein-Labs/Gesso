@@ -255,3 +255,23 @@ end
         end
     end
 end
+
+@testset "LFM: prefill profiler sees the conv mixer and the MoE block" begin
+    PPI = Gesso.Inference
+    saved = PPI._PREFILL_PROFILE[]
+    try
+        spec = _lfm_inf.spec_from_gguf_kv(_lfm_toy_kv(true))
+        model, tensors = _lfm_bind(spec, _lfm_toy(spec))
+        PPI.prefill_profile_enable!()
+        redirect_stdout(devnull) do
+            Gesso.reference_generate(model, tensors, [3, 7, 1, 12, 5]; max_new_tokens=0, eps=spec.rms_norm_eps)
+        end
+        recs = PPI.prefill_profile_records()
+        @test !isempty(recs)
+        @test sum(r.stage_ns.conv_mixer for r in recs) > 0
+        @test sum(r.stage_ns.moe_host for r in recs) > 0
+        @test all(r -> sum(values(r.stage_ns)) + r.other_ns == r.wall_ns, recs)
+    finally
+        PPI._PREFILL_PROFILE[] = saved
+    end
+end

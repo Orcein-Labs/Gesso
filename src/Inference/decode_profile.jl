@@ -19,6 +19,7 @@ const DECODE_STAGES = (
     :attn_mixer,
     :norm,
     :dense_ffn,
+    :conv_mixer,
     :moe_router,
     :moe_alloc,
     :moe_qupload,
@@ -53,6 +54,12 @@ const DECODE_ATTN_SUBSTAGES =
 # Dense FFN decode sub-stages (inside :dense_ffn).
 const DECODE_FFN_SUBSTAGES = (:ffn_gateup, :ffn_act, :ffn_down)
 
+# LFM2 short-convolution mixer sub-stages (inside :conv_mixer).
+const DECODE_CONV_SUBSTAGES = (:conv_in, :conv_mix, :conv_out)
+
+# Biased-routing MoE sub-stages (inside :moe_host on the CPU backend).
+const DECODE_BIASED_MOE_SUBSTAGES = (:moe_route, :moe_experts)
+
 const DECODE_SUBSTAGES = (
     :host_fork_join,
     :host_critical_path,
@@ -61,6 +68,8 @@ const DECODE_SUBSTAGES = (
     DECODE_GDN_SUBSTAGES...,
     DECODE_ATTN_SUBSTAGES...,
     DECODE_FFN_SUBSTAGES...,
+    DECODE_CONV_SUBSTAGES...,
+    DECODE_BIASED_MOE_SUBSTAGES...,
 )
 
 const DECODE_COUNTERS = (
@@ -424,6 +433,7 @@ end
 const PREFILL_STAGES = (
     :attn_mixer,
     :gdn_mixer,
+    :conv_mixer,
     :moe_router,
     :moe_alloc,
     :moe_qupload,
