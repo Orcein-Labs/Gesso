@@ -28,60 +28,10 @@ struct _GDNWindowRec
     beta::Matrix{Float32}      # (nv, T)
     core::Matrix{Float32}      # (nv*dv, T) delta-rule output per token
     rec_out::Array{Float32, 3}  # (nv, dk, dv) state after the window
-    delta::Matrix{Float32}     # (nv, nslab) per-chunk scratch, as in CPUDecodeScratch
     nslab::Int
     nv::Int
     dk::Int
     dv::Int
-end
-
-# Same arithmetic as `_gdn_delta_slab!`, operation for operation. The state is
-# read from `src` and written to `dst`; when they are the same array this is the
-# in-place kernel. The first loop reads the prior state, the second writes the
-# new one, so the out-of-place form has no read-after-write hazard.
-function _gdn_delta_slab_oop!(
-    dst,
-    src,
-    core,
-    qn,
-    kn,
-    v,
-    decay,
-    beta,
-    delta,
-    jlo::Int,
-    jhi::Int,
-    nv::Int,
-    dk::Int,
-)
-    @inbounds for j in jlo:jhi
-        base = nv * dk * (j - 1)
-        vb = nv * (j - 1)
-        for hh in 1:nv
-            delta[hh] = 0.0f0
-        end
-        for i in 1:dk
-            ib = nv * (i - 1)
-            for hh in 1:nv
-                s = src[base+ib+hh] * decay[hh]
-                delta[hh] += s * kn[ib+hh]
-            end
-        end
-        for hh in 1:nv
-            delta[hh] = (v[vb+hh] - delta[hh]) * beta[hh]
-            core[vb+hh] = 0.0f0
-        end
-        for i in 1:dk
-            ib = nv * (i - 1)
-            for hh in 1:nv
-                idx = base + ib + hh
-                s = src[idx] * decay[hh] + kn[ib+hh] * delta[hh]
-                dst[idx] = s
-                core[vb+hh] += s * qn[ib+hh]
-            end
-        end
-    end
-    return dst
 end
 
 # Applies `ntok` token updates to every slab. Chunk `c` owns the value columns of
@@ -99,10 +49,9 @@ function (g::_GDNWindowChunk)(c::Int)
     r = g.rec
     jlo = div((c - 1) * r.dv, r.nslab) + 1
     jhi = div(c * r.dv, r.nslab)
-    dl = view(r.delta, :, c)
     for t in 1:g.ntok
         src = t == 1 ? g.src : g.dst
-        _gdn_delta_slab_oop!(
+        _gdn_delta_slab!(
             g.dst,
             src,
             view(r.core, :, t),
@@ -111,7 +60,6 @@ function (g::_GDNWindowChunk)(c::Int)
             view(r.vn, :, t),
             view(r.decay, :, t),
             view(r.beta, :, t),
-            dl,
             jlo,
             jhi,
             r.nv,
@@ -361,7 +309,6 @@ function _window_gdn_block!(
         zeros(Float32, nv, T),
         zeros(Float32, nv * dv, T),
         zeros(Float32, size(rec_in)),
-        sc.delta,
         sc.nslab,
         nv,
         dk,

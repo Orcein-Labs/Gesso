@@ -34,7 +34,6 @@ struct CPUDecodeScratch{R <: AbstractFloat}
     core::Vector{Float32}         # (nv, dv) delta-rule output
     decay::Vector{Float32}        # (nv,)
     beta::Vector{Float32}         # (nv,)
-    delta::Matrix{Float32}        # (nv, nslab) per-slab delta / kv_mem buffer
     nslab::Int
     # True for a model with a GDN mixer. Only then do the decode projections
     # take the Q8_K route read through `_decode_xq`.
@@ -116,7 +115,6 @@ function _cpu_decode_scratch(
         zeros(Float32, nv * dv),
         zeros(Float32, nv),
         zeros(Float32, nv),
-        zeros(Float32, nv, nslab),
         nslab,
         mx !== nothing && !(mx isa ShortConvSpec),
         Q8KVec(div(Int(dim), QK_K)),
@@ -242,52 +240,100 @@ function _gdn_conv_decode!(out, x, weight, conv_state, ksz::Int)
     return out
 end
 
-# Delta rule for the value-dim slab jlo:jhi. State layout (nv, dk, dv), so the
-# slab `j` columns are contiguous in `rec`. Per value head this is the reference
-# recurrence: decay, kv_mem, delta, rank-1 update, and output. Each j column is
-# independent, so slabs need no synchronization.
+# Delta rule for the value-dim slab jlo:jhi, reading the state from `src` and
+# writing it to `dst`; decode passes the same array for both. State layout
+# (nv, dk, dv), so the slab `j` columns are contiguous. Per value head this is the
+# reference recurrence: decay, kv_mem, delta, rank-1 update, and output. Each j
+# column is independent, so slabs need no synchronization.
+#
+# Heads go in blocks of `_GDN_HB` with the kv_mem and output sums held in
+# registers. A sum kept in memory cannot be, since `core` may alias the state as
+# far as the compiler knows, and each add then waits on the previous store. Every
+# head keeps the reference operation order, so the bits do not change. Pass 1 only
+# reads `src` and pass 2 reads each element before writing it, so `dst === src` is
+# safe.
+const _GDN_HB = 8
+
 function _gdn_delta_slab!(
-    rec,
+    dst,
+    src,
     core,
     qn,
     kn,
     v,
     decay,
     beta,
-    delta,
     jlo::Int,
     jhi::Int,
     nv::Int,
     dk::Int,
 )
-    @inbounds for j in jlo:jhi
+    for j in jlo:jhi
         base = nv * dk * (j - 1)
         vb = nv * (j - 1)
-        for hh in 1:nv
-            delta[hh] = 0.0f0
+        h0 = 0
+        while h0 + _GDN_HB <= nv
+            _gdn_delta_heads!(dst, src, core, qn, kn, v, decay, beta, base, vb, h0, nv, dk, Val(_GDN_HB))
+            h0 += _GDN_HB
         end
-        for i in 1:dk
-            ib = nv * (i - 1)
-            for hh in 1:nv
-                s = rec[base+ib+hh] * decay[hh]
-                delta[hh] += s * kn[ib+hh]
-            end
+        if h0 + 4 <= nv
+            _gdn_delta_heads!(dst, src, core, qn, kn, v, decay, beta, base, vb, h0, nv, dk, Val(4))
+            h0 += 4
         end
-        for hh in 1:nv
-            delta[hh] = (v[vb+hh] - delta[hh]) * beta[hh]
-            core[vb+hh] = 0.0f0
-        end
-        for i in 1:dk
-            ib = nv * (i - 1)
-            for hh in 1:nv
-                idx = base + ib + hh
-                s = rec[idx] * decay[hh] + kn[ib+hh] * delta[hh]
-                rec[idx] = s
-                core[vb+hh] += s * qn[ib+hh]
-            end
+        while h0 < nv
+            _gdn_delta_heads!(dst, src, core, qn, kn, v, decay, beta, base, vb, h0, nv, dk, Val(1))
+            h0 += 1
         end
     end
-    return rec
+    return dst
+end
+
+# Heads h0+1:h0+W of slab column `j` (state offset `base`, value offset `vb`).
+@inline function _gdn_delta_heads!(
+    dst,
+    src,
+    core,
+    qn,
+    kn,
+    v,
+    decay,
+    beta,
+    base::Int,
+    vb::Int,
+    h0::Int,
+    nv::Int,
+    dk::Int,
+    ::Val{W},
+) where {W}
+    @inbounds begin
+        dec = ntuple(l -> @inbounds(decay[h0+l]), Val(W))
+        acc = ntuple(_ -> 0.0f0, Val(W))
+        for i in 1:dk
+            o = nv * (i - 1) + h0
+            x = ntuple(l -> @inbounds(src[base+o+l]), Val(W))
+            k = ntuple(l -> @inbounds(kn[o+l]), Val(W))
+            acc = map((a, xl, dl, kl) -> a + (xl * dl) * kl, acc, x, dec, k)
+        end
+        vt = ntuple(l -> @inbounds(v[vb+h0+l]), Val(W))
+        bt = ntuple(l -> @inbounds(beta[h0+l]), Val(W))
+        d = map((a, vl, bl) -> (vl - a) * bl, acc, vt, bt)
+        out = ntuple(_ -> 0.0f0, Val(W))
+        for i in 1:dk
+            o = nv * (i - 1) + h0
+            x = ntuple(l -> @inbounds(src[base+o+l]), Val(W))
+            k = ntuple(l -> @inbounds(kn[o+l]), Val(W))
+            q = ntuple(l -> @inbounds(qn[o+l]), Val(W))
+            s = map((xl, dl, kl, el) -> xl * dl + kl * el, x, dec, k, d)
+            for l in 1:W
+                dst[base+o+l] = s[l]
+            end
+            out = map((ol, sl, ql) -> ol + sl * ql, out, s, q)
+        end
+        for l in 1:W
+            core[vb+h0+l] = out[l]
+        end
+    end
+    return nothing
 end
 
 # One slab of the delta-rule recurrence. It runs on the shared CPU pool, not
@@ -308,13 +354,13 @@ function (g::_GDNSlabChunk)(c::Int)
     jhi = div(c * g.dv, nslab)
     _gdn_delta_slab!(
         g.rec,
+        g.rec,
         sc.core,
         sc.qn,
         sc.kn,
         sc.vn,
         sc.decay,
         sc.beta,
-        view(sc.delta, :, c),
         jlo,
         jhi,
         g.nv,
