@@ -136,7 +136,7 @@ function handle_chat(srv::Server, req::HTTPRequest, io::IO, keepalive::Bool)::Bo
     # A client that goes away is seen as EOF on its socket. The watcher reads
     # no bytes, so a pipelined request is still there for the next read.
     cancelled = Threads.Atomic{Bool}(false)
-    Threads.@spawn try
+    Threads.@spawn _io_pool() try
         if eof(io)
             cancelled[] = true
             _wake_waiters(srv.gate)

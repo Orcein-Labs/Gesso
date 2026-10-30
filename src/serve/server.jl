@@ -70,7 +70,8 @@ chat request that arrives while another is running.
 
 Call `serve` from the thread that loaded the engine. Generation runs on that
 thread, because Lava's command queue may only be used from the thread that built
-it. Connections run on the default threadpool. Julia's event loop runs on thread
+it. Connections run on the default threadpool, or on the interactive one when
+the engine holds the only default thread. Julia's event loop runs on thread
 1, and while thread 1 computes no socket or timer anywhere in the process makes
 progress, so load the engine and call `serve` inside [`on_engine_thread`](@ref).
 Then `/health` and new connections are answered during a long prefill.
@@ -109,7 +110,7 @@ function serve(
         Threads.Atomic{Int}(0),
     )
     @async _engine_worker(srv.jobs)     # @async keeps it on this thread
-    srv.task = Threads.@spawn :default _accept_loop(srv)
+    srv.task = Threads.@spawn _io_pool() _accept_loop(srv)
     block && wait(srv.task)
     return srv
 end
@@ -149,6 +150,13 @@ function _engine_tid()
     end
     return me
 end
+
+# Where connection tasks go. A task spawned on :default can land behind the
+# engine when the engine holds the only default thread, which is the layout
+# Julia starts with when no -t is given (one default, one interactive thread).
+_io_pool() =
+    Threads.threadpoolsize(:default) == 1 && Threads.threadpoolsize(:interactive) > 0 ?
+    :interactive : :default
 
 # Runs each generation handed to it by _on_engine, one at a time, on the thread
 # that started the server.
@@ -195,10 +203,10 @@ function _accept_loop(srv::Server)
         end
         if Threads.atomic_add!(srv.open_connections, 1) >= srv.max_connections
             Threads.atomic_sub!(srv.open_connections, 1)
-            Threads.@spawn _refuse_connection(sock)
+            Threads.@spawn _io_pool() _refuse_connection(sock)
             continue
         end
-        Threads.@spawn _handle_connection(srv, sock)
+        Threads.@spawn _io_pool() _handle_connection(srv, sock)
     end
     return nothing
 end
