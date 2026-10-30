@@ -593,11 +593,11 @@ end
         )
         srv = on_engine_thread(() -> serve(spin; port=0, block=false))
         try
-            chat = Threads.@spawn :default sv_request(
+            chat = Threads.@spawn Gesso.Serve._io_pool() sv_request(
                 srv.port,
                 sv_post("/v1/chat/completions", sv_chat(SV_USER)),
             )
-            probe = Threads.@spawn :default begin
+            probe = Threads.@spawn Gesso.Serve._io_pool() begin
                 t0 = time()
                 while !busy[] && time() - t0 < 60
                     sleep(0.01)
