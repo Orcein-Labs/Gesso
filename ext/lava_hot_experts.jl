@@ -81,6 +81,24 @@ const _LHOT_LEFT = Ref{Int64}(0)        # bytes not yet given to a layer
 const _LHOT_NLAYERS = Ref(0)            # pool-eligible expert layers of the loaded model
 const _LHOT_WARNED = Ref(false)
 
+# Device-local heap budget minus usage, summed over the heaps that report a
+# budget; `nothing` when the driver reports none or the probe fails.
+function _lava_device_free_bytes()
+    rows = try
+        Lava.probe_device_memory_budget(Lava.vk_context())
+    catch
+        return nothing
+    end
+    free = Int64(0)
+    reported = false
+    for r in rows
+        r.device_local && r.budget > 0 || continue
+        reported = true
+        free += max(Int64(0), Int64(r.budget - r.usage))
+    end
+    return reported ? free : nothing
+end
+
 # Pool budget in bytes. GESSO_GPU_HOT_EXPERTS_MIB pins it. Otherwise it is the
 # device-local heap budget minus usage, less GESSO_GPU_HOT_RESERVE_MIB. When the
 # driver reports no budget (VK_EXT_memory_budget missing), a fixed 2048 MiB is
@@ -90,11 +108,7 @@ function _lhot_budget_bytes()
     mib = Int64(1) << 20
     fixed = _lhot_env_int("GESSO_GPU_HOT_EXPERTS_MIB", -1)
     fixed >= 0 && return Int64(fixed) * mib
-    rows = Lava.probe_device_memory_budget(Lava.vk_context())
-    free = Int64(0)
-    for r in rows
-        r.device_local && r.budget > 0 && (free += max(Int64(0), Int64(r.budget - r.usage)))
-    end
+    free = something(_lava_device_free_bytes(), Int64(0))
     if free == 0
         if !_LHOT_WARNED[]
             _LHOT_WARNED[] = true
