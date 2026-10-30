@@ -43,11 +43,18 @@
 # and error counts, p50/p99 time-to-first-token and mean decode tok/s of the
 # streamed requests, the latest RSS and, with --vram, GPU memory used.
 #
+# With several clients the server's one prompt-cache slot rarely still holds a
+# conversation when its next turn arrives, so originals run uncached and no
+# replay can show cache-origin drift. --solo-every S gives every S seconds a
+# window of --solo-len seconds in which client 1 runs only conversations and the
+# others pause, ending any conversation of theirs at its next turn. The windows
+# carry no cancellations, so keep them short next to the mixed time.
+#
 # Options that take a value: --host --port --duration --clients --pid --seed
 #   --log --request-timeout --health-timeout --health-interval --rss-interval
 #   --rss-growth-mb --rss-growth-frac --long-words --max-turns --replay-frac
 #   --metrics-interval --warmup --p99-growth-ms --p99-growth-frac
-#   --vram-growth-mb
+#   --vram-growth-mb --solo-every --solo-len
 # Flags: --vram (sample nvidia-smi) --replay-strict
 #
 # The module is also used by test/test_soak.jl, so the client cannot rot.
@@ -81,7 +88,13 @@ Base.@kwdef struct Config
     p99_growth_frac::Float64 = 0.5      # (the fraction is of the first window's p99)
     vram::Bool = false                  # sample GPU memory with nvidia-smi
     vram_growth_mb::Float64 = 256.0
+    solo_every::Float64 = 0.0           # period of the single-client windows; 0 turns them off
+    solo_len::Float64 = 600.0
 end
+
+# Whether `elapsed` seconds after the clients start falls in a single-client
+# window. A window opens each period, so a run starts with one.
+in_solo(cfg::Config, elapsed) = cfg.solo_every > 0 && mod(elapsed, cfg.solo_every) < cfg.solo_len
 
 # Request kinds and their weights in the mix.
 const MIX = [
@@ -160,7 +173,10 @@ mutable struct Ctx
     tool_turns::Int                         # tool requests whose reply passed the checks
     tool_calls::Int                         # of those, calls the model made
     tool_no_call::Int                       # of those, answered in text instead
+    started::Float64                        # when the clients started; the single-client windows count from it
 end
+
+in_solo(ctx::Ctx) = in_solo(ctx.cfg, time() - ctx.started)
 
 # Wall-clock marks of one streamed exchange.
 mutable struct Timing
@@ -650,8 +666,9 @@ end
 # One conversation: each turn sends the whole history, greedy, and appends the
 # reply. Every turn is a request of its own kind. It ends quietly when the next
 # request could not be shown to fit, or at the deadline; a failed turn ends it
-# after the failure is recorded.
-function run_conversation!(ctx, rng, kind; stream, deadline)
+# after the failure is recorded. Any client but the first ends it when a
+# single-client window opens.
+function run_conversation!(ctx, rng, kind; stream, deadline, client=1)
     cfg = ctx.cfg
     planned = rand(rng, 2:cfg.max_turns)
     # a thinking model would spend the whole budget on reasoning and leave no content
@@ -663,6 +680,10 @@ function run_conversation!(ctx, rng, kind; stream, deadline)
     for turn in 1:planned
         if time() >= deadline
             ended = "deadline"
+            break
+        end
+        if client > 1 && in_solo(ctx)
+            ended = "solo window"
             break
         end
         text = turn == 1 ? words(rng, rand(rng, 5:12)) : "And then? " * words(rng, rand(rng, 3:8))
@@ -936,10 +957,20 @@ function pick_kind(rng; tools::Bool=true)
 end
 
 # One pick of the mix. A conversation records its own turns.
-function run_kind!(ctx, rng, kind, deadline)
-    kind == "conversation" && return run_conversation!(ctx, rng, kind; stream=false, deadline=deadline)
-    kind == "conversation_stream" && return run_conversation!(ctx, rng, kind; stream=true, deadline=deadline)
+function run_kind!(ctx, rng, kind, deadline; client=1)
+    kind == "conversation" && return run_conversation!(ctx, rng, kind; stream=false, deadline=deadline, client=client)
+    kind == "conversation_stream" && return run_conversation!(ctx, rng, kind; stream=true, deadline=deadline, client=client)
     return timed_request!(ctx, rng, kind)
+end
+
+# One step of client `i`: in a single-client window the first client runs a
+# conversation and the others wait it out.
+function client_step!(ctx, rng, i, deadline)
+    if in_solo(ctx)
+        i == 1 || return sleep(min(1.0, max(0.0, deadline - time())))
+        return run_kind!(ctx, rng, rand(rng, ("conversation", "conversation_stream")), deadline)
+    end
+    return run_kind!(ctx, rng, pick_kind(rng; tools=ctx.tools_on), deadline; client=i)
 end
 
 function timed_request!(ctx, rng, kind; run=() -> dispatch(ctx, rng, kind))
@@ -1191,9 +1222,10 @@ function soak(cfg::Config; log::IO=devnull)
         Dict{String, Vector{Float64}}(), Dict{String, Int}(), Dict{String, Int}(),
         Failure[], Dict{String, NamedTuple}(), Tuple{Float64, Int}[], 0, 0.0, Ref(false),
         0, NTuple{3, Float64}[], NamedTuple[], Tuple{Float64, Int}[], 0, Int[], (0, 0, 0),
-        0, 0, 0, true, "", 0, 0, 0,
+        0, 0, 0, true, "", 0, 0, 0, time(),
     )
-    emit(ctx, "start"; port=cfg.port, clients=cfg.clients, duration=cfg.duration, seed=cfg.seed)
+    emit(ctx, "start"; port=cfg.port, clients=cfg.clients, duration=cfg.duration, seed=cfg.seed,
+        solo_every=cfg.solo_every, solo_len=cfg.solo_len)
 
     # The context limit decides what counts as an oversize prompt.
     try
@@ -1215,6 +1247,7 @@ function soak(cfg::Config; log::IO=devnull)
     end
 
     started = time()
+    ctx.started = started
     deadline = started + cfg.duration
     probes = Task[]
     push!(probes, @async health_probe(ctx))
@@ -1224,7 +1257,7 @@ function soak(cfg::Config; log::IO=devnull)
         @async begin
             rng = MersenneTwister(cfg.seed + i)
             while time() < deadline
-                run_kind!(ctx, rng, pick_kind(rng; tools=ctx.tools_on), deadline)
+                client_step!(ctx, rng, i, deadline)
             end
         end
     end
@@ -1313,6 +1346,8 @@ const OPTIONS = Dict(
     "--p99-growth-ms" => (:p99_growth_ms, s -> parse(Float64, s)),
     "--p99-growth-frac" => (:p99_growth_frac, s -> parse(Float64, s)),
     "--vram-growth-mb" => (:vram_growth_mb, s -> parse(Float64, s)),
+    "--solo-every" => (:solo_every, s -> parse(Float64, s)),
+    "--solo-len" => (:solo_len, s -> parse(Float64, s)),
 )
 
 # Options that stand alone.
@@ -1345,6 +1380,8 @@ function main(args)
         cfg.clients > 0 && cfg.duration > 0 || throw(ArgumentError("--clients and --duration must be positive"))
         cfg.max_turns >= 2 || throw(ArgumentError("--max-turns must be at least 2"))
         cfg.metrics_interval > 0 || throw(ArgumentError("--metrics-interval must be positive"))
+        cfg.solo_every == 0 || 0 < cfg.solo_len < cfg.solo_every ||
+            throw(ArgumentError("--solo-len must be positive and shorter than --solo-every"))
         res = open(log_path, "w") do log
             soak(cfg; log=log)
         end

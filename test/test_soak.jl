@@ -226,7 +226,7 @@ end
             Dict{String, Vector{Float64}}(), Dict{String, Int}(), Dict{String, Int}(),
             GessoSoak.Failure[], Dict{String, NamedTuple}(), Tuple{Float64, Int}[], 0, 0.0, Ref(false),
             0, NTuple{3, Float64}[], NamedTuple[], Tuple{Float64, Int}[], 0, Int[], (0, 0, 0),
-            0, 0, 0, true, "", 0, 0, 0,
+            0, 0, 0, true, "", 0, 0, 0, time(),
         )
         rng = GessoSoak.MersenneTwister(3)
         body = GessoSoak.chat_json(GessoSoak.user("one two three four five six seven eight nine ten");
@@ -313,6 +313,26 @@ end
         events = [GessoSoak.JSON.parse(l) for l in split(String(take!(io)), '\n'; keepempty=false)]
         @test any(e -> e["event"] == "replay" && e["drift_eligible"] === true &&
                        e["original_cached"] > GessoSoak.FRESH_CACHED_MAX, events)
+    finally
+        close(srv)
+    end
+end
+
+@testset "soak: single-client windows" begin
+    cfg = GessoSoak.Config(solo_every=100, solo_len=20)
+    @test GessoSoak.in_solo(cfg, 0) && GessoSoak.in_solo(cfg, 19.9) && GessoSoak.in_solo(cfg, 105)
+    @test !GessoSoak.in_solo(cfg, 20) && !GessoSoak.in_solo(cfg, 99.9)
+    @test !GessoSoak.in_solo(GessoSoak.Config(), 0)
+    @test GessoSoak.main(["--solo-every", "10", "--solo-len", "10"]) == 2
+    # a run inside one window: only the first client sends, and only conversations
+    srv = Gesso.serve(soak_engine(); port=0, block=false)
+    try
+        cfg = GessoSoak.Config(port=srv.port, duration=6, clients=3, warmup=0, replay_frac=1.0,
+            solo_every=1000, solo_len=999, rss_growth_mb=Inf)
+        res = GessoSoak.soak(cfg)
+        @test res.ok
+        @test issubset(keys(res.counts), ["health", "greedy", "conversation", "conversation_stream", "replay", "evict"])
+        @test res.replay.n > 0 && res.replay.eligible > 0
     finally
         close(srv)
     end
