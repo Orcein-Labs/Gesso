@@ -2927,6 +2927,7 @@ include("gpt2_tokenizer.jl")
 # The generic path is what new families use; `load_llama` still works.
 include("architecture_spec.jl")      # Pass A/F: canonical description + capabilities
 include("context_budget.jl")       # KV bytes per token, ceilings, compaction policy (CPU only)
+include("gpu_budget.jl")           # weight budget: probed free bytes less the post-placement reserve
 export kv_bytes_per_token,
     memory_ceiling_tokens,
     CostModel,

@@ -1341,13 +1341,42 @@ end
 _host_f32(s::Gesso.Inference.QuantMatrix) = Gesso.Inference._quant_host_f32(s)
 _host_f32(s) = convert(Array{Float32}, s)
 
+# Bytes cublasCreate takes from the pool (measured as the free-memory drop
+# around the call on the 8 GB card: 64 MiB).
+const _BLAS_HANDLE_BYTES = Int64(64) << 20
+
+# CUDA.free_memory() is the raw driver figure and ignores
+# JULIA_CUDA_HARD_MEMORY_LIMIT; the limit caps what the pool may hold, so the
+# room left under it is the hard limit less what the pool already uses.
+function _cuda_free_for_budget()
+    free = Int64(CUDA.free_memory())
+    hard = Int64(CUDA.CUDACore.memory_limits().hard)
+    hard > 0 || return free
+    used = coalesce(CUDA.CUDACore.used_memory(), 0)
+    return min(free, max(Int64(0), hard - Int64(used)))
+end
+
+# Weight budget: free bytes less what is allocated after placement. The pass
+# is the one `_prefill_pass_rows` would pick on an empty card; the floor is
+# the room the sizer keeps free after a pass.
+function _cuda_weight_budget(tensors)
+    G = Gesso.Inference
+    geo = G._gpu_geometry(tensors)
+    ctx = G._gpu_budget_ctx()
+    rows = G._gpu_budget_pass_rows(ctx)
+    reserve = G._gpu_reserve(;
+        kv_per_token=G._gpu_kv_per_token(geo, :cuda),
+        ctx,
+        prefill=geo.spec === nothing ? 0 : _prefill_pass_bytes(rows, ctx, geo.qdim, geo.group),
+        floor=max(_PREFILL_PASS_MARGIN, _hot_reserve_bytes()),
+        blas=_BLAS_HANDLE_BYTES,
+    )
+    return G._gpu_budget_resolve(:cuda, _cuda_free_for_budget(), reserve)
+end
+
 function _to_device_cuda(tensors)
+    budget = _cuda_weight_budget(tensors)   # sees the card before the handle takes its share
     _blas_reserve!()   # before the weights and pools leave no room for it
-    @debug "vram before dense placement" free_mib=div(
-        Int64(CUDA.free_memory()),
-        Int64(1024 * 1024),
-    ) dense_budget_mib=div(Gesso.Inference._gpu_budget_bytes(), Int64(1024 * 1024))
-    budget = Gesso.Inference._gpu_budget_bytes()
     wdt = _gpu_weight_eltype()
     used = Int64(0)
     conv = IdDict{Any, Any}()

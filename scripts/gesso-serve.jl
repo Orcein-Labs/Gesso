@@ -127,6 +127,8 @@ function launch(opts)
     # The GPU methods are newer than this frame. Every later call dispatches on
     # the backend, the warm-up and the server tasks included, so the rest of the
     # launch runs in the latest world instead of wrapping each call.
+    # The weight budget keeps KV room for the context the server will serve.
+    Gesso.Inference.gpu_budget_context!(n_ctx)
     tensors = Base.invokelatest(() -> Gesso.to_device(backend, tensors))
     return Base.invokelatest(
         serve_loaded,

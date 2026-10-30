@@ -34,6 +34,46 @@ end
     end
 end
 
+@testset "GPU budget from free memory and the reserve" begin
+    G = Gesso.Inference
+    mib = Int64(1) << 20
+    r = G._gpu_reserve(; kv_per_token=10_000, ctx=1000, prefill=300 * mib, floor=1024 * mib, blas=64 * mib)
+    @test r.kv == 10_000_000
+    @test r.total == r.kv + 300mib + 1024mib + 64mib + 128mib
+    withenv("GESSO_GPU_BUDGET_MIB" => nothing) do
+        # normal probe: free minus reserve
+        @test G._gpu_budget_decide(8000mib, r.total) == (8000mib - r.total, :probe)
+        # a bigger card gets a bigger budget
+        @test G._gpu_budget_decide(24000mib, r.total)[1] > G._gpu_budget_decide(8000mib, r.total)[1]
+        # probe smaller than the reserve: nothing goes on the device, no throw
+        @test G._gpu_budget_decide(r.total - 1, r.total) == (0, :probe)
+        @test G._gpu_budget_decide(0, r.total) == (0, :probe)
+        # no probe: the fixed 4800 MiB
+        @test G._gpu_budget_decide(nothing, r.total) == (4800mib, :fallback)
+    end
+    # the env wins over any probe
+    withenv("GESSO_GPU_BUDGET_MIB" => "123") do
+        @test G._gpu_budget_decide(8000mib, r.total) == (123mib, :env)
+        @test G._gpu_budget_decide(nothing, r.total) == (123mib, :env)
+        @test G._gpu_budget_decide(1, r.total) == (123mib, :env)
+    end
+    # context: server hint, then env, then the default
+    withenv("GESSO_GPU_BUDGET_CTX" => nothing) do
+        @test G._gpu_budget_ctx() == 65536
+        G.gpu_budget_context!(4096)
+        @test G._gpu_budget_ctx() == 4096
+        G.gpu_budget_context!(0)
+        withenv("GESSO_GPU_BUDGET_CTX" => "2048") do
+            @test G._gpu_budget_ctx() == 2048
+        end
+    end
+    @test G._gpu_budget_pass_rows(300) == 300
+    @test G._gpu_budget_pass_rows(65536) == 1024
+    # a hand-built toy has no spec: no KV is reserved
+    geo = G._gpu_geometry((; embedding=nothing))
+    @test G._gpu_kv_per_token(geo, :cuda) == 0
+end
+
 @testset "MoE top-k SwiGLU: unit router" begin
     seq, h, n_exp, ff, k = 1, 4, 4, 4, 2
     x = ones(seq, h)

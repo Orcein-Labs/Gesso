@@ -24,6 +24,7 @@ struct LavaQwen4exp
     dev::Dict{String,Any}
     freq::Any
     bytes::Base.RefValue{Int64}
+    cap::Int64            # weight budget, resolved once at construction
 end
 
 # Device decode state. `host` keeps only the PLE token history, which the CPU
@@ -43,8 +44,27 @@ function Gesso.Inference.qwen4exp_device(::LavaBackend, m::Gesso.Inference.Qwen4
     freq = Float32[cfg.rope_base^(-2 * i / cfg.n_rot) for i in 0:(cfg.n_rot÷2-1)]
     # Pools are keyed by the previous model's banks; its layer count does not apply.
     _lhot_register!(())
-    return LavaQwen4exp(m, Dict{String,Any}(), Lava.LavaArray{Float32}(freq), Ref(Int64(0)))
+    return LavaQwen4exp(
+        m,
+        Dict{String,Any}(),
+        Lava.LavaArray{Float32}(freq),
+        Ref(Int64(0)),
+        _q4x_weight_budget(cfg),
+    )
 end
+
+# Free device-local bytes less the reserve. The device KV is Float32 for the
+# attention layers; decode is one token at a time, so no prefill pass is held.
+function _q4x_weight_budget(cfg::Gesso.Inference.Qwen4expConfig)
+    G = Gesso.Inference
+    ctx = G._gpu_budget_ctx()
+    kv_per_token = count(cfg.attn_layer) * 2 * cfg.n_head_kv * cfg.head_dim * 4
+    floor = Int64(_lhot_env_int("GESSO_GPU_HOT_RESERVE_MIB", _LHOT_RESERVE_MIB)) << 20
+    reserve = G._gpu_reserve(; kv_per_token, ctx, prefill=0, floor, blas=0)
+    free = haskey(ENV, "GESSO_GPU_BUDGET_MIB") ? nothing : _lava_device_free_bytes()
+    return G._gpu_budget_resolve(:lava_qwen4exp, free, reserve)
+end
+
 
 function Gesso.Inference.qwen4exp_device_state(dm::LavaQwen4exp)
     return LavaQwen4expState(0, Gesso.Inference.Qwen4expState(dm.cpu.cfg),
@@ -55,12 +75,12 @@ end
 
 function _q4x_budget!(dm::LavaQwen4exp, bytes::Integer)
     dm.bytes[] += Int64(bytes)
-    cap = Gesso.Inference._gpu_budget_bytes()
+    cap = dm.cap
     dm.bytes[] <= cap || throw(
         gesso_error(
             ERR_INVALID_PLAN,
             "qwen4exp: device weights reach $(dm.bytes[]) B, over the budget $cap B " *
-            "(GESSO_GPU_BUDGET_MIB)",
+            "(GESSO_GPU_BUDGET_MIB overrides the probed budget)",
         ),
     )
     return nothing

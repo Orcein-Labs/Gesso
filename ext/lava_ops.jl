@@ -1464,11 +1464,31 @@ the lowering) and return a new named tuple of the same shape — `embedding`,
 `blocks`, `lm_head`, and `final_rms` when present. NEVER mutates the CPU
 tensors. Tied heads stay tied on device: `lm_head === embedding`.
 """
+const _LAVA_PREFILL_TILE_BYTES = Int64(16) << 20   # attention tile, as on CUDA
+
+# Free device-local bytes less the reserve (KV, one prefill pass, the hot-pool
+# floor, slack). Lava has no pass-size override, so the pass is the chunk.
+function _lava_weight_budget(tensors)
+    G = Gesso.Inference
+    geo = G._gpu_geometry(tensors)
+    ctx = G._gpu_budget_ctx()
+    rows = G._gpu_budget_pass_rows(ctx)
+    floor = Int64(_lhot_env_int("GESSO_GPU_HOT_RESERVE_MIB", _LHOT_RESERVE_MIB)) << 20
+    reserve = G._gpu_reserve(;
+        kv_per_token=G._gpu_kv_per_token(geo, :lava),
+        ctx,
+        prefill=geo.spec === nothing ? 0 : G._gpu_prefill_row_bytes(geo) * rows + _LAVA_PREFILL_TILE_BYTES,
+        floor,
+        blas=0,
+    )
+    return G._gpu_budget_resolve(:lava, haskey(ENV, "GESSO_GPU_BUDGET_MIB") ? nothing : _lava_device_free_bytes(), reserve)
+end
+
 function _lava_to_device(tensors)
     # GGUF quant matrices dequantize to F32 here (embedding rows are gathered
     # from F32 storage). Projection weights stay as GGUF bytes when they are
     # eligible and fit the dense budget (the CUDA rule, GESSO_GPU_BUDGET_MIB).
-    budget = Ref(Gesso.Inference._gpu_budget_bytes())
+    budget = Ref(_lava_weight_budget(tensors))
     _to_f32(s) =
         s isa Lava.LavaArray ? s :
         s isa Gesso.Inference.QuantMatrix ?
