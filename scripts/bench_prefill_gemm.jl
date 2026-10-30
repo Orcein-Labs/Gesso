@@ -69,6 +69,10 @@ shapes = [
     ("qwen2b-ffn_gate-Q6_K", INF.GGML_TYPE_Q6_K, 2048, 6144),
     ("lfm-expert-Q4_K", INF.GGML_TYPE_Q4_K, 2048, 1792),
     ("lfm-expert-Q5_K", INF.GGML_TYPE_Q5_K, 2048, 1792),
+    # The one n=512 shape ggml test-backend-ops perf runs for MUL_MAT.
+    ("ggml-m4096-k14336-Q4_K", INF.GGML_TYPE_Q4_K, 14336, 4096),
+    ("ggml-m4096-k14336-Q5_K", INF.GGML_TYPE_Q5_K, 14336, 4096),
+    ("ggml-m4096-k14336-Q6_K", INF.GGML_TYPE_Q6_K, 14336, 4096),
 ]
 for p in split(get(ENV, "GESSO_BENCH_GGUF", ""), ':'; keepempty=false)
     append!(shapes, gguf_shapes(p))
