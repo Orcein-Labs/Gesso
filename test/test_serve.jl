@@ -694,6 +694,104 @@ end
     @test_throws ArgumentError serve(sv_fake(); port=0, block=false, max_connections=0)
 end
 
+const SV_LONG = "think\n</think>\n\n" * repeat("ok ", 200)
+
+@testset "generation queue: a full queue answers 503 with Retry-After" begin
+    active = Ref(0)
+    srv = serve(
+        sv_fake(script=SV_LONG, delay=0.002, active=active);
+        port=0,
+        block=false,
+        max_queue=0,
+    )
+    try
+        busy = Sockets.connect(Sockets.localhost, srv.port)
+        write(busy, sv_post("/v1/chat/completions", sv_chat(SV_USER; stream=true)))
+        @test sv_wait_until(() -> active[] == 1)
+        r = sv_request(srv.port, sv_post("/v1/chat/completions", sv_chat(SV_USER)))
+        @test r.status == 503
+        @test r.headers["retry-after"] == "1"
+        @test JSON.parse(r.body)["error"]["type"] == "server_error"
+        close(busy)
+        @test sv_wait_until(() -> !srv.gate.busy)
+    finally
+        close(srv)
+    end
+end
+
+@testset "generation queue: a request that waits too long gets 503 and a closed connection" begin
+    @test_throws ArgumentError serve(sv_fake(); port=0, block=false, max_queue=-1)
+    @test_throws ArgumentError serve(sv_fake(); port=0, block=false, queue_timeout=0)
+    active = Ref(0)
+    srv = serve(
+        sv_fake(script=SV_LONG, delay=0.002, active=active);
+        port=0,
+        block=false,
+        max_queue=4,
+        queue_timeout=0.3,
+    )
+    try
+        busy = Sockets.connect(Sockets.localhost, srv.port)
+        write(busy, sv_post("/v1/chat/completions", sv_chat(SV_USER; stream=true)))
+        @test sv_wait_until(() -> active[] == 1)
+        waiter = Sockets.connect(Sockets.localhost, srv.port)
+        t0 = time()
+        write(waiter, sv_post("/v1/chat/completions", sv_chat(SV_USER)))
+        resp = sv_read_response(waiter)
+        @test time() - t0 < 5
+        @test resp.status == 503
+        @test resp.headers["retry-after"] == "1"
+        @test resp.headers["connection"] == "close"
+        @test sv_wait_until(() -> eof(waiter))
+        close(waiter)
+        @test srv.gate.waiting == 0
+        # the generation that holds the engine is not disturbed by the timeout
+        @test active[] == 1
+        close(busy)
+        @test sv_wait_until(() -> !srv.gate.busy)
+    finally
+        close(srv)
+    end
+end
+
+@testset "generation queue: a client that leaves while queued frees its place" begin
+    active = Ref(0)
+    srv = serve(
+        sv_fake(script=SV_LONG, delay=0.002, active=active);
+        port=0,
+        block=false,
+        max_queue=1,
+        queue_timeout=30,
+    )
+    try
+        busy = Sockets.connect(Sockets.localhost, srv.port)
+        write(busy, sv_post("/v1/chat/completions", sv_chat(SV_USER; stream=true)))
+        @test sv_wait_until(() -> active[] == 1)
+
+        queued = Sockets.connect(Sockets.localhost, srv.port)
+        write(queued, sv_post("/v1/chat/completions", sv_chat(SV_USER)))
+        @test sv_wait_until(() -> srv.gate.waiting == 1)
+        # the one place is taken, so a further request is refused
+        full = sv_request(srv.port, sv_post("/v1/chat/completions", sv_chat(SV_USER)))
+        @test full.status == 503
+
+        close(queued)
+        @test sv_wait_until(() -> srv.gate.waiting == 0)
+
+        # the place that the departed client held is free for the next request
+        next = Sockets.connect(Sockets.localhost, srv.port)
+        write(next, sv_post("/v1/chat/completions", sv_chat(SV_USER)))
+        @test sv_wait_until(() -> srv.gate.waiting == 1)
+        close(busy)
+        resp = sv_read_response(next)
+        close(next)
+        @test resp.status == 200
+        @test JSON.parse(resp.body)["usage"]["completion_tokens"] > 0
+    finally
+        close(srv)
+    end
+end
+
 @testset "parser: the start state comes from the prompt" begin
     @test opens_reasoning("<|im_start|>assistant\n<think>\n")
     @test !opens_reasoning("<|im_start|>assistant\n")

@@ -137,7 +137,10 @@ function handle_chat(srv::Server, req::HTTPRequest, io::IO, keepalive::Bool)::Bo
     # no bytes, so a pipelined request is still there for the next read.
     cancelled = Ref(false)
     @async try
-        eof(io) && (cancelled[] = true)
+        if eof(io)
+            cancelled[] = true
+            _wake_waiters(srv.gate)
+        end
     catch
     end
 
@@ -160,16 +163,22 @@ function handle_chat(srv::Server, req::HTTPRequest, io::IO, keepalive::Bool)::Bo
         ToolCallDelta[],
     )
 
+    slot = _acquire_slot!(srv.gate, cancelled)
+    slot === :full && return _refuse_busy(io, keepalive, "the generation queue is full")
+    slot === :timeout &&
+        return _refuse_busy(io, false, "waited too long for the generation queue")
+    slot === :cancelled && return false
+
     gen = try
-        lock(srv.gate) do
-            _run_turn!(turn, prompt_ids, max_new, sampling, boundary)
-        end
+        _run_turn!(turn, prompt_ids, max_new, sampling, boundary)
     catch e
         if turn.started[]
             @error "generation failed after the stream started" exception=(e, catch_backtrace())
             return false
         end
         rethrow()
+    finally
+        _release_slot!(srv.gate)
     end
     (gen === nothing || turn.cancelled[]) && return false
 
@@ -223,6 +232,19 @@ function handle_chat(srv::Server, req::HTTPRequest, io::IO, keepalive::Bool)::Bo
             "usage" => usage,
         );
         keepalive=keepalive,
+    )
+    return keepalive
+end
+
+# A 503 for a chat request that could not get the engine. Retry-After tells the
+# client to come back once the running generation has had time to finish.
+function _refuse_busy(io::IO, keepalive::Bool, reason::AbstractString)::Bool
+    write_error(
+        io,
+        503,
+        "$reason, retry later";
+        keepalive=keepalive,
+        headers=["Retry-After" => "1"],
     )
     return keepalive
 end
