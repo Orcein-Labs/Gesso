@@ -1313,6 +1313,48 @@ for K in 1:8, q5 in (false, true), prep in (false, true)
     )
 end
 
+# The columns' totals sumf[c] + lane 1 + ... + lane 8, each lane added in turn
+# as the scalar loop does, for all eight columns at once: slicing the lanes
+# across the columns turns the eight dependent chains into eight vector adds.
+function _kq_ir_multi_finish()
+    io = IOBuffer()
+    print(io, "define <8 x float> @entry(<64 x float> %s, <8 x float> %f) #0 {\n")
+    acc = "%f"
+    for l in 0:7
+        idx = join(("i32 $(8c + l)" for c in 0:7), ", ")
+        print(
+            io,
+            "  %t$l = shufflevector <64 x float> %s, <64 x float> poison, <8 x i32> <$idx>\n",
+            "  %a$l = fadd <8 x float> $acc, %t$l\n",
+        )
+        acc = "%a$l"
+    end
+    print(io, "  ret <8 x float> $acc\n}\n", _KQ_ATTRS)
+    return String(take!(io))
+end
+
+@eval @inline _multi_finish(
+    s::NTuple{64, VecElement{Float32}},
+    f::NTuple{8, VecElement{Float32}},
+) = Base.llvmcall(
+    ($(_kq_ir_multi_finish()), "entry"),
+    NTuple{8, VecElement{Float32}},
+    Tuple{NTuple{64, VecElement{Float32}}, NTuple{8, VecElement{Float32}}},
+    s,
+    f,
+)
+
+# Column totals for a tile of K <= 8 columns.
+@inline function _multi_totals(
+    sums::NTuple{N, VecElement{Float32}},
+    sumf::NTuple{K, Float32},
+) where {N, K}
+    z = VecElement(0.0f0)
+    s64 = (sums..., ntuple(_ -> z, Val(64 - N))...)
+    f8 = ntuple(c -> VecElement(c <= K ? sumf[c] : 0.0f0), Val(8))
+    return _multi_finish(s64, f8)
+end
+
 # The activation chunk pointer and the Q8_K source of a column.
 @inline _q45k_xptr(x::Q8KVec, ib::Int) = pointer(x.qs, ib * QK_K + 1)
 @inline _q45k_xptr(x::Q6KPrepVec, ib::Int) = pointer(x.xp, ib * QK_K + 1)
@@ -1383,12 +1425,9 @@ end
             sf = sumf
             sumf = ntuple(c -> sf[c] - dmin[c] * Float32(md[c].value), Val(K))
         end
+        tot = _multi_totals(sums, sumf)
         for c in 1:K
-            s = sumf[c]
-            for l in 1:8
-                s += sums[8*(c-1)+l].value
-            end
-            out[t0+c-1] = s
+            out[t0+c-1] = tot[c].value
         end
     end
     return out
