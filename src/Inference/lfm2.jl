@@ -102,10 +102,10 @@ function _short_convolution_block!(cpu, h, normed, sub, bt, wl, eps, zeros_like;
     size(hist) == (dim, width - 1) || error("short convolution: invalid history shape")
     rmsnorm!(cpu, normed, h, bt.attn_rms, wl; eps)
     bcx = Activation(; shape=(seq, 3dim), storage=zeros_like((seq, 3dim)))
-    matmul!(cpu, bcx, normed, bt.wshort_in, wl)
+    @decode_sub :conv_in cpu matmul!(cpu, bcx, normed, bt.wshort_in, wl)
     mixed = Activation(; shape=(seq, dim), storage=zeros_like((seq, dim)))
-    _short_conv_mix!(cpu, mixed.storage, bcx.storage, bt.wshort_conv.storage, hist)
-    matmul!(cpu, sub, mixed, bt.wshort_out, wl)
+    @decode_sub :conv_mix cpu _short_conv_mix!(cpu, mixed.storage, bcx.storage, bt.wshort_conv.storage, hist)
+    @decode_sub :conv_out cpu matmul!(cpu, sub, mixed, bt.wshort_out, wl)
     return sub
 end
 
@@ -194,7 +194,7 @@ function _biased_moe_batched!(down, x, router, bias, bt, logits, probs, order, g
     n_used = bt.n_expert_used
     experts = Matrix{Int}(undef, n_used, seq)
     wts = Matrix{Float32}(undef, n_used, seq)
-    for t in 1:seq
+    @decode_sub :moe_route nothing for t in 1:seq
         m = _cpu_router_logits!(logits, x, t, router)
         if bt.router_gating === :sigmoid
             probs .= _cpu_sigmoid.(logits)
@@ -210,21 +210,23 @@ function _biased_moe_batched!(down, x, router, bias, bt, logits, probs, order, g
             wts[k, t] = probs[e] / denom
         end
     end
-    if seq == 1
-        xf = Vector{Float32}(undef, dim)
-        yrow = Vector{Float32}(undef, dim)
-        @inbounds for i in 1:dim
-            xf[i] = x[1, i]
+    @decode_sub :moe_experts nothing begin
+        if seq == 1
+            xf = Vector{Float32}(undef, dim)
+            yrow = Vector{Float32}(undef, dim)
+            @inbounds for i in 1:dim
+                xf[i] = x[1, i]
+            end
+            _moe_host_experts_auto!(yrow, xf, view(experts, :, 1), view(wts, :, 1), n_used, gate_s, up_s, down_s)
+            @inbounds for i in 1:dim
+                y[1, i] = yrow[i]
+            end
+        else
+            X = x isa Matrix{Float32} ? x : Matrix{Float32}(x)
+            Y = y isa Matrix{Float32} ? y : Matrix{Float32}(undef, seq, dim)
+            _moe_host_prefill!(Y, X, experts, wts, fill(true, seq), length(logits), gate_s, up_s, down_s)
+            Y === y || copyto!(y, Y)
         end
-        _moe_host_experts_auto!(yrow, xf, view(experts, :, 1), view(wts, :, 1), n_used, gate_s, up_s, down_s)
-        @inbounds for i in 1:dim
-            y[1, i] = yrow[i]
-        end
-        return down
     end
-    X = x isa Matrix{Float32} ? x : Matrix{Float32}(x)
-    Y = y isa Matrix{Float32} ? y : Matrix{Float32}(undef, seq, dim)
-    _moe_host_prefill!(Y, X, experts, wts, fill(true, seq), length(logits), gate_s, up_s, down_s)
-    Y === y || copyto!(y, Y)
     return down
 end

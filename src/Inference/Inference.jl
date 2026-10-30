@@ -745,7 +745,9 @@ end
 
 function _moe_ffn!(cpu, down, normed2, bt, wl, zeros_like)
     if haskey(bt, :wrouter_bias) || (haskey(bt, :router_gating) && bt.router_gating === :sigmoid)
-        return _biased_moe_ffn!(cpu, down, normed2, bt)
+        # Device backends time this call themselves, around their host fallback.
+        backend_name(cpu) === :cpu || return _biased_moe_ffn!(cpu, down, normed2, bt)
+        return @decode_stage :moe_host cpu _biased_moe_ffn!(cpu, down, normed2, bt)
     end
     x = normed2.storage
     y = down.storage
@@ -1919,7 +1921,7 @@ function reference_generate(
                     continue
                 end
                 if _block_mixer(bt) === :short_convolution
-                    _short_convolution_block!(cpu, hp, normed, sub, bt, wp, eps, block_tmp; state=gdn_conv[bi])
+                    @decode_stage :conv_mixer cpu _short_convolution_block!(cpu, hp, normed, sub, bt, wp, eps, block_tmp; state=gdn_conv[bi])
                     hp.storage .+= sub.storage
                 elseif _block_mixer(bt) === :linear_attention
                     @decode_stage :gdn_mixer cpu _hybrid_linear_block!(
