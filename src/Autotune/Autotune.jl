@@ -238,7 +238,7 @@ function search!(
         gesso_error(
             ERR_VERIFY_MISMATCH,
             "search!: no registered candidates for (:$(op), :$(backend)) — " *
-            "no legal lowering exists to select among (§LXX)",
+            "no legal lowering exists to select among",
             op=op,
             backend=backend,
             regime=regime,
@@ -282,9 +282,9 @@ function search!(
         gesso_error(
             ERR_VERIFY_MISMATCH,
             "search!: every candidate for (:$(op), :$(backend), :$(regime)) " *
-            "failed the correctness gate — no legal lowering exists (§LXX: " *
+            "failed the correctness gate — no legal lowering exists: " *
             "never silently keep a failing implementation, never fall back " *
-            "to another backend because search missed)",
+            "to another backend because search missed",
             op=op,
             backend=backend,
             regime=regime,

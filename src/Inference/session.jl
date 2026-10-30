@@ -433,7 +433,7 @@ function _assert_disjoint_scratch!(parent::Session, child::Session)
             gesso_error(
                 ERR_INVALID_PLAN,
                 "fork: parent and child share decode scratch buffer :$name — " *
-                "scratch is per-Session dirty workspace, never shared (§LXXX)";
+                "scratch is per-Session dirty workspace, never shared";
                 buffer=name,
             ),
         )
@@ -1116,7 +1116,7 @@ function _fork_owned(s::Session; sink::ReceiptSink=default_receipt_sink())
             ERR_INVALID_PLAN,
             "fork: session is not ready — identity prefix share is legal " *
             "after prefill! (and subsequent decode!s); this session has " *
-            "consumed $(s.seqlen) token(s) (§LXXX)",
+            "consumed $(s.seqlen) token(s)",
         ),
     )
     child = Session(

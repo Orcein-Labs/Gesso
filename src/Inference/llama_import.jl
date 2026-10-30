@@ -95,29 +95,29 @@ function _load_llama_config_impl(path::AbstractString)
     )
 
     raw["model_type"] == "llama" || error(
-        "load_llama_config: model_type $(repr(raw["model_type"])) is not \"llama\" — not Llama-shaped, refusing (§LXXVI)",
+        "load_llama_config: model_type $(repr(raw["model_type"])) is not \"llama\" — not Llama-shaped, refusing",
     )
     raw["hidden_act"] == "silu" || error(
-        "load_llama_config: hidden_act $(repr(raw["hidden_act"])) is not \"silu\" — refusing (§LXXVI)",
+        "load_llama_config: hidden_act $(repr(raw["hidden_act"])) is not \"silu\" — refusing",
     )
     raw["rope_scaling"] === nothing || error(
         "load_llama_config: rope_scaling must be null this sprint (got $(repr(raw["rope_scaling"])))",
     )
     raw["rope_interleaved"] === false || error(
-        "load_llama_config: rope_interleaved must be false — interleaved RoPE is out of scope (§LXXVI)",
+        "load_llama_config: rope_interleaved must be false — interleaved RoPE is out of scope",
     )
     raw["attention_bias"] === false || error(
-        "load_llama_config: attention_bias must be false — attention bias is out of scope (§LXXVI)",
+        "load_llama_config: attention_bias must be false — attention bias is out of scope",
     )
     # HuggingFace LlamaConfig defaults mlp_bias to false and SmolLM2-135M's
     # released config.json (transformers 4.40.1) omits the key. Missing ⇒
     # false. Present and true ⇒ refuse. Not a silent representation change.
     mlp_bias = get(raw, "mlp_bias", false)
     mlp_bias === false || error(
-        "load_llama_config: mlp_bias must be false — MLP bias is out of scope (§LXXVI)",
+        "load_llama_config: mlp_bias must be false — MLP bias is out of scope",
     )
     raw["tie_word_embeddings"] === true || error(
-        "load_llama_config: tie_word_embeddings must be true — untied heads are out of scope (§LXXVI)",
+        "load_llama_config: tie_word_embeddings must be true — untied heads are out of scope",
     )
 
     hidden = _checkpoint_int(raw["hidden_size"], "hidden_size"; minimum=1)

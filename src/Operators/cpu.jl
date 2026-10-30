@@ -53,7 +53,7 @@ end
 
 _unmaterialized(op::Symbol, what::Symbol) = error(
     "$op: $what.storage is unset — CPU math needs materialized " *
-    "Array{<:AbstractFloat} storage (§LXXV math law); nothing means the caller " *
+    "Array{<:AbstractFloat} storage; nothing means the caller " *
     "skipped materialization",
 )
 

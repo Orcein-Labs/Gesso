@@ -272,7 +272,7 @@ function materialize_architecture(
         if spec.tie_word_embeddings
             arr == emb_arr || error(
                 "materialize_architecture: lm_head.weight differs from embed_tokens.weight " *
-                "but tie_word_embeddings is true — untied heads are out of scope here (§LXX)",
+                "but tie_word_embeddings is true — untied heads are out of scope here",
             )
         else
             lm_head = ProjectionWeight(; shape=size(arr), storage=arr)
