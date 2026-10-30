@@ -12,7 +12,7 @@ lists the supported names.
 | `qwen35moe` | Qwen3.5 mixture of experts, same hybrid layout |
 | `llama` | Llama-style dense transformers |
 | `spark2_5` | Spark |
-| `qwen4exp` | Qwen4 expert models |
+| `qwen4exp` | Experimental Qwen hybrid: DeltaNet and attention layers, hyper-connections, per-layer embeddings, mixture of experts with a shared expert |
 | `lfm2` | LFM2 and LFM2.5 dense |
 | `lfm2moe` | LFM2 mixture of experts |
 | `gemma4` | Gemma 4, mixture-of-experts variants only |
