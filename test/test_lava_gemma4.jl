@@ -108,6 +108,47 @@ else
         @test _lg4_err(_lg4_prefill(_lg4_f, tq_dev, _lg4_lava), ref) <= _lg4_tol(ref)
     end
 
+    # The attention passes against a host loop, with a cache offset, GQA and a
+    # window, untiled and with one query row per tile.
+    function _lg4_attn_ref(Q, Kd, Vd, nh, nkv, hd, qoff, win)
+        Nq = size(Q, 1)
+        O = zeros(Float64, Nq, nh * hd)
+        for t in 1:Nq, h in 1:nh
+            kvh = (h - 1) ÷ (nh ÷ nkv) + 1
+            r = qoff + t - 1
+            ks = (win > 0 ? max(1, r - win + 1) : 1):r
+            s = [sum(Float64(Q[t, (h-1)*hd+d]) * Kd[k, kvh, d] for d in 1:hd) for k in ks]
+            p = exp.(s .- maximum(s))
+            p ./= sum(p)
+            for d in 1:hd
+                O[t, (h-1)*hd+d] = sum(p[i] * Vd[k, kvh, d] for (i, k) in enumerate(ks))
+            end
+        end
+        return O
+    end
+
+    @testset "lava Gemma4: attention passes match a host loop, tiled and untiled" begin
+        ext = Base.get_extension(Gesso, :GessoLavaExt)
+        rng = MersenneTwister(20261030)
+        nh, nkv, hd = 4, 2, 16
+        for (Nq, qoff, win) in ((9, 1, 0), (9, 1, 4), (5, 8, 0), (5, 8, 3), (1, 12, 5))
+            K = qoff + Nq - 1
+            Q = randn(rng, Float32, Nq, nh * hd)
+            Kd = randn(rng, Float32, K, nkv, hd)
+            Vd = randn(rng, Float32, K, nkv, hd)
+            ref = _lg4_attn_ref(Q, Kd, Vd, nh, nkv, hd, qoff, win)
+            run() = Array(ext._g4l_attention(ext._g4l_up(Q), ext._g4l_up(Kd), ext._g4l_up(Vd), nh, nkv, hd, qoff, win))
+            @test _lg4_err(run(), ref) <= _lg4_tol(ref)
+            prev = ext._G4L_SCORE_BYTES[]
+            ext._G4L_SCORE_BYTES[] = 4 * nh
+            try
+                @test _lg4_err(run(), ref) <= _lg4_tol(ref)
+            finally
+                ext._G4L_SCORE_BYTES[] = prev
+            end
+        end
+    end
+
     @testset "lava Gemma4: negative control, sliding window off exceeds the bound" begin
         prev = Gesso.Inference._GEMMA4_WINDOW_MASK_ENABLED[]
         Gesso.Inference._GEMMA4_WINDOW_MASK_ENABLED[] = false
