@@ -19,6 +19,6 @@ include("engine.jl")
 include("server.jl")
 include("handlers.jl")
 
-export ChatModel, serve, gguf_chat_model
+export ChatModel, serve, gguf_chat_model, on_engine_thread
 
 end

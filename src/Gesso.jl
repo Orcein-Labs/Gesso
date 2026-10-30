@@ -48,8 +48,8 @@ using .Semantics: PrefillWorkload, DecodeWorkload
 export PrefillWorkload, DecodeWorkload
 
 # --- chat server (src/serve) ------------------------------------------------
-using .Serve: ChatModel, serve, gguf_chat_model
-export ChatModel, serve, gguf_chat_model
+using .Serve: ChatModel, serve, gguf_chat_model, on_engine_thread
+export ChatModel, serve, gguf_chat_model, on_engine_thread
 
 using .ModelIR: Embedding, RMSNorm, RoPE, Attention, SwiGLU, Block, Model
 export Embedding, RMSNorm, RoPE, Attention, SwiGLU, Block, Model

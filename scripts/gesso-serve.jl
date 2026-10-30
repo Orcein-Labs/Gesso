@@ -5,9 +5,11 @@
 #       engine, asks it for /health, shuts down, and exits 0 when the answer is
 #       right. It does not touch weights, a GPU or a tokenizer.
 #
-#   julia --project scripts/gesso-serve.jl --gguf <path> [--host 127.0.0.1]
+#   julia -t auto --project scripts/gesso-serve.jl --gguf <path> [--host 127.0.0.1]
 #         [--port 8080] [--n-ctx 65536] [--model-id ornith-35b] [--cpu]
-#       Loads a GGUF and serves it. The path comes from --gguf or from
+#       Loads a GGUF and serves it. Start with threads: generation runs on a
+#       thread other than thread 1, which keeps Julia's event loop free, so
+#       /health answers during a long prefill. The path comes from --gguf or from
 #       GESSO_ORNITH35_GGUF. GESSO_BACKEND=lava|cuda|cpu picks the backend and
 #       defaults to lava; --cpu is the same as GESSO_BACKEND=cpu. Only the GPU
 #       package that was asked for is loaded, so the package never depends on it.
@@ -57,7 +59,7 @@ end
 
 const USAGE = """
 usage: julia --project scripts/gesso-serve.jl --check
-       julia --project scripts/gesso-serve.jl --gguf <path> [--host H] [--port P] [--n-ctx N] [--model-id ID] [--cpu]"""
+       julia -t auto --project scripts/gesso-serve.jl --gguf <path> [--host H] [--port P] [--n-ctx N] [--model-id ID] [--cpu]"""
 
 # Flags take a value, except --cpu and --check. Anything unknown is an error,
 # because a mistyped flag silently ignored would serve the wrong model.
@@ -166,10 +168,10 @@ end
 
 function main(args)
     if args == ["--check"]
-        return run_check()
+        return on_engine_thread(run_check)
     end
     try
-        return launch(parse_launch(args))
+        return on_engine_thread(() -> launch(parse_launch(args)))
     catch e
         e isa ArgumentError || rethrow()
         println(stderr, "gesso-serve: ", e.msg)

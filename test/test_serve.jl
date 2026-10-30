@@ -563,6 +563,59 @@ end
     end
 end
 
+# An engine that computes for a while without yielding, like a long CPU prefill.
+# /health must still answer while it runs, which needs generation off thread 1.
+@testset "health answers while a generation computes" begin
+    if Gesso.Serve._engine_tid() == 1
+        @test_skip "needs a default thread other than this one"
+    else
+        busy = Threads.Atomic{Bool}(false)
+        base = sv_fake(script="ok")
+        spin = ChatModel(
+            tokenize=base.tokenize,
+            detokenize=base.detokenize,
+            accepts_tools=base.accepts_tools,
+            render=base.render,
+            generate=(prompt_ids; max_new_tokens, on_token) -> begin
+                busy[] = true
+                t0 = time_ns()
+                while time_ns() - t0 < 2_000_000_000
+                    GC.safepoint()
+                end
+                busy[] = false
+                return base.generate(prompt_ids; max_new_tokens, on_token)
+            end,
+            n_ctx=base.n_ctx,
+            model_id=base.model_id,
+        )
+        srv = on_engine_thread(() -> serve(spin; port=0, block=false))
+        try
+            chat = Threads.@spawn :default sv_request(
+                srv.port,
+                sv_post("/v1/chat/completions", sv_chat(SV_USER)),
+            )
+            probe = Threads.@spawn :default begin
+                t0 = time()
+                while !busy[] && time() - t0 < 10
+                    sleep(0.01)
+                end
+                started = busy[]
+                t1 = time()
+                r = sv_request(srv.port, sv_get("/health"))
+                (started, r.status, time() - t1, busy[])
+            end
+            started, status, waited, still_busy = fetch(probe)
+            @test started
+            @test status == 200
+            @test waited < 1.0
+            @test still_busy
+            @test fetch(chat).status == 200
+        finally
+            close(srv)
+        end
+    end
+end
+
 @testset "engine contract: a ChatModel without prefix_len asks for no boundary" begin
     cm = sv_fake()
     @test cm.prefix_len(
