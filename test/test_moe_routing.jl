@@ -72,6 +72,9 @@ end
     # a hand-built toy has no spec: no KV is reserved
     geo = G._gpu_geometry((; embedding=nothing))
     @test G._gpu_kv_per_token(geo, :cuda) == 0
+    # a stub spec without model sizes counts as no spec
+    geo = G._gpu_geometry((; spec=(; family=:probe)))
+    @test G._gpu_kv_per_token(geo, :cuda) == 0
 end
 
 @testset "MoE top-k SwiGLU: unit router" begin

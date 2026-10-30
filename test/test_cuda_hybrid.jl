@@ -35,7 +35,7 @@ else
             spec=(; family=:probe),
             rope=policy,
         )
-        gpu = Gesso.to_device(cuda, ts)
+        gpu = withenv(() -> Gesso.to_device(cuda, ts), "GESSO_GPU_BUDGET_MIB" => "4800")
         @test gpu.spec === ts.spec
         @test gpu.rope === ts.rope
         @test gpu.blocks[1].mixer === :linear_attention
@@ -49,12 +49,12 @@ else
             Gesso.ProjectionWeight(; shape=(1024, 1024), storage=ones(Float32, 1024, 1024))
         ts = (; embedding=big, blocks=[(; w=big)], lm_head=big)
         withenv("GESSO_GPU_WEIGHT_DTYPE" => "f16") do
-            gpu = Gesso.to_device(cuda, ts)
+            gpu = withenv(() -> Gesso.to_device(cuda, ts), "GESSO_GPU_BUDGET_MIB" => "4800")
             @test gpu.lm_head.storage isa CUDA.CuArray{Float16}
             @test big.storage isa Array{Float32}
         end
         withenv("GESSO_GPU_WEIGHT_DTYPE" => "f32") do
-            gpu = Gesso.to_device(cuda, ts)
+            gpu = withenv(() -> Gesso.to_device(cuda, ts), "GESSO_GPU_BUDGET_MIB" => "4800")
             @test gpu.lm_head.storage isa CUDA.CuArray{Float32}
         end
 
@@ -395,7 +395,7 @@ else
         @test occursin("Failure boundary: none", miss)
 
         model, tensors, _ = Gesso.load_architecture(dir)
-        gpu = Gesso.to_device(cuda, tensors)
+        gpu = withenv(() -> Gesso.to_device(cuda, tensors), "GESSO_GPU_BUDGET_MIB" => "4800")
         @test gpu.spec === tensors.spec
         ids = Gesso.reference_generate(
             model,

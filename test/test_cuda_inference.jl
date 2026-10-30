@@ -31,7 +31,7 @@ else
     cpu_logits = Gesso.reference_prefill(toy2_modelir(), ts, PROMPT)   # F64 host
 
     @testset "toy2 CUDA prefill vs CPU oracle (atol=1e-3)" begin
-        gpu_ts = Gesso.to_device(cuda, ts)
+        gpu_ts = withenv(() -> Gesso.to_device(cuda, ts), "GESSO_GPU_BUDGET_MIB" => "4800")
         gpu_logits = Gesso.reference_prefill(toy2_modelir(), gpu_ts, PROMPT; backend=cuda)
         @test size(gpu_logits) == size(cpu_logits)
         # the host copy back is explicit: Array(...) on the returned matrix;
@@ -43,7 +43,7 @@ else
     end
 
     @testset "toy2 CUDA greedy generate: token ids match CPU" begin
-        gpu_ts = Gesso.to_device(cuda, ts)
+        gpu_ts = withenv(() -> Gesso.to_device(cuda, ts), "GESSO_GPU_BUDGET_MIB" => "4800")
         cpu_ids = Gesso.reference_generate(toy2_modelir(), ts, PROMPT; max_new_tokens=8)
         gpu_ids = Gesso.reference_generate(
             toy2_modelir(),
@@ -77,7 +77,7 @@ else
             eps=cfg.rms_norm_eps,
             theta=cfg.rope_theta,
         )
-        gpu_tensors = Gesso.to_device(cuda, cpu_tensors)
+        gpu_tensors = withenv(() -> Gesso.to_device(cuda, cpu_tensors), "GESSO_GPU_BUDGET_MIB" => "4800")
         gpu_out = Float64.(
             Array(
                 Gesso.reference_prefill(

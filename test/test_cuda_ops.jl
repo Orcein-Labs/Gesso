@@ -204,7 +204,7 @@ else
             lm_head=nothing,      # filled below as the same object
         )
         tensors = merge(tensors, (lm_head=tensors.embedding,))
-        gpu = Gesso.to_device(cuda, tensors)
+        gpu = withenv(() -> Gesso.to_device(cuda, tensors), "GESSO_GPU_BUDGET_MIB" => "4800")
         @test gpu.embedding.storage isa CuArray{Float32}
         @test gpu.lm_head === gpu.embedding                     # tied ON DEVICE
         @test Array(gpu.embedding.storage) == Float32.(emb_arr) # values survive F64→F32
@@ -213,7 +213,7 @@ else
         # final_rms absent → nothing; present → transferred
         @test !haskey(gpu, :final_rms) || gpu.final_rms === nothing
         fr = mat(Gesso.FrozenParameter, [0.5, 0.5])
-        gpu2 = Gesso.to_device(cuda, merge(tensors, (final_rms=fr,)))
+        gpu2 = withenv(() -> Gesso.to_device(cuda, merge(tensors, (final_rms=fr,))), "GESSO_GPU_BUDGET_MIB" => "4800")
         @test gpu2.final_rms.storage isa CuArray{Float32}
     end
 
