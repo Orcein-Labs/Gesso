@@ -79,7 +79,7 @@ mutable struct Turn
     stream::Bool
     include_usage::Bool
     keepalive::Bool
-    cancelled::Ref{Bool}
+    cancelled::Threads.Atomic{Bool}
     started::Ref{Bool}
     ids::Vector{Int}
     prefix_at::Int                  # ids before the decode window (see _sync_text!)
@@ -135,8 +135,8 @@ function handle_chat(srv::Server, req::HTTPRequest, io::IO, keepalive::Bool)::Bo
 
     # A client that goes away is seen as EOF on its socket. The watcher reads
     # no bytes, so a pipelined request is still there for the next read.
-    cancelled = Ref(false)
-    @async try
+    cancelled = Threads.Atomic{Bool}(false)
+    Threads.@spawn try
         if eof(io)
             cancelled[] = true
             _wake_waiters(srv.gate)
@@ -168,9 +168,13 @@ function handle_chat(srv::Server, req::HTTPRequest, io::IO, keepalive::Bool)::Bo
     slot === :timeout &&
         return _refuse_busy(io, false, "waited too long for the generation queue")
     slot === :cancelled && return false
+    if !isopen(srv.jobs)
+        _release_slot!(srv.gate)
+        return _refuse_busy(io, false, "the server is shutting down")
+    end
 
     gen = try
-        _run_turn!(turn, prompt_ids, max_new, sampling, boundary)
+        _on_engine(srv, () -> _run_turn!(turn, prompt_ids, max_new, sampling, boundary))
     catch e
         if turn.started[]
             @error "generation failed after the stream started" exception=(e, catch_backtrace())
@@ -278,7 +282,7 @@ function _run_turn!(
 end
 
 function _on_token(turn::Turn, id::Integer)
-    yield()     # lets the disconnect watcher run between tokens
+    yield()     # lets other tasks on the engine's thread run between tokens
     push!(turn.ids, Int(id))
     turn.cancelled[] && return false
     _sync_text!(turn; final=false)

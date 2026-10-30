@@ -1,6 +1,7 @@
 # Listener, connection loop and dispatch. One listener task accepts; each
 # connection gets its own task; generation is single-flight behind `gate`, which
-# holds a bounded queue of requests waiting for their turn.
+# holds a bounded queue of requests waiting for their turn, and runs on the
+# thread that called `serve`, which should not be thread 1 (see on_engine_thread).
 
 """
     GenerationGate
@@ -36,6 +37,7 @@ mutable struct Server
     host::String
     port::Int
     gate::GenerationGate
+    jobs::Channel{Any}
     task::Union{Nothing, Task}
     read_timeout::Float64
     max_connections::Int
@@ -65,6 +67,13 @@ with `Retry-After`. `queue_timeout` is how many seconds a queued request waits
 for its turn before it gets a 503 and its connection is closed. A client that
 disconnects while queued leaves the queue at once. `max_queue=0` refuses every
 chat request that arrives while another is running.
+
+Call `serve` from the thread that loaded the engine. Generation runs on that
+thread, because Lava's command queue may only be used from the thread that built
+it. Connections run on the default threadpool. Julia's event loop runs on thread
+1, and while thread 1 computes no socket or timer anywhere in the process makes
+progress, so load the engine and call `serve` inside [`on_engine_thread`](@ref).
+Then `/health` and new connections are answered during a long prefill.
 """
 function serve(
     model::ChatModel;
@@ -80,6 +89,10 @@ function serve(
     max_connections > 0 || throw(ArgumentError("max_connections must be positive"))
     max_queue >= 0 || throw(ArgumentError("max_queue must not be negative"))
     queue_timeout > 0 || throw(ArgumentError("queue_timeout must be positive"))
+    if Threads.threadid() == 1 && _engine_tid() != 1
+        @warn "serve was called on thread 1, so /health stalls during generation. " *
+              "Load the engine and call serve inside on_engine_thread." maxlog = 1
+    end
     ip = parse(Sockets.IPv4, host)
     listener = Sockets.listen(ip, port)
     _, bound = Sockets.getsockname(listener)
@@ -89,25 +102,89 @@ function serve(
         String(host),
         Int(bound),
         GenerationGate(Int(max_queue), Float64(queue_timeout)),
+        Channel{Any}(1),
         nothing,
         Float64(read_timeout),
         Int(max_connections),
         Threads.Atomic{Int}(0),
     )
-    if block
-        _accept_loop(srv)
-    else
-        srv.task = @async _accept_loop(srv)
-    end
+    @async _engine_worker(srv.jobs)     # @async keeps it on this thread
+    srv.task = Threads.@spawn :default _accept_loop(srv)
+    block && wait(srv.task)
     return srv
+end
+
+"""
+    on_engine_thread(f)
+
+Run `f()` on a thread other than thread 1 and return what it returns. Thread 1
+runs Julia's event loop, so compute there stalls every socket and timer in the
+process. Load the engine and call [`serve`](@ref) inside `f`, so that generation
+runs where it cannot hold up `/health`. `f` stays on the thread it starts on.
+When Julia has no default thread other than thread 1, or the caller is already
+off thread 1, `f` runs inline.
+"""
+function on_engine_thread(f)
+    tid = _engine_tid()
+    tid == Threads.threadid() && return f()
+    t = Task(f)
+    t.sticky = true
+    ccall(:jl_set_task_tid, Cint, (Any, Cint), t, tid - 1)
+    schedule(t)
+    try
+        return fetch(t)
+    catch e
+        e isa TaskFailedException || rethrow()
+        throw(e.task.exception)
+    end
+end
+
+# The thread generation should run on: the caller's own unless that is thread 1,
+# else the first default thread that is not thread 1.
+function _engine_tid()
+    me = Threads.threadid()
+    me == 1 || return me
+    for tid in Threads.threadpooltids(:default)
+        tid == 1 || return tid
+    end
+    return me
+end
+
+# Runs each generation handed to it by _on_engine, one at a time, on the thread
+# that started the server.
+function _engine_worker(jobs::Channel{Any})
+    for (f, done) in jobs
+        result = try
+            (true, f())
+        catch e
+            (false, e)
+        end
+        put!(done, result)
+    end
+    return nothing
+end
+
+# Runs f on the engine's thread and waits for it. An exception from f is thrown
+# here, as it would be had f run inline.
+function _on_engine(srv::Server, f)
+    done = Channel{Any}(1)
+    put!(srv.jobs, (f, done))
+    ok, value = take!(done)
+    ok || throw(value)
+    return value
 end
 
 """
     close(srv::Server)
 
-Stop accepting connections. Connections already open finish their current request.
+Stop accepting connections. Connections already open finish their current
+request; a chat request that arrives on one after this gets a 503.
 """
-Base.close(srv::Server) = close(srv.listener)
+function Base.close(srv::Server)
+    close(srv.listener)
+    close(srv.jobs)
+    return nothing
+end
 
 function _accept_loop(srv::Server)
     while isopen(srv.listener)
@@ -118,10 +195,10 @@ function _accept_loop(srv::Server)
         end
         if Threads.atomic_add!(srv.open_connections, 1) >= srv.max_connections
             Threads.atomic_sub!(srv.open_connections, 1)
-            @async _refuse_connection(sock)
+            Threads.@spawn _refuse_connection(sock)
             continue
         end
-        @async _handle_connection(srv, sock)
+        Threads.@spawn _handle_connection(srv, sock)
     end
     return nothing
 end
@@ -223,7 +300,7 @@ end
 # outlasted the queue timeout, or :cancelled when the client left while queued.
 # A request that arrives while others wait joins the back of the queue even if
 # the slot is free, so a queued request is not overtaken.
-function _acquire_slot!(gate::GenerationGate, cancelled::Ref{Bool})::Symbol
+function _acquire_slot!(gate::GenerationGate, cancelled::Threads.Atomic{Bool})::Symbol
     lock(gate.lock) do
         if !gate.busy && gate.waiting == 0
             gate.busy = true

@@ -8,7 +8,23 @@ with `Retry-After`.
 ## Start it
 
 ```bash
-julia --project=benchmark scripts/gesso-serve.jl --gguf /path/to/model.gguf
+julia -t auto --project=benchmark scripts/gesso-serve.jl --gguf /path/to/model.gguf
+```
+
+Start Julia with `-t auto` (or `-t N`). The launcher loads the model and runs
+generation on a thread other than thread 1, because Julia's event loop lives on
+thread 1 and compute there stalls every socket in the process. `/health` and
+new connections are then answered during a long prefill. With a single thread
+the server still works, but a generation holds up every other client until it
+yields.
+
+To call `serve` from your own code, do the same:
+
+```julia
+on_engine_thread() do
+    chat = gguf_chat_model(model, tensors, spec, tokenizer; backend=backend)
+    serve(chat; port=8080)
+end
 ```
 
 | Option | Default | Meaning |
