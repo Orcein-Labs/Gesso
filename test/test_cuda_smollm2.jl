@@ -80,7 +80,7 @@ end
         @test cfg.num_key_value_heads == 3
 
         # device prefill; host copy back is explicit (§LXXVII)
-        gpu_tensors = Gesso.to_device(cuda, cpu_tensors)
+        gpu_tensors = withenv(() -> Gesso.to_device(cuda, cpu_tensors), "GESSO_GPU_BUDGET_MIB" => "4800")
         gpu_logits = Array(
             Gesso.reference_prefill(
                 model,

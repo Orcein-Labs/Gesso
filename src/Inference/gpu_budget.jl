@@ -36,10 +36,12 @@ end
     _gpu_geometry(tensors) -> NamedTuple
 
 Model sizes the reserve needs, from `tensors.spec` when the loader attached
-one. A hand-built toy has no spec and reserves no KV.
+one. A hand-built toy has no spec, or a stub without model sizes, and reserves
+no KV.
 """
 function _gpu_geometry(tensors)
     spec = tensors isa NamedTuple && haskey(tensors, :spec) ? tensors.spec : nothing
+    spec isa NamedTuple && !haskey(spec, :moe) && (spec = nothing)
     spec === nothing &&
         return (; spec=nothing, hidden=0, qdim=0, kvdim=0, ffn=0, group=1, head_dim=0)
     ffn = spec.moe === nothing ? spec.intermediate_size :

@@ -74,6 +74,19 @@ else
     cuda = Gesso.CUDABackend()
     cpu = Gesso.CPUBackend()
     Inf_ = Gesso.Inference
+    # The derived budget follows free device memory, which a hard limit shrinks
+    # to nothing; these tests are about placement under a roomy card.
+    _to_device_default_budget(ts) =
+        withenv(() -> Gesso.to_device(cuda, ts), "GESSO_GPU_BUDGET_MIB" => "4800")
+    _ext_free_for_budget() =
+        Base.get_extension(Gesso, :GessoCUDAExt)._cuda_free_for_budget()
+
+    @testset "cuda budget probe respects JULIA_CUDA_HARD_MEMORY_LIMIT" begin
+        free = _ext_free_for_budget()
+        @test 0 < free <= CUDA.free_memory()
+        hard = CUDA.CUDACore.memory_limits().hard
+        hard > 0 && @test free <= hard
+    end
 
     @testset "cuda to_device uploads tiny GgufQuantSlice as GpuQuantSlice" begin
         slice = _pack_f32_slice(ones(Float32, 2, 4, 8), 8, 4)
@@ -84,7 +97,7 @@ else
             wexp_gate=Gesso.ExpertWeight(; shape=size(slice), storage=slice),
         )
         ts = (; embedding=emb, blocks=[bt], lm_head=emb)
-        gpu = Gesso.to_device(cuda, ts)
+        gpu = _to_device_default_budget(ts)
         @test gpu.blocks[1].wexp_gate.storage isa Gesso.GpuQuantSlice
         @test gpu.embedding.storage isa CUDA.CuArray{Float32}
         gpu0 = withenv("GESSO_GPU_BUDGET_MIB" => "0") do
@@ -139,11 +152,11 @@ else
         slabs(g) = map(k -> g.blocks[1][k].storage, (:wexp_gate, :wexp_up, :wexp_down))
         @test all(
             x -> x isa Gesso.GgufQuantSlice,
-            slabs(Gesso.to_device(cuda, ts_of(Inf_.GGML_TYPE_Q6_K))),
+            slabs(_to_device_default_budget(ts_of(Inf_.GGML_TYPE_Q6_K))),
         )
         @test all(
             x -> x isa Gesso.GpuQuantSlice,
-            slabs(Gesso.to_device(cuda, ts_of(Inf_.GGML_TYPE_Q2_K))),
+            slabs(_to_device_default_budget(ts_of(Inf_.GGML_TYPE_Q2_K))),
         )
     end
 
@@ -1095,7 +1108,7 @@ else
         # Exact id equality with the CPU path assumes no hot-expert pool, which
         # is on by default now.
         gpu = withenv("GESSO_GPU_HOT_EXPERTS" => "0") do
-            Gesso.to_device(cuda, tensors)
+            _to_device_default_budget(tensors)
         end
         ids_gpu = Gesso.reference_generate(
             model,

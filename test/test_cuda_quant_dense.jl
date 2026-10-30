@@ -69,7 +69,11 @@ else
     function _device_matmul(qm, X, workload)
         pw = Gesso.ProjectionWeight(; shape=size(qm), storage=qm)
         emb = Gesso.EmbeddingTable(; shape=(4, 2), storage=ones(Float32, 4, 2))
-        gpu = Gesso.to_device(cuda, (; embedding=emb, blocks=[(; w=pw)], lm_head=emb))
+        # The derived budget follows the card's free memory, which a hard
+        # limit shrinks to nothing; this test is about the placed weight.
+        gpu = withenv("GESSO_GPU_BUDGET_MIB" => "4800") do
+            Gesso.to_device(cuda, (; embedding=emb, blocks=[(; w=pw)], lm_head=emb))
+        end
         w = gpu.blocks[1].w
         @test w.storage isa _dq_ext.GpuDenseQuant
         n, nrows = size(X, 1), size(qm, 1)
@@ -172,7 +176,7 @@ else
         pw = Gesso.ProjectionWeight(; shape=size(qm), storage=qm)
         emb = Gesso.EmbeddingTable(; shape=(4, 2), storage=ones(Float32, 4, 2))
         ts = (; embedding=emb, blocks=[(; w=pw)], lm_head=emb)
-        withenv("GESSO_GPU_DENSE_QUANT" => "0") do
+        withenv("GESSO_GPU_DENSE_QUANT" => "0", "GESSO_GPU_BUDGET_MIB" => "4800") do
             gpu = Gesso.to_device(cuda, ts)
             @test gpu.blocks[1].w.storage isa CUDA.CuArray{Float16}
         end
