@@ -496,7 +496,10 @@ end
 """
     spec_from_gguf_kv(kv; tensor_names=nothing) -> ArchitectureSpec
 
-Derive the spec from GGUF metadata. Three arches are supported (qwen35, qwen35moe, llama):
+Derive the spec from GGUF metadata. Eight arches are supported: qwen35, qwen35moe,
+llama, spark2_5, qwen4exp, lfm2, lfm2moe and gemma4. Any other
+`general.architecture` is an error. The two Qwen3.5 arches are described here;
+the others have their own readers in this file:
 
 * `qwen35`: dense Gated DeltaNet hybrid, `moe = nothing`, FFN width from
   `feed_forward_length`. `block_count` includes `nextn_predict_layers` MTP
@@ -1119,7 +1122,8 @@ end
 """
     load_gguf(path; T=Float32) -> (model, tensors, spec)
 
-Load a `qwen35` (dense), `qwen35moe` or `llama` GGUF. Dense 2-D projection weights and
+Load a GGUF of any architecture `spec_from_gguf_kv` accepts (qwen35,
+qwen35moe, llama, spark2_5, qwen4exp, lfm2, lfm2moe, gemma4). Dense 2-D projection weights and
 the embedding and output head stay as quant bytes (`QuantMatrix`), not F32.
 Small and 1-D tensors materialize to `T` (Float32 by default; F64 cannot hold
 these checkpoints). Routed experts stay mmap'd as `GgufQuantSlice` and dequant
