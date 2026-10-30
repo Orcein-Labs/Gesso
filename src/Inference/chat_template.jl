@@ -446,9 +446,14 @@ end
 """
     chat_family(template::AbstractString) -> Symbol
 
-Identify a chat template by its markers. Returns `:qwen35_xml` for the
-Qwen3.5 XML family (`<function=`, `<tool_response>`, `<think>`). Any other
-template is an error.
+Identify a chat template by its markers. Returns one of:
+
+* `:gemma4`: Gemma 4 turn and thought-channel markers (`<|turn>`, `<|channel>thought`).
+* `:lfm25`: LFM2.5 markers (`CONTINUE_FINAL_MESSAGE_TAG`, `render_tool_calls`).
+* `:lfm2`: LFM2 markers (`<|tool_list_start|>`, `<|tool_response_start|>`).
+* `:qwen35_xml`: Qwen3.5 XML family (`<function=`, `<tool_response>`, `<think>`).
+
+Any other template is an error.
 """
 function chat_family(template::AbstractString)::Symbol
     if occursin("<|turn>", template) && occursin("<turn|>", template) && occursin("<|channel>thought", template)
