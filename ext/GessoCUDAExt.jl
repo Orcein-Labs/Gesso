@@ -103,7 +103,7 @@ struct CUDABackend <: AbstractGessoBackend
             gesso_error(
                 ERR_RESOURCE_LIMIT,
                 "CUDABackend: no functional NVIDIA device — requesting CUDA " *
-                "without a device fails explicitly (§LXX); Gesso never falls " *
+                "without a device fails explicitly; Gesso never falls " *
                 "back to CPU silently. Check the driver, or stay on " *
                 "CPUBackend (tier 0).";
                 requested_backend=:cuda,

@@ -248,7 +248,7 @@ function append_kv!(mgr::PagedKVManager, layer::Int, kind::Symbol, row)
             ERR_RESOURCE_LIMIT,
             "append_kv!: context_length $(mgr.context_length) exhausted — " *
             "refusing to append $(_kind_str(kind)) token-row $(filled + 1) " *
-            "(no silent drop, no wraparound, §LXX)";
+            "(no silent drop, no wraparound)";
             context_length=mgr.context_length,
             filled=filled,
             layer=layer,
@@ -331,7 +331,7 @@ function _alias_pages!(dst::PagedKVManager, src::PagedKVManager)
             gesso_error(
                 ERR_INVALID_PLAN,
                 "_alias_pages!: dst manager already holds pages — " *
-                "aliasing is only defined into a fresh manager (§LXXX)";
+                "aliasing is only defined into a fresh manager";
             ),
         )
     end

@@ -1000,7 +1000,7 @@ function _autotune_dispatch!(dst, x, w, regime)
         gesso_error(
             ERR_VERIFY_MISMATCH,
             "matmul!: autotune winner :$(winner) has no registered " *
-            "candidate — registry and cache disagree (§LXX: no silent keep)",
+            "candidate — registry and cache disagree",
             op=:matmul!,
             regime=regime,
             winner=string(winner),

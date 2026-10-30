@@ -105,7 +105,7 @@ struct LavaBackend <: AbstractGessoBackend
             gesso_error(
                 ERR_RESOURCE_LIMIT,
                 "LavaBackend: no usable Vulkan device — requesting Lava " *
-                "without a device fails explicitly (§LXX); Gesso never falls " *
+                "without a device fails explicitly; Gesso never falls " *
                 "back to CPU or CUDA silently. Check vulkaninfo / the ICD, " *
                 "or stay on CPUBackend (tier 0).";
                 requested_backend=:lava,

@@ -67,7 +67,7 @@ struct RoPEPolicy
         mrope_section::Vector{Int}=Int[],
     )
         kind in (:none, :linear, :llama3) || error(
-            "RoPEPolicy: unsupported scaling kind $(repr(kind)) — this build expresses :none, :linear, :llama3 (§LXX: no silent substitution)",
+            "RoPEPolicy: unsupported scaling kind $(repr(kind)) — this build expresses :none, :linear, :llama3",
         )
         isfinite(theta) && theta > 0 ||
             error("RoPEPolicy: theta must be finite and positive")
