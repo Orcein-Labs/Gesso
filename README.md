@@ -147,9 +147,9 @@ stack, or to compare against Lava.
 If you ask for a GPU backend and there's no device, you get a typed error.
 Gesso never falls back to the CPU without telling you.
 
-GGUF models load with `Gesso.load_gguf`, which also needs `GESSO_GGML_DIR` to
-point at a llama.cpp build. The chat server is `scripts/gesso-serve.jl`. It
-serves `/v1/models` and `/v1/chat/completions`.
+GGUF models load with `Gesso.load_gguf`. Loading needs no llama.cpp; only the
+comparison scripts below use `GESSO_GGML_DIR`. The chat server is `scripts/gesso-serve.jl`. It
+serves `/v1/models` and `/v1/chat/completions`, plus `/health` and `/props`.
 
 ### Reproduce
 
@@ -186,7 +186,7 @@ real-model gates are reported as named skips.
   with copy-on-write), and a receipt on every call.
 - Model support: Llama-family safetensors, and GGUF with K-quants and
   IQ-quants, including the Qwen3.5-MoE hybrid architecture.
-- KV cache formats f32, f16, q8 and q4h (`GESSO_KV_FORMAT`). When unset, CUDA
+- KV cache formats f32, f16, q8 and q4h (`GESSO_KV_FORMAT`; Lava has no q4h). When unset, CUDA
   and Lava use q8 and the CPU uses f32.
 - Backends, in order of how the project treats them:
   - CPU, the correctness oracle.
@@ -207,11 +207,11 @@ scripts/       gates, benchmarks and the chat server
 test/          test harness
 benchmark/     benchmark harness (results/ accrues)
 vendor/        patched upstream packages (Lava)
-docs/          reference (environment variables)
+docs/          user documentation (index in docs/README.md)
 libs/          local dev sources (gitignored)
 ```
 
-Every `GESSO_*` environment variable is indexed in [`docs/env-vars.md`](docs/env-vars.md).
+User documentation starts at [`docs/README.md`](docs/README.md). Every `GESSO_*` environment variable is indexed in [`docs/env-vars.md`](docs/env-vars.md).
 The long-prompt benchmarks read `benchmark/corpus-pride-and-prejudice.txt`, the
 opening chapters of Jane Austen's novel (public domain, from Project Gutenberg).
 
