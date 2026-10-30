@@ -185,6 +185,106 @@ function _window_matmul!(cpu, dst::AbstractMatrix, x::AbstractMatrix, w, wl, zer
     return dst
 end
 
+# Runs `f(rows)` over 1:T, split across threads when there is more than one row.
+_window_split_rows!(f, T::Int) =
+    Threads.nthreads() > 1 && T > 1 ? _cpu_split_rows!(f, T) : f(1:T)
+
+# RMS norm of every window row in one call. The row kernel folds each row in the
+# order the one-row decode call does, so the result is the per-row loop's bits.
+# With mixed element types the rows still go through the one-row buffers.
+function _window_rmsnorm!(cpu, dst::AbstractMatrix, src::AbstractMatrix, hp, out, w, wl; eps)
+    if eltype(dst) == eltype(src) == eltype(hp.storage) == eltype(out.storage)
+        rmsnorm!(
+            cpu,
+            Activation(; shape=size(dst), storage=dst),
+            Activation(; shape=size(src), storage=src),
+            w,
+            wl;
+            eps,
+        )
+        return dst
+    end
+    for t in axes(src, 1)
+        _win_load!(hp.storage, src, t)
+        rmsnorm!(cpu, out, hp, w, wl; eps)
+        _win_store!(dst, t, out.storage)
+    end
+    return dst
+end
+
+# Depthwise causal conv + SiLU for window row t, read from the raw rows instead of
+# a rolling state. Tap p of row t reads x_{t-ksz+p}: window row t-ksz+p when that
+# is at least 1, otherwise column t-1+p of the pre-window state. The products and
+# the sum run in `_gdn_conv_decode!`'s order, so the output is decode's bits.
+function _gdn_conv_window_row!(out, mixed::Matrix{Float32}, conv_in, weight, t::Int, ksz::Int)
+    @inbounds for c in eachindex(out)
+        acc = 0.0f0
+        for p in 1:(ksz-1)
+            s = t - ksz + p
+            xs = s >= 1 ? mixed[c, s] : conv_in[c, t-1+p]
+            acc += weight[c, 1, p] * xs
+        end
+        acc += weight[c, 1, ksz] * mixed[c, t]
+        out[c] = acc / (1.0f0 + exp(-acc))
+    end
+    return out
+end
+
+# The per-row GDN work between the projections and the delta rule: the a and b
+# gate products, the causal conv, the gates and the q/k normalization. Row t's
+# conv reads only raw rows up to t and the pre-window state, so after the raw
+# rows are copied into `rec` the rows are independent and split across threads.
+# Each row runs decode's kernels on its own one-row buffers. A quantized a or b
+# weight keeps the rows on one task, since the quantized product shares scratch.
+function _window_gdn_rows!(rec, W, conv_in, bt, spec, sc, bufs, cpu, wl, ksz::Int)
+    T = size(W.mixed, 1)
+    _window_split_rows!(T) do rows
+        for t in rows
+            copyto!(view(rec.mixed, :, t), view(W.mixed, t, :))
+            copyto!(view(rec.z, :, t), view(W.zc, t, :))
+        end
+    end
+    A_log = bt.wgdn_A_log.storage::Vector{Float32}
+    dt_bias = bt.wgdn_dt_bias.storage::Vector{Float32}
+    weight = bt.wgdn_conv.storage
+    nk, nv, dk, dv = sc.nk, sc.nv, sc.dk, sc.dv
+    tiled = spec.mixer.v_head_tiled
+    function run_rows(rows)
+        xr = similar(bufs.normed.storage)
+        a = similar(sc.a)
+        b = similar(sc.b)
+        xa = Activation(; shape=size(xr), storage=xr)
+        aa = Activation(; shape=size(a), storage=a)
+        ba = Activation(; shape=size(b), storage=b)
+        convout = similar(sc.convout)
+        for t in rows
+            _win_load!(xr, W.normed, t)
+            matmul!(cpu, aa, xa, bt.wgdn_a, wl)
+            matmul!(cpu, ba, xa, bt.wgdn_b, wl)
+            _gdn_conv_window_row!(convout, rec.mixed, conv_in, weight, t, ksz)
+            _gdn_gates_row!(view(rec.beta, :, t), view(rec.decay, :, t), vec(a), vec(b), A_log, dt_bias, nv)
+            _gdn_qk_row!(
+                view(rec.vn, :, t),
+                view(rec.qn, :, t),
+                view(rec.kn, :, t),
+                convout,
+                nk,
+                nv,
+                dk,
+                dv,
+                tiled,
+            )
+        end
+        return nothing
+    end
+    if _is_quant_storage(bt.wgdn_a.storage) || _is_quant_storage(bt.wgdn_b.storage)
+        run_rows(1:T)
+    else
+        _window_split_rows!(run_rows, T)
+    end
+    return rec
+end
+
 # Matrices the window's blocks write into, sized for T rows and allocated once
 # per window.
 function _window_buffers(
@@ -267,53 +367,34 @@ function _window_gdn_block!(
         dk,
         dv,
     )
-    # the conv state advances row by row here; the committed conv is rebuilt
-    # from `rec.mixed` in `_commit_window!`, so this copy is discarded
-    wconv = copy(conv_in)
-    a_act = Activation(; shape=(1, nv), storage=sc.a)
-    b_act = Activation(; shape=(1, nv), storage=sc.b)
-
-    for t in 1:T
-        _win_load!(bufs.hp.storage, hwin, t)
-        rmsnorm!(cpu, bufs.normed, bufs.hp, bt.attn_rms, wl; eps)
-        _win_store!(W.normed, t, bufs.normed.storage)
-    end
-    _window_matmul!(cpu, W.mixed, W.normed, bt.wgdn_qkv, wl, zeros_like)
-    _window_matmul!(cpu, W.zc, W.normed, bt.wgdn_z, wl, zeros_like)
-
-    for t in 1:T
-        _win_load!(bufs.normed.storage, W.normed, t)
-        _win_load!(sc.mixed, W.mixed, t)
-        _win_load!(sc.z, W.zc, t)
-        # wgdn_a and wgdn_b are dense Float32 and stay on the (1, n) product, as in decode
-        matmul!(cpu, a_act, bufs.normed, bt.wgdn_a, wl)
-        matmul!(cpu, b_act, bufs.normed, bt.wgdn_b, wl)
-        _gdn_conv_decode!(sc.convout, vec(sc.mixed), bt.wgdn_conv.storage, wconv, ksz)
-        _gdn_gates_qk!(cpu, bt, spec, sc)
-        copyto!(view(rec.mixed, :, t), vec(sc.mixed))
-        copyto!(view(rec.z, :, t), vec(sc.z))
-        copyto!(view(rec.qn, :, t), sc.qn)
-        copyto!(view(rec.kn, :, t), sc.kn)
-        copyto!(view(rec.vn, :, t), sc.vn)
-        copyto!(view(rec.decay, :, t), sc.decay)
-        copyto!(view(rec.beta, :, t), sc.beta)
+    @decode_sub :gdn_norm cpu _window_rmsnorm!(cpu, W.normed, hwin, bufs.hp, bufs.normed, bt.attn_rms, wl; eps)
+    @decode_sub :gdn_proj cpu begin
+        _window_matmul!(cpu, W.mixed, W.normed, bt.wgdn_qkv, wl, zeros_like)
+        _window_matmul!(cpu, W.zc, W.normed, bt.wgdn_z, wl, zeros_like)
     end
 
-    _pool_run_chunks!(_GDNWindowChunk(rec_in, rec.rec_out, rec, T), sc.nslab)
+    @decode_sub :gdn_rows cpu _window_gdn_rows!(rec, W, conv_in, bt, spec, sc, bufs, cpu, wl, ksz)
+
+    @decode_sub :gdn_recur cpu _pool_run_chunks!(
+        _GDNWindowChunk(rec_in, rec.rec_out, rec, T),
+        sc.nslab,
+    )
 
     scale_norm = bt.wgdn_norm.storage::Vector{Float32}
-    for t in 1:T
-        _gdn_gnorm_merge!(
-            view(W.gdn_merged, t, :),
-            nv,
-            dv,
-            view(rec.core, :, t),
-            view(rec.z, :, t),
-            scale_norm,
-            epsf,
-        )
+    @decode_sub :gdn_gnorm cpu _window_split_rows!(T) do rows
+        for t in rows
+            _gdn_gnorm_merge!(
+                view(W.gdn_merged, t, :),
+                nv,
+                dv,
+                view(rec.core, :, t),
+                view(rec.z, :, t),
+                scale_norm,
+                epsf,
+            )
+        end
     end
-    _window_matmul!(cpu, W.sub, W.gdn_merged, bt.wgdn_o, wl, zeros_like)
+    @decode_sub :gdn_outproj cpu _window_matmul!(cpu, W.sub, W.gdn_merged, bt.wgdn_o, wl, zeros_like)
     return rec
 end
 
@@ -345,19 +426,17 @@ function _window_attn_block!(
     rotary_dim::Int=0,
 )
     T = size(hwin, 1)
-    for t in 1:T
-        _win_load!(bufs.hp.storage, hwin, t)
-        rmsnorm!(cpu, bufs.normed, bufs.hp, bt.attn_rms, wl; eps)
-        _win_store!(W.normed, t, bufs.normed.storage)
-    end
-    _window_matmul!(cpu, W.q, W.normed, bt.wq, wl, zeros_like)
-    _window_matmul!(cpu, W.k, W.normed, bt.wk, wl, zeros_like)
-    _window_matmul!(cpu, W.v, W.normed, bt.wv, wl, zeros_like)
     gated = haskey(bt, :wattn_gate)
-    gated && _window_matmul!(cpu, W.gate, W.normed, bt.wattn_gate, wl, zeros_like)
+    @decode_sub :attn_proj cpu begin
+        _window_rmsnorm!(cpu, W.normed, hwin, bufs.hp, bufs.normed, bt.attn_rms, wl; eps)
+        _window_matmul!(cpu, W.q, W.normed, bt.wq, wl, zeros_like)
+        _window_matmul!(cpu, W.k, W.normed, bt.wk, wl, zeros_like)
+        _window_matmul!(cpu, W.v, W.normed, bt.wv, wl, zeros_like)
+        gated && _window_matmul!(cpu, W.gate, W.normed, bt.wattn_gate, wl, zeros_like)
+    end
 
     if cpu_scratch !== nothing && T > 1
-        _window_attn_rows_cpu!(
+        @decode_sub :attn_rows cpu _window_attn_rows_cpu!(
             bt,
             bi,
             kc,
@@ -378,7 +457,7 @@ function _window_attn_block!(
             inv_freq,
             rotary_dim,
         )
-        _window_matmul!(cpu, W.sub, W.attn_merged, bt.wo, wl, zeros_like)
+        @decode_sub :attn_outproj cpu _window_matmul!(cpu, W.sub, W.attn_merged, bt.wo, wl, zeros_like)
         return W.sub
     end
     for t in 1:T
@@ -530,19 +609,25 @@ function _window_ffn_block!(
         end
         return hwin
     end
+    @decode_stage :dense_ffn cpu _window_dense_ffn!(bt, hwin, subT, W, bufs, cpu, wl, zeros_like; eps)
+    return hwin
+end
+
+# The dense half of `_window_ffn_block!`, timed as one :dense_ffn stage.
+function _window_dense_ffn!(bt, hwin, subT, W, bufs, cpu, wl, zeros_like; eps)
+    T = size(hwin, 1)
     _add_storage!(hwin, subT)
-    for t in 1:T
-        _win_load!(bufs.hp.storage, hwin, t)
-        rmsnorm!(cpu, bufs.normed2, bufs.hp, bt.ffn_rms, wl; eps)
-        _win_store!(W.normed2, t, bufs.normed2.storage)
+    _window_rmsnorm!(cpu, W.normed2, hwin, bufs.hp, bufs.normed2, bt.ffn_rms, wl; eps)
+    @decode_sub :ffn_gateup cpu begin
+        _window_matmul!(cpu, W.ffn_gate, W.normed2, bt.wgate, wl, zeros_like)
+        _window_matmul!(cpu, W.ffn_up, W.normed2, bt.wup, wl, zeros_like)
     end
-    _window_matmul!(cpu, W.ffn_gate, W.normed2, bt.wgate, wl, zeros_like)
-    _window_matmul!(cpu, W.ffn_up, W.normed2, bt.wup, wl, zeros_like)
     act = Activation(; shape=size(W.ffn_act), storage=W.ffn_act)
     gate = Activation(; shape=size(W.ffn_gate), storage=W.ffn_gate)
     up = Activation(; shape=size(W.ffn_up), storage=W.ffn_up)
-    haskey(bt, :ffn_geglu) ? _geglu!(cpu, act, gate, up) : swiglu!(cpu, act, gate, up, wl)
-    _window_matmul!(cpu, W.ffn_down, W.ffn_act, bt.wdown, wl, zeros_like)
+    @decode_sub :ffn_act cpu haskey(bt, :ffn_geglu) ? _geglu!(cpu, act, gate, up) :
+        swiglu!(cpu, act, gate, up, wl)
+    @decode_sub :ffn_down cpu _window_matmul!(cpu, W.ffn_down, W.ffn_act, bt.wdown, wl, zeros_like)
     _add_storage!(hwin, W.ffn_down)
     return hwin
 end
@@ -641,7 +726,7 @@ function _decode_window!(
     for (bi, blk) in enumerate(model.blocks)
         bt = tensors.blocks[bi]
         if _block_mixer(bt) === :linear_attention
-            recs[bi] = _window_gdn_block!(
+            recs[bi] = @decode_stage :gdn_mixer cpu _window_gdn_block!(
                 bt,
                 tensors.spec,
                 hwin,
@@ -657,7 +742,7 @@ function _decode_window!(
             )
             subT = W.sub
         else
-            subT = _window_attn_block!(
+            subT = @decode_stage :attn_mixer cpu _window_attn_block!(
                 bt,
                 bi,
                 kc,

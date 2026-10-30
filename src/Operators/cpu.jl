@@ -221,13 +221,28 @@ function _cpu_rope_rows!(storage, positions, tθ, inv_freq, interleaved, rotary_
 end
 
 # swiglu over storage: dst = (g / (1 + exp(-g))) .* up, elementwise, so the
-# scalar loop stores the same value the broadcast chain did.
+# scalar loop stores the same value the broadcast chain did. Prefill-sized
+# arrays split contiguous ranges across threads.
 function _cpu_swiglu_storage!(dsts::AbstractArray, gs::AbstractArray, ups::AbstractArray)
-    for i in eachindex(dsts, gs, ups)
+    n = length(dsts)
+    if dsts isa Array && gs isa Array && ups isa Array && Threads.nthreads() > 1 && n >= 1 << 18
+        size(gs) == size(ups) == size(dsts) ||
+            throw(DimensionMismatch("swiglu!: sizes $(size(dsts)), $(size(gs)), $(size(ups))"))
+        _cpu_split_rows!(n) do r
+            _cpu_swiglu_range!(dsts, gs, ups, r)
+        end
+    else
+        _cpu_swiglu_range!(dsts, gs, ups, eachindex(dsts, gs, ups))
+    end
+    return dsts
+end
+
+function _cpu_swiglu_range!(dsts, gs, ups, r)
+    for i in r
         g = gs[i]
         dsts[i] = (g / (1.0 + exp(-g))) * ups[i]
     end
-    return dsts
+    return nothing
 end
 
 # softmax over storage, mutating the score row in place exactly as before
