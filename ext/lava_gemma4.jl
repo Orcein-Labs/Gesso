@@ -84,46 +84,85 @@ end
 
 # Causal attention with an optional sliding window and scale 1.0. Query row t
 # sits at 1-based cache row qoff + t - 1 and sees rows lo:r, with
-# lo = max(1, r - win + 1) when win > 0. Three passes (max, sum, weighted value)
-# keep the score row out of per-thread storage.
-@kernel cpu=false function _g4l_attn_kernel!(O, Q, Kd, Vd, nh::Int, nkv::Int, hd::Int, qoff::Int, win::Int, Nq::Int)
+# lo = max(1, r - win + 1) when win > 0. A tile of query rows t0:t0+Nt-1 sees
+# the keys k0+1:k0+Kn between them; S is (Kn, Nt * nh) with column
+# (h - 1) * Nt + tl. Scores, softmax and the weighted value sum are separate
+# passes, so each score is computed once.
+@kernel cpu=false function _g4l_scores_kernel!(S, Q, Kd, nh::Int, nkv::Int, hd::Int, qoff::Int, win::Int,
+                                               t0::Int, Nt::Int, k0::Int, Kn::Int)
     i = @index(Global)
-    if i <= Nq * nh
-        t = (i - 1) % Nq + 1
-        hh = (i - 1) ÷ Nq + 1
-        rep = nh ÷ nkv
-        kvh = (hh - 1) ÷ rep + 1
-        qo = (hh - 1) * hd
+    if i <= Kn * Nt * nh
+        kk = (i - 1) % Kn + 1
+        c = (i - 1) ÷ Kn + 1
+        tl = (c - 1) % Nt + 1
+        hh = (c - 1) ÷ Nt + 1
+        t = t0 + tl - 1
+        k = k0 + kk
         r = qoff + t - 1
         lo = win > 0 ? max(1, r - win + 1) : 1
-        mx = -3.0f38
-        for k in lo:r
+        if k < lo || k > r
+            S[kk, c] = Float32(-Inf)
+        else
+            kvh = (hh - 1) ÷ (nh ÷ nkv) + 1
+            qo = (hh - 1) * hd
             s = 0.0f0
             for d in 1:hd
                 s += Q[t, qo + d] * Kd[k, kvh, d]
             end
-            mx = max(mx, s)
+            S[kk, c] = s
         end
-        den = 0.0f0
-        for k in lo:r
-            s = 0.0f0
-            for d in 1:hd
-                s += Q[t, qo + d] * Kd[k, kvh, d]
-            end
-            den += exp(s - mx)
+    end
+end
+
+# One workgroup per score column; the masked keys hold -Inf and come out 0.
+# Every column has its own row r unmasked, so the max is finite.
+@kernel cpu=false function _g4l_softmax_cols_kernel!(S, Kn::Int)
+    tl = @index(Local, Linear)
+    c = @index(Group, Linear)
+    red = @localmem Float32 (_G4L_WG[1],)
+    m = Float32(-Inf)
+    for k in tl:_G4L_WG[1]:Kn
+        m = max(m, S[k, c])
+    end
+    red[tl] = m
+    @synchronize
+    mx = red[1]
+    for j in 2:_G4L_WG[1]
+        mx = max(mx, red[j])
+    end
+    @synchronize
+    l = 0.0f0
+    for k in tl:_G4L_WG[1]:Kn
+        p = exp(S[k, c] - mx)
+        S[k, c] = p
+        l += p
+    end
+    red[tl] = l
+    @synchronize
+    den = red[1]
+    for j in 2:_G4L_WG[1]
+        den += red[j]
+    end
+    inv = 1.0f0 / den
+    for k in tl:_G4L_WG[1]:Kn
+        S[k, c] = S[k, c] * inv
+    end
+end
+
+@kernel cpu=false function _g4l_pv_kernel!(O, S, Vd, nh::Int, nkv::Int, hd::Int, t0::Int, Nt::Int, k0::Int, Kn::Int)
+    i = @index(Global)
+    if i <= Nt * nh * hd
+        tl = (i - 1) % Nt + 1
+        rest = (i - 1) ÷ Nt
+        hh = rest % nh + 1
+        d = rest ÷ nh + 1
+        c = (hh - 1) * Nt + tl
+        kvh = (hh - 1) ÷ (nh ÷ nkv) + 1
+        acc = 0.0f0
+        for kk in 1:Kn
+            acc += S[kk, c] * Vd[k0 + kk, kvh, d]
         end
-        inv = 1.0f0 / den
-        for d in 1:hd
-            acc = 0.0f0
-            for k in lo:r
-                s = 0.0f0
-                for dd in 1:hd
-                    s += Q[t, qo + dd] * Kd[k, kvh, dd]
-                end
-                acc += (exp(s - mx) * inv) * Vd[k, kvh, d]
-            end
-            O[t, qo + d] = acc
-        end
+        O[t0 + tl - 1, (hh - 1) * hd + d] = acc
     end
 end
 
@@ -224,10 +263,35 @@ end
 
 _g4l_kv_write!(dst::_LavaQ8, src, row0::Int) = Gesso.Inference._kv_write_rows!(dst, src, row0)
 
+# Score buffer cap per tile of query rows.
+const _G4L_SCORE_BYTES = Ref(256 * 2^20)
+
+# Keys the tile t0:t1 sees, as (k0, Kn): rows k0+1:k0+Kn.
+function _g4l_tile_keys(qoff::Int, win::Int, t0::Int, t1::Int)
+    lo = win > 0 ? max(1, qoff + t0 - 1 - win + 1) : 1
+    return lo - 1, qoff + t1 - 1 - lo + 1
+end
+
 function _g4l_attention(Q, Kd, Vd, nh::Int, nkv::Int, hd::Int, qoff::Int, win::Int)
     Nq = size(Q, 1)
     O = _g4l_new(Nq, nh * hd)
-    _g4l_launch!(_g4l_attn_kernel!, O, Nq * nh, O, Q, Kd, Vd, nh, nkv, hd, qoff, win, Nq)
+    budget = _G4L_SCORE_BYTES[] ÷ (4 * nh)
+    t0 = 1
+    while t0 <= Nq
+        t1 = Nq
+        _, Kn = _g4l_tile_keys(qoff, win, t0, t1)
+        if Kn * (t1 - t0 + 1) > budget
+            t1 = min(Nq, t0 + max(1, budget ÷ Kn) - 1)
+        end
+        Nt = t1 - t0 + 1
+        k0, Kn = _g4l_tile_keys(qoff, win, t0, t1)
+        S = _g4l_new(Kn, Nt * nh)
+        _g4l_launch!(_g4l_scores_kernel!, S, Kn * Nt * nh, S, Q, Kd, nh, nkv, hd, qoff, win, t0, Nt, k0, Kn)
+        _g4l_softmax_cols_kernel!(KA.get_backend(S))(S, Kn; ndrange=Nt * nh * _G4L_WG[1], workgroupsize=_G4L_WG)
+        _g4l_launch!(_g4l_pv_kernel!, O, Nt * nh * hd, O, S, Vd, nh, nkv, hd, t0, Nt, k0, Kn)
+        Lava.unsafe_free!(S)
+        t0 = t1 + 1
+    end
     return O
 end
 
