@@ -85,6 +85,78 @@ end
     @test kv_bytes_per_token(_spec35(head_dim=96), :q8) > 0
 end
 
+@testset "context budget: kv_bytes_per_token with per-layer geometry" begin
+    # Gemma-style toy: layers 1-3 are windowed with head_dim 128, layer 4 is
+    # global with head_dim 256. KV heads are 1, 1, 2, 2 by layer.
+    spec = _CB.ArchitectureSpec(
+        family=:gemma4,
+        hidden_size=512,
+        num_layers=4,
+        n_heads=4,
+        n_kv_heads=2,
+        head_dim=256,
+        vocab_size=1000,
+        intermediate_size=512,
+        sliding_window=512,
+        swa_layers=[true, true, true, false],
+        head_dim_swa=128,
+        layer_kv_heads=[1, 1, 2, 2],
+    )
+    @test [_CB.layer_head_dim(spec, l) for l in 0:3] == [128, 128, 128, 256]
+    @test [_CB.layer_n_kv_heads(spec, l) for l in 0:3] == [1, 1, 2, 2]
+
+    # Hand sums, 2 * kv_heads * per-head bytes per layer:
+    #   f32: 1024 + 1024 + 2048 + 4096                 = 8192
+    #   f16: half of f32                               = 4096
+    #   q8:  136 B/head at d=128, 272 B/head at d=256  -> 272 + 272 + 544 + 1088 = 2176
+    #   q4h: 72 B/head at d=128, 144 B/head at d=256   -> 144 + 144 + 288 + 576  = 1152
+    expected = Dict(:f32 => 8192, :f16 => 4096, :q8 => 2176, :q4h => 1152)
+    for (fmt, bytes) in expected
+        @test kv_bytes_per_token(spec, fmt) == bytes
+    end
+
+    # The figure must equal the storage the cache allocator really builds: one
+    # K and one V buffer per KV layer, sized by that layer's head count and
+    # head dimension. 4 rows is a whole padding unit, so bytes divide evenly.
+    rows = 4
+    function allocated_bytes_per_token(fmt::Symbol)
+        like = zeros(Float32, 0, 0, 0)
+        total = 0
+        for l in 0:(spec.num_layers-1)
+            _CB.layer_mixer(spec, l) === :full_attention || continue
+            nkv = _CB.layer_n_kv_heads(spec, l)
+            hd = _CB.layer_head_dim(spec, l)
+            for _ in 1:2   # K and V
+                x = _CB._kv_alloc(fmt, like, rows, nkv, hd)
+                total += x isa _CB.QuantKV ? sizeof(x.codes) + sizeof(x.scales) : sizeof(x)
+            end
+        end
+        return total ÷ rows
+    end
+    for fmt in (:f32, :f16, :q8, :q4h)
+        @test kv_bytes_per_token(spec, fmt) == allocated_bytes_per_token(fmt)
+    end
+
+    # A global layer with an odd head dim is refused for the quantized formats,
+    # because that layer's own scale blocks would not fill.
+    bad = _CB.ArchitectureSpec(
+        family=:gemma4,
+        hidden_size=512,
+        num_layers=2,
+        n_heads=4,
+        n_kv_heads=2,
+        head_dim=250,
+        vocab_size=1000,
+        intermediate_size=512,
+        sliding_window=512,
+        swa_layers=[true, false],
+        head_dim_swa=128,
+    )
+    # f16: layer 0 at d=128 gives 2 * 2 * 128 * 2 = 1024; layer 1 at d=250 gives 2000.
+    @test kv_bytes_per_token(bad, :f16) == 3024
+    @test_throws Gesso.GessoError kv_bytes_per_token(bad, :q8)
+end
+
 @testset "context budget: memory_ceiling_tokens" begin
     @test memory_ceiling_tokens(
         budget_bytes=1000,
