@@ -227,6 +227,8 @@ using Gesso: reference_prefill, reference_generate
     # AMDGPU operator methods (embedding, rope, softmax, swiglu, GEGLU, matmul,
     # rmsnorm): KA CPU parity vs the F64 oracle and device-free AMD compile.
     include("test_amdgpu_ops.jl")
+    # AMDGPU dense quant GEMV (Q8_0, Q4_K): device parity, residency and compile.
+    include("test_amdgpu_quant.jl")
 
     # Phase 8 (§LXXXI item B): Lava operator methods on LavaArray{Float32} vs
     # the CPU F64 oracle at declared atol — named skip without a device. The
