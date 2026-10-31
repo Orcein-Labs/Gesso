@@ -1484,6 +1484,23 @@ function _lava_weight_budget(tensors)
     return G._gpu_budget_resolve(:lava, haskey(ENV, "GESSO_GPU_BUDGET_MIB") ? nothing : _lava_device_free_bytes(), reserve)
 end
 
+# Lava uploads through one pinned staging buffer per queue that grows to the
+# largest transfer and is never freed, after copying the source into a new byte
+# vector. One whole-weight upload, such as a 3 GB F32 lm_head, leaves 4 GiB of
+# pinned host memory for the life of the process. Chunks cap both at 64 MiB.
+const _LAVA_UPLOAD_CHUNK_BYTES = 64 << 20
+
+function _lava_upload(::Type{T}, host::AbstractArray) where {T}
+    src = host isa Array{T} ? host : Array{T}(host)
+    dst = Lava.LavaArray{T}(undef, size(src))
+    nbytes = length(src) * sizeof(T)
+    GC.@preserve src dst for off in 0:_LAVA_UPLOAD_CHUNK_BYTES:nbytes-1
+        Lava.copy_buffer!(:upload, dst.buf[], Ptr{UInt8}(pointer(src)) + off,
+                          min(_LAVA_UPLOAD_CHUNK_BYTES, nbytes - off); offset=dst.offset + off)
+    end
+    return dst
+end
+
 function _lava_to_device(tensors)
     # GGUF quant matrices dequantize to F32 here (embedding rows are gathered
     # from F32 storage). Projection weights stay as GGUF bytes when they are
@@ -1492,8 +1509,8 @@ function _lava_to_device(tensors)
     _to_f32(s) =
         s isa Lava.LavaArray ? s :
         s isa Gesso.Inference.QuantMatrix ?
-        Lava.LavaArray{Float32}(Gesso.Inference._quant_host_f32(s)) :
-        Lava.LavaArray{Float32}(s)
+        _lava_upload(Float32, Gesso.Inference._quant_host_f32(s)) :
+        _lava_upload(Float32, s)
     _to_proj(s) = begin
         if s isa Gesso.Inference.QuantMatrix &&
            _lq_eligible(s) &&

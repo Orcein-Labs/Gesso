@@ -139,14 +139,14 @@ function _lq_upload(s::Gesso.Inference.QuantMatrix)
     if s.ggml_type == Gesso.Inference.GGML_TYPE_Q8_0
         qs, d = _lq8_repack(bytes, s.nrows, s.ne0)
         return LavaQ8Quant(
-            Lava.LavaArray{UInt32}(qs),
-            Lava.LavaArray{Float32}(d),
+            _lava_upload(UInt32, qs),
+            _lava_upload(Float32, d),
             s.ne0,
             s.nrows,
         )
     end
     return LavaBlockQuant(
-        Lava.LavaArray{UInt8}(bytes),
+        _lava_upload(UInt8, bytes),
         s.ggml_type,
         _lq_kind(s.ggml_type),
         s.ne0,
