@@ -2,10 +2,10 @@
 # quantized through to_device, the GEMV matches the CPU F64 oracle on KA's CPU
 # backend with a Q8_K activation, invalid workgroup sizes are typed failures,
 # and each dot kernel compiles and links for the AMD targets with no device.
-# GPU-UNTESTED: nothing here runs on ROCm. Reuses the helpers of
-# test_amdgpu_quant.jl, which runtests includes first.
+# GPU-UNTESTED: nothing here runs on ROCm.
 
 using Random
+using Test: AbstractTestSet, Broken, get_testset, record
 
 if !isdefined(@__MODULE__, :_skip)
     function _skip(msg::AbstractString)
@@ -18,6 +18,48 @@ end
 if !AMDGPU_LOADED || AMDGPU_EXT === nothing
     @test _skip("AMDGPU.jl or KernelAbstractions not loadable — AMDGPU K-quant tests skipped")
 else
+    const _AMDKQ_B = _AMDX.KADeviceBackend(_AMDKA.CPU())
+    const _AMDKQ_TOL_RTOL = 5.0e-5
+
+    # The activation as the K-quant kernels see it: each 256-block quantized to
+    # Q8_K by the host reference, dequantized in F64.
+    function _amdkq_ref_x(X::AbstractMatrix{Float32})
+        X64 = Float64.(X)
+        for r in axes(X, 1)
+            y = Gesso.Inference.quantize_q8_K!(Gesso.Inference.Q8KVec(size(X, 2) ÷ 256), X[r, :])
+            X64[r, :] .= Float64.(repeat(y.d; inner=256)) .* Float64.(y.qs)
+        end
+        return X64
+    end
+
+    # Device path: to_device places the weight, matmul! runs the GEMV.
+    function _amdkq_device_matmul(qm, X::Matrix{Float32})
+        pw = Gesso.ProjectionWeight(size(qm), qm)
+        emb = Gesso.EmbeddingTable((4, 2), ones(Float32, 4, 2))
+        dev = Gesso.to_device(_AMDKQ_B, (; embedding=emb, blocks=[(; w=pw)], lm_head=emb))
+        w = dev.blocks[1].w
+        @test w.storage isa _AMDX.AmdDenseQuant
+        n, nrows = size(X, 1), size(qm, 1)
+        dst = Gesso.Activation((n, nrows), zeros(Float32, n, nrows))
+        x = Gesso.Activation(size(X), X)
+        Gesso.matmul!(_AMDKQ_B, dst, x, w, Gesso.DecodeWorkload())
+        return dst.storage
+    end
+
+    # Per-element error against the F32-accumulation bound, F64 reference.
+    function _amdkq_check(qm, X::Matrix{Float32}; label::AbstractString)
+        dev = _amdkq_device_matmul(qm, X)
+        W = Float64.(Gesso.Inference._quant_host_f32(qm))
+        X64 = _amdkq_ref_x(X)
+        ref = X64 * transpose(W)
+        A = abs.(X64) * transpose(abs.(W))
+        tol = _AMDKQ_TOL_RTOL .* A .+ 1.0e-9
+        err = abs.(Float64.(dev) .- ref)
+        @info "amdgpu K-quant GEMV" label maxerr = maximum(err) worst_err_over_tol = maximum(err ./ tol)
+        @test all(err .<= tol)
+        return nothing
+    end
+
     # Superblock bytes and the offsets of the f16 scale fields inside one block.
     const _AMDKQ_LAYOUT = Dict(
         Gesso.Inference.GGML_TYPE_Q2_K => (84, (80, 82)),
@@ -62,11 +104,11 @@ else
             for (nrows, k, ntok) in ((1, 256, 1), (37, 256, 1), (37, 256, 3), (37, 512, 1), (37, 768, 3))
                 qm = _amdkq_random(rng, t, nrows, k)
                 X = randn(rng, Float32, ntok, k)
-                _amdq_check(qm, X; label="$name $(nrows)x$k ntok=$ntok", refx=_amdq_ref_xk)
+                _amdkq_check(qm, X; label="$name $(nrows)x$k ntok=$ntok")
             end
             qm = _amdkq_random(rng, t, 37, 512)
             X = randn(rng, Float32, 40, 512)
-            _amdq_check(qm, X; label="$name 37x512 ntok=40 (not a multiple of wg)", refx=_amdq_ref_xk)
+            _amdkq_check(qm, X; label="$name 37x512 ntok=40 (not a multiple of wg)")
         end
     end
 
@@ -108,7 +150,7 @@ else
         for t in keys(_AMDKQ_LAYOUT)
             qm = _amdkq_random(rng, t, 4, 256)
             pw = Gesso.ProjectionWeight(size(qm), qm)
-            dev = Gesso.to_device(_AMDQ_B, (; embedding=emb, blocks=[(; w=pw)], lm_head=emb))
+            dev = Gesso.to_device(_AMDKQ_B, (; embedding=emb, blocks=[(; w=pw)], lm_head=emb))
             @test dev.blocks[1].w.storage isa _AMDX.AmdDenseQuant
             @test Array(dev.blocks[1].w.storage.data) == qm.data
             @test dev.blocks[1].w.storage.ggml_type == t
