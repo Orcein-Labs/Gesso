@@ -638,6 +638,7 @@ function _q4x_dev_ffn(dm::LavaQwen4exp, il::Int, x, taps)
         Gesso.Inference._q4x_moe!(moe_h, xh, router, ge, ue, de, cfg.n_used)
         moe = Lava.LavaArray{Float32}(moe_h)
     end
+    _lava_host_hold!()
     gs = _q4x_dmm(dm, x, p * "ffn_gate_shexp.weight")
     us = _q4x_dmm(dm, x, p * "ffn_up_shexp.weight")
     act = Lava.LavaArray{Float32}(undef, size(gs)...)

@@ -34,6 +34,32 @@ function _ec_f32_bank(A3::AbstractArray{Float32, 3}, ne0::Int, ne1::Int)
     )
 end
 
+@testset "host expert prefault covers fused gate_up banks" begin
+    # Gemma stores gate and up as one :wexp_gate_up bank. The CUDA-only version
+    # looked at :wexp_gate/:wexp_up/:wexp_down and never prefaulted it.
+    path, io = mktemp()
+    write(io, rand(deterministic_rng(7), UInt8, 3 * 65536))
+    close(io)
+    data = open(f -> _EC_Inf.Mmap.mmap(f, Vector{UInt8}; grow=false, shared=false), path)
+    gu = _EC_Inf.GgufQuantSlice(data, 4096, Int32(0), 2, 64, 256, 65536, Int64(1))
+    dn = _EC_Inf.GgufQuantSlice(data, 100, Int32(0), 1, 16, 16, 1024, Int64(1))
+    blocks = [
+        (wexp_gate_up=(storage=gu,), wexp_down=(storage=dn,)),
+        (wgate=(storage=gu,), wexp_down=(storage=UInt8[],)),
+    ]
+    r = _EC_Inf._prefault_host_experts!(blocks)
+    if Sys.islinux()
+        @test r.slabs == 2
+        @test r.failed == 0
+    else
+        @test r == (slabs=0, failed=0)
+    end
+    @test _EC_Inf._prefault_host_experts!([(wqkv=(storage=nothing,),)]) == (slabs=0, failed=0)
+    data = nothing
+    GC.gc()
+    rm(path; force=true)
+end
+
 @testset "expert residency: quota, fill order, profile, trace (host)" begin
     rng = deterministic_rng(31)
     n_exp, h, ff = 6, 4, 3

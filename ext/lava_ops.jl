@@ -1576,6 +1576,7 @@ function _lava_to_device(tensors)
         @warn "lava: quant weights exceed the weight budget; the reserved context may not fit" weights_mib =
             mib(used[]) budget_mib = mib(budget) ctx = Gesso.Inference._gpu_budget_ctx()
     end
+    Gesso.Inference._prefault_host_experts!(blocks)
     _lhot_register!(blocks)
     _lava_sync!()
     result = (; embedding, blocks, lm_head, final_rms)

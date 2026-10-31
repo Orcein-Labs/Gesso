@@ -1576,7 +1576,7 @@ function _to_device_cuda(tensors)
             host_n += 1
         end
     end
-    _prefault_host_experts!(blocks)
+    Gesso.Inference._prefault_host_experts!(blocks)
     _hot_experts_enabled() ? _hot_register!(blocks) : _hot_release_all!()
     @debug "expert storage census" cached_projections=cached_n whole_slab_projections=slab_n host_projections=host_n vram_free_mib=div(
         Int64(CUDA.free_memory()),
@@ -1584,47 +1584,6 @@ function _to_device_cuda(tensors)
     )
     result = (; embedding, blocks, lm_head, final_rms)
     return merge(result, _keep_tensor_meta(tensors))
-end
-
-# Host-resident expert slabs are views into the mmap'd GGUF, mapped but not
-# yet faulted in. The CPU expert path then takes its first-touch page faults in
-# the middle of decode: the first generation's tokens ran 50 to 90 ms instead
-# of 32 while new experts were routed. MADV_POPULATE_READ (Linux 5.14) maps the
-# pages here instead, at load; where it is missing, decode just faults lazily
-# as before.
-const _MADV_POPULATE_READ = Cint(22)
-
-function _prefault_host_experts!(blocks)
-    Sys.islinux() || return
-    slabs = Gesso.Inference.GgufQuantSlice[]
-    for bt in blocks, k in (:wexp_gate, :wexp_up, :wexp_down)
-        haskey(bt, k) || continue
-        s = bt[k].storage
-        s isa Gesso.Inference.GgufQuantSlice && push!(slabs, s)
-    end
-    isempty(slabs) && return
-    page = UInt(ccall(:getpagesize, Cint, ()))
-    failed = Threads.Atomic{Int}(0)
-    Threads.@threads for i in eachindex(slabs)
-        s = slabs[i]
-        GC.@preserve s begin
-            lo = UInt(pointer(s.data)) + UInt(s.offset0)
-            hi = lo + UInt(s.n_exp * s.bytes_per_expert)
-            lo &= ~(page - 1)
-            rc = ccall(
-                :madvise,
-                Cint,
-                (Ptr{Cvoid}, Csize_t, Cint),
-                Ptr{Cvoid}(lo),
-                hi - lo,
-                _MADV_POPULATE_READ,
-            )
-            rc == 0 || Threads.atomic_add!(failed, 1)
-        end
-    end
-    failed[] == 0 ||
-        @debug "host expert prefault skipped" slabs=length(slabs) failed=failed[]
-    return
 end
 
 # --- per-expert device residency (see src/Inference/expert_residency.jl) ----

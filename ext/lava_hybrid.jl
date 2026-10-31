@@ -629,6 +629,14 @@ function Gesso.Inference._silu_mul!(::LavaBackend, dst, src, gate)
     return dst
 end
 
+# How long the CPU pool stays hot after a host-expert layer. It must cover the
+# device work up to the next host-expert layer; a worker that parks in that gap
+# made the next layer's experts about twice as slow on CUDA. See the hold notes
+# in src/Runtime/cpu_pool.jl.
+const _LAVA_HOST_HOLD_NS = 5_000_000
+
+_lava_host_hold!() = Gesso.Runtime.pool_hold!(_LAVA_HOST_HOLD_NS)
+
 # Routed experts on the host (L2). The expert banks stay GgufQuantSlice (or
 # host Array) and are never uploaded; x and the router come down, the CPU
 # route runs, and y goes back up. Device expert routing is L3.
@@ -679,6 +687,7 @@ function Gesso.Inference._moe_topk_swiglu!(
     if _lhot_wants(xh, gate, up, down, 0)
         Gesso.Inference.@decode_stage :moe_hot backend _lhot_moe_decode!(
             y, x, xh, rh, gate, up, down, n_used)
+        _lava_host_hold!()
         return y
     end
     yh = zeros(Float32, size(y))
@@ -692,6 +701,7 @@ function Gesso.Inference._moe_topk_swiglu!(
         down,
         n_used,
     )
+    _lava_host_hold!()
     Gesso.Inference.@decode_stage :moe_h2d backend copyto!(y, yh)
     return y
 end

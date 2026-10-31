@@ -222,3 +222,53 @@ function expert_hit_summary(blocks)
     end
     return out
 end
+
+# Host-resident expert slabs are views into the mmap'd GGUF, mapped but not
+# yet faulted in. The CPU expert path then takes its first-touch page faults in
+# the middle of decode: the first generation's tokens ran 50 to 90 ms instead
+# of 32 while new experts were routed (CUDA, Ornith 35B). MADV_POPULATE_READ
+# (Linux 5.14) maps the pages at load instead; where it is missing, decode
+# faults lazily as before.
+const _MADV_POPULATE_READ = Cint(22)
+
+const _HOST_EXPERT_KEYS = (:wexp_gate, :wexp_up, :wexp_gate_up, :wexp_down)
+
+"""
+    _prefault_host_experts!(blocks) -> (slabs, failed)
+
+Fault in every host `GgufQuantSlice` expert bank in `blocks` with
+`MADV_POPULATE_READ`. Returns how many slabs were found and how many madvise
+calls failed; a failure leaves that slab to fault lazily.
+"""
+function _prefault_host_experts!(blocks)
+    Sys.islinux() || return (slabs=0, failed=0)
+    slabs = GgufQuantSlice[]
+    for bt in blocks, k in _HOST_EXPERT_KEYS
+        haskey(bt, k) || continue
+        s = getproperty(bt, k).storage
+        s isa GgufQuantSlice && push!(slabs, s)
+    end
+    isempty(slabs) && return (slabs=0, failed=0)
+    page = UInt(ccall(:getpagesize, Cint, ()))
+    failed = Threads.Atomic{Int}(0)
+    Threads.@threads for i in eachindex(slabs)
+        s = slabs[i]
+        GC.@preserve s begin
+            lo = UInt(pointer(s.data)) + UInt(s.offset0)
+            hi = lo + UInt(s.n_exp * s.bytes_per_expert)
+            lo &= ~(page - 1)
+            rc = ccall(
+                :madvise,
+                Cint,
+                (Ptr{Cvoid}, Csize_t, Cint),
+                Ptr{Cvoid}(lo),
+                hi - lo,
+                _MADV_POPULATE_READ,
+            )
+            rc == 0 || Threads.atomic_add!(failed, 1)
+        end
+    end
+    failed[] == 0 ||
+        @debug "host expert prefault skipped" slabs=length(slabs) failed=failed[]
+    return (slabs=length(slabs), failed=failed[])
+end

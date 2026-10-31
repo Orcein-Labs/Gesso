@@ -400,6 +400,7 @@ function _g4l_moe(attn::Lava.LavaArray, bt, eps_f::Float32)
         Gesso.CPUBackend(), xh, _g4l_host_bt(bt), eps_f;
         scratch=Gesso.Inference._Gemma4Scratch(),
     )
+    _lava_host_hold!()
     out = _g4l_new(size(xh)...)
     copyto!(out, Matrix{Float32}(mlp))
     return out
