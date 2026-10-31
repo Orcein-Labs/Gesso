@@ -696,6 +696,9 @@ end
             @test all(isnan, W[:, (nr+1):end])
         end
         @test_throws Exception _KQ._dequant_rows_threaded!(zeros(Float32, ne0, 2), q, nrows, 2)
+        host = _KQ._quant_host_f32(q)
+        @test size(host) == (nrows, ne0)
+        @test reinterpret(UInt32, vec(host)) == reinterpret(UInt32, vec(permutedims(reshape(ref, ne0, nrows))))
     end
 
     # Q4_1 has no native GEMV, so _quant_matmul! takes the dequant fallback.
