@@ -58,7 +58,7 @@ function _hot_budget_bytes()
     fixed = _hot_env_int("GESSO_GPU_HOT_EXPERTS_MIB", -1)
     fixed >= 0 && return Int64(fixed) * mib
     CUDA.reclaim(CUDA.CUDACore.RECLAIM_GC)
-    return _expert_budget_from_free(Int64(CUDA.free_memory()), _hot_reserve_mib())
+    return _expert_budget_from_free(_cuda_free_for_budget(), _hot_reserve_mib())
 end
 
 _hot_reserve_mib() = _hot_env_int("GESSO_GPU_HOT_RESERVE_MIB", _HOT_RESERVE_DEFAULT_MIB)

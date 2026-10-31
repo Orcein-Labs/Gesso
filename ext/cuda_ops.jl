@@ -1653,7 +1653,7 @@ function _expert_cache_budget_bytes()
     free_raw = Int64(CUDA.free_memory())
     # GC level: a DROP would also destroy library handles that must be re-created later
     CUDA.reclaim(CUDA.CUDACore.RECLAIM_GC)   # return the allocator's cached blocks so the free figure is real
-    free = Int64(CUDA.free_memory())
+    free = _cuda_free_for_budget()
     budget = _expert_budget_from_free(free, reserve)
     @debug "expert cache budget" free_before_reclaim_mib=div(free_raw, mib) free_mib=div(
         free,
