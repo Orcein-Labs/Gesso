@@ -9,6 +9,7 @@
 # backend it passes, and the backend-explicit forms are what these tests call.
 
 using Random: MersenneTwister
+using Test: AbstractTestSet, Broken, get_testset, record
 
 if !isdefined(@__MODULE__, :_skip)
     function _skip(msg::AbstractString)
@@ -16,6 +17,21 @@ if !isdefined(@__MODULE__, :_skip)
         ts isa AbstractTestSet && record(ts, Broken(:skipped, String(msg)))
         return true
     end
+end
+
+# F64 softmax(q k^T / sqrt(d)) v for one decode row, GQA heads sharing a KV head.
+function _amdkv_decode_oracle(q, kc, vc, n_heads, group, K, d)
+    out = zeros(Float64, 1, n_heads, d)
+    for h in 1:n_heads
+        hk = div(h - 1, group) + 1
+        s = [sum(Float64(q[1, h, c]) * Float64(kc[j, hk, c]) for c in 1:d) / sqrt(d) for j in 1:K]
+        w = exp.(s .- maximum(s))
+        w ./= sum(w)
+        for j in 1:K, c in 1:d
+            out[1, h, c] += w[j] * Float64(vc[j, hk, c])
+        end
+    end
+    return out
 end
 
 if !AMDGPU_LOADED || AMDGPU_EXT === nothing
@@ -85,11 +101,11 @@ else
             _AMDX._ka_kv_write_rows!(_AMDKV_KA, vq, randn(rng, Float32, K, nkv, d), 1)
             q = randn(rng, Float32, 1, H, d)
             attn = zeros(Float32, 1, H, d)
-            ok = _AMDX._ka_attention_decode!(_AMD_ATTN_KA, attn, q, kq, vq, H, d, group, K; wg=64)
+            ok = _AMDX._ka_attention_decode!(_AMDKV_KA, attn, q, kq, vq, H, d, group, K; wg=64)
             @test ok === true
             kd = _AMDX._ka_kv_dense(_AMDKV_KA, kq, K)
             vd = _AMDX._ka_kv_dense(_AMDKV_KA, vq, K)
-            ref = _amd_attn_decode_oracle(q, kd, vd, H, group, K, d)
+            ref = _amdkv_decode_oracle(q, kd, vd, H, group, K, d)
             err = maximum(abs.(Float64.(attn) .- ref))
             tol = 1.0e-4 * max(1.0, maximum(abs.(ref)))
             println("  kv q8 decode H=$H nkv=$nkv d=$d K=$K max_err=$(err) tol=$(tol)")
@@ -97,7 +113,7 @@ else
 
             # the in-place read is the dense read, element for element
             attn_dense = zeros(Float32, 1, H, d)
-            _AMDX._ka_attention_decode!(_AMD_ATTN_KA, attn_dense, q, kd, vd, H, d, group, K; wg=64)
+            _AMDX._ka_attention_decode!(_AMDKV_KA, attn_dense, q, kd, vd, H, d, group, K; wg=64)
             @test attn == attn_dense
         end
     end
@@ -110,7 +126,12 @@ else
         pr = zeros(Float32, L, K)
         kq = _amdkv_ka(K, H, d)
         vd = zeros(Float32, K, H, d)
-        e = _amd_attn_catch(() -> _AMDX._ka_attention_heads!(_AMD_ATTN_KA, attn, sc, pr, q, kq, vd, H, d, L, K))
+        e = try
+            _AMDX._ka_attention_heads!(_AMDKV_KA, attn, sc, pr, q, kq, vd, H, d, L, K)
+            nothing
+        catch err
+            err
+        end
         @test e isa Gesso.GessoError && e.code === Gesso.ERR_INVALID_PLAN
     end
 
