@@ -1490,7 +1490,19 @@ function _lava_upload(::Type{T}, host::AbstractArray) where {T}
         Lava.copy_buffer!(:upload, dst.buf[], Ptr{UInt8}(pointer(src)) + off,
                           min(_LAVA_UPLOAD_CHUNK_BYTES, nbytes - off); offset=dst.offset + off)
     end
+    _lava_trim_above_weights!()
     return dst
+end
+
+# Lava trims its pool once more than `trim_threshold` bytes are live, at most every
+# 5 s, and a trim that finds an empty block drains the queue and runs a full GC.
+# The 1 GiB default treats the live set as scratch, but resident weights alone
+# exceed it, so every run trimmed on that clock; with an 11 GB host heap the full
+# GCs took 43% of a Gemma4 prefill. The threshold now sits 1 GiB above the weights.
+function _lava_trim_above_weights!()
+    p = Lava.pool(Lava.vk_context())
+    p.trim_threshold = max(p.trim_threshold, p.live_bytes[] + (1 << 30))
+    return nothing
 end
 
 """
