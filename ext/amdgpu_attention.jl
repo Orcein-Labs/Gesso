@@ -59,13 +59,6 @@ end
 _ka_kv_parts(x::AbstractArray) = (x, x, false)
 _ka_kv_parts(x::Gesso.Inference.QuantKV{:q8}) = (x.codes, x.scales, true)
 
-# One element of a decode cache as Float32, dequantized in place for q8.
-# A q8 scale is Float16 and widens by integer ops (_ka_kv_f16_widen, in
-# amdgpu_kv_format.jl): a Float32(Float16) conversion in device code does not
-# compile on ROCm. A dense scale is already Float32.
-@inline _ka_kv_scale(x::Float16) = _ka_kv_f16_widen(x)
-@inline _ka_kv_scale(x::Float32) = x
-
 # Scores of one query head: sc[t, j] = q[t,hh,:] . k[j,hh,:] / sqrt(d).
 # Masked entries are computed too and ignored by the softmax, which keeps this
 # kernel branch-free.
@@ -218,7 +211,7 @@ end
         u = (((g - 1) % nsplit) * _KA_ATTN_TILE) + i
         h = div((g - 1) ÷ nsplit, group) + 1
         for c in 1:d
-            x += sq[c] * (kq ? Float32(kc[u, h, c]) * _ka_kv_scale(kcs[u, h, ((c - 1) >> 5) + 1]) : Float32(kc[u, h, c]))
+            x += sq[c] * (kq ? Float32(kc[u, h, c]) * Float32(kcs[u, h, ((c - 1) >> 5) + 1]) : Float32(kc[u, h, c]))
         end
         x *= scale
         sp[i] = x
@@ -266,7 +259,7 @@ end
         for i in 1:max(0, min(_KA_ATTN_TILE, K - ((g - 1) % nsplit) * _KA_ATTN_TILE))
             u = (((g - 1) % nsplit) * _KA_ATTN_TILE) + i
             h = div((g - 1) ÷ nsplit, group) + 1
-            piece += sp[i] * (vq ? Float32(vc[u, h, j]) * _ka_kv_scale(vcs[u, h, ((j - 1) >> 5) + 1]) : Float32(vc[u, h, j]))
+            piece += sp[i] * (vq ? Float32(vc[u, h, j]) * Float32(vcs[u, h, ((j - 1) >> 5) + 1]) : Float32(vc[u, h, j]))
         end
         acc[j] = piece
         j += wg

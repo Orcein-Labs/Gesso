@@ -4,9 +4,10 @@
 # (amdgpu_attention.jl) dequantizes in place. Readers that take a dense cache
 # (prefill, the per-head path) get a Float32 copy of rows 1:K made here.
 #
-# The write kernel is the one in ext/lava_kv_format.jl with AMD names: the same
-# fma-corrected division and integer widening of the Float16 scale, so codes
-# match the host quantizer _kv_quantize_row! bit for bit, including on ties.
+# The write kernel is the one in ext/lava_kv_format.jl with AMD names. It keeps
+# the fma-corrected division, so codes match the host quantizer _kv_quantize_row!
+# bit for bit, including on ties. The Float16 scale widens with a plain Float32
+# conversion, which is exact and compiles for every AMD target.
 # Nothing here runs on ROCm hardware yet (GPU-UNTESTED); the tests run the same
 # kernels on KA's CPU backend and compile them for the AMD targets.
 
@@ -30,18 +31,6 @@ const _AmdQ8 = QuantKV{:q8,<:AMDGPU.ROCArray,<:AMDGPU.ROCArray}
     return q
 end
 
-# Float32 value of a Float16 scale by integer ops, so no narrowing and widening
-# pair can be folded away on the device. Every step is exact.
-@inline function _ka_kv_f16_widen(s::Float16)
-    b = reinterpret(UInt16, s)
-    e = Int32((b >> 10) & 0x1f)
-    m = Int32(b & 0x03ff)
-    m = e == Int32(0) ? m : m | Int32(0x0400)
-    p = reinterpret(Float32, UInt32(max(e, Int32(1)) - Int32(25) + Int32(127)) << 23)
-    v = Float32(m) * p
-    return (b & 0x8000) == 0x0000 ? v : -v
-end
-
 # One item per (row, head, block) triple of the source rows.
 @kernel function _ka_kv_q8_write_kernel!(codes, scales, @Const(src), row0::Int, n_kv::Int, nb::Int)
     i = @index(Global, Linear)
@@ -56,7 +45,7 @@ end
         amax = max(amax, abs(Float32(src[r, h, base+k])))
     end
     s = Float16(_ka_kv_div_rn(amax, 127.0f0))
-    inv = s == Float16(0) ? 0.0f0 : _ka_kv_div_rn(1.0f0, _ka_kv_f16_widen(s))
+    inv = s == Float16(0) ? 0.0f0 : _ka_kv_div_rn(1.0f0, Float32(s))
     scales[u, h, b] = s
     for k in 1:_KV_BLOCK
         j = base + k
