@@ -18,6 +18,14 @@ _hyb_pos(T, dims...; s=0.0) = reshape(T.(0.5 .+ 0.3 .* sin.(collect(1:prod(dims)
 _hyb_sig(x) = 1 / (1 + exp(-x))
 _hyb_silu(x) = x * _hyb_sig(x)
 _hyb_softplus(x) = x > 20 ? x : log1p(exp(x))
+function _hyb_error(f)
+    try
+        f()
+        return nothing
+    catch e
+        return e
+    end
+end
 
 if !(@isdefined(AMDGPU_EXT)) || AMDGPU_EXT === nothing
     @test _skip("AMDGPU hybrid tests skipped — the AMDGPU extension did not load")
@@ -202,29 +210,29 @@ else
     @testset "amdgpu hybrid: invalid workgroup sizes refused with ERR_INVALID_PLAN" begin
         ka = bk.ka
         for bad in (0, 3, 512)
-            err = _ops_error(() -> _AMDX._ka_gdn_gnorm!(
+            err = _hyb_error(() -> _AMDX._ka_gdn_gnorm!(
                 ka, zeros(Float32, 1, 4), zeros(Float32, 1, 2, 2), zeros(Float32, 1, 4),
                 zeros(Float32, 2), 1.0e-6; wg=bad,
             ))
             @test err isa Gesso.GessoError && err.code == Gesso.ERR_INVALID_PLAN
-            err = _ops_error(() -> _AMDX._ka_causal_conv1d_silu!(
+            err = _hyb_error(() -> _AMDX._ka_causal_conv1d_silu!(
                 ka, zeros(Float32, 2, 2), zeros(Float32, 2, 2), zeros(Float32, 2, 1, 2),
                 zeros(Float32, 2, 1); wg=bad,
             ))
             @test err isa Gesso.GessoError && err.code == Gesso.ERR_INVALID_PLAN
-            err = _ops_error(() -> _AMDX._ka_shared_gate!(
+            err = _hyb_error(() -> _AMDX._ka_shared_gate!(
                 ka, zeros(Float32, 1, 2), zeros(Float32, 1, 2), zeros(Float32, 1, 2),
                 zeros(Float32, 2); wg=bad,
             ))
             @test err isa Gesso.GessoError && err.code == Gesso.ERR_INVALID_PLAN
-            err = _ops_error(() -> _AMDX._ka_gdn_delta!(
+            err = _hyb_error(() -> _AMDX._ka_gdn_delta!(
                 ka, zeros(Float32, 1, 4), zeros(Float32, 1, 8), zeros(Float32, 1, 4),
                 zeros(Float32, 1, 4), zeros(Float32, 4), zeros(Float32, 4),
                 zeros(Float32, 4, 2, 2), 4, 2, 2, 2, false, 1.0e-6; wg=bad,
             ))
             @test err isa Gesso.GessoError && err.code == Gesso.ERR_INVALID_PLAN
         end
-        err = _ops_error(() -> _AMDX._ka_gdn_delta!(
+        err = _hyb_error(() -> _AMDX._ka_gdn_delta!(
             ka, zeros(Float32, 1, 10), zeros(Float32, 1, 20), zeros(Float32, 1, 5),
             zeros(Float32, 1, 5), zeros(Float32, 5), zeros(Float32, 5),
             zeros(Float32, 5, 2, 2), 5, 1, 2, 2, false, 1.0e-6; wg=4,
