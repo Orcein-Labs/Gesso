@@ -27,15 +27,26 @@ module GessoAMDGPUExt
 
 import Gesso
 import Gesso: backend_name, execution_tier, supports
+import Gesso: rmsnorm!, rope!, softmax!, swiglu!, matmul!, embedding_lookup!
 
 using Gesso:
     AbstractGessoBackend,
+    Activation,
+    EmbeddingTable,
+    ProjectionWeight,
+    FrozenParameter,
+    TemporaryWorkspace,
+    PrefillWorkload,
+    DecodeWorkload,
     GessoError,
     gesso_error,
     ERR_RESOURCE_LIMIT,
     ERR_INVALID_PLAN,
     ERR_ALLOCATION,
-    ERR_RUNTIME
+    ERR_RUNTIME,
+    ERR_NUMERICAL_INSTABILITY
+
+using LinearAlgebra: mul!
 
 using AMDGPU
 using AMDGPU: ROCBackend
@@ -88,13 +99,26 @@ execution_tier(::Type{<:KADeviceBackend}) = 1
 
 # Grows only as ops land with a CPU-oracle test and an AMD compile test.
 # import_report reads this set, so an empty set refuses every model up front.
-const AMDGPU_SUPPORTED_CAPS = Set{Symbol}()
+const AMDGPU_SUPPORTED_CAPS = Set{Symbol}([
+    :rmsnorm,
+    :matmul,
+    :softmax,
+    :embedding_lookup,
+    :swiglu_ffn,
+    :geglu_ffn,
+    :rope_none,
+    :rope_linear,
+    :rope_llama3,
+    :rope_partial_dim,
+    :rope_interleaved,
+])
 
 supports(::KADeviceBackend, cap::Symbol) = cap in AMDGPU_SUPPORTED_CAPS
 supports(::Type{<:KADeviceBackend}, cap::Symbol) = cap in AMDGPU_SUPPORTED_CAPS
 
 include("amdgpu_device.jl")
 include("amdgpu_kernels.jl")
+include("amdgpu_ops.jl")
 
 # Bind the tag and attach to_device at load time, as GessoCUDAExt and
 # GessoLavaExt do (see GessoLavaExt.__init__ for why the method goes through

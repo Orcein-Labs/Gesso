@@ -61,9 +61,9 @@ else
 
         @test Gesso.backend_name(Gesso.AMDGPUBackend) == :amdgpu
         @test Gesso.execution_tier(Gesso.AMDGPUBackend) == 1
-        # nothing is claimed until an op lands with both tests
-        @test Gesso.supports(Gesso.AMDGPUBackend, :matmul) == false
-        @test Gesso.supports(Gesso.AMDGPUBackend, :rmsnorm) == false
+        # nothing is claimed until an op lands with both tests (caps set in GessoAMDGPUExt)
+        @test Gesso.supports(Gesso.AMDGPUBackend, :matmul) == true
+        @test Gesso.supports(Gesso.AMDGPUBackend, :rmsnorm) == true
 
         if Main.AMDGPU.functional()
             @test _skip("a functional ROCm device is present — the no-device failure test does not apply")
