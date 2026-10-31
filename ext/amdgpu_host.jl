@@ -27,16 +27,39 @@ function _ka_host_quant(q::AmdDenseQuant)
     end
 end
 
+# Dense weights get the same once-per-array copy. Only the weight path uses
+# this cache: an activation is rewritten every token, so its copy must be fresh.
+const _KA_HOST_DENSE = Dict{UInt,Tuple{WeakRef,AbstractArray}}()
+const _KA_HOST_DENSE_LOCK = ReentrantLock()
+
+function _ka_host_dense(s::AbstractArray)
+    s isa Array && return s
+    key = objectid(s)
+    lock(_KA_HOST_DENSE_LOCK) do
+        e = get(_KA_HOST_DENSE, key, nothing)
+        if e !== nothing && e[1].value === s
+            return e[2]
+        end
+        filter!(p -> p.second[1].value !== nothing, _KA_HOST_DENSE)
+        host = Array(s)
+        _KA_HOST_DENSE[key] = (WeakRef(s), host)
+        return host
+    end
+end
+
 _ka_host_storage(s) = s
 _ka_host_storage(::Nothing) = nothing
 _ka_host_storage(s::AbstractArray) = s isa Array ? s : Array(s)
 _ka_host_storage(q::AmdDenseQuant) = _ka_host_quant(q)
 
+_ka_host_weight(s) = _ka_host_storage(s)
+_ka_host_weight(s::AbstractArray) = _ka_host_dense(s)
+
 _ka_host_wrap(w) = w
 _ka_host_wrap(::Nothing) = nothing
-_ka_host_wrap(w::ProjectionWeight) = ProjectionWeight(w.shape, _ka_host_storage(w.storage))
-_ka_host_wrap(w::FrozenParameter) = FrozenParameter(w.shape, _ka_host_storage(w.storage))
-_ka_host_wrap(w::ExpertWeight) = ExpertWeight(w.shape, _ka_host_storage(w.storage))
+_ka_host_wrap(w::ProjectionWeight) = ProjectionWeight(w.shape, _ka_host_weight(w.storage))
+_ka_host_wrap(w::FrozenParameter) = FrozenParameter(w.shape, _ka_host_weight(w.storage))
+_ka_host_wrap(w::ExpertWeight) = ExpertWeight(w.shape, _ka_host_weight(w.storage))
 
 # Replace the named fields of a block's parameter tuple with host views;
 # fields the block does not carry are skipped.

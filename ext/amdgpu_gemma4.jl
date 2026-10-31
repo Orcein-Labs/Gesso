@@ -276,16 +276,37 @@ _ka_g4_rope_tables(positions, inv_freq, half::Int) = begin
     return cs, sn
 end
 
+# Every layer of one token rotates with the same positions and frequencies, so
+# the uploaded cos/sin pair is kept for the last set seen. The key is the
+# contents, not the identity: a reused positions buffer must still miss when
+# the token moves on.
+const _KA_G4_ROPE_CACHE = Ref{Any}(nothing)
+const _KA_G4_ROPE_LOCK = ReentrantLock()
+
+function _ka_g4_rope_device(ka, positions, inv_freq, half::Int)
+    lock(_KA_G4_ROPE_LOCK) do
+        e = _KA_G4_ROPE_CACHE[]
+        if e !== nothing && e.ka === ka && e.half == half &&
+           e.positions == positions && e.inv_freq == inv_freq
+            return e.cs, e.sn
+        end
+        cs, sn = _ka_g4_rope_tables(positions, inv_freq, half)
+        cs_d = _ka_upload_host(ka, Float32, cs)
+        sn_d = _ka_upload_host(ka, Float32, sn)
+        _KA_G4_ROPE_CACHE[] = (;
+            ka, half, positions=collect(positions), inv_freq=collect(inv_freq), cs=cs_d, sn=sn_d,
+        )
+        return cs_d, sn_d
+    end
+end
+
 function _ka_g4_rope!(ka, A, positions, nheads::Int, hd::Int, n_rot::Int, inv_freq; wg::Int=_KA_OP_WG)
     half = n_rot ÷ 2
     N = size(A, 1)
     (half == 0 || N == 0) && return A
-    cs, sn = _ka_g4_rope_tables(positions, inv_freq, half)
+    cs, sn = _ka_g4_rope_device(ka, positions, inv_freq, half)
     total = N * half
-    _ka_g4_launch(
-        ka, _ka_g4_rope_kernel!, wg, total,
-        A, _ka_upload_host(ka, Float32, cs), _ka_upload_host(ka, Float32, sn), N, nheads, hd, half,
-    )
+    _ka_g4_launch(ka, _ka_g4_rope_kernel!, wg, total, A, cs, sn, N, nheads, hd, half)
     return A
 end
 
@@ -357,8 +378,8 @@ function _ka_g4_seg_norm(b::KADeviceBackend, src, nheads::Int, hd::Int, w, eps::
     dst = KA.allocate(b.ka, Float32, size(src))
     N = size(src, 1)
     if w === nothing
-        ones_w = _ka_upload_host(b.ka, Float32, ones(Float32, hd))
-        return _ka_g4_seg_norm!(b.ka, dst, src, ones_w, eps, hd, N, nheads, false)
+        # The kernel reads w only when use_w is set, so the input stands in for it.
+        return _ka_g4_seg_norm!(b.ka, dst, src, src, eps, hd, N, nheads, false)
     end
     return _ka_g4_seg_norm!(b.ka, dst, src, w, eps, hd, N, nheads, true)
 end
