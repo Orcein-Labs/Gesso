@@ -5,10 +5,11 @@
 # Float32 math. A format without a tested kernel never reaches this file;
 # to_device dequantizes it on the host to Float32 instead.
 #
-# Activations. Q8_0 and Q4_K weights take the CPU-order kernels, which quantize
-# the activation on device first (Q8_0 blocks, and Q8_K-style blocks of 256 for
-# Q4_K), the way ggml's CPU path does. Every other format keeps the activation
-# in Float32 and accumulates in Float32 through a local-memory tree.
+# Activations. Q8_0 and the K-quants (Q2_K..Q6_K, kernels in amdgpu_kquant.jl)
+# take the CPU-order kernels, which quantize the activation on device first
+# (Q8_0 blocks, and Q8_K-style blocks of 256 for the K-quants), the way ggml's
+# CPU path does. The IQ formats (amdgpu_iquant.jl) keep the activation in
+# Float32 and accumulate in Float32, one work item per output.
 
 const _AMDQ_IQ_SUPERBLOCK_TYPES = (
     Gesso.Inference.GGML_TYPE_IQ4_XS,
@@ -21,7 +22,11 @@ const _AMDQ_IQ_SUPERBLOCK_TYPES = (
 
 const _AMDQ_TYPES = (
     Gesso.Inference.GGML_TYPE_Q8_0,
+    Gesso.Inference.GGML_TYPE_Q2_K,
+    Gesso.Inference.GGML_TYPE_Q3_K,
     Gesso.Inference.GGML_TYPE_Q4_K,
+    Gesso.Inference.GGML_TYPE_Q5_K,
+    Gesso.Inference.GGML_TYPE_Q6_K,
     Gesso.Inference.GGML_TYPE_IQ4_NL,
     Gesso.Inference.GGML_TYPE_IQ4_XS,
     Gesso.Inference.GGML_TYPE_IQ2_XXS,
@@ -50,7 +55,13 @@ Base.sizeof(q::AmdDenseQuant) = sizeof(q.data)
 _amdq_block_values(t::Int32) =
     t == Gesso.Inference.GGML_TYPE_Q8_0 ? 32 :
     t == Gesso.Inference.GGML_TYPE_IQ4_NL ? 32 :
-    t == Gesso.Inference.GGML_TYPE_Q4_K ? 256 :
+    t in (
+        Gesso.Inference.GGML_TYPE_Q2_K,
+        Gesso.Inference.GGML_TYPE_Q3_K,
+        Gesso.Inference.GGML_TYPE_Q4_K,
+        Gesso.Inference.GGML_TYPE_Q5_K,
+        Gesso.Inference.GGML_TYPE_Q6_K,
+    ) ? 256 :
     t in _AMDQ_IQ_SUPERBLOCK_TYPES ? 256 : 0
 
 function _amdq_eligible(s)
@@ -250,6 +261,10 @@ _amdq_q4k_matmul!(Y, X, q::AmdDenseQuant; wg::Int=64) =
 function _amdq_gemv!(Y, X, q::AmdDenseQuant; wg::Int=64)
     q.ggml_type == Gesso.Inference.GGML_TYPE_Q8_0 && return _amdq_q8_matmul!(Y, X, q; wg)
     q.ggml_type == Gesso.Inference.GGML_TYPE_Q4_K && return _amdq_q4k_matmul!(Y, X, q; wg)
+    q.ggml_type == Gesso.Inference.GGML_TYPE_Q2_K && return _amdq_q2k_matmul!(Y, X, q; wg)
+    q.ggml_type == Gesso.Inference.GGML_TYPE_Q3_K && return _amdq_q3k_matmul!(Y, X, q; wg)
+    q.ggml_type == Gesso.Inference.GGML_TYPE_Q5_K && return _amdq_q5k_matmul!(Y, X, q; wg)
+    q.ggml_type == Gesso.Inference.GGML_TYPE_Q6_K && return _amdq_q6k_matmul!(Y, X, q; wg)
     q.ggml_type == Gesso.Inference.GGML_TYPE_IQ4_NL && return _amdq_iq4nl_matmul!(Y, X, q; wg)
     q.ggml_type in _AMDQ_IQ_SUPERBLOCK_TYPES && return _amdq_iq_matmul!(Y, X, q; wg)
     throw(

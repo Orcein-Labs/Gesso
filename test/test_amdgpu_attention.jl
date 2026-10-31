@@ -170,7 +170,7 @@ else
             1,
             4,
         ) === false
-        qk = Gesso.Inference.QuantKV{:q8}(zeros(UInt8, 4, H, d), zeros(Float32, 4, H), d)
+        qk = Gesso.Inference.QuantKV{:q4h}(zeros(UInt8, 4, H, d ÷ 2), zeros(Float16, 4, H, 1), d)
         e = _amd_attn_catch(() -> _AMDX._ka_attention_decode!(_AMD_ATTN_KA, attn, q, qk, kc, H, d, 1, 4))
         @test e isa Gesso.GessoError
         @test e isa Gesso.GessoError && e.code === Gesso.ERR_INVALID_PLAN
@@ -191,7 +191,8 @@ else
             @test all(r -> r.bytes > 0, res)
 
             res = amd_compile(K._ka_attn_split_kernel!, wg, (wg * 2,),
-                (G(Float32, 3), G(Float32, 3), G(Float32, 3), G(Float32, 3), Int, Int, Float32, Int, Int))
+                (G(Float32, 3), G(Float32, 3), G(Float32, 3), G(Float32, 3), G(Float32, 3), G(Float32, 3),
+                    Bool, Bool, Int, Int, Float32, Int, Int))
             @test length(res) == length(AMD_TARGETS)
             @test all(r -> r.bytes > 0, res)
 
