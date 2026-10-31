@@ -1298,8 +1298,13 @@ end
 # hot-expert route, so both select the same experts with the same weights.
 # Returns false when the token routes nothing (weights sum to zero).
 function _moe_route_token!(experts, wts, t::Int, x, router, logits, order, n_used::Int)
-    n_exp = length(logits)
     m = _cpu_router_logits!(logits, x, t, router)
+    return _moe_route_logits!(experts, wts, t, logits, m, order, n_used)
+end
+
+# The routing above, from logits already computed for token t (m is their max).
+function _moe_route_logits!(experts, wts, t::Int, logits, m, order, n_used::Int)
+    n_exp = length(logits)
     s = 0.0f0
     for e in 1:n_exp
         v = exp(logits[e] - m)
@@ -1325,6 +1330,40 @@ function _moe_route_token!(experts, wts, t::Int, x, router, logits, order, n_use
     return true
 end
 
+# Prefill routing on the CPU pool. The serial token loop held the pool idle for
+# most of an Ornith 35B prefill (62% of main-thread samples). Each chunk routes
+# its tokens in blocks of `_MOE_ROUTE_BLOCK`, so one pass over the router (2 MB
+# on the 35B) serves the whole block. Every logit still sums over i in order
+# with the same ops as `_cpu_router_logits!`, so the routing is bit-identical.
+const _MOE_ROUTE_BLOCK = 8
+
+function _moe_route_tokens!(experts, wts, live, x, router, n_used::Int, ::Type{T}) where {T}
+    seq = size(x, 1)
+    n_exp, h = size(router)
+    nc = min(Threads.nthreads(), cld(seq, _MOE_ROUTE_BLOCK))
+    _run_row_chunks!(nc, seq * n_exp * h) do c
+        t0 = div((c - 1) * seq, nc) + 1
+        t1 = div(c * seq, nc)
+        L = Matrix{T}(undef, n_exp, _MOE_ROUTE_BLOCK)
+        order = Vector{Int}(undef, n_exp)
+        for b0 in t0:_MOE_ROUTE_BLOCK:t1
+            nb = min(_MOE_ROUTE_BLOCK, t1 - b0 + 1)
+            fill!(L, zero(T))
+            @inbounds for i in 1:h, j in 1:nb
+                xi = T(x[b0 + j - 1, i])
+                @simd for e in 1:n_exp
+                    L[e, j] += xi * router[e, i]
+                end
+            end
+            for j in 1:nb
+                lj = view(L, :, j)
+                live[b0 + j - 1] = _moe_route_logits!(experts, wts, b0 + j - 1, lj, maximum(lj), order, n_used)
+            end
+        end
+    end
+    return live
+end
+
 # Routing is the per-expert loop's, op for op, so the selected experts and
 # their weights match it exactly.
 function _cpu_moe_topk_swiglu_batched!(
@@ -1343,8 +1382,10 @@ function _cpu_moe_topk_swiglu_batched!(
     experts = Matrix{Int}(undef, n_used, seq)
     wts = Matrix{Float32}(undef, n_used, seq)
     live = fill(false, seq)
-    for t in 1:seq
-        live[t] = _moe_route_token!(experts, wts, t, x, router, logits, order, n_used)
+    if seq == 1
+        live[1] = _moe_route_token!(experts, wts, 1, x, router, logits, order, n_used)
+    else
+        _moe_route_tokens!(experts, wts, live, x, router, n_used, eltype(logits))
     end
     if seq == 1
         live[1] || return y
