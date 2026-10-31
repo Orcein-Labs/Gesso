@@ -10,9 +10,10 @@
 #       Loads a GGUF and serves it. Start with threads: generation runs on a
 #       thread other than thread 1, which keeps Julia's event loop free, so
 #       /health answers during a long prefill. The path comes from --gguf or from
-#       GESSO_ORNITH35_GGUF. GESSO_BACKEND=lava|cuda|cpu picks the backend and
-#       defaults to lava; --cpu is the same as GESSO_BACKEND=cpu. Only the GPU
-#       package that was asked for is loaded, so the package never depends on it.
+#       GESSO_ORNITH35_GGUF. GESSO_BACKEND=lava|cuda|amdgpu|cpu picks the backend
+#       and defaults to lava; --cpu is the same as GESSO_BACKEND=cpu. amdgpu has
+#       never run on AMD hardware. Only the GPU package that was asked for is
+#       loaded, so the package never depends on it.
 
 using Gesso
 using Sockets
@@ -94,8 +95,17 @@ end
 # and a cpu run never touches a GPU stack. The backend binding exists only once
 # the extension is loaded, hence the invokelatest calls.
 function gpu_backend(which::AbstractString)
-    pkg, ctor = which == "lava" ? (:Lava, :LavaBackend) : (:CUDA, :CUDABackend)
-    Core.eval(Main, :(using $pkg))
+    pkgs, ctor = if which == "lava"
+        (:Lava,), :LavaBackend
+    elseif which == "amdgpu"
+        # AMDGPU carries KernelAbstractions only as a weakdep; the extension needs both.
+        (:AMDGPU, :KernelAbstractions), :AMDGPUBackend
+    else
+        (:CUDA,), :CUDABackend
+    end
+    for pkg in pkgs
+        Core.eval(Main, :(using $pkg))
+    end
     return Base.invokelatest(() -> getfield(Gesso, ctor)())
 end
 
@@ -108,8 +118,8 @@ function launch(opts)
 
     which = opts["cpu"] ? "cpu" : get(ENV, "GESSO_BACKEND", "lava")
     # Fail on a bad backend name before spending minutes on the weights.
-    which in ("lava", "cuda", "cpu") ||
-        throw(ArgumentError("GESSO_BACKEND must be lava, cuda or cpu, got '$which'"))
+    which in ("lava", "cuda", "amdgpu", "cpu") ||
+        throw(ArgumentError("GESSO_BACKEND must be lava, cuda, amdgpu or cpu, got '$which'"))
     model, tensors, spec = Gesso.load_gguf(path)
     tk = Gesso.Inference.load_gguf_tokenizer(path)
     which == "cpu" && return serve_loaded(
