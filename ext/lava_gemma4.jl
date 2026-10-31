@@ -198,6 +198,11 @@ end
 
 _g4l_new(dims...) = Lava.LavaArray{Float32}(undef, dims...)
 
+# Per-layer temporaries go back to the pool as soon as their last kernel is
+# queued. Left to the GC, a prefill pass at 8k context strands them across
+# pool blocks and the next layer's score tile cannot get a block.
+_g4l_free!(xs...) = foreach(Lava.unsafe_free!, xs)
+
 function _g4l_up(h::AbstractArray{Float32})
     d = _g4l_new(size(h)...)
     copyto!(d, h)
@@ -265,6 +270,13 @@ _g4l_kv_write!(dst::_LavaQ8, src, row0::Int) = Gesso.Inference._kv_write_rows!(d
 
 # Score buffer cap per tile of query rows.
 const _G4L_SCORE_BYTES = Ref(256 * 2^20)
+
+# Largest score tile _g4l_attention allocates for `rows` queries over `ctx` keys,
+# for the weight budget's reserve.
+function _g4l_score_tile_bytes(nh::Int, ctx::Int, rows::Int)
+    per_row = Int64(4) * nh * ctx
+    return per_row * clamp(_G4L_SCORE_BYTES[] ÷ per_row, 1, max(1, rows))
+end
 
 # Keys the tile t0:t1 sees, as (k0, Kn): rows k0+1:k0+Kn.
 function _g4l_tile_keys(qoff::Int, win::Int, t0::Int, t1::Int)
@@ -458,7 +470,10 @@ function _g4l_qkv(X, bt, nh::Int, nkv::Int, hd::Int, positions, eps_f::Float32)
     n_rot = bt.rope_layer.rotary_dim == 0 ? hd : bt.rope_layer.rotary_dim
     _g4l_rope!(Q, positions, nh, hd, n_rot, bt.rope_layer.inv_freq)
     _g4l_rope!(K, positions, nkv, hd, n_rot, bt.rope_layer.inv_freq)
-    return Q, _g4l_heads(K, N, nkv, hd), _g4l_heads(V, N, nkv, hd)
+    Kh = _g4l_heads(K, N, nkv, hd)
+    Vh = _g4l_heads(V, N, nkv, hd)
+    _g4l_free!(xn, K, V)
+    return Q, Kh, Vh
 end
 
 function _g4l_window(bt)
@@ -481,6 +496,7 @@ function _g4l_finish!(backend, X, O, bt, eps_f::Float32)
         Gesso.Inference._gemma4_layer_output_scale!(backend, out, bt.layer_output_scale.storage)
     end
     _g4l_copy!(X, out)
+    _g4l_free!(A, An, attn_out, cur, out)
     return X
 end
 
@@ -496,6 +512,7 @@ function Gesso.Inference._gemma4_prefill_block!(
     Q, Kh, Vh = _g4l_qkv(X, bt, nh, nkv, hd, positions, eps_f)
     O = _g4l_attention(Q, Kh, Vh, nh, nkv, hd, 1, _g4l_window(bt))
     _g4l_finish!(backend, X, O, bt, eps_f)
+    _g4l_free!(Q, Kh, Vh, O)
     return h
 end
 
@@ -515,5 +532,9 @@ function Gesso.Inference._gemma4_generate_block!(
     Vd = Gesso.Inference._kv_dense(vc_layer.storage, s1)
     O = _g4l_attention(Q, Kd, Vd, nh, nkv, hd, s0, _g4l_window(bt))
     _g4l_finish!(backend, X, O, bt, eps_f)
+    _g4l_free!(Q, Kh, Vh, O)
+    # A q8 cache reads through a dense copy; an f32 cache is read in place.
+    Kd === kc_layer.storage || _g4l_free!(Kd)
+    Vd === vc_layer.storage || _g4l_free!(Vd)
     return hp
 end

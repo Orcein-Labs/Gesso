@@ -149,6 +149,40 @@ else
         end
     end
 
+    @testset "lava Gemma4: the weight budget reserves the largest score tile" begin
+        ext = Base.get_extension(Gesso, :GessoLavaExt)
+        # The tiles _g4l_attention cuts, walked independently of the reserve formula.
+        function max_tile(nh, Nq, qoff, win)
+            budget = ext._G4L_SCORE_BYTES[] ÷ (4 * nh)
+            t0, worst = 1, 0
+            while t0 <= Nq
+                _, Kn = ext._g4l_tile_keys(qoff, win, t0, Nq)
+                t1 = Kn * (Nq - t0 + 1) > budget ? min(Nq, t0 + max(1, budget ÷ Kn) - 1) : Nq
+                _, Kn = ext._g4l_tile_keys(qoff, win, t0, t1)
+                worst = max(worst, 4 * Kn * (t1 - t0 + 1) * nh)
+                t0 = t1 + 1
+            end
+            return worst
+        end
+        for nh in (4, 16), ctx in (512, 8192, 32768), rows in (1, 512, 1024)
+            rows > ctx && continue
+            reserve = ext._g4l_score_tile_bytes(nh, ctx, rows)
+            # The last pass sees every key; the first pass sees only its own rows.
+            @test max_tile(nh, rows, ctx - rows + 1, 0) <= reserve
+            @test max_tile(nh, rows, 1, 0) <= reserve
+        end
+        @test max_tile(16, 1024, 8192 - 1024 + 1, 0) == ext._g4l_score_tile_bytes(16, 8192, 1024)
+        # Negative control: the CUDA-sized tile the budget used to reserve is short.
+        @test max_tile(16, 1024, 8192 - 1024 + 1, 0) > ext._LAVA_PREFILL_TILE_BYTES
+
+        spec = (; n_heads=16)
+        g4 = (; spec, blocks=[(; gemma4_layer=true)])
+        other = (; spec, blocks=[(; mixer=:attention)])
+        @test ext._lava_attention_tile_bytes(g4, (; spec), 8192, 1024) == 256 * 2^20
+        @test ext._lava_attention_tile_bytes(g4, (; spec), 512, 512) == ext._LAVA_PREFILL_TILE_BYTES
+        @test ext._lava_attention_tile_bytes(other, (; spec), 8192, 1024) == ext._LAVA_PREFILL_TILE_BYTES
+    end
+
     @testset "lava Gemma4: negative control, sliding window off exceeds the bound" begin
         prev = Gesso.Inference._GEMMA4_WINDOW_MASK_ENABLED[]
         Gesso.Inference._GEMMA4_WINDOW_MASK_ENABLED[] = false

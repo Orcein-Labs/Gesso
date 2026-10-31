@@ -1458,6 +1458,14 @@ end
 
 const _LAVA_PREFILL_TILE_BYTES = Int64(16) << 20   # attention tile, as on CUDA
 
+# The attention tile one prefill pass allocates. Gemma 4 runs its own attention,
+# whose score tile is up to 16x the CUDA-sized one.
+function _lava_attention_tile_bytes(tensors, geo, ctx::Int, rows::Int)
+    blocks = tensors isa NamedTuple && haskey(tensors, :blocks) ? tensors.blocks : ()
+    any(bt -> haskey(bt, :gemma4_layer), blocks) || return _LAVA_PREFILL_TILE_BYTES
+    return max(_LAVA_PREFILL_TILE_BYTES, _g4l_score_tile_bytes(geo.spec.n_heads, ctx, rows))
+end
+
 # Free device-local bytes less the reserve (KV, one prefill pass, the hot-pool
 # floor, slack). Lava has no pass-size override, so the pass is the chunk.
 function _lava_weight_budget(tensors)
@@ -1469,7 +1477,8 @@ function _lava_weight_budget(tensors)
     reserve = G._gpu_reserve(;
         kv_per_token=G._gpu_kv_per_token(geo, :lava),
         ctx,
-        prefill=geo.spec === nothing ? 0 : G._gpu_prefill_row_bytes(geo) * rows + _LAVA_PREFILL_TILE_BYTES,
+        prefill=geo.spec === nothing ? 0 :
+            G._gpu_prefill_row_bytes(geo) * rows + _lava_attention_tile_bytes(tensors, geo, ctx, rows),
         floor,
         blas=0,
     )
