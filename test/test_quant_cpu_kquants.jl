@@ -676,3 +676,42 @@ end
     end
     ran || nothing
 end
+
+@testset "dequant fallback: threaded rows match one serial pass" begin
+    rng = Xoshiro(0x51f0)
+    for (name, ty) in _KQTYPES
+        nb = 2
+        ne0 = nb * _kq_nvals(ty)
+        nrows = 301
+        rb = _KQ._qrow_bytes(ty, ne0)
+        w = _kq_random_rows(rng, ty, nrows, nb)
+        q = _KQ.QuantMatrix(w, 0, ty, ne0, nrows, rb, _kq_nvals(ty))
+        ref = _KQ._dequant_f32(w, 0, ty, nrows * ne0)
+        for (r0, nr) in ((1, nrows), (17, 200), (nrows, 1))
+            W = fill(NaN32, ne0, nr + 3)
+            _KQ._dequant_rows_threaded!(W, q, r0, nr)
+            got = reinterpret(UInt32, vec(W[:, 1:nr]))
+            want = reinterpret(UInt32, ref[((r0-1)*ne0+1):((r0+nr-1)*ne0)])
+            @test got == want
+            @test all(isnan, W[:, (nr+1):end])
+        end
+        @test_throws Exception _KQ._dequant_rows_threaded!(zeros(Float32, ne0, 2), q, nrows, 2)
+    end
+
+    # Q4_1 has no native GEMV, so _quant_matmul! takes the dequant fallback.
+    ty = _KQ.GGML_TYPE_Q4_1
+    ne0, nrows = 128, 257
+    w = rand(rng, UInt8, nrows * div(ne0, 32) * 20)
+    for blk in 0:(nrows*div(ne0, 32)-1)
+        _kq_put_f16!(w, 20blk, 0.005f0 + 0.05f0 * rand(rng, Float32))
+        _kq_put_f16!(w, 20blk + 2, 0.05f0 * randn(rng, Float32))
+    end
+    q = _KQ.QuantMatrix(w, 0, ty, ne0, nrows, div(ne0, 32) * 20, 32)
+    Wref = reshape(_KQ._dequant_f32(w, 0, ty, nrows * ne0), ne0, nrows)
+    for seq in (1, 3)
+        x = randn(rng, Float32, seq, ne0)
+        dst = Matrix{Float32}(undef, seq, nrows)
+        _KQ._quant_matmul!(dst, x, q)
+        @test dst ≈ x * Wref rtol = 1.0f-5
+    end
+end
