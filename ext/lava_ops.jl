@@ -1456,14 +1456,6 @@ end
 
 # --- explicit transfer (§LXXXI: "the interpreter does not copy") ---------------
 
-"""
-    to_device(::LavaBackend, tensors) -> tensors'
-
-Copy `Array` storage to `LavaArray{Float32}` (F64→F32 conversion is part of
-the lowering) and return a new named tuple of the same shape — `embedding`,
-`blocks`, `lm_head`, and `final_rms` when present. NEVER mutates the CPU
-tensors. Tied heads stay tied on device: `lm_head === embedding`.
-"""
 const _LAVA_PREFILL_TILE_BYTES = Int64(16) << 20   # attention tile, as on CUDA
 
 # Free device-local bytes less the reserve (KV, one prefill pass, the hot-pool
@@ -1501,6 +1493,14 @@ function _lava_upload(::Type{T}, host::AbstractArray) where {T}
     return dst
 end
 
+"""
+    to_device(::LavaBackend, tensors) -> tensors'
+
+Copy `Array` storage to `LavaArray{Float32}` (F64→F32 conversion is part of
+the lowering) and return a new named tuple of the same shape — `embedding`,
+`blocks`, `lm_head`, and `final_rms` when present. NEVER mutates the CPU
+tensors. Tied heads stay tied on device: `lm_head === embedding`.
+"""
 function _lava_to_device(tensors)
     # GGUF quant matrices dequantize to F32 here (embedding rows are gathered
     # from F32 storage). Projection weights stay as GGUF bytes when they are
