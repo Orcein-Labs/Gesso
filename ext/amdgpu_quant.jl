@@ -10,9 +10,25 @@
 # Q4_K), the way ggml's CPU path does. Every other format keeps the activation
 # in Float32 and accumulates in Float32 through a local-memory tree.
 
+const _AMDQ_IQ_SUPERBLOCK_TYPES = (
+    Gesso.Inference.GGML_TYPE_IQ4_XS,
+    Gesso.Inference.GGML_TYPE_IQ2_XXS,
+    Gesso.Inference.GGML_TYPE_IQ2_XS,
+    Gesso.Inference.GGML_TYPE_IQ2_S,
+    Gesso.Inference.GGML_TYPE_IQ3_XXS,
+    Gesso.Inference.GGML_TYPE_IQ3_S,
+)
+
 const _AMDQ_TYPES = (
     Gesso.Inference.GGML_TYPE_Q8_0,
     Gesso.Inference.GGML_TYPE_Q4_K,
+    Gesso.Inference.GGML_TYPE_IQ4_NL,
+    Gesso.Inference.GGML_TYPE_IQ4_XS,
+    Gesso.Inference.GGML_TYPE_IQ2_XXS,
+    Gesso.Inference.GGML_TYPE_IQ2_XS,
+    Gesso.Inference.GGML_TYPE_IQ2_S,
+    Gesso.Inference.GGML_TYPE_IQ3_XXS,
+    Gesso.Inference.GGML_TYPE_IQ3_S,
 )
 
 # Device-resident dense quant weight: `data` holds the GGUF block bytes of
@@ -33,7 +49,9 @@ Base.sizeof(q::AmdDenseQuant) = sizeof(q.data)
 
 _amdq_block_values(t::Int32) =
     t == Gesso.Inference.GGML_TYPE_Q8_0 ? 32 :
-    t == Gesso.Inference.GGML_TYPE_Q4_K ? 256 : 0
+    t == Gesso.Inference.GGML_TYPE_IQ4_NL ? 32 :
+    t == Gesso.Inference.GGML_TYPE_Q4_K ? 256 :
+    t in _AMDQ_IQ_SUPERBLOCK_TYPES ? 256 : 0
 
 function _amdq_eligible(s)
     s isa Gesso.Inference.QuantMatrix || return false
@@ -232,6 +250,8 @@ _amdq_q4k_matmul!(Y, X, q::AmdDenseQuant; wg::Int=64) =
 function _amdq_gemv!(Y, X, q::AmdDenseQuant; wg::Int=64)
     q.ggml_type == Gesso.Inference.GGML_TYPE_Q8_0 && return _amdq_q8_matmul!(Y, X, q; wg)
     q.ggml_type == Gesso.Inference.GGML_TYPE_Q4_K && return _amdq_q4k_matmul!(Y, X, q; wg)
+    q.ggml_type == Gesso.Inference.GGML_TYPE_IQ4_NL && return _amdq_iq4nl_matmul!(Y, X, q; wg)
+    q.ggml_type in _AMDQ_IQ_SUPERBLOCK_TYPES && return _amdq_iq_matmul!(Y, X, q; wg)
     throw(
         gesso_error(
             ERR_INVALID_PLAN,
