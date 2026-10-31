@@ -117,6 +117,13 @@ else
         end
     end
 
+    @testset "amdgpu IQ: codebooks upload once per backend" begin
+        ka = _AMDKA.CPU()
+        a = _AMDX._amdq_iq_device_tables(ka)
+        b = _AMDX._amdq_iq_device_tables(ka)
+        @test a.g2 === b.g2 && a.g3 === b.g3 && a.ks === b.ks && a.kv === b.kv
+    end
+
     @testset "amdgpu IQ: a type with no IQ kernel is ERR_INVALID_PLAN" begin
         rng = Random.MersenneTwister(10)
         f16 = Gesso.Inference.QuantMatrix(
