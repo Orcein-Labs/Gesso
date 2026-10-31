@@ -90,8 +90,14 @@ else
     end
 
     # Per-element error against the F32-accumulation bound, F64 reference.
-    function _amdq_check(qm, X::Matrix{Float32}; label::AbstractString, refx=_amdq_ref_x)
-        dev = _amdq_device_matmul(qm, X)
+    # With `launch` set, the launcher runs directly at workgroup size `wg`.
+    function _amdq_check(qm, X::Matrix{Float32}; label::AbstractString, refx=_amdq_ref_x, launch=nothing, wg=64)
+        dev = if launch === nothing
+            _amdq_device_matmul(qm, X)
+        else
+            dq = _AMDX.AmdDenseQuant(UInt8.(qm.data), qm.ggml_type, qm.ne0, qm.nrows, qm.row_bytes)
+            launch(zeros(Float32, size(X, 1), qm.nrows), X, dq; wg)
+        end
         W = Float64.(Gesso.Inference._quant_host_f32(qm))
         X64 = refx(X)
         ref = X64 * transpose(W)
@@ -127,12 +133,31 @@ else
         _amdq_check(qm, X; label="q4_k 37x512 ntok=40 (not a multiple of wg)", refx=_amdq_ref_xk)
     end
 
+    @testset "amdgpu quant Q8_0: workgroup sizes 1, 64, 256 agree with the oracle" begin
+        rng = Random.MersenneTwister(20261033)
+        for wg in (1, 64, 256), (nrows, k, ntok) in ((1, 32, 1), (5, 32, 3), (37, 96, 1), (5, 512, 3))
+            qm = _amdq_random_q8(rng, nrows, k)
+            X = randn(rng, Float32, ntok, k)
+            _amdq_check(qm, X; label="q8_0 $(nrows)x$k ntok=$ntok wg=$wg", launch=_AMDX._amdq_q8_matmul!, wg)
+        end
+    end
+
+    @testset "amdgpu quant Q4_K: workgroup sizes 1, 64, 256 agree with the oracle" begin
+        rng = Random.MersenneTwister(20261034)
+        for wg in (1, 64, 256), (nrows, k, ntok) in ((1, 256, 1), (5, 256, 3), (37, 512, 1), (5, 768, 2))
+            qm = _amdq_random_q4k(rng, nrows, k)
+            X = randn(rng, Float32, ntok, k)
+            _amdq_check(qm, X; label="q4_k $(nrows)x$k ntok=$ntok wg=$wg", refx=_amdq_ref_xk,
+                launch=_AMDX._amdq_q4k_matmul!, wg)
+        end
+    end
+
     @testset "amdgpu quant: invalid workgroup sizes are ERR_INVALID_PLAN" begin
         rng = Random.MersenneTwister(7)
         qm = _amdq_random_q8(rng, 4, 64)
         X = randn(rng, Float32, 2, 64)
         Y = zeros(Float32, 2, 4)
-        for wg in (0, 48, 512)
+        for wg in (0, 3, 48, 512)
             err = try
                 _AMDX._amdq_q8_matmul!(Y, X, _AMDX.AmdDenseQuant(
                     UInt8.(qm.data), qm.ggml_type, qm.ne0, qm.nrows, qm.row_bytes,
@@ -150,7 +175,7 @@ else
         qm = _amdq_random_q4k(rng, 4, 256)
         X = randn(rng, Float32, 2, 256)
         Y = zeros(Float32, 2, 4)
-        for wg in (0, 48, 512)
+        for wg in (0, 3, 48, 512)
             err = try
                 _AMDX._amdq_q4k_matmul!(Y, X, _AMDX.AmdDenseQuant(
                     qm.data, qm.ggml_type, qm.ne0, qm.nrows, qm.row_bytes,
@@ -204,7 +229,7 @@ else
                 _AMDX._amdq_q8_dot_kernel!,
                 wg,
                 (wg * 3,),
-                (G(Float32, 2), G(Int32, 2), G(Float32, 2), G(UInt8, 1), Int, Int, Int, Int),
+                (G(Float32, 2), G(Int32, 2), G(Float32, 2), G(UInt8, 1), Int, Int, Int),
             )
             @test length(res) == length(AMD_TARGETS)
             @test all(r -> r.bytes > 0, res)
@@ -222,7 +247,7 @@ else
                 _AMDX._amdq_q4k_dot_kernel!,
                 wg,
                 (wg * 3,),
-                (G(Float32, 2), G(Int32, 2), G(Float32, 2), G(UInt8, 1), Int, Int, Int, Int),
+                (G(Float32, 2), G(Int32, 2), G(Float32, 2), G(UInt8, 1), Int, Int, Int),
             )
             @test length(res) == length(AMD_TARGETS)
             @test all(r -> r.bytes > 0, res)

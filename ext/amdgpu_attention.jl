@@ -29,16 +29,35 @@ const _KA_ATTN_DMAX = 512
 function _ka_require_dense_kv(::Any)
     return nothing
 end
+# q8 has a dense reader (_ka_kv_dense), so only the other formats refuse here.
+function _ka_require_dense_kv(::Gesso.Inference.QuantKV{:q8})
+    return nothing
+end
 function _ka_require_dense_kv(::Gesso.Inference.QuantKV)
     throw(
         gesso_error(
             ERR_INVALID_PLAN,
-            "a quantized KV cache has no KernelAbstractions reader; the AMDGPU " *
-            "backend stores f32 caches, so set GESSO_KV_FORMAT=f32";
+            "a q4h KV cache has no AMDGPU per-head reader; set GESSO_KV_FORMAT=q8 or f32";
             requested_backend=:amdgpu,
-            kv_format=:quantized,
+            kv_format=:q4h,
         ),
     )
+end
+
+# The per-head path reads dense rows, so a q8 cache is dequantized first: one
+# launch per tensor into a Float32 (K, n_kv, d) copy of rows 1:K.
+_ka_dense_kv_heads(ka, x::AbstractArray, K::Int, n_heads::Int; wg::Int=64) = x
+function _ka_dense_kv_heads(
+    ka,
+    x::Gesso.Inference.QuantKV{:q8},
+    K::Int,
+    n_heads::Int;
+    wg::Int=64,
+)
+    size(x.codes, 2) >= n_heads || throw(
+        ArgumentError("q8 KV cache has $(size(x.codes, 2)) heads, need at least $n_heads"),
+    )
+    return _ka_kv_dense(ka, x, K; wg)
 end
 
 # The decode takes the cache as its parts: codes and scales for q8, the dense
@@ -343,6 +362,8 @@ function _ka_attention_heads!(
     1 <= L <= K || throw(
         ArgumentError("attention needs 1 <= L <= K, got L=$L K=$K"),
     )
+    k = _ka_dense_kv_heads(ka, k, K, n_heads; wg)
+    v = _ka_dense_kv_heads(ka, v, K, n_heads; wg)
     kern_m = _ka_attn_softmax_values_kernel!(ka, wg)
     for hh in 1:n_heads
         _ka_attention_scores!(ka, sc, q, k, hh, d_head, L, K; wg)

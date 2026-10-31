@@ -19,6 +19,11 @@ CUDA = "052768ef-5323-5732-b1bb-66c8b64840ba"
 Lava = "3a680b1f-cb25-4bee-9cf7-bc880b76dc8c"
 Vulkan = "9f14b124-c50e-4008-a7d4-969b3a6cd68a"
 VulkanCore = "16167f82-ea26-5cba-b1de-ed6fd5e30a11"
+# AMDGPU.jl + KernelAbstractions so GESSO_BACKEND=amdgpu can trigger
+# GessoAMDGPUExt from the scripts. AMDGPU carries KernelAbstractions only as a
+# weakdep, so both are listed. Bench env only; core [deps] stays free of both.
+AMDGPU = "21141c5a-9bdb-4563-92ae-f87d6854732e"
+KernelAbstractions = "63c18a36-062a-441e-b654-da1e3ab1ce7c"
 
 [sources]
 Gesso = {path = ".."}

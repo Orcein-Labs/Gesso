@@ -60,6 +60,22 @@ else
         return nothing
     end
 
+    # Direct launch at an explicit workgroup size, bypassing the op surface's default.
+    function _amdkq_check_wg(qm, X::Matrix{Float32}, wg::Int; label::AbstractString)
+        dev = _AMDX.AmdDenseQuant(qm.data, qm.ggml_type, qm.ne0, qm.nrows, qm.row_bytes)
+        Y = zeros(Float32, size(X, 1), qm.nrows)
+        _AMDX._amdq_gemv!(Y, X, dev; wg)
+        W = Float64.(Gesso.Inference._quant_host_f32(qm))
+        X64 = _amdkq_ref_x(X)
+        ref = X64 * transpose(W)
+        A = abs.(X64) * transpose(abs.(W))
+        tol = _AMDKQ_TOL_RTOL .* A .+ 1.0e-9
+        err = abs.(Float64.(Y) .- ref)
+        @info "amdgpu K-quant GEMV" label wg maxerr = maximum(err) worst_err_over_tol = maximum(err ./ tol)
+        @test all(err .<= tol)
+        return nothing
+    end
+
     # Superblock bytes and the offsets of the f16 scale fields inside one block.
     const _AMDKQ_LAYOUT = Dict(
         Gesso.Inference.GGML_TYPE_Q2_K => (84, (80, 82)),
@@ -109,6 +125,20 @@ else
             qm = _amdkq_random(rng, t, 37, 512)
             X = randn(rng, Float32, 40, 512)
             _amdkq_check(qm, X; label="$name 37x512 ntok=40 (not a multiple of wg)")
+        end
+    end
+
+    @testset "amdgpu quant K-quants: workgroup sizes 1, 64, 256 and lane/superblock edges" begin
+        rng = Random.MersenneTwister(20261034)
+        for t in keys(_AMDKQ_LAYOUT), wg in (1, 64, 256)
+            name = _AMDKQ_NAME[t]
+            # One superblock (lanes idle), nsb not a multiple of wg, M=1 and M=3,
+            # odd nrows, and many superblocks per lane.
+            for (nrows, k, ntok) in ((5, 256, 3), (3, 768, 2), (1, 256, 1), (7, 1280, 1), (2, 25600, 1))
+                qm = _amdkq_random(rng, t, nrows, k)
+                X = randn(rng, Float32, ntok, k)
+                _amdkq_check_wg(qm, X, wg; label="$name $(nrows)x$k ntok=$ntok")
+            end
         end
     end
 
@@ -170,7 +200,7 @@ else
                 kern,
                 wg,
                 (wg * 3,),
-                (G(Float32, 2), G(Int32, 2), G(Float32, 2), G(UInt8, 1), Int, Int, Int, Int),
+                (G(Float32, 2), G(Int32, 2), G(Float32, 2), G(UInt8, 1), Int, Int, Int),
             )
             @test length(res) == length(AMD_TARGETS)
             @test all(r -> r.bytes > 0, res)

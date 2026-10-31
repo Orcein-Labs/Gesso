@@ -41,28 +41,79 @@ end
     x[t, h, b] = Float32(x1 * s + x2 * c)
 end
 
-# One thread per row. Columns j ≤ offset + i are unmasked (causal, with the key
-# window ending at the last query). A row whose unmasked maximum is not finite
-# is written as NaN, so the caller's finite check reports it.
+# One workgroup per row. Columns j ≤ offset + i are unmasked (causal, with the
+# key window ending at the last query). The lanes stride over the row, then
+# fold the maximum and the sum through local memory (Float64 partials). A row
+# whose unmasked maximum is not finite is written as NaN, so the caller's finite
+# check reports it.
+# Values that cross a barrier live in local memory (`stat`): stat[1] is the row
+# maximum, stat[2] the row sum. Plain locals are re-derived after each barrier.
 @kernel function _ka_softmax_rows_kernel!(dst, @Const(s), K::Int, offset::Int)
-    i = @index(Global, Linear)
+    wg = @uniform @groupsize()[1]
+    part = @localmem Float64 (_KA_MAX_WG,)
+    stat = @localmem Float64 (2,)
+    i = @index(Group, Linear)
+    lane = @index(Local, Linear)
     lim = min(K, offset + i)
-    m = -Inf32
-    for j in 1:lim
-        m = max(m, s[i, j])
+    mx = -Inf
+    j = lane
+    while j <= lim
+        mx = max(mx, Float64(s[i, j]))
+        j += wg
     end
-    if isfinite(m)
-        acc = 0.0
-        for j in 1:lim
-            acc += exp(Float64(s[i, j]) - Float64(m))
+    part[lane] = mx
+    @synchronize
+    steps = @uniform trailing_zeros(wg)
+    for k in 1:steps
+        lane = @index(Local, Linear)
+        h = wg >> k
+        if lane <= h
+            part[lane] = max(part[lane], part[lane+h])
         end
-        for j in 1:K
-            dst[i, j] = j <= lim ? Float32(exp(Float64(s[i, j]) - Float64(m)) / acc) : 0.0f0
+        @synchronize
+    end
+    if @index(Local, Linear) == 1
+        stat[1] = part[1]
+    end
+    @synchronize
+    i = @index(Group, Linear)
+    lim = min(K, offset + i)
+    lane = @index(Local, Linear)
+    acc = 0.0
+    j = lane
+    while j <= lim
+        if isfinite(stat[1])
+            acc += exp(Float64(s[i, j]) - stat[1])
         end
-    else
-        for j in 1:K
+        j += wg
+    end
+    part[lane] = acc
+    @synchronize
+    steps2 = @uniform trailing_zeros(wg)
+    for k in 1:steps2
+        lane = @index(Local, Linear)
+        h = wg >> k
+        if lane <= h
+            part[lane] += part[lane+h]
+        end
+        @synchronize
+    end
+    if @index(Local, Linear) == 1
+        stat[2] = part[1]
+    end
+    @synchronize
+    i = @index(Group, Linear)
+    lim = min(K, offset + i)
+    j = @index(Local, Linear)
+    while j <= K
+        if !isfinite(stat[1])
             dst[i, j] = NaN32
+        elseif j <= lim
+            dst[i, j] = Float32(exp(Float64(s[i, j]) - stat[1]) / stat[2])
+        else
+            dst[i, j] = 0.0f0
         end
+        j += wg
     end
 end
 
@@ -254,6 +305,24 @@ end
 
 # --- RoPE -------------------------------------------------------------------------
 
+# The frequency table is the same for every layer of a model, so the uploaded
+# copy is kept for the last table seen. Matched by content, so a changed table
+# misses and uploads again.
+const _KA_ROPE_FREQ = Ref{Any}(nothing)
+const _KA_ROPE_FREQ_LOCK = ReentrantLock()
+
+function _ka_rope_freq_device(ka, freq_host::Vector{Float64})
+    lock(_KA_ROPE_FREQ_LOCK) do
+        e = _KA_ROPE_FREQ[]
+        if e !== nothing && e.ka === ka && e.host == freq_host
+            return e.dev
+        end
+        dev = _ka_upload_host(ka, Float64, freq_host)
+        _KA_ROPE_FREQ[] = (; ka, host=copy(freq_host), dev)
+        return dev
+    end
+end
+
 function _ka_rope!(b::KADeviceBackend, q, k, positions; theta, inv_freq, interleaved, rotary_dim)
     qs = _ka_device_storage!(:rope!, b, q)
     ks = _ka_device_storage!(:rope!, b, k)
@@ -271,7 +340,7 @@ function _ka_rope!(b::KADeviceBackend, q, k, positions; theta, inv_freq, interle
     freq_host = inv_freq === nothing ?
         Float64[tθ^(Float64(-2i) / rd) for i in 0:(half-1)] :
         Float64.(inv_freq)
-    freq = _ka_upload_host(b.ka, Float64, freq_host)
+    freq = _ka_rope_freq_device(b.ka, freq_host)
     pos = _ka_upload_host(b.ka, Int32, Int32.(positions))
     for x in (qs, ks)
         n = size(x, 1) * size(x, 2) * half
@@ -299,15 +368,16 @@ end
 
 # --- softmax ------------------------------------------------------------------
 
-function _ka_softmax!(b::KADeviceBackend, dst, scores; check_finite::Bool)
+function _ka_softmax!(b::KADeviceBackend, dst, scores; check_finite::Bool, wg::Int=_KA_OP_WG)
     ds = _ka_device_storage!(:softmax!, b, dst)
     ss = _ka_device_storage!(:softmax!, b, scores)
     ndims(ss) == 2 && size(ds) == size(ss) || throw(
         gesso_error(ERR_INVALID_PLAN, "softmax!: destination and scores must be matching matrices"; op=:softmax!),
     )
+    _ka_check_wg(wg)
     L, K = size(ss)
     L == 0 && return dst
-    _ka_softmax_rows_kernel!(b.ka, _KA_OP_WG)(ds, ss, K, K - L; ndrange=L)
+    _ka_softmax_rows_kernel!(b.ka, wg)(ds, ss, K, K - L; ndrange=wg * L)
     if check_finite
         Gesso.Inference._all_finite(ds) || throw(
             gesso_error(ERR_NUMERICAL_INSTABILITY, "softmax!: no finite unmasked maximum"),

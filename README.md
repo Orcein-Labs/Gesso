@@ -195,14 +195,16 @@ real-model gates are reported as named skips.
   - CUDA, an optional alternative and comparator. It has device argmax, GEMM
     attention, quantized expert kernels, hot experts and an autotuned
     `matmul!`.
-  The core package depends on neither GPU stack.
+  - AMDGPU (ROCm), opt-in and GPU-untested: written in KernelAbstractions and
+    tested on its CPU backend, never on AMD hardware.
+  The core package depends on none of the GPU stacks.
 - An OpenAI-compatible chat server with streaming and sampling.
 
 ## Layout
 
 ```
 src/           package core
-ext/           Lava (GPU default) and CUDA (optional) package extensions
+ext/           Lava (GPU default), CUDA and AMDGPU (optional) package extensions
 scripts/       gates, benchmarks and the chat server
 test/          test harness
 benchmark/     benchmark harness (results/ accrues)

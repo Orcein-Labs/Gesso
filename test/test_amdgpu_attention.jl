@@ -86,6 +86,37 @@ else
         end
     end
 
+    # The q8 per-head path dequantizes the cache, then runs the f32 kernels. The
+    # oracle reads the same dequantized values, so the bound covers the kernel
+    # only; the quantization error itself is checked in test_amdgpu_kv_format.jl.
+    @testset "amdgpu attention: q8 per-head path matches the F64 oracle on dequantized rows" begin
+        rng = MersenneTwister(20261101)
+        # (H, d, L, K, window); d is a multiple of the 32-value q8 block
+        cases = ((2, 32, 3, 70, 5), (3, 64, 1, 1, 0), (2, 32, 5, 33, 4), (4, 32, 1, 40, 0))
+        for (H, d, L, K, window) in cases, wg in (1, 64, 256)
+            q = randn(rng, Float32, L, H, d)
+            kf = randn(rng, Float32, K, H, d)
+            vf = randn(rng, Float32, K, H, d)
+            kq = Gesso.Inference.QuantKV{:q8}(zeros(Int8, K, H, d), zeros(Float16, K, H, d ÷ 32), d)
+            vq = Gesso.Inference.QuantKV{:q8}(zeros(Int8, K, H, d), zeros(Float16, K, H, d ÷ 32), d)
+            Gesso.Inference._kv_write_rows!(kq, kf, 1)
+            Gesso.Inference._kv_write_rows!(vq, vf, 1)
+            kd = Float32[Float32(kq.codes[j, h, c]) * Float32(kq.scales[j, h, (c - 1) ÷ 32 + 1])
+                for j in 1:K, h in 1:H, c in 1:d]
+            vd = Float32[Float32(vq.codes[j, h, c]) * Float32(vq.scales[j, h, (c - 1) ÷ 32 + 1])
+                for j in 1:K, h in 1:H, c in 1:d]
+            attn = zeros(Float32, L, H, d)
+            sc = zeros(Float32, L, K)
+            pr = zeros(Float32, L, K)
+            _AMDX._ka_attention_heads!(_AMD_ATTN_KA, attn, sc, pr, q, kq, vq, H, d, L, K; window, wg)
+            ref = _amd_attn_heads_oracle(q, kd, vd, H, d, L, K, window)
+            err = maximum(abs.(Float64.(attn) .- ref))
+            tol = 1.0e-4 * max(1.0, maximum(abs, ref))
+            println("  kv q8 heads H=$H d=$d L=$L K=$K window=$window wg=$wg max_err=$(err) tol=$(tol)")
+            @test err <= tol
+        end
+    end
+
     @testset "amdgpu attention: masked keys never reach the sum, even when non-finite" begin
         rng = MersenneTwister(7)
         H, d, L, K = 1, 4, 2, 5

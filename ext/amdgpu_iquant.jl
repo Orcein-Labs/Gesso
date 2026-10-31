@@ -111,6 +111,9 @@ end
     end
 end
 
+# One workgroup per (token, output row); lane l walks superblocks l, l+wg, ... and
+# the lane partials are summed through local memory as a tree (see the K-quant
+# dot kernels in amdgpu_kquant.jl for the layout).
 @kernel function _amdq_iq_dot_kernel!(
     Y,
     @Const(X),
@@ -118,34 +121,52 @@ end
     M::Int,
     K::Int,
     row_bytes::Int,
-    total::Int,
     kind::Int,
     @Const(KV),
     @Const(G2),
     @Const(G3),
     @Const(KS),
 )
-    lin = @index(Global, Linear)
-    if lin <= total
-        t = (lin - 1) % M + 1
-        r = (lin - 1) ÷ M
-        nsb = K ÷ 256
-        bs = row_bytes ÷ nsb
-        base = r * row_bytes
-        acc = 0.0f0
-        for sb in 0:(nsb-1)
-            blk = base + sb * bs
-            for u in 0:15
-                sc = _amdq_iq_unit_scale(kind, W, blk, u)
-                s = 0.0f0
-                for l in 0:15
-                    e = 16 * u + l
-                    s += Float32(_amdq_iq_ival(kind, W, blk, e, G2, G3, KS, KV)) * X[t, sb*256+e+1]
-                end
-                acc += sc * s
+    wg = @uniform @groupsize()[1]
+    part = @localmem Float32 (_KA_MAX_WG,)
+    grp = @index(Group, Linear)
+    lane = @index(Local, Linear)
+    t = (grp - 1) % M + 1
+    r = (grp - 1) ÷ M
+    nsb = K ÷ 256
+    bs = row_bytes ÷ nsb
+    base = r * row_bytes
+    acc = 0.0f0
+    sb = lane - 1
+    while sb < nsb
+        blk = base + sb * bs
+        for u in 0:15
+            sc = _amdq_iq_unit_scale(kind, W, blk, u)
+            s = 0.0f0
+            for l in 0:15
+                e = 16 * u + l
+                s += Float32(_amdq_iq_ival(kind, W, blk, e, G2, G3, KS, KV)) * X[t, sb*256+e+1]
             end
+            acc += sc * s
         end
-        @inbounds Y[t, r+1] = acc
+        sb += wg
+    end
+    part[lane] = acc
+    @synchronize
+    steps = @uniform trailing_zeros(wg)
+    for k in 1:steps
+        lane = @index(Local, Linear)
+        h = wg >> k
+        if lane <= h
+            part[lane] += part[lane+h]
+        end
+        @synchronize
+    end
+    if @index(Local, Linear) == 1
+        grp = @index(Group, Linear)
+        t = (grp - 1) % M + 1
+        r = (grp - 1) ÷ M
+        @inbounds Y[t, r+1] = part[1]
     end
 end
 
@@ -158,28 +179,46 @@ end
     M::Int,
     K::Int,
     row_bytes::Int,
-    total::Int,
     @Const(KV),
 )
-    lin = @index(Global, Linear)
-    if lin <= total
-        t = (lin - 1) % M + 1
-        r = (lin - 1) ÷ M
-        nb = K ÷ 32
-        base = r * row_bytes
-        acc = 0.0f0
-        for b in 0:(nb-1)
-            blk = base + b * 18
-            d = _amdq_f16(W, blk)
-            s = 0.0f0
-            for j in 0:31
-                qb = _amdq_u8(W, blk + 2 + (j & 15))
-                nib = j < 16 ? (qb & Int32(15)) : (qb >> 4)
-                s += Float32(KV[Int(nib)+1]) * X[t, b*32+j+1]
-            end
-            acc += d * s
+    wg = @uniform @groupsize()[1]
+    part = @localmem Float32 (_KA_MAX_WG,)
+    grp = @index(Group, Linear)
+    lane = @index(Local, Linear)
+    t = (grp - 1) % M + 1
+    r = (grp - 1) ÷ M
+    nb = K ÷ 32
+    base = r * row_bytes
+    acc = 0.0f0
+    b = lane - 1
+    while b < nb
+        blk = base + b * 18
+        d = _amdq_f16(W, blk)
+        s = 0.0f0
+        for j in 0:31
+            qb = _amdq_u8(W, blk + 2 + (j & 15))
+            nib = j < 16 ? (qb & Int32(15)) : (qb >> 4)
+            s += Float32(KV[Int(nib)+1]) * X[t, b*32+j+1]
         end
-        @inbounds Y[t, r+1] = acc
+        acc += d * s
+        b += wg
+    end
+    part[lane] = acc
+    @synchronize
+    steps = @uniform trailing_zeros(wg)
+    for k in 1:steps
+        lane = @index(Local, Linear)
+        h = wg >> k
+        if lane <= h
+            part[lane] += part[lane+h]
+        end
+        @synchronize
+    end
+    if @index(Local, Linear) == 1
+        grp = @index(Group, Linear)
+        t = (grp - 1) % M + 1
+        r = (grp - 1) ÷ M
+        @inbounds Y[t, r+1] = part[1]
     end
 end
 
@@ -228,9 +267,8 @@ function _amdq_iq_matmul!(Y, X, q::AmdDenseQuant; wg::Int=64)
     ka = KA.get_backend(X)
     kind = _amdq_iq_kind(q.ggml_type)
     tb = _amdq_iq_device_tables(ka)
-    total = m * q.nrows
     _amdq_iq_dot_kernel!(ka, wg)(
-        Y, X, q.data, m, k, q.row_bytes, total, kind, tb.kv, tb.g2, tb.g3, tb.ks; ndrange=total,
+        Y, X, q.data, m, k, q.row_bytes, kind, tb.kv, tb.g2, tb.g3, tb.ks; ndrange=wg * m * q.nrows,
     )
     return Y
 end
@@ -240,9 +278,8 @@ function _amdq_iq4nl_matmul!(Y, X, q::AmdDenseQuant; wg::Int=64)
     m, k = size(X)
     ka = KA.get_backend(X)
     tb = _amdq_iq_device_tables(ka)
-    total = m * q.nrows
     _amdq_iq4nl_dot_kernel!(ka, wg)(
-        Y, X, q.data, m, k, q.row_bytes, total, tb.kv; ndrange=total,
+        Y, X, q.data, m, k, q.row_bytes, tb.kv; ndrange=wg * m * q.nrows,
     )
     return Y
 end

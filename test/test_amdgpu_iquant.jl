@@ -76,6 +76,39 @@ else
         return nothing
     end
 
+    # Direct launch at an explicit workgroup size, bypassing the op surface's default.
+    function _amdiq_check_wg(qm, X::Matrix{Float32}, wg::Int; label::AbstractString)
+        dev = _AMDX.AmdDenseQuant(qm.data, qm.ggml_type, qm.ne0, qm.nrows, qm.row_bytes)
+        Y = zeros(Float32, size(X, 1), qm.nrows)
+        _AMDX._amdq_gemv!(Y, X, dev; wg)
+        W = Float64.(Gesso.Inference._quant_host_f32(qm))
+        X64 = Float64.(X)
+        ref = X64 * transpose(W)
+        A = abs.(X64) * transpose(abs.(W))
+        tol = _AMDIQ_TOL_RTOL .* A .+ 1.0e-9
+        err = abs.(Float64.(Y) .- ref)
+        @info "amdgpu IQ GEMV" label wg maxerr = maximum(err) worst_err_over_tol = maximum(err ./ tol)
+        @test all(err .<= tol)
+        return nothing
+    end
+
+    @testset "amdgpu IQ: workgroup sizes 1, 64, 256 and lane/superblock edges" begin
+        rng = Random.MersenneTwister(20261035)
+        for (t, bv, bb) in _AMDIQ_LAYOUTS, wg in (1, 64, 256)
+            name = "ggml_type_$t"
+            # One block or superblock (lanes idle), block count not a multiple of
+            # wg, M=1 and M=3, odd nrows, and many blocks per lane.
+            cases = bv == 32 ?
+                ((1, 32, 1), (5, 96, 3), (7, 3200, 1)) :
+                ((1, 256, 1), (5, 256, 3), (3, 768, 2), (7, 1280, 1), (2, 25600, 1))
+            for (nrows, k, ntok) in cases
+                qm = _amdiq_random(rng, t, bv, bb, nrows, k)
+                X = randn(rng, Float32, ntok, k)
+                _amdiq_check_wg(qm, X, wg; label="$name $(nrows)x$k ntok=$ntok")
+            end
+        end
+    end
+
     @testset "amdgpu IQ: device GEMV vs CPU F64 oracle (KA CPU backend)" begin
         rng = Random.MersenneTwister(20261101)
         for (t, bv, bb) in _AMDIQ_LAYOUTS
@@ -149,7 +182,7 @@ else
                 _AMDX._amdq_iq4nl_dot_kernel!,
                 wg,
                 (wg * 3,),
-                (G(Float32, 2), G(Float32, 2), G(UInt8, 1), Int, Int, Int, Int, G(Int32, 1)),
+                (G(Float32, 2), G(Float32, 2), G(UInt8, 1), Int, Int, Int, G(Int32, 1)),
             )
             @test length(res) == length(AMD_TARGETS)
             @test all(r -> r.bytes > 0, res)
@@ -160,7 +193,7 @@ else
                 (wg * 3,),
                 (
                     G(Float32, 2), G(Float32, 2), G(UInt8, 1),
-                    Int, Int, Int, Int, Int,
+                    Int, Int, Int, Int,
                     G(Int32, 1), G(UInt32, 1), G(UInt32, 1), G(UInt8, 1),
                 ),
             )

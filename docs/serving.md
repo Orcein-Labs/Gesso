@@ -37,7 +37,8 @@ end
 | `--cpu` | off | Run on the CPU backend. |
 | `--check` | off | Start a fake engine on an ephemeral port, query `/health`, exit. |
 
-`GESSO_BACKEND` selects the backend: `lava` (the default), `cuda` or `cpu`.
+`GESSO_BACKEND` selects the backend: `lava` (the default), `cuda`, `amdgpu`
+(GPU-untested) or `cpu`.
 Any other value is an error. The launcher loads the GPU package itself, moves
 the weights to the device, runs a short warm-up, and then prints
 `gesso-serve ready on HOST:PORT n_ctx=N model=ID`. Bad arguments print usage

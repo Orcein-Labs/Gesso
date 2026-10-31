@@ -118,16 +118,43 @@ else
         end
     end
 
-    @testset "amdgpu KV q8: prefill and per-head paths refuse a quantized cache" begin
-        H, d, L, K = 2, 32, 1, 4
-        q = zeros(Float32, L, H, d)
-        attn = zeros(Float32, L, H, d)
+    @testset "amdgpu KV q8: rows written at row0 > 1 read back through the dense copy" begin
+        rng = MersenneTwister(20261102)
+        R, n, n_kv, d, row0 = 8, 3, 2, 64, 4
+        src = randn(rng, Float32, n, n_kv, d)
+        host = _amdkv_host(R, n_kv, d)
+        dev = _amdkv_ka(R, n_kv, d)
+        Gesso.Inference._kv_write_rows!(host, src, row0)
+        _AMDX._ka_kv_write_rows!(_AMDKV_KA, dev, src, row0)
+        @test dev.codes == host.codes
+        @test dev.scales == host.scales
+        dense = _AMDX._ka_kv_dense(_AMDKV_KA, dev, row0 + n - 1)
+        expect = [u < row0 ? 0.0f0 :
+                Float32(host.codes[u, h, j]) * Float32(host.scales[u, h, (j - 1) ÷ 32 + 1])
+            for u in 1:(row0 + n - 1), h in 1:n_kv, j in 1:d]
+        @test dense == expect
+    end
+
+    @testset "amdgpu KV q8: per-head path reads the dequantized cache; q4h is refused" begin
+        rng = MersenneTwister(20261103)
+        H, d, L, K = 2, 32, 2, 6
+        q = randn(rng, Float32, L, H, d)
+        kq = _amdkv_ka(K, H, d)
+        vq = _amdkv_ka(K, H, d)
+        Gesso.Inference._kv_write_rows!(kq, randn(rng, Float32, K, H, d), 1)
+        Gesso.Inference._kv_write_rows!(vq, randn(rng, Float32, K, H, d), 1)
+        kd = _AMDX._ka_kv_dense(_AMDKV_KA, kq, K)
+        vd = _AMDX._ka_kv_dense(_AMDKV_KA, vq, K)
+        attn_q8 = zeros(Float32, L, H, d)
+        attn_dense = zeros(Float32, L, H, d)
         sc = zeros(Float32, L, K)
         pr = zeros(Float32, L, K)
-        kq = _amdkv_ka(K, H, d)
-        vd = zeros(Float32, K, H, d)
+        _AMDX._ka_attention_heads!(_AMDKV_KA, attn_q8, sc, pr, q, kq, vq, H, d, L, K)
+        _AMDX._ka_attention_heads!(_AMDKV_KA, attn_dense, sc, pr, q, kd, vd, H, d, L, K)
+        @test attn_q8 == attn_dense
+        qk = Gesso.Inference.QuantKV{:q4h}(zeros(UInt8, K, H, d ÷ 2), zeros(Float16, K, H, 1), d)
         e = try
-            _AMDX._ka_attention_heads!(_AMDKV_KA, attn, sc, pr, q, kq, vd, H, d, L, K)
+            _AMDX._ka_attention_heads!(_AMDKV_KA, attn_q8, sc, pr, q, qk, vq, H, d, L, K)
             nothing
         catch err
             err
