@@ -237,8 +237,17 @@ function _g4_moe_prefill_dequant!(moe::Matrix{Float32}, x2::Matrix{Float32}, exp
                 Y[i, ids[j]] = D[j, i]
             end
         end
-        @inbounds for k in 1:n_used, i in 1:E, t in t0:t1
-            moe[t, i] += weights[k, t] * Y[i, (t - t0) * n_used + k]
+        # Each moe[t, i] still adds its slots in k order. Walking Y down a column
+        # instead of across slots keeps the loads contiguous.
+        _g4_rows!(n) do rows
+            @inbounds for r in rows, k in 1:n_used
+                t = t0 + r - 1
+                w = weights[k, t]
+                col = (r - 1) * n_used + k
+                for i in 1:E
+                    moe[t, i] += w * Y[i, col]
+                end
+            end
         end
     end
     return moe
