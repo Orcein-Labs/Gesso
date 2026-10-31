@@ -5,11 +5,12 @@
 # Float32 math. A format without a tested kernel never reaches this file;
 # to_device dequantizes it on the host to Float32 instead.
 #
-# Activations. Q8_0 and the K-quants (Q2_K..Q6_K, kernels in amdgpu_kquant.jl)
-# take the CPU-order kernels, which quantize the activation on device first
-# (Q8_0 blocks, and Q8_K-style blocks of 256 for the K-quants), the way ggml's
-# CPU path does. The IQ formats (amdgpu_iquant.jl) keep the activation in
-# Float32 and accumulate in Float32, one work item per output.
+# Activations. Q8_0 and Q4_K quantize the activation on device first (Q8_0
+# blocks, and Q8_K-style blocks of 256), the way ggml's CPU path does, then
+# run one workgroup per (token, output row) with a local-memory tree reduction.
+# The other K-quants (Q2_K, Q3_K, Q5_K, Q6_K, kernels in amdgpu_kquant.jl) keep
+# the one-work-item-per-output CPU-order launch. The IQ formats
+# (amdgpu_iquant.jl) keep the activation in Float32, one work item per output.
 
 const _AMDQ_IQ_SUPERBLOCK_TYPES = (
     Gesso.Inference.GGML_TYPE_IQ4_XS,
@@ -113,36 +114,47 @@ end
     end
 end
 
-@kernel function _amdq_q8_dot_kernel!(
-    Y,
-    @Const(Q),
-    @Const(D),
-    @Const(W),
-    M::Int,
-    K::Int,
-    row_bytes::Int,
-    total::Int,
-)
-    lin = @index(Global, Linear)
-    if lin <= total
-        t = (lin - 1) % M + 1
-        r = (lin - 1) ÷ M
-        nb = K ÷ 32
-        base = r * row_bytes
-        acc = 0.0f0
-        for b in 0:(nb-1)
-            blk = base + b * 34
-            sumi = Int32(0)
-            for j in 0:31
-                wi = _amdq_i8(W, blk + 2 + j)
-                sumi += wi * Q[t, b*32+j+1]
-            end
-            wd = _amdq_f16(W, blk)
-            scale = Float32(Float64(wd) * Float64(D[t, b+1]))
-            term = Float32(Float64(Float32(sumi)) * Float64(scale))
-            acc = Float32(Float64(acc) + Float64(term))
+# One workgroup per (token, output row). Lane `lane` takes blocks lane-1,
+# lane-1+wg, ... so neighbouring lanes read neighbouring 34-byte blocks of the
+# same row. The lane partials fold through local memory; only that fold order
+# depends on the workgroup size, the per-block integer sums do not.
+@kernel function _amdq_q8_dot_kernel!(Y, @Const(Q), @Const(D), @Const(W), M::Int, K::Int, row_bytes::Int)
+    wg = @uniform @groupsize()[1]
+    part = @localmem Float32 (_KA_MAX_WG,)
+    grp = @index(Group, Linear)
+    lane = @index(Local, Linear)
+    nb = K ÷ 32
+    base = ((grp - 1) ÷ M) * row_bytes
+    t = (grp - 1) % M + 1
+    acc = 0.0f0
+    b = lane - 1
+    while b < nb
+        blk = base + b * 34
+        sumi = Int32(0)
+        for j in 0:31
+            wi = _amdq_i8(W, blk + 2 + j)
+            sumi += wi * Q[t, b*32+j+1]
         end
-        @inbounds Y[t, r+1] = acc
+        wd = _amdq_f16(W, blk)
+        scale = Float32(Float64(wd) * Float64(D[t, b+1]))
+        term = Float32(Float64(Float32(sumi)) * Float64(scale))
+        acc = Float32(Float64(acc) + Float64(term))
+        b += wg
+    end
+    part[lane] = acc
+    @synchronize
+    steps = @uniform trailing_zeros(wg)
+    for k in 1:steps
+        lane = @index(Local, Linear)
+        h = wg >> k
+        if lane <= h
+            part[lane] += part[lane+h]
+        end
+        @synchronize
+    end
+    if @index(Local, Linear) == 1
+        grp = @index(Group, Linear)
+        @inbounds Y[(grp - 1) % M + 1, (grp - 1) ÷ M + 1] = part[1]
     end
 end
 
@@ -189,46 +201,55 @@ end
     return sc, mn
 end
 
-@kernel function _amdq_q4k_dot_kernel!(
-    Y,
-    @Const(Q),
-    @Const(D),
-    @Const(W),
-    M::Int,
-    K::Int,
-    row_bytes::Int,
-    total::Int,
-)
-    lin = @index(Global, Linear)
-    if lin <= total
-        t = (lin - 1) % M + 1
-        r = (lin - 1) ÷ M
-        nsb = K ÷ 256
-        base = r * row_bytes
-        acc = 0.0f0
-        for sb in 0:(nsb-1)
-            blk = base + sb * 144
-            isc = Int32(0)
-            imn = Int32(0)
-            for g in 0:7
-                sc, mn = _amdq_scale_min(W, blk + 4, g)
-                sub = Int32(0)
-                bs = Int32(0)
-                for l in 0:31
-                    byte = _amdq_u8(W, blk + 16 + 32 * (g >> 1) + l)
-                    nib = iseven(g) ? (byte & Int32(15)) : (byte >> 4)
-                    qv = Q[t, sb*256+g*32+l+1]
-                    sub += nib * qv
-                    bs += qv
-                end
-                isc += sc * sub
-                imn += mn * bs
+# One workgroup per (token, output row), lanes stride over superblocks as in the
+# Q8_0 kernel above.
+@kernel function _amdq_q4k_dot_kernel!(Y, @Const(Q), @Const(D), @Const(W), M::Int, K::Int, row_bytes::Int)
+    wg = @uniform @groupsize()[1]
+    part = @localmem Float32 (_KA_MAX_WG,)
+    grp = @index(Group, Linear)
+    lane = @index(Local, Linear)
+    nsb = K ÷ 256
+    base = ((grp - 1) ÷ M) * row_bytes
+    t = (grp - 1) % M + 1
+    acc = 0.0f0
+    sb = lane - 1
+    while sb < nsb
+        blk = base + sb * 144
+        isc = Int32(0)
+        imn = Int32(0)
+        for g in 0:7
+            sc, mn = _amdq_scale_min(W, blk + 4, g)
+            sub = Int32(0)
+            bs = Int32(0)
+            for l in 0:31
+                byte = _amdq_u8(W, blk + 16 + 32 * (g >> 1) + l)
+                nib = iseven(g) ? (byte & Int32(15)) : (byte >> 4)
+                qv = Q[t, sb*256+g*32+l+1]
+                sub += nib * qv
+                bs += qv
             end
-            dd = _amdq_f16(W, blk) * D[t, sb+1]
-            dm = _amdq_f16(W, blk + 2) * D[t, sb+1]
-            acc += dd * Float32(isc) - dm * Float32(imn)
+            isc += sc * sub
+            imn += mn * bs
         end
-        @inbounds Y[t, r+1] = acc
+        dd = _amdq_f16(W, blk) * D[t, sb+1]
+        dm = _amdq_f16(W, blk + 2) * D[t, sb+1]
+        acc += dd * Float32(isc) - dm * Float32(imn)
+        sb += wg
+    end
+    part[lane] = acc
+    @synchronize
+    steps = @uniform trailing_zeros(wg)
+    for k in 1:steps
+        lane = @index(Local, Linear)
+        h = wg >> k
+        if lane <= h
+            part[lane] += part[lane+h]
+        end
+        @synchronize
+    end
+    if @index(Local, Linear) == 1
+        grp = @index(Group, Linear)
+        @inbounds Y[(grp - 1) % M + 1, (grp - 1) ÷ M + 1] = part[1]
     end
 end
 
@@ -250,11 +271,26 @@ function _amdq_cpu_order_matmul!(Y, X, q::AmdDenseQuant, pack, dot, bv::Int; wg:
     return Y
 end
 
+# Q8_0 and Q4_K: quantize the activation with `pack`, then run `dot` with one
+# workgroup of `wg` lanes per (token, output row).
+function _amdq_wg_matmul!(Y, X, q::AmdDenseQuant, pack, dot, bv::Int; wg::Int)
+    _ka_check_wg(wg)
+    m, k = size(X)
+    ka = KA.get_backend(X)
+    nblk = k ÷ bv
+    total_act = m * nblk
+    Q = KA.allocate(ka, Int32, (m, k))
+    D = KA.allocate(ka, Float32, (m, nblk))
+    pack(ka, wg)(Q, D, X, m, k, total_act; ndrange=total_act)
+    dot(ka, wg)(Y, Q, D, q.data, m, k, q.row_bytes; ndrange=wg * m * q.nrows)
+    return Y
+end
+
 _amdq_q8_matmul!(Y, X, q::AmdDenseQuant; wg::Int=64) =
-    _amdq_cpu_order_matmul!(Y, X, q, _amdq_q8_act_pack_kernel!, _amdq_q8_dot_kernel!, 32; wg)
+    _amdq_wg_matmul!(Y, X, q, _amdq_q8_act_pack_kernel!, _amdq_q8_dot_kernel!, 32; wg)
 
 _amdq_q4k_matmul!(Y, X, q::AmdDenseQuant; wg::Int=64) =
-    _amdq_cpu_order_matmul!(Y, X, q, _amdq_q8k_act_pack_kernel!, _amdq_q4k_dot_kernel!, 256; wg)
+    _amdq_wg_matmul!(Y, X, q, _amdq_q8k_act_pack_kernel!, _amdq_q4k_dot_kernel!, 256; wg)
 
 # Dispatch: one entry for every supported format, so the op surface does not
 # know which kernel a weight runs.

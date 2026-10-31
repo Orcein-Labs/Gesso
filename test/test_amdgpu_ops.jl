@@ -117,7 +117,7 @@ else
         wl = Gesso.PrefillWorkload()
         cpu = Gesso.CPUBackend()
         rng = Random.MersenneTwister(0x50f7)
-        for (L, K) in ((3, 3), (2, 5), (1, 4), (4, 4))
+        for (L, K) in ((3, 3), (2, 5), (1, 4), (4, 4), (1, 1), (1, 7), (2, 100), (3, 70))
             s32 = 3f0 .* randn(rng, Float32, L, K)
             out = _ops_act(Gesso.TemporaryWorkspace, zeros(Float32, L, K))
             Gesso.softmax!(b, out, _ops_act(Gesso.TemporaryWorkspace, copy(s32)), wl)
@@ -141,6 +141,37 @@ else
         dec = _ops_act(Gesso.TemporaryWorkspace, zeros(Float32, 2, 2))
         Gesso.softmax!(b, dec, _ops_act(Gesso.TemporaryWorkspace, nanrow), Gesso.DecodeWorkload())
         @test isnan(dec.storage[1, 1])
+    end
+
+    @testset "amdgpu ops: softmax! workgroup sizes 1, 64, 256 and masked-row edges" begin
+        b = _AMDX.KADeviceBackend(_AMDKA.CPU())
+        cpu = Gesso.CPUBackend()
+        wl = Gesso.PrefillWorkload()
+        rng = Random.MersenneTwister(0x50f8)
+        for wg in (1, 64, 256), (L, K) in ((2, 100), (3, 3), (1, 1))
+            s32 = 3f0 .* randn(rng, Float32, L, K)
+            out = _ops_act(Gesso.TemporaryWorkspace, zeros(Float32, L, K))
+            _AMDX._ka_softmax!(b, out, _ops_act(Gesso.TemporaryWorkspace, copy(s32)); check_finite=true, wg)
+            ref = _ops_act(Gesso.TemporaryWorkspace, zeros(Float64, L, K))
+            Gesso.softmax!(cpu, ref, _ops_act(Gesso.TemporaryWorkspace, Float64.(s32)), wl)
+            err = _ops_maxerr(out.storage, ref.storage)
+            _ops_report("softmax! $(L)x$(K) wg=$wg", err, 1e-6)
+            @test err <= 1e-6
+        end
+
+        # Square causal block: row 1 keeps only column 1, so its output is exactly [1, 0, 0].
+        s = randn(rng, Float32, 3, 3)
+        out = zeros(Float32, 3, 3)
+        _AMDX._ka_softmax!(b, _ops_act(Gesso.TemporaryWorkspace, out), _ops_act(Gesso.TemporaryWorkspace, s);
+            check_finite=true, wg=64)
+        @test out[1, :] == Float32[1, 0, 0]
+
+        ss = _ops_act(Gesso.TemporaryWorkspace, randn(rng, Float32, 2, 5))
+        for wg in (0, 3, 512)
+            dst = _ops_act(Gesso.TemporaryWorkspace, zeros(Float32, 2, 5))
+            err = _ops_error(() -> _AMDX._ka_softmax!(b, dst, ss; check_finite=false, wg))
+            @test err isa Gesso.GessoError && err.code == Gesso.ERR_INVALID_PLAN
+        end
     end
 
     @testset "amdgpu ops: swiglu! vs CPU F64 oracle" begin
