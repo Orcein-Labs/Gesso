@@ -112,12 +112,14 @@ _quant_bytes(q::QuantMatrix) = view(q.data, (q.offset0+1):(q.offset0+q.nrows*q.r
 """
     _quant_host_f32(q) -> Matrix{Float32} (nrows, ne0)
 
-Full dequant to host F32 in Gesso layout. Used by the CUDA upload and the
-tests; the CPU matmul never builds this whole matrix on the native path.
+Full dequant to host F32 in Gesso layout, rows split over the CPU pool. Used
+by the device uploads and the tests; the CPU matmul never builds this whole
+matrix on the native path.
 """
 function _quant_host_f32(q::QuantMatrix)
-    y = _dequant_f32(q.data, q.offset0, q.ggml_type, q.nrows * q.ne0)
-    return permutedims(reshape(y, q.ne0, q.nrows))
+    W = Matrix{Float32}(undef, q.ne0, q.nrows)
+    _dequant_rows_threaded!(W, q, 1, q.nrows)
+    return permutedims(W)
 end
 
 const _QUANT_FALLBACK_TYPES = Set{Int32}()
@@ -240,7 +242,7 @@ function _dequant_rows_threaded!(W::Matrix{Float32}, q::QuantMatrix, r0::Int, nr
     0 <= off && off + nr * q.row_bytes <= length(q.data) || throw(
         gesso_error(
             ERR_RUNTIME,
-            "quant matmul: rows $r0:$(r0+nr-1) run past the $(length(q.data))-byte weight. The file is truncated or corrupt; download it again.";
+            "quant weight: rows $r0:$(r0+nr-1) run past the $(length(q.data))-byte weight. The file is truncated or corrupt; download it again.";
             reason=:malformed_gguf,
         ),
     )
