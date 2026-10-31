@@ -121,6 +121,7 @@ include("amdgpu_device.jl")
 include("amdgpu_kernels.jl")
 include("amdgpu_ops.jl")
 include("amdgpu_attention.jl")
+include("amdgpu_quant.jl")
 
 # Bind the tag and attach to_device at load time, as GessoCUDAExt and
 # GessoLavaExt do (see GessoLavaExt.__init__ for why the method goes through

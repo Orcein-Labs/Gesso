@@ -61,7 +61,7 @@ else
 
         @test Gesso.backend_name(Gesso.AMDGPUBackend) == :amdgpu
         @test Gesso.execution_tier(Gesso.AMDGPUBackend) == 1
-        # nothing is claimed until an op lands with both tests (caps set in GessoAMDGPUExt)
+        # caps are claimed per op once it has a parity and a compile test
         @test Gesso.supports(Gesso.AMDGPUBackend, :matmul) == true
         @test Gesso.supports(Gesso.AMDGPUBackend, :rmsnorm) == true
 

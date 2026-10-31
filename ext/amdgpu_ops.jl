@@ -9,8 +9,6 @@
 # phase drift. GEGLU evaluates GELU with Lava's Float32 erf polynomial, which
 # measures 4.1e-7 absolute against the Float64 oracle on the test grid.
 
-using LinearAlgebra: mul!
-
 const _KA_OP_WG = 64
 const _KA_WORKLOAD = Union{Gesso.PrefillWorkload, Gesso.DecodeWorkload}
 
@@ -376,8 +374,9 @@ function Gesso.Inference._geglu!(b::KADeviceBackend, act, gate, up)
 end
 
 # --- matmul -------------------------------------------------------------------
-# No kernel: dense Float32 GEMM goes to the vendor BLAS on the device array
-# (rocBLAS, expected and not device-measured) and to OpenBLAS on KA CPU, as the Lava path does.
+# Dense Float32 GEMM goes to the vendor BLAS on the device array (rocBLAS,
+# expected and not device-measured) and to OpenBLAS on KA CPU, as the Lava path
+# does. A projection kept quantized on device runs its GEMV in amdgpu_quant.jl.
 
 function _ka_matmul!(b::KADeviceBackend, dst, x, w)
     ds = _ka_device_storage!(:matmul!, b, dst)
@@ -400,7 +399,11 @@ function matmul!(
     w::Union{ProjectionWeight, EmbeddingTable},
     workload::_KA_WORKLOAD,
 )
-    _ka_matmul!(b, dst, x, w)
+    if w isa ProjectionWeight && w.storage isa AmdDenseQuant
+        _amdq_matmul_op!(b, dst, x, w)
+    else
+        _ka_matmul!(b, dst, x, w)
+    end
     _ka_after_op!(b, workload)
     return dst
 end
