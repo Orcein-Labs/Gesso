@@ -12,6 +12,7 @@
 
 const _AMDQ_TYPES = (
     Gesso.Inference.GGML_TYPE_Q8_0,
+    Gesso.Inference.GGML_TYPE_Q4_K,
 )
 
 # Device-resident dense quant weight: `data` holds the GGUF block bytes of
@@ -30,7 +31,9 @@ Base.ndims(::AmdDenseQuant) = 2
 Base.length(q::AmdDenseQuant) = q.nrows * q.ne0
 Base.sizeof(q::AmdDenseQuant) = sizeof(q.data)
 
-_amdq_block_values(t::Int32) = t == Gesso.Inference.GGML_TYPE_Q8_0 ? 32 : 0
+_amdq_block_values(t::Int32) =
+    t == Gesso.Inference.GGML_TYPE_Q8_0 ? 32 :
+    t == Gesso.Inference.GGML_TYPE_Q4_K ? 256 : 0
 
 function _amdq_eligible(s)
     s isa Gesso.Inference.QuantMatrix || return false
@@ -67,17 +70,16 @@ end
         b = (lin - 1) ÷ M
         amax = 0.0f0
         @inbounds for j in 1:32
-            amax = max(amax, abs(X[t, b*32+j]))
+            a = abs(X[t, b*32+j])
+            if a > amax
+                amax = a
+            end
         end
-        d = Float32(Float64(amax) / 127.0)
-        inv = d != 0.0f0 ? Float32(1.0 / Float64(d)) : 0.0f0
+        d = amax / 127.0f0
+        inv = d != 0.0f0 ? 1.0f0 / d : 0.0f0
         @inbounds D[t, b+1] = Float32(Float16(d))
         @inbounds for j in 1:32
-            scaled = Float32(Float64(X[t, b*32+j]) * Float64(inv))
-            a = abs(scaled)
-            whole = unsafe_trunc(Int32, floor(a))
-            rounded = whole + Int32(a - Float32(whole) >= 0.5f0)
-            Q[t, b*32+j] = scaled < 0.0f0 ? -rounded : rounded
+            Q[t, b*32+j] = unsafe_trunc(Int32, round(X[t, b*32+j] * inv))
         end
     end
 end
@@ -115,25 +117,121 @@ end
     end
 end
 
+# --- Q4_K (144-byte block of 256: f16 d, f16 dmin, 12 packed scale/min bytes,
+# 128 bytes of nibbles) and its Q8_K activation -----------------------------------
+#
+# The activation is quantized per (token, 256-block) with the scale taken from
+# the signed element of largest magnitude, so the codes span [-127, 127]. The
+# dot sums nibble*code and code per 32-element sub-block in integers, then folds
+# each superblock into a Float32 accumulator, the way the CPU path orders it.
+
+@kernel function _amdq_q8k_act_pack_kernel!(Q, D, @Const(X), M::Int, K::Int, total::Int)
+    lin = @index(Global, Linear)
+    if lin <= total
+        t = (lin - 1) % M + 1
+        b = (lin - 1) ÷ M
+        amax = 0.0f0
+        mx = 0.0f0
+        @inbounds for j in 1:256
+            v = X[t, b*256+j]
+            if abs(v) > amax
+                amax = abs(v)
+                mx = v
+            end
+        end
+        iscale = amax == 0.0f0 ? 0.0f0 : -127.0f0 / mx
+        @inbounds D[t, b+1] = iscale == 0.0f0 ? 0.0f0 : 1.0f0 / iscale
+        @inbounds for j in 1:256
+            Q[t, b*256+j] = min(Int32(127), unsafe_trunc(Int32, round(iscale * X[t, b*256+j])))
+        end
+    end
+end
+
+# Scale and min of sub-block j (0..7) from the 12 packed bytes at offset s.
+@inline function _amdq_scale_min(W, s::Int, j::Int)
+    if j < 4
+        sc = _amdq_u8(W, s + j) & Int32(63)
+        mn = _amdq_u8(W, s + j + 4) & Int32(63)
+    else
+        hi_sc = _amdq_u8(W, s + j + 4)
+        sc = (hi_sc & Int32(15)) | ((_amdq_u8(W, s + j - 4) >> 6) << 4)
+        mn = (hi_sc >> 4) | ((_amdq_u8(W, s + j) >> 6) << 4)
+    end
+    return sc, mn
+end
+
+@kernel function _amdq_q4k_dot_kernel!(
+    Y,
+    @Const(Q),
+    @Const(D),
+    @Const(W),
+    M::Int,
+    K::Int,
+    row_bytes::Int,
+    total::Int,
+)
+    lin = @index(Global, Linear)
+    if lin <= total
+        t = (lin - 1) % M + 1
+        r = (lin - 1) ÷ M
+        nsb = K ÷ 256
+        base = r * row_bytes
+        acc = 0.0f0
+        for sb in 0:(nsb-1)
+            blk = base + sb * 144
+            isc = Int32(0)
+            imn = Int32(0)
+            for g in 0:7
+                sc, mn = _amdq_scale_min(W, blk + 4, g)
+                sub = Int32(0)
+                bs = Int32(0)
+                for l in 0:31
+                    byte = _amdq_u8(W, blk + 16 + 32 * (g >> 1) + l)
+                    nib = iseven(g) ? (byte & Int32(15)) : (byte >> 4)
+                    qv = Q[t, sb*256+g*32+l+1]
+                    sub += nib * qv
+                    bs += qv
+                end
+                isc += sc * sub
+                imn += mn * bs
+            end
+            dd = _amdq_f16(W, blk) * D[t, sb+1]
+            dm = _amdq_f16(W, blk + 2) * D[t, sb+1]
+            acc += dd * Float32(isc) - dm * Float32(imn)
+        end
+        @inbounds Y[t, r+1] = acc
+    end
+end
+
 # --- launchers ------------------------------------------------------------------
 
-function _amdq_q8_matmul!(Y, X, q::AmdDenseQuant; wg::Int=64)
+# Quantize the activation on device with `pack` (blocks of `bv` values), then run
+# `dot` over every (token, output row). The dot kernels share one argument list.
+function _amdq_cpu_order_matmul!(Y, X, q::AmdDenseQuant, pack, dot, bv::Int; wg::Int)
     _ka_check_wg(wg)
     m, k = size(X)
     ka = KA.get_backend(X)
-    total_act = m * (k ÷ 32)
+    nblk = k ÷ bv
+    total_act = m * nblk
     Q = KA.allocate(ka, Int32, (m, k))
-    D = KA.allocate(ka, Float32, (m, k ÷ 32))
-    _amdq_q8_act_pack_kernel!(ka, wg)(Q, D, X, m, k, total_act; ndrange=total_act)
+    D = KA.allocate(ka, Float32, (m, nblk))
+    pack(ka, wg)(Q, D, X, m, k, total_act; ndrange=total_act)
     total = m * q.nrows
-    _amdq_q8_dot_kernel!(ka, wg)(Y, Q, D, q.data, m, k, q.row_bytes, total; ndrange=total)
+    dot(ka, wg)(Y, Q, D, q.data, m, k, q.row_bytes, total; ndrange=total)
     return Y
 end
+
+_amdq_q8_matmul!(Y, X, q::AmdDenseQuant; wg::Int=64) =
+    _amdq_cpu_order_matmul!(Y, X, q, _amdq_q8_act_pack_kernel!, _amdq_q8_dot_kernel!, 32; wg)
+
+_amdq_q4k_matmul!(Y, X, q::AmdDenseQuant; wg::Int=64) =
+    _amdq_cpu_order_matmul!(Y, X, q, _amdq_q8k_act_pack_kernel!, _amdq_q4k_dot_kernel!, 256; wg)
 
 # Dispatch: one entry for every supported format, so the op surface does not
 # know which kernel a weight runs.
 function _amdq_gemv!(Y, X, q::AmdDenseQuant; wg::Int=64)
     q.ggml_type == Gesso.Inference.GGML_TYPE_Q8_0 && return _amdq_q8_matmul!(Y, X, q; wg)
+    q.ggml_type == Gesso.Inference.GGML_TYPE_Q4_K && return _amdq_q4k_matmul!(Y, X, q; wg)
     throw(
         gesso_error(
             ERR_INVALID_PLAN,
