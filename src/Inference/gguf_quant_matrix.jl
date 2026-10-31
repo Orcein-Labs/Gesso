@@ -215,25 +215,52 @@ function _quant_matmul!(dst::AbstractMatrix, x::AbstractMatrix, q::QuantMatrix)
     _note_quant_fallback(q.ggml_type)
     xf = Matrix{Float32}(x)
     nc = max(1, _QUANT_FALLBACK_CHUNK_ELEMS ÷ q.ne0)
+    W = Matrix{Float32}(undef, q.ne0, min(nc, q.nrows))
+    out = Matrix{Float32}(undef, seq, min(nc, q.nrows))
     r0 = 1
     while r0 <= q.nrows
         r1 = min(q.nrows, r0 + nc - 1)
         nr = r1 - r0 + 1
-        buf = _dequant_f32(
-            q.data,
-            q.offset0 + (r0 - 1) * q.row_bytes,
-            q.ggml_type,
-            nr * q.ne0,
-        )
-        Wc = reshape(buf, q.ne0, nr)
-        out = Matrix{Float32}(undef, seq, nr)
-        mul!(out, xf, Wc)
+        _dequant_rows_threaded!(W, q, r0, nr)
+        oc = view(out, :, 1:nr)
+        mul!(oc, xf, view(W, :, 1:nr))
         @inbounds for c in 1:nr, t in 1:seq
-            dst[t, r0+c-1] = out[t, c]
+            dst[t, r0+c-1] = oc[t, c]
         end
         r0 = r1 + 1
     end
     return dst
+end
+
+# Rows r0:r0+nr-1 of `q`, dequantized into the first nr columns of W. Each row
+# decodes on its own, so splitting the rows over tasks gives the same values
+# as one serial pass.
+function _dequant_rows_threaded!(W::Matrix{Float32}, q::QuantMatrix, r0::Int, nr::Int)
+    off = q.offset0 + (r0 - 1) * q.row_bytes
+    0 <= off && off + nr * q.row_bytes <= length(q.data) || throw(
+        gesso_error(
+            ERR_RUNTIME,
+            "quant matmul: rows $r0:$(r0+nr-1) run past the $(length(q.data))-byte weight. The file is truncated or corrupt; download it again.";
+            reason=:malformed_gguf,
+        ),
+    )
+    nc = _qgemv_nchunks(nr)
+    GC.@preserve W q begin
+        _run_row_chunks!(nc, nr * q.ne0) do c
+            j0 = div((c - 1) * nr, nc)
+            j1 = div(c * nr, nc)
+            j1 > j0 || return nothing
+            _ggml_dequant!(
+                view(W, (j0*q.ne0+1):(j1*q.ne0)),
+                q.data,
+                off + j0 * q.row_bytes,
+                q.ggml_type,
+                (j1 - j0) * q.ne0,
+            )
+            return nothing
+        end
+    end
+    return W
 end
 
 # ---------------------------------------------------------------- F16 / BF16
