@@ -237,6 +237,10 @@ using Gesso: reference_prefill, reference_generate
     include("test_amdgpu_kquant.jl")
     # AMDGPU q8 KV cache: write bit-equal to the host quantizer, dense copy, fused decode.
     include("test_amdgpu_kv_format.jl")
+    # AMDGPU LFM2 short convolution and MoE toy: device parity, typed failures, compile.
+    include("test_amdgpu_lfm2.jl")
+    # AMDGPU Gemma 4 ops and toy: device parity, sliding window, typed failures, compile.
+    include("test_amdgpu_gemma4.jl")
 
     # Phase 8 (§LXXXI item B): Lava operator methods on LavaArray{Float32} vs
     # the CPU F64 oracle at declared atol — named skip without a device. The
