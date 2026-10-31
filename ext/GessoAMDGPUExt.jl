@@ -112,6 +112,8 @@ const AMDGPU_SUPPORTED_CAPS = Set{Symbol}([
     :rope_interleaved,
     :attention,
     :sliding_window_attention,
+    :linear_attention,
+    :short_convolution,
 ])
 
 supports(::KADeviceBackend, cap::Symbol) = cap in AMDGPU_SUPPORTED_CAPS
@@ -123,6 +125,7 @@ include("amdgpu_ops.jl")
 include("amdgpu_attention.jl")
 include("amdgpu_quant.jl")
 include("amdgpu_iquant.jl")
+include("amdgpu_hybrid.jl")
 
 # Bind the tag and attach to_device at load time, as GessoCUDAExt and
 # GessoLavaExt do (see GessoLavaExt.__init__ for why the method goes through
