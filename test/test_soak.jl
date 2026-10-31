@@ -318,6 +318,16 @@ end
     end
 end
 
+@testset "soak: the clients split the mix so every kind runs once" begin
+    kinds = first.(GessoSoak.MIX)
+    for n in (1, 3, 4, length(kinds) + 2)
+        parts = [GessoSoak.cover_kinds(i, n) for i in 1:n]
+        @test sort(reduce(vcat, parts)) == sort(kinds)
+    end
+    no_tools = reduce(vcat, [GessoSoak.cover_kinds(i, 3; tools=false) for i in 1:3])
+    @test sort(no_tools) == sort(setdiff(kinds, GessoSoak.TOOL_KINDS))
+end
+
 @testset "soak: single-client windows" begin
     cfg = GessoSoak.Config(solo_every=100, solo_len=20)
     @test GessoSoak.in_solo(cfg, 0) && GessoSoak.in_solo(cfg, 19.9) && GessoSoak.in_solo(cfg, 105)

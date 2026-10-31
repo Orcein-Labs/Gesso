@@ -945,8 +945,10 @@ function dispatch(ctx, rng, kind)
     error("unknown kind $kind")
 end
 
+mix_for(tools::Bool) = tools ? MIX : [kw for kw in MIX if first(kw) ∉ TOOL_KINDS]
+
 function pick_kind(rng; tools::Bool=true)
-    mix = tools ? MIX : [kw for kw in MIX if first(kw) ∉ TOOL_KINDS]
+    mix = mix_for(tools)
     total = sum(last, mix)
     x = rand(rng, 1:total)
     for (k, w) in mix
@@ -963,14 +965,21 @@ function run_kind!(ctx, rng, kind, deadline; client=1)
     return timed_request!(ctx, rng, kind)
 end
 
+# The kinds client `i` of `n` sends once each before it draws from the mix. The
+# clients split the mix between them, so a short or slow run still sends every
+# kind; a weight-1 kind can draw nothing in a few hundred picks.
+cover_kinds(i, n; tools::Bool=true) = [first(kw) for (j, kw) in enumerate(mix_for(tools)) if mod1(j, n) == i]
+
 # One step of client `i`: in a single-client window the first client runs a
-# conversation and the others wait it out.
-function client_step!(ctx, rng, i, deadline)
+# conversation and the others wait it out. Outside one, the client works through
+# `cover` first.
+function client_step!(ctx, rng, i, deadline, cover=String[])
     if in_solo(ctx)
         i == 1 || return sleep(min(1.0, max(0.0, deadline - time())))
         return run_kind!(ctx, rng, rand(rng, ("conversation", "conversation_stream")), deadline)
     end
-    return run_kind!(ctx, rng, pick_kind(rng; tools=ctx.tools_on), deadline; client=i)
+    kind = isempty(cover) ? pick_kind(rng; tools=ctx.tools_on) : popfirst!(cover)
+    return run_kind!(ctx, rng, kind, deadline; client=i)
 end
 
 function timed_request!(ctx, rng, kind; run=() -> dispatch(ctx, rng, kind))
@@ -1256,8 +1265,9 @@ function soak(cfg::Config; log::IO=devnull)
     clients = map(1:cfg.clients) do i
         @async begin
             rng = MersenneTwister(cfg.seed + i)
+            cover = cover_kinds(i, cfg.clients; tools=ctx.tools_on)
             while time() < deadline
-                client_step!(ctx, rng, i, deadline)
+                client_step!(ctx, rng, i, deadline, cover)
             end
         end
     end
