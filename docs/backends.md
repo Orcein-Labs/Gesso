@@ -55,8 +55,11 @@ the extension. `Gesso.AMDGPUBackend()` raises `ERR_RESOURCE_LIMIT` when
 AMDGPU.jl finds no functional ROCm device, and it never falls back to the CPU.
 
 It covers the Llama-family, Qwen3.5 hybrid, LFM2 and Gemma 4 paths with the
-quantized and IQ-quantized weight formats. The KV cache is `f32`; a `q4h`
-cache is refused, and `q8` is not yet supported end to end. MoE routing and
+quantized and IQ-quantized weight formats. The KV cache is `f32` by default,
+and `q8` works end to end on the per-head, decode and Gemma 4 paths (the
+decode reads the codes in place; the per-head and Gemma 4 paths dequantize
+into a dense copy). The q8 path is tested on KernelAbstractions' CPU backend
+and has not yet run on ROCm hardware. A `q4h` cache is refused. MoE routing and
 the Gemma 4 routed feed-forward block run on the host. Check
 `Gesso.supports(Gesso.AMDGPUBackend, capability)` before relying on a
 capability.

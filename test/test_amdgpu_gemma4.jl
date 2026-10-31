@@ -236,10 +236,23 @@ else
         for i in eachindex(rows_c, rows_d)
             @test _amdg_err(rows_d[i], rows_c[i]) <= _amdg_tol(rows_c[i])
         end
-        # The KA backend refuses a quantized KV cache with a typed error.
+    end
+
+    @testset "amdgpu Gemma4: toy greedy decode with q8 KV matches the CPU q8 oracle" begin
+        q = _amdg_q
+        ids_c, rows_c = withenv(() -> _amdg_generate(q, q.t, _AMDG_CPU), "GESSO_KV_FORMAT" => "q8")
+        ids_d, rows_d = withenv(() -> _amdg_generate(q, q.t_dev, _AMDG_B), "GESSO_KV_FORMAT" => "q8")
+        @test ids_d == ids_c
+        @test length(rows_d) == length(rows_c) == _AMDG_NEW
+        for i in eachindex(rows_c, rows_d)
+            @test _amdg_err(rows_d[i], rows_c[i]) <= _amdg_tol(rows_c[i])
+        end
+    end
+
+    @testset "amdgpu Gemma4: a q4h KV cache is a typed refusal" begin
         q = _amdg_q
         err = try
-            withenv(() -> _amdg_generate(q, q.t_dev, _AMDG_B), "GESSO_KV_FORMAT" => "q8")
+            withenv(() -> _amdg_generate(q, q.t_dev, _AMDG_B), "GESSO_KV_FORMAT" => "q4h")
             nothing
         catch e
             e
