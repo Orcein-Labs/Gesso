@@ -54,6 +54,7 @@ function Gesso.Inference._check_device_storage(op::Symbol, b::KADeviceBackend, t
     t isa Gesso.ExpertWeight &&
         t.storage isa Gesso.Inference.GgufQuantSlice &&
         return nothing
+    t.storage isa AmdDenseQuant && _ka_on_device(b, t.storage.data) && return nothing
     _ka_device_storage!(op, b, t)
     return nothing
 end
@@ -98,14 +99,18 @@ end
     to_device(::KADeviceBackend, tensors) -> tensors'
 
 Copy weight storage to Float32 device arrays and return a new named tuple of
-the same shape. GGUF quant matrices dequantize to Float32 on the host first;
-a device quant GEMV can replace that later. Routed expert banks stay on the
+the same shape. A projection whose GGUF format has a tested device kernel
+(see `_AMDQ_TYPES`) keeps its block bytes on device; every other quant matrix
+dequantizes to Float32 on the host first. Routed expert banks stay on the
 host. NEVER mutates the CPU tensors. Tied heads stay tied: `lm_head === embedding`.
 """
 function _ka_to_device(b::KADeviceBackend, tensors)
     _conv_t(t) = begin
         hasproperty(t, :storage) || return t
         t.storage === nothing && return t
+        if t isa Gesso.ProjectionWeight && _amdq_eligible(t.storage)
+            return typeof(t)(; shape=t.shape, storage=_amdq_upload(b, t.storage))
+        end
         typeof(t)(; shape=t.shape, storage=_ka_upload(b, t.storage))
     end
     _host_expert_key(k) = k in (:wexp_gate, :wexp_up, :wexp_gate_up, :wexp_down)

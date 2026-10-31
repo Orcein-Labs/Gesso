@@ -222,6 +222,9 @@ using Gesso: reference_prefill, reference_generate
     # CPU backend vs the F64 oracle, and a device-free compile for AMD targets.
     include("test_amdgpu_seam.jl")
 
+    # AMDGPU dense quant GEMV (Q8_0): device parity, residency and compile.
+    include("test_amdgpu_quant.jl")
+
     # Phase 8 (§LXXXI item B): Lava operator methods on LavaArray{Float32} vs
     # the CPU F64 oracle at declared atol — named skip without a device. The
     # LAVA_LOADED / VULKAN_OK consts come from the seam file above.
