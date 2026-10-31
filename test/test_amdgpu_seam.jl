@@ -213,5 +213,19 @@ else
         # negative control: a heap allocation cannot lower for the device, so
         # the harness must refuse it rather than report bytes
         @test_throws Main.AMDGPU.GPUCompiler.InvalidIRError amd_compile(_amd_heap_alloc_kernel!, 64, (64,), (G(Float32, 1),))
+
+        # that throw leaves its hostcalls behind in AMDGPU; the next fresh
+        # compile must not report them (wg 128 is not in the compile cache)
+        clean = amd_compile(_AMDX._ka_rmsnorm_rows_kernel!, 128, (128 * rows,), (G(Float32, 2), G(Float32, 2), G(Float32, 1), Float64, Int, Int))
+        @test all(r -> isempty(r.hostcalls), clean)
+
+        # negative control: a kernel that calls the host allocator compiles,
+        # and the harness reports and refuses it. AMDGPU.jl cannot lower device
+        # malloc for gfx1030 at all, so the control runs on the other targets.
+        hc_targets = filter(t -> t[1] != "gfx1030", AMD_TARGETS)
+        @test_throws ErrorException amd_compile(_amd_hostcall_kernel!, 64, (64,), (G(Float32, 1),); targets=hc_targets)
+        hc = amd_compile(_amd_hostcall_kernel!, 64, (64,), (G(Float32, 1),); allow_hostcalls=true, targets=hc_targets)
+        @test length(hc) == length(hc_targets)
+        @test all(r -> :malloc_hostcall in r.hostcalls, hc)
     end
 end

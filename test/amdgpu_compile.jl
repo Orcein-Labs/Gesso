@@ -39,18 +39,26 @@ if !isdefined(@__MODULE__, :amd_compile)
     "Device-side global array type, for `amd_compile` argument tuples."
     amd_global(T, N) = Main.AMDGPU.Device.ROCDeviceArray{T, N, Main.AMDGPU.Device.AS.Global}
 
-    """
-        amd_compile(kernel, wg, ndr, argtypes) -> [(; isa, bytes)]
+    # AMDGPU's linker stashes detected hostcalls in task-local storage and the
+    # next successful compile collects them. A compile that throws leaves its
+    # entry behind, and it would be reported against the next kernel.
+    _amd_drop_stale_hostcalls() = (pop!(task_local_storage(), :amdgpu_early_hostcalls, nothing); nothing)
 
-    Compile and link `kernel(ROCBackend(), wg)` over `ndr` for every AMD target.
-    `argtypes` are the device-side argument types, without the KA context.
     """
-    function amd_compile(kernel, wg, ndr, argtypes::Tuple)
+        amd_compile(kernel, wg, ndr, argtypes; allow_hostcalls=false, targets=AMD_TARGETS) -> [(; isa, bytes, hostcalls)]
+
+    Compile and link `kernel(ROCBackend(), wg)` over `ndr` for each of `targets`.
+    `argtypes` are the device-side argument types, without the KA context.
+    A kernel that needs a hostcall (device malloc, printf) keeps a host service
+    thread polling for the life of the program, so it is refused unless
+    `allow_hostcalls`.
+    """
+    function amd_compile(kernel, wg, ndr, argtypes::Tuple; allow_hostcalls::Bool=false, targets=AMD_TARGETS)
         GPUC = _AMD_GPUC
         obj = kernel(Main.AMDGPU.ROCBackend(), wg)
         ctx = _amd_context(obj, ndr)
         tt = Tuple{typeof(ctx), argtypes...}
-        return map(AMD_TARGETS) do (isa, w64)
+        return map(targets) do (isa, w64)
             feat = w64 ? "" : "+wavefrontsize32,-wavefrontsize64"
             target = GPUC.GCNCompilerTarget(; dev_isa=isa, features=feat)
             cfg = GPUC.CompilerConfig(
@@ -61,8 +69,16 @@ if !isdefined(@__MODULE__, :amd_compile)
                 always_inline=true,
             )
             job = GPUC.CompilerJob(GPUC.methodinstance(typeof(obj.f), tt), cfg)
-            r = Main.AMDGPU.Compiler.compile_or_lookup(job)
-            (; isa, bytes=r.obj === nothing ? 0 : length(r.obj))
+            _amd_drop_stale_hostcalls()
+            r = try
+                Main.AMDGPU.Compiler.compile_or_lookup(job)
+            finally
+                _amd_drop_stale_hostcalls()
+            end
+            hostcalls = unique(r.global_hostcalls)
+            allow_hostcalls || isempty(hostcalls) ||
+                error("amd_compile: $(nameof(typeof(obj.f))) on $isa needs hostcalls $hostcalls")
+            (; isa, bytes=r.obj === nothing ? 0 : length(r.obj), hostcalls)
         end
     end
 
@@ -71,6 +87,15 @@ if !isdefined(@__MODULE__, :amd_compile)
     @Main.KernelAbstractions.kernel function _amd_heap_alloc_kernel!(dst)
         i = @Main.KernelAbstractions.index(Global, Linear)
         dst[i] = Float32(sum(Vector{Float32}(undef, i)))
+    end
+
+    # Negative control for the hostcall refusal: valid device IR that calls the
+    # host allocator.
+    @Main.KernelAbstractions.kernel function _amd_hostcall_kernel!(dst)
+        i = @Main.KernelAbstractions.index(Global, Linear)
+        p = Main.AMDGPU.Device.malloc(Csize_t(16))
+        Main.AMDGPU.Device.free(p)
+        dst[i] = 1.0f0
     end
 
 end
