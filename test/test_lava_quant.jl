@@ -206,6 +206,19 @@ else
         @test !_lq_ext._lq_eligible(bad)
     end
 
+    # Lava has no host dense path: an over-budget weight that fell back to F32
+    # took more device memory than its quant bytes, not less.
+    @testset "LavaDenseQuant: a zero budget still uploads eligible weights as quant" begin
+        qm = _lq_random_matrix(MersenneTwister(11), :q4_k, 8, 256)
+        pw = Gesso.ProjectionWeight(; shape=size(qm), storage=qm)
+        emb = Gesso.EmbeddingTable(; shape=(4, 2), storage=ones(Float32, 4, 2))
+        dev = withenv("GESSO_GPU_BUDGET_MIB" => "0") do
+            @test_logs (:warn, r"exceed the weight budget") match_mode = :any Gesso.to_device(
+                _lq_lava, (; embedding=emb, blocks=[(; w=pw)], lm_head=emb))
+        end
+        @test dev.blocks[1].w.storage isa _lq_ext.LavaBlockQuant
+    end
+
     # Expert bank: n_exp matrices concatenated as one device buffer, as
     # GpuQuantSlice stores them. Each expert is checked against its own host
     # matrix, the way the CUDA expert MMVQ testset does.
