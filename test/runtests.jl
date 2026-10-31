@@ -241,6 +241,7 @@ using Gesso: reference_prefill, reference_generate
     include("test_amdgpu_lfm2.jl")
     # AMDGPU Gemma 4 ops and toy: device parity, sliding window, typed failures, compile.
     include("test_amdgpu_gemma4.jl")
+    include("test_amdgpu_host.jl")
 
     # Phase 8 (§LXXXI item B): Lava operator methods on LavaArray{Float32} vs
     # the CPU F64 oracle at declared atol — named skip without a device. The

@@ -254,6 +254,24 @@ end
 
 # --- RoPE -------------------------------------------------------------------------
 
+# The frequency table is the same for every layer of a model, so the uploaded
+# copy is kept for the last table seen. Matched by content, so a changed table
+# misses and uploads again.
+const _KA_ROPE_FREQ = Ref{Any}(nothing)
+const _KA_ROPE_FREQ_LOCK = ReentrantLock()
+
+function _ka_rope_freq_device(ka, freq_host::Vector{Float64})
+    lock(_KA_ROPE_FREQ_LOCK) do
+        e = _KA_ROPE_FREQ[]
+        if e !== nothing && e.ka === ka && e.host == freq_host
+            return e.dev
+        end
+        dev = _ka_upload_host(ka, Float64, freq_host)
+        _KA_ROPE_FREQ[] = (; ka, host=copy(freq_host), dev)
+        return dev
+    end
+end
+
 function _ka_rope!(b::KADeviceBackend, q, k, positions; theta, inv_freq, interleaved, rotary_dim)
     qs = _ka_device_storage!(:rope!, b, q)
     ks = _ka_device_storage!(:rope!, b, k)
@@ -271,7 +289,7 @@ function _ka_rope!(b::KADeviceBackend, q, k, positions; theta, inv_freq, interle
     freq_host = inv_freq === nothing ?
         Float64[tθ^(Float64(-2i) / rd) for i in 0:(half-1)] :
         Float64.(inv_freq)
-    freq = _ka_upload_host(b.ka, Float64, freq_host)
+    freq = _ka_rope_freq_device(b.ka, freq_host)
     pos = _ka_upload_host(b.ka, Int32, Int32.(positions))
     for x in (qs, ks)
         n = size(x, 1) * size(x, 2) * half
