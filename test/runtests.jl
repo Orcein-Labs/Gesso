@@ -221,7 +221,9 @@ using Gesso: reference_prefill, reference_generate
     # explicit no-device failure, to_device and the reference kernel on KA's
     # CPU backend vs the F64 oracle, and a device-free compile for AMD targets.
     include("test_amdgpu_seam.jl")
-
+    # Attention on KADeviceBackend: per-head and fused decode parity against the
+    # F64 oracle on KA CPU, invalid launch and dense-cache refusal, compile for AMD.
+    include("test_amdgpu_attention.jl")
     # AMDGPU operator methods (embedding, rope, softmax, swiglu, GEGLU, matmul,
     # rmsnorm): KA CPU parity vs the F64 oracle and device-free AMD compile.
     include("test_amdgpu_ops.jl")
