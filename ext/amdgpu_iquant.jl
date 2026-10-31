@@ -207,10 +207,19 @@ function _amdq_iq_host_tables()
     return tb
 end
 
+# Uploaded once per backend: a GEMV runs per projection per token, and four
+# allocations plus copies on each call would dominate a decode step.
+const _AMDQ_IQ_DEVICE = Dict{Any,Any}()
+const _AMDQ_IQ_DEVICE_LOCK = ReentrantLock()
+
 function _amdq_iq_device_tables(ka)
-    h = _amdq_iq_host_tables()
-    up(v) = (d = KA.allocate(ka, eltype(v), length(v)); copyto!(d, v); d)
-    return (kv=up(h.kv), g2=up(h.g2), g3=up(h.g3), ks=up(h.ks))
+    lock(_AMDQ_IQ_DEVICE_LOCK) do
+        get!(_AMDQ_IQ_DEVICE, ka) do
+            h = _amdq_iq_host_tables()
+            up(v) = (d = KA.allocate(ka, eltype(v), length(v)); copyto!(d, v); d)
+            (kv=up(h.kv), g2=up(h.g2), g3=up(h.g3), ks=up(h.ks))
+        end
+    end
 end
 
 function _amdq_iq_matmul!(Y, X, q::AmdDenseQuant; wg::Int=64)
