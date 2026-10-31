@@ -81,22 +81,28 @@ const _LHOT_LEFT = Ref{Int64}(0)        # bytes not yet given to a layer
 const _LHOT_NLAYERS = Ref(0)            # pool-eligible expert layers of the loaded model
 const _LHOT_WARNED = Ref(false)
 
-# Device-local heap budget minus usage, summed over the heaps that report a
-# budget; `nothing` when the driver reports none or the probe fails.
+# Budget minus usage on the largest device-local heap that reports a budget;
+# `nothing` when the driver reports none or the probe fails. Device arrays come
+# from that heap alone. A second, small device-local heap (NVIDIA's ~246 MiB
+# host-visible BAR window) holds none of them, and adding it in overstated the
+# free memory by ~208 MiB on the 8 GB card, enough to OOM Gemma at ctx 8192.
+function _lava_free_from_heaps(rows)
+    best = nothing
+    for r in rows
+        r.device_local && r.budget > 0 || continue
+        (best === nothing || r.size > best.size) && (best = r)
+    end
+    best === nothing && return nothing
+    return max(Int64(0), Int64(best.budget) - Int64(best.usage))
+end
+
 function _lava_device_free_bytes()
     rows = try
         Lava.probe_device_memory_budget(Lava.vk_context())
     catch
         return nothing
     end
-    free = Int64(0)
-    reported = false
-    for r in rows
-        r.device_local && r.budget > 0 || continue
-        reported = true
-        free += max(Int64(0), Int64(r.budget - r.usage))
-    end
-    return reported ? free : nothing
+    return _lava_free_from_heaps(rows)
 end
 
 # Pool budget in bytes. GESSO_GPU_HOT_EXPERTS_MIB pins it. Otherwise it is the

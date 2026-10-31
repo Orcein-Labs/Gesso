@@ -338,6 +338,25 @@ else
             @test maximum(abs, doubled .- w .* ref) > _hot_tol(w .* ref)
         end
     end
+    @testset "free bytes count only the heap device arrays come from" begin
+        # The rows the RTX 5060 driver reports: heap 0 holds every device array,
+        # heap 2 is the small host-visible BAR window, heap 1 is system memory.
+        h0 = (heap=0, device_local=true, size=8546942976, budget=7425753088, usage=10616832)
+        h1 = (heap=1, device_local=false, size=33554432000, budget=30000000000, usage=0)
+        h2 = (heap=2, device_local=true, size=257949696, budget=238092288, usage=19857408)
+        free0 = h0.budget - h0.usage
+        @test _HOT_EXT._lava_free_from_heaps([h0, h1, h2]) == free0
+        @test _HOT_EXT._lava_free_from_heaps([h2, h1, h0]) == free0
+        # Negative control: the sum over device-local heaps overstates it by heap 2.
+        summed = sum(r.budget - r.usage for r in (h0, h2))
+        @test summed - free0 == h2.budget - h2.usage > 200 * 2^20
+        @test _HOT_EXT._lava_free_from_heaps([h0, h1, h2]) != summed
+        # No budget reported, or none device-local: unknown, not zero.
+        @test _HOT_EXT._lava_free_from_heaps([merge(h0, (; budget=0)), h1]) === nothing
+        @test _HOT_EXT._lava_free_from_heaps([h1]) === nothing
+        @test _HOT_EXT._lava_free_from_heaps([merge(h0, (; usage=h0.budget + 1))]) == 0
+    end
+
     @testset "registered layers split the budget evenly" begin
         # Three expert layers and a budget of two slots each, plus half a slot.
         # Before the count was taken at load, the first layer seen took every
