@@ -21,6 +21,7 @@ license = "Apache-2.0"
 # it — never as core dependencies:
 #   Lava    → ext/GessoLavaExt.jl   (Phase 8; the default GPU backend)
 #   CUDA.jl → ext/GessoCUDAExt.jl   (Phase 4; optional comparator)
+#   AMDGPU.jl + KernelAbstractions → ext/GessoAMDGPUExt.jl (ROCm; GPU-untested)
 #
 # Lava is vendored at vendor/Lava (upstream plus our patches, see
 # vendor/README.md); it is NOT a dependency of this package. Phase 8 (§LXXXI) added it as a WEAKDEP + extension only.
@@ -51,12 +52,20 @@ CUDA = "052768ef-5323-5732-b1bb-66c8b64840ba"
 # and tests with Lava not loaded. Not in the General registry — the test env
 # loads vendor/Lava via [sources] (test/Project.toml).
 Lava = "3a680b1f-cb25-4bee-9cf7-bc880b76dc8c"
+# AMDGPU.jl (ROCm) is a package EXTENSION, never a core dep. The extension
+# needs KernelAbstractions too: AMDGPU 2.10 carries it only as a weakdep, so
+# both trigger GessoAMDGPUExt (`using AMDGPU, KernelAbstractions, Gesso`).
+AMDGPU = "21141c5a-9bdb-4563-92ae-f87d6854732e"
+KernelAbstractions = "63c18a36-062a-441e-b654-da1e3ab1ce7c"
 
 [extensions]
 GessoCUDAExt = "CUDA"
 GessoLavaExt = "Lava"
+GessoAMDGPUExt = ["AMDGPU", "KernelAbstractions"]
 
 [compat]
+AMDGPU = "2.8"
+KernelAbstractions = "0.9.43, 0.10"
 julia = "1.12"
 
 [extras]

@@ -35,6 +35,13 @@ CUDA = "052768ef-5323-5732-b1bb-66c8b64840ba"
 # env, not core — core [deps] stays Lava-free (§VII). Device-absent machines still pass: the Lava tests
 # are named skips when vk_context() fails.
 Lava = "3a680b1f-cb25-4bee-9cf7-bc880b76dc8c"
+# AMDGPU.jl + KernelAbstractions in the TEST env so the pair triggers
+# GessoAMDGPUExt. Core [deps] stays free of both (§VII). No machine here has
+# an AMD GPU: the suite runs the extension's kernels on KernelAbstractions'
+# CPU backend against the CPU oracle, and compiles them for AMD targets with
+# no device and no ROCm install.
+AMDGPU = "21141c5a-9bdb-4563-92ae-f87d6854732e"
+KernelAbstractions = "63c18a36-062a-441e-b654-da1e3ab1ce7c"
 # Phase 8 (§LXXXI): Vulkan.jl + VulkanCore.jl, Lava's runtime dependencies,
 # pinned FROM SOURCE in the test env only. Ground truth (2026-09-30): Lava
 # master calls Vulkan.PhysicalDeviceCooperativeMatrixFeaturesKHR during
