@@ -51,7 +51,7 @@ const _LQ_KVALUES_IQ4NL =
 abstract type LavaDenseQuant end
 
 struct LavaBlockQuant <: LavaDenseQuant
-    data::Lava.LavaArray{UInt8}
+    data::Lava.LavaArray{UInt8,1}
     ggml_type::Int32
     kind::Int
     ne0::Int
@@ -537,8 +537,8 @@ end
 # 4-byte value words and an F32 scale array, and a lane loads whole words:
 # 250-330 GB/s on the same shapes. The split costs 1/16 more device bytes.
 struct LavaQ8Quant <: LavaDenseQuant
-    qs::Lava.LavaArray{UInt32}   # row r: words (r-1)*ne0/4+1 ... r*ne0/4
-    d::Lava.LavaArray{Float32}   # row r: scales (r-1)*ne0/32+1 ... r*ne0/32
+    qs::Lava.LavaArray{UInt32,1} # row r: words (r-1)*ne0/4+1 ... r*ne0/4
+    d::Lava.LavaArray{Float32,1} # row r: scales (r-1)*ne0/32+1 ... r*ne0/32
     ne0::Int
     nrows::Int
 end
