@@ -264,12 +264,16 @@ function _g4_quant_bank(rng, t::Int32, n_exp::Int, ne0::Int, ne1::Int)
     blk_vals, blk_bytes = Dict(_gemma4_inf.GGML_TYPE_Q8_0 => (32, 34),
                                _gemma4_inf.GGML_TYPE_IQ4_NL => (32, 18),
                                _gemma4_inf.GGML_TYPE_IQ2_XS => (256, 74),
-                               _gemma4_inf.GGML_TYPE_IQ3_XXS => (256, 98))[t]
+                               _gemma4_inf.GGML_TYPE_IQ3_XXS => (256, 98),
+                               _gemma4_inf.GGML_TYPE_Q4_1 => (32, 20))[t]
     nblk = n_exp * ne1 * div(ne0, blk_vals)
     bpe = div(nblk, n_exp) * blk_bytes
     data = rand(rng, UInt8, nblk * blk_bytes)
     for b in 0:(nblk-1)
         data[(b*blk_bytes+1):(b*blk_bytes+2)] .= reinterpret(UInt8, [Float16(0.002 + 0.01 * rand(rng))])
+        if t == _gemma4_inf.GGML_TYPE_Q4_1
+            data[(b*blk_bytes+3):(b*blk_bytes+4)] .= reinterpret(UInt8, [Float16(-0.08 * rand(rng))])
+        end
     end
     return _gemma4_inf.GgufQuantSlice(data, 0, t, n_exp, ne0, ne1, bpe, Int64(blk_vals))
 end
@@ -466,4 +470,48 @@ end
     O = inf._g4_attend!(s, zeros(Float32, N, nh * hd), Q, kv, kv, 1, 0, 0, nh, nkv, hd)
     @test size(s.attn_tile, 1) == 0
     @test O == by_rows(Q, kv, kv, 1, 0, 0, nh, nkv, hd)
+end
+
+@testset "Gemma4: fallback experts grouped by token match the token loop" begin
+    # Q4_1 has no native kernel, so every expert matmul dequantizes. Grouped
+    # prefill runs one GEMM per expert; the token loop runs one row per slot.
+    inf = _gemma4_inf
+    E, ff, n_used = 32, 32, 2
+    kv = _gemma4_toy_kv()
+    kv["gemma4.embedding_length"] = E
+    spec = inf.spec_from_gguf_kv(kv)
+    _, tensors = _gemma4_bind(spec, _gemma4_toy(spec))
+    bt = _g4_quant_experts(tensors.blocks[1], MersenneTwister(20261030), inf.GGML_TYPE_Q4_1,
+                           inf.GGML_TYPE_Q4_1, E, ff)
+    gu, dn = bt.wexp_gate_up.storage, bt.wexp_down.storage
+    @test inf._g4_moe_dequant_ok(gu, dn)
+    @test !inf._g4_moe_batched_ok(gu, dn, E)
+
+    N = inf._G4_PREFILL_TOKENS + 5
+    r = MersenneTwister(9)
+    x2 = randn(r, Float32, N, E)
+    experts = reduce(hcat, (randperm(r, gu.n_exp)[1:n_used] for _ in 1:N))
+    weights = rand(r, Float32, n_used, N)
+    y_grp = inf._g4_moe_prefill_dequant!(zeros(Float32, N, E), x2, experts, weights, gu, dn)
+    y_tok = zeros(Float32, N, E)
+    s = inf._Gemma4Scratch()
+    for t in 1:N, k in 1:n_used
+        e = experts[k, t]
+        g, f = inf._g4_eval_gate_up!(s, bt.wexp_gate_up, e, x2[t:t, :])
+        a = reshape([inf._g4_gelu(g[1, i]) * g[1, f + i] for i in 1:f], 1, f)
+        y = inf._g4_eval_down!(s, bt.wexp_down, e, a)
+        y_tok[t, :] .+= weights[k, t] .* y[1, :]
+    end
+    @test all(isfinite, y_grp) && any(!iszero, y_grp)
+    @test isapprox(y_grp, y_tok; rtol=1e-5)
+
+    # Negative control: a different routing must not pass the same check.
+    y_bad = inf._g4_moe_prefill_dequant!(zeros(Float32, N, E), x2, circshift(experts, (0, 1)),
+                                         weights, gu, dn)
+    @test !isapprox(y_bad, y_tok; rtol=1e-2)
+
+    # The whole FFN takes the grouped path at N > 1 and still runs end to end.
+    X = randn(MersenneTwister(10), Float32, 4, E)
+    y_ffn = copy(inf._gemma4_parallel_moe_ffn!(Gesso.CPUBackend(), X, bt, 1e-6))
+    @test size(y_ffn) == (4, E) && all(isfinite, y_ffn)
 end

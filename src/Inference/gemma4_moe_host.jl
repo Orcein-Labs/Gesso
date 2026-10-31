@@ -182,3 +182,64 @@ function _g4_moe_prefill!(moe::Matrix{Float32}, x2::Matrix{Float32}, experts::Ma
     end
     return moe
 end
+
+# Experts with no native kernel (every expert, in the all-f32 oracle mode) take
+# `_quant_matmul!`'s fallback, which dequantizes the whole expert matrix on each
+# call. The token loop made that call once per token and slot. Grouping the
+# tokens by expert dequantizes each expert once per batch and runs one F32 GEMM
+# over its tokens. The k-order sum is the token loop's, but the GEMM sums each
+# dot in its own order, so `moe` matches the loop to rounding, not bit for bit.
+function _g4_moe_dequant_ok(gu, dn)
+    gu isa GgufQuantSlice && dn isa GgufQuantSlice || return false
+    return !_quant_native(gu.ggml_type) || !_quant_native(dn.ggml_type)
+end
+
+function _g4_moe_prefill_dequant!(moe::Matrix{Float32}, x2::Matrix{Float32}, experts::Matrix{Int},
+                                  weights::Matrix{Float32}, gu_s::GgufQuantSlice, dn_s::GgufQuantSlice)
+    N, E = size(x2)
+    n_used = size(experts, 1)
+    n_exp = gu_s.n_exp
+    ff = dn_s.ne0
+    for t0 in 1:_G4_PREFILL_TOKENS:N
+        t1 = min(N, t0 + _G4_PREFILL_TOKENS - 1)
+        n = t1 - t0 + 1
+        # Slot s = (t - t0) * n_used + k. Expert e owns slots[start[e]+1:start[e+1]].
+        start = zeros(Int, n_exp + 1)
+        for t in t0:t1, k in 1:n_used
+            start[experts[k, t] + 1] += 1
+        end
+        cumsum!(start, start)
+        next = start[1:n_exp]
+        slots = Vector{Int}(undef, n * n_used)
+        for t in t0:t1, k in 1:n_used
+            e = experts[k, t]
+            next[e] += 1
+            slots[next[e]] = (t - t0) * n_used + k
+        end
+        Y = Matrix{Float32}(undef, E, n * n_used)
+        for e in 1:n_exp
+            ids = view(slots, (start[e] + 1):start[e + 1])
+            c = length(ids)
+            c == 0 && continue
+            Xe = Matrix{Float32}(undef, c, E)
+            @inbounds for i in 1:E, j in 1:c
+                Xe[j, i] = x2[t0 + (ids[j] - 1) ÷ n_used, i]
+            end
+            G = Matrix{Float32}(undef, c, 2ff)
+            _quant_matmul!(G, Xe, _g4_expert_matrix(gu_s, e))
+            A = Matrix{Float32}(undef, c, ff)
+            @inbounds for i in 1:ff, j in 1:c
+                A[j, i] = _g4_gelu(G[j, i]) * G[j, ff + i]
+            end
+            D = Matrix{Float32}(undef, c, E)
+            _quant_matmul!(D, A, _g4_expert_matrix(dn_s, e))
+            @inbounds for j in 1:c, i in 1:E
+                Y[i, ids[j]] = D[j, i]
+            end
+        end
+        @inbounds for k in 1:n_used, i in 1:E, t in t0:t1
+            moe[t, i] += weights[k, t] * Y[i, (t - t0) * n_used + k]
+        end
+    end
+    return moe
+end

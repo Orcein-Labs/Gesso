@@ -550,14 +550,20 @@ function _gemma4_parallel_moe_ffn!(backend, attn, bt, eps::Real; scratch::_Gemma
     batched = _g4_moe_batched_ok(gu_stor, dn_stor, E)
     moe_s = batched ? _g4_moe_scratch!(scratch, E, dn_stor.ne0, n_used, gu_stor.ggml_type, dn_stor.ggml_type) : nothing
     grouped = batched && N > 1
-    experts = grouped ? Matrix{Int}(undef, n_used, N) : Matrix{Int}(undef, 0, 0)
-    weights = grouped ? Matrix{Float32}(undef, n_used, N) : Matrix{Float32}(undef, 0, 0)
+    dequant = !batched && N > 1 && _g4_moe_dequant_ok(gu_stor, dn_stor)
+    routed = grouped || dequant
+    experts = routed ? Matrix{Int}(undef, n_used, N) : Matrix{Int}(undef, 0, 0)
+    weights = routed ? Matrix{Float32}(undef, n_used, N) : Matrix{Float32}(undef, 0, 0)
 
-    if grouped
+    if routed
         _g4_route_rows!(experts, weights, rin, r_stor, n_used, down_scale)
-        _g4_moe_prefill!(moe, x2, experts, weights, gu_stor, dn_stor)
+        if grouped
+            _g4_moe_prefill!(moe, x2, experts, weights, gu_stor, dn_stor)
+        else
+            _g4_moe_prefill_dequant!(moe, x2, experts, weights, gu_stor, dn_stor)
+        end
     end
-    for t in 1:(grouped ? 0 : N)
+    for t in 1:(routed ? 0 : N)
         denom = _g4_route_token!(logits, probs, order, rin, t, r_stor, n_used)
         if batched
             _g4_moe_token_batched!(moe, t, x2, scratch.order, probs, denom, down_scale, n_used,
