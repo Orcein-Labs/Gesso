@@ -1338,15 +1338,26 @@ end
     f,
 )
 
-# Column totals for a tile of K <= 8 columns.
+# Column totals for a tile of K <= 8 columns. Ragged tiles keep the scalar
+# chains: padding them out to eight columns costs more than it saves.
+@inline function _multi_totals(
+    sums::NTuple{64, VecElement{Float32}},
+    sumf::NTuple{8, Float32},
+)
+    return _multi_finish(sums, ntuple(c -> VecElement(sumf[c]), Val(8)))
+end
+
 @inline function _multi_totals(
     sums::NTuple{N, VecElement{Float32}},
     sumf::NTuple{K, Float32},
 ) where {N, K}
-    z = VecElement(0.0f0)
-    s64 = (sums..., ntuple(_ -> z, Val(64 - N))...)
-    f8 = ntuple(c -> VecElement(c <= K ? sumf[c] : 0.0f0), Val(8))
-    return _multi_finish(s64, f8)
+    return ntuple(Val(K)) do c
+        t = sumf[c]
+        for l in 1:8
+            t += sums[8 * (c - 1) + l].value
+        end
+        VecElement(t)
+    end
 end
 
 # The activation chunk pointer and the Q8_K source of a column.
