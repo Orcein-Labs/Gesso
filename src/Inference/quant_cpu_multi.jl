@@ -1007,12 +1007,9 @@ end
                 d,
             )
         end
+        tot = _multi_totals(sums, ntuple(_ -> 0.0f0, Val(K)))
         for c in 1:K
-            sumf = 0.0f0
-            for l in 1:8
-                sumf += sums[8*(c-1)+l].value
-            end
-            out[t0+c-1] = sumf
+            out[t0+c-1] = tot[c].value
         end
     end
     return out
@@ -1197,12 +1194,9 @@ end
             pm = ntuple(c -> pmo[c] + ib * QK_K, Val(K))
             sums = _q6k_prep_multi_step(pointer(w, b + 1), pq, pm, sums, d)
         end
+        tot = _multi_totals(sums, ntuple(_ -> 0.0f0, Val(K)))
         for c in 1:K
-            sumf = 0.0f0
-            for l in 1:8
-                sumf += sums[8*(c-1)+l].value
-            end
-            out[t0+c-1] = sumf
+            out[t0+c-1] = tot[c].value
         end
     end
     return out
@@ -1549,12 +1543,9 @@ end
             pq = ntuple(c -> px[c] + ib * QK_K, Val(K))
             sums = _q3k_multi_step(pointer(w, b + 1), pq, _kq_q3_scale_vec(lo, hi), sums, d, prep)
         end
+        tot = _multi_totals(sums, ntuple(_ -> 0.0f0, Val(K)))
         for c in 1:K
-            sumf = 0.0f0
-            for l in 1:8
-                sumf += sums[8*(c-1)+l].value
-            end
-            out[t0+c-1] = sumf
+            out[t0+c-1] = tot[c].value
         end
     end
     return out
