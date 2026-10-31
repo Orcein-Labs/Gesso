@@ -217,6 +217,11 @@ using Gesso: reference_prefill, reference_generate
     # imports Lava at its own top level, exactly like the CUDA seam above.
     include("test_lava_seam.jl")
 
+    # The AMDGPU (ROCm) backend seam, GPU-untested: manifest law, binding, the
+    # explicit no-device failure, to_device and the reference kernel on KA's
+    # CPU backend vs the F64 oracle, and a device-free compile for AMD targets.
+    include("test_amdgpu_seam.jl")
+
     # Phase 8 (§LXXXI item B): Lava operator methods on LavaArray{Float32} vs
     # the CPU F64 oracle at declared atol — named skip without a device. The
     # LAVA_LOADED / VULKAN_OK consts come from the seam file above.
@@ -397,6 +402,8 @@ using Gesso: reference_prefill, reference_generate
         weakdeps_allowlist = Dict{String, String}( # name => justification
             "CUDA" => "Phase 4 backend (§LXXVII), package extension GessoCUDAExt — never a core dep",
             "Lava" => "Phase 8 backend (§LXXXI), package extension GessoLavaExt — never a core dep; not in General registry, test env installs from source",
+            "AMDGPU" => "ROCm backend, package extension GessoAMDGPUExt — never a core dep",
+            "KernelAbstractions" => "kernel language for GessoAMDGPUExt, a second trigger beside AMDGPU — never a core dep",
         )
         unjustified_weak = [
             d for d in get(declared, "weakdeps", String[]) if !haskey(weakdeps_allowlist, d)
