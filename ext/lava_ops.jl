@@ -1515,19 +1515,21 @@ tensors. Tied heads stay tied on device: `lm_head === embedding`.
 """
 function _lava_to_device(tensors)
     # GGUF quant matrices dequantize to F32 here (embedding rows are gathered
-    # from F32 storage). Projection weights stay as GGUF bytes when they are
-    # eligible and fit the dense budget (the CUDA rule, GESSO_GPU_BUDGET_MIB).
-    budget = Ref(_lava_weight_budget(tensors))
+    # from F32 storage). Eligible projection weights always stay as GGUF bytes.
+    # On CUDA an over-budget weight stays on the host; Lava has no host dense
+    # path, so its only alternative is device F32, which is larger than the
+    # quant bytes and turned a tight budget into an out-of-memory. The budget
+    # now only reports how far the weights eat into the KV reserve.
+    budget = _lava_weight_budget(tensors)
+    used = Ref(Int64(0))
     _to_f32(s) =
         s isa Lava.LavaArray ? s :
         s isa Gesso.Inference.QuantMatrix ?
         _lava_upload(Float32, Gesso.Inference._quant_host_f32(s)) :
         _lava_upload(Float32, s)
     _to_proj(s) = begin
-        if s isa Gesso.Inference.QuantMatrix &&
-           _lq_eligible(s) &&
-           _lq_device_bytes(s) <= budget[]
-            budget[] -= _lq_device_bytes(s)
+        if s isa Gesso.Inference.QuantMatrix && _lq_eligible(s)
+            used[] += _lq_device_bytes(s)
             return _lq_upload(s)
         end
         return _to_f32(s)
@@ -1560,6 +1562,11 @@ function _lava_to_device(tensors)
         _conv_t(tensors.lm_head; proj=true)
     fr = haskey(tensors, :final_rms) ? tensors.final_rms : nothing
     final_rms = fr === nothing ? nothing : _conv_t(fr)
+    if used[] > budget
+        mib(x) = div(x, Int64(1) << 20)
+        @warn "lava: quant weights exceed the weight budget; the reserved context may not fit" weights_mib =
+            mib(used[]) budget_mib = mib(budget) ctx = Gesso.Inference._gpu_budget_ctx()
+    end
     _lhot_register!(blocks)
     _lava_sync!()
     result = (; embedding, blocks, lm_head, final_rms)
