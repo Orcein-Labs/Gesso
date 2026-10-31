@@ -231,6 +231,7 @@ using Gesso: reference_prefill, reference_generate
     include("test_amdgpu_quant.jl")
     # AMDGPU dense K-quant GEMV (Q2_K, Q3_K, Q5_K, Q6_K): device parity and compile.
     include("test_amdgpu_kquant.jl")
+    include("test_amdgpu_kv_format.jl")
 
     # Phase 8 (§LXXXI item B): Lava operator methods on LavaArray{Float32} vs
     # the CPU F64 oracle at declared atol — named skip without a device. The
