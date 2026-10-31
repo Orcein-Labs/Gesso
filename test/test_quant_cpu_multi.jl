@@ -599,6 +599,30 @@ end
     end
 end
 
+@testset "prefill: ragged sequence lengths and row counts equal the per-token path" begin
+    rng = Xoshiro(0xfade)
+    nb = 2
+    ne0 = 256 * nb
+    for (name, ty) in _MQ_TYPES, nrows in (1, 33), seq in (1, 7, 8, 9, 63, 512)
+        rb = _MQ._qrow_bytes(ty, ne0)
+        data = _mq_random_rows(rng, ty, nrows, nb)
+        q = _MQ.QuantMatrix(data, 0, ty, ne0, nrows, rb, Int64(256))
+        x = randn(rng, Float32, seq, ne0)
+        saved = _MQ._PREFILL_MULTI[]
+        dst_multi = zeros(Float32, seq, nrows)
+        dst_per_token = zeros(Float32, seq, nrows)
+        try
+            _MQ._PREFILL_MULTI[] = Int8(1)
+            _MQ._quant_matmul!(dst_multi, x, q)
+            _MQ._PREFILL_MULTI[] = Int8(0)
+            _MQ._quant_matmul!(dst_per_token, x, q)
+        finally
+            _MQ._PREFILL_MULTI[] = saved
+        end
+        @test all(reinterpret.(UInt32, dst_multi) .== reinterpret.(UInt32, dst_per_token))
+    end
+end
+
 @testset "GESSO_PREFILL_MULTI switch is read as a flag" begin
     @test _MQ._prefill_multi_enabled() isa Bool
 end
