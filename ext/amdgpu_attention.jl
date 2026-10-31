@@ -11,9 +11,10 @@
 # runs two launches per head (scores, then softmax and values), and there is
 # no separate softmax op for this backend.
 #
-# Only f32 caches are read. A quantized cache (GESSO_KV_FORMAT=q8) has no KA
-# reader and is refused with ERR_INVALID_PLAN rather than dequantized on the
-# host.
+# The fused decode reads f32 and q8 caches in place (q8 dequantizes each
+# element from its Int8 codes and Float16 scale). The prefill and the per-head
+# path take dense Float32 rows (see amdgpu_kv_format.jl) and refuse a quantized
+# cache here. A q4h cache has no reader and is refused with ERR_INVALID_PLAN.
 
 import Gesso.Inference: _attention_heads!, _attention_decode_device!
 
@@ -39,6 +40,24 @@ function _ka_require_dense_kv(::Gesso.Inference.QuantKV)
         ),
     )
 end
+
+# The decode takes the cache as its parts: codes and scales for q8, the dense
+# array for f32 (the scales slot then repeats the array and is never read).
+function _ka_require_decode_kv(::Any)
+    return nothing
+end
+function _ka_require_decode_kv(::Gesso.Inference.QuantKV{:q4h})
+    throw(
+        gesso_error(
+            ERR_INVALID_PLAN,
+            "a q4h KV cache has no AMDGPU reader; set GESSO_KV_FORMAT=q8 or f32";
+            requested_backend=:amdgpu,
+            kv_format=:q4h,
+        ),
+    )
+end
+_ka_kv_parts(x::AbstractArray) = (x, x, false)
+_ka_kv_parts(x::Gesso.Inference.QuantKV{:q8}) = (x.codes, x.scales, true)
 
 # Scores of one query head: sc[t, j] = q[t,hh,:] . k[j,hh,:] / sqrt(d).
 # Masked entries are computed too and ignored by the softmax, which keeps this
@@ -154,7 +173,11 @@ end
     part,
     @Const(q),
     @Const(kc),
+    @Const(kcs),
     @Const(vc),
+    @Const(vcs),
+    kq::Bool,
+    vq::Bool,
     group::Int,
     K::Int,
     scale::Float32,
@@ -185,8 +208,10 @@ end
     i = lane
     while i <= max(0, min(_KA_ATTN_TILE, K - ((g - 1) % nsplit) * _KA_ATTN_TILE))
         x = 0.0f0
+        u = (((g - 1) % nsplit) * _KA_ATTN_TILE) + i
+        h = div((g - 1) ÷ nsplit, group) + 1
         for c in 1:d
-            x += sq[c] * kc[(((g - 1) % nsplit) * _KA_ATTN_TILE)+i, (div((g - 1) ÷ nsplit, group) + 1), c]
+            x += sq[c] * (kq ? Float32(kc[u, h, c]) * Float32(kcs[u, h, ((c - 1) >> 5) + 1]) : Float32(kc[u, h, c]))
         end
         x *= scale
         sp[i] = x
@@ -232,7 +257,9 @@ end
     while j <= d
         piece = 0.0f0
         for i in 1:max(0, min(_KA_ATTN_TILE, K - ((g - 1) % nsplit) * _KA_ATTN_TILE))
-            piece += sp[i] * vc[(((g - 1) % nsplit) * _KA_ATTN_TILE)+i, (div((g - 1) ÷ nsplit, group) + 1), j]
+            u = (((g - 1) % nsplit) * _KA_ATTN_TILE) + i
+            h = div((g - 1) ÷ nsplit, group) + 1
+            piece += sp[i] * (vq ? Float32(vc[u, h, j]) * Float32(vcs[u, h, ((j - 1) >> 5) + 1]) : Float32(vc[u, h, j]))
         end
         acc[j] = piece
         j += wg
@@ -337,19 +364,25 @@ function _ka_attention_decode!(
     wg::Int=64,
 )
     _ka_check_wg(wg)
-    _ka_require_dense_kv(kc)
-    _ka_require_dense_kv(vc)
+    _ka_require_decode_kv(kc)
+    _ka_require_decode_kv(vc)
     K >= 1 ||
         throw(ArgumentError("decode attention needs at least one cache row, got K=$K"))
     d_head <= _KA_ATTN_DMAX || return false
+    kcodes, kscales, kq = _ka_kv_parts(kc)
+    vcodes, vscales, vq = _ka_kv_parts(vc)
     nsplit = cld(K, _KA_ATTN_TILE)
     part = KA.zeros(ka, Float32, nsplit, n_heads, d_head + 2)
     scale = Float32(1 / sqrt(d_head))
     _ka_attn_split_kernel!(ka, wg)(
         part,
         q,
-        kc,
-        vc,
+        kcodes,
+        kscales,
+        vcodes,
+        vscales,
+        kq,
+        vq,
         group,
         K,
         scale,

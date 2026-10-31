@@ -169,7 +169,7 @@ else
         q4 = _amdq_random_q4k(rng, 4, 256)
         emb = Gesso.EmbeddingTable((4, 2), ones(Float32, 4, 2))
         q2 = Gesso.Inference.QuantMatrix(
-            rand(rng, UInt8, 2 * 84), 0, Gesso.Inference.GGML_TYPE_Q2_K, 256, 2, 84, Int64(256),
+            rand(rng, UInt8, 2 * 36), 0, Gesso.Inference.GGML_TYPE_Q4_0, 64, 2, 36, Int64(32),
         )
         blk = (
             wq=Gesso.ProjectionWeight(size(qm), qm),

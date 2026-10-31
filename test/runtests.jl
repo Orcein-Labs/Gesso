@@ -233,6 +233,10 @@ using Gesso: reference_prefill, reference_generate
     include("test_amdgpu_iquant.jl")
     # AMDGPU hybrid GDN, gates, fused decode and shared-expert gate: KA CPU parity and AMD compile.
     include("test_amdgpu_hybrid.jl")
+    # AMDGPU dense K-quant GEMV (Q2_K, Q3_K, Q5_K, Q6_K): device parity and compile.
+    include("test_amdgpu_kquant.jl")
+    # AMDGPU q8 KV cache: write bit-equal to the host quantizer, dense copy, fused decode.
+    include("test_amdgpu_kv_format.jl")
 
     # Phase 8 (§LXXXI item B): Lava operator methods on LavaArray{Float32} vs
     # the CPU F64 oracle at declared atol — named skip without a device. The
