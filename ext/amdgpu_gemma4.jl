@@ -295,6 +295,43 @@ function _ka_g4_kv_put!(ka, dst, src, row0::Int, nheads::Int, hd::Int; wg::Int=_
     return dst
 end
 
+# Gemma 4 cache storage. f32 caches are device arrays as before; a q8 cache keeps
+# its codes and scales on the device, and is written and read through the q8
+# kernels (amdgpu_kv_format.jl). Gemma 4 has no in-place q8 reader, so a read
+# dequantizes rows 1:s1 into a dense copy.
+function _ka_g4_kv_storage!(b::KADeviceBackend, t)
+    s = t.storage
+    _ka_require_dense_kv(s)
+    if s isa Gesso.Inference.QuantKV
+        _ka_on_device(b, s.codes) && _ka_on_device(b, s.scales) && return s
+        throw(
+            gesso_error(
+                ERR_INVALID_PLAN,
+                "gemma4_block: $(backend_name(b)) backend requires the q8 cache codes and " *
+                "scales on its own device; call to_device explicitly";
+                op=:gemma4_block,
+                backend=backend_name(b),
+                storage_type=string(typeof(s)),
+            ),
+        )
+    end
+    return _ka_device_storage!(:gemma4_block, b, t)
+end
+
+# Writes rows row0.. of one layer from K or V (N, nkv*hd). A q8 cache takes the
+# head-major permutation the q8 writer expects; the f32 cache keeps its kernel.
+function _ka_g4_kv_write!(ka, dst::Gesso.Inference.QuantKV{:q8}, src, row0::Int, nkv::Int, hd::Int)
+    N = size(src, 1)
+    heads = PermutedDimsArray(reshape(src, N, hd, nkv), (1, 3, 2))
+    return _ka_kv_write_rows!(ka, dst, _ka_kv_on_device(ka, heads), row0)
+end
+_ka_g4_kv_write!(ka, dst, src, row0::Int, nkv::Int, hd::Int) =
+    _ka_g4_kv_put!(ka, dst, src, row0, nkv, hd)
+
+# Rows 1:n for the attention kernels, which read absolute key positions.
+_ka_g4_kv_read(ka, dst::Gesso.Inference.QuantKV{:q8}, n::Int) = _ka_kv_dense(ka, dst, n)
+_ka_g4_kv_read(ka, dst, n::Int) = dst
+
 _ka_g4_tile_keys(qoff::Int, win::Int, t0::Int, t1::Int) = begin
     lo = win > 0 ? max(1, qoff + t0 - 1 - win + 1) : 1
     return lo - 1, qoff + t1 - 1 - lo + 1
@@ -490,15 +527,15 @@ function Gesso.Inference._gemma4_generate_block!(
 )
     X = _ka_device_storage!(:gemma4_block, b, (; storage=_ka_act_storage(hp)))
     hd, nkv, nh, win, eps_f = _ka_g4_geom(bt, tensors, eps)
-    _ka_require_dense_kv(kc_layer.storage)
-    _ka_require_dense_kv(vc_layer.storage)
-    kc = _ka_device_storage!(:gemma4_block, b, kc_layer)
-    vc = _ka_device_storage!(:gemma4_block, b, vc_layer)
+    kc = _ka_g4_kv_storage!(b, kc_layer)
+    vc = _ka_g4_kv_storage!(b, vc_layer)
     positions = collect((s0 - 1):(s1 - 1))
     Q, K, V = _ka_g4_qkv(b, X, bt, positions, wl, eps_f, nh, nkv, hd)
-    _ka_g4_kv_put!(b.ka, kc, K, s0, nkv, hd)
-    _ka_g4_kv_put!(b.ka, vc, V, s0, nkv, hd)
-    O = _ka_g4_attention(b.ka, Q, kc, vc, nh, nkv, hd, s0, win)
+    _ka_g4_kv_write!(b.ka, kc, K, s0, nkv, hd)
+    _ka_g4_kv_write!(b.ka, vc, V, s0, nkv, hd)
+    Kd = _ka_g4_kv_read(b.ka, kc, s1)
+    Vd = _ka_g4_kv_read(b.ka, vc, s1)
+    O = _ka_g4_attention(b.ka, Q, Kd, Vd, nh, nkv, hd, s0, win)
     _ka_g4_finish!(b, X, O, bt, wl, eps_f)
     return hp
 end
