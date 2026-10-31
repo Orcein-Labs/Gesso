@@ -93,13 +93,13 @@ function _q4x_upload(dm::LavaQwen4exp, h::Gesso.Inference.QuantMatrix)
     end
     host = Gesso.Inference._quant_host_f32(h)
     _q4x_budget!(dm, sizeof(host))
-    return Lava.LavaArray{Float32}(host)
+    return _lava_upload(Float32, host)
 end
 
 function _q4x_upload(dm::LavaQwen4exp, h::AbstractArray)
     host = Float32.(h)
     _q4x_budget!(dm, sizeof(host))
-    return Lava.LavaArray{Float32}(host)
+    return _lava_upload(Float32, host)
 end
 
 # Device copy of a named weight, uploaded on first use.
@@ -123,7 +123,7 @@ function _q4x_dev_f32(dm::LavaQwen4exp, name::String)
         host = h isa Gesso.Inference.QuantMatrix ?
             Gesso.Inference._quant_host_f32(h) : Float32.(h)
         _q4x_budget!(dm, sizeof(host))
-        Lava.LavaArray{Float32}(host)
+        _lava_upload(Float32, host)
     end
 end
 
