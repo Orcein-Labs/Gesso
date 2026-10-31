@@ -88,13 +88,14 @@ execution_tier(::Type{<:KADeviceBackend}) = 1
 
 # Grows only as ops land with a CPU-oracle test and an AMD compile test.
 # import_report reads this set, so an empty set refuses every model up front.
-const AMDGPU_SUPPORTED_CAPS = Set{Symbol}()
+const AMDGPU_SUPPORTED_CAPS = Set([:attention, :sliding_window_attention])
 
 supports(::KADeviceBackend, cap::Symbol) = cap in AMDGPU_SUPPORTED_CAPS
 supports(::Type{<:KADeviceBackend}, cap::Symbol) = cap in AMDGPU_SUPPORTED_CAPS
 
 include("amdgpu_device.jl")
 include("amdgpu_kernels.jl")
+include("amdgpu_attention.jl")
 
 # Bind the tag and attach to_device at load time, as GessoCUDAExt and
 # GessoLavaExt do (see GessoLavaExt.__init__ for why the method goes through
