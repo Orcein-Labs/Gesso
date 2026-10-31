@@ -35,6 +35,7 @@ using Gesso:
     EmbeddingTable,
     ProjectionWeight,
     FrozenParameter,
+    ExpertWeight,
     TemporaryWorkspace,
     PrefillWorkload,
     DecodeWorkload,
@@ -113,7 +114,18 @@ const AMDGPU_SUPPORTED_CAPS = Set{Symbol}([
     :attention,
     :sliding_window_attention,
     :linear_attention,
+    :qk_norm,
     :short_convolution,
+    :moe_routing,
+    :sigmoid_moe_routing,
+    :moe_selection_bias,
+    :embedding_scale,
+    :logit_softcap,
+    :v_norm_weightless,
+    :k_only_global_attention,
+    :gemma4_parallel_moe,
+    :layer_output_scale,
+    :rope_freq_factors,
 ])
 
 supports(::KADeviceBackend, cap::Symbol) = cap in AMDGPU_SUPPORTED_CAPS
@@ -128,6 +140,9 @@ include("amdgpu_iquant.jl")
 include("amdgpu_hybrid.jl")
 include("amdgpu_kquant.jl")
 include("amdgpu_kv_format.jl")
+include("amdgpu_host.jl")
+include("amdgpu_lfm2.jl")
+include("amdgpu_gemma4.jl")
 
 # Bind the tag and attach to_device at load time, as GessoCUDAExt and
 # GessoLavaExt do (see GessoLavaExt.__init__ for why the method goes through
