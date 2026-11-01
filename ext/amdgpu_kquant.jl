@@ -70,8 +70,9 @@
         end
         @synchronize
     end
-    if @index(Local, Linear) == 1
-        grp = @index(Group, Linear)
+    lane = @index(Local, Linear)
+    grp = @index(Group, Linear)
+    if lane == 1
         t = (grp - 1) % M + 1
         r = (grp - 1) ÷ M
         @inbounds Y[t, r+1] = part[1]
@@ -155,8 +156,9 @@ end
         end
         @synchronize
     end
-    if @index(Local, Linear) == 1
-        grp = @index(Group, Linear)
+    lane = @index(Local, Linear)
+    grp = @index(Group, Linear)
+    if lane == 1
         t = (grp - 1) % M + 1
         r = (grp - 1) ÷ M
         @inbounds Y[t, r+1] = part[1]
@@ -219,8 +221,9 @@ end
         end
         @synchronize
     end
-    if @index(Local, Linear) == 1
-        grp = @index(Group, Linear)
+    lane = @index(Local, Linear)
+    grp = @index(Group, Linear)
+    if lane == 1
         t = (grp - 1) % M + 1
         r = (grp - 1) ÷ M
         @inbounds Y[t, r+1] = part[1]
@@ -283,8 +286,9 @@ end
         end
         @synchronize
     end
-    if @index(Local, Linear) == 1
-        grp = @index(Group, Linear)
+    lane = @index(Local, Linear)
+    grp = @index(Group, Linear)
+    if lane == 1
         t = (grp - 1) % M + 1
         r = (grp - 1) ÷ M
         @inbounds Y[t, r+1] = part[1]

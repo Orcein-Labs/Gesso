@@ -152,8 +152,9 @@ end
         end
         @synchronize
     end
-    if @index(Local, Linear) == 1
-        grp = @index(Group, Linear)
+    lane = @index(Local, Linear)
+    grp = @index(Group, Linear)
+    if lane == 1
         @inbounds Y[(grp - 1) % M + 1, (grp - 1) ÷ M + 1] = part[1]
     end
 end
@@ -247,8 +248,9 @@ end
         end
         @synchronize
     end
-    if @index(Local, Linear) == 1
-        grp = @index(Group, Linear)
+    lane = @index(Local, Linear)
+    grp = @index(Group, Linear)
+    if lane == 1
         @inbounds Y[(grp - 1) % M + 1, (grp - 1) ÷ M + 1] = part[1]
     end
 end
