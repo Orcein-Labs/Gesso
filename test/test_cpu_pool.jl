@@ -111,38 +111,14 @@ end
 @testset "CPU pool" begin
     @testset "sizing" begin
         P = _RP._cpu_pool_participants
-        @test P(; cores=18, threads=36, override=nothing) == 18
-        @test P(; cores=36, threads=36, override=nothing) == 18
-        @test P(; cores=4, threads=36, override=nothing) == 4
-        @test P(; cores=18, threads=8, override=nothing) == 8
-        @test P(; cores=0, threads=8, override=nothing) == 1
-        @test P(; cores=18, threads=36, override=3) == 3
-        @test P(; cores=18, threads=36, override=40) == 36
-        @test P(; cores=18, threads=36, override=1) == 1
-    end
-
-    @testset "physical core count from sysfs" begin
-        mktempdir() do root
-            # Three cores over two packages; cpu4 is offline (no topology dir);
-            # cpu6 has an unreadable core_id and is skipped.
-            for (cpu, pkg, core) in ((0, 0, 0), (1, 0, 0), (2, 0, 1), (3, 0, 1), (5, 1, 0))
-                d = joinpath(root, "cpu$cpu", "topology")
-                mkpath(d)
-                write(joinpath(d, "physical_package_id"), "$pkg\n")
-                write(joinpath(d, "core_id"), "$core\n")
-            end
-            mkpath(joinpath(root, "cpu4"))
-            mkpath(joinpath(root, "cpu6", "topology"))
-            write(joinpath(root, "cpu6", "topology", "physical_package_id"), "0\n")
-            write(joinpath(root, "cpu6", "topology", "core_id"), "junk\n")
-            mkpath(joinpath(root, "cpufreq"))
-            @test _RP._cpu_pool_sysfs_cores(root) == 3
-            @test _RP._cpu_pool_physical_cores(root) == 3
-        end
-        missing_root = joinpath(tempdir(), "gesso-no-such-sysfs-$(getpid())")
-        @test _RP._cpu_pool_sysfs_cores(missing_root) === nothing
-        @test _RP._cpu_pool_physical_cores(missing_root) == max(1, Sys.CPU_THREADS ÷ 2)
-        @test _RP._cpu_pool_physical_cores() >= 1
+        @test P(; threads=36, override=nothing) == 18
+        @test P(; threads=18, override=nothing) == 18
+        @test P(; threads=16, override=nothing) == 16
+        @test P(; threads=8, override=nothing) == 8
+        @test P(; threads=0, override=nothing) == 1
+        @test P(; threads=36, override=3) == 3
+        @test P(; threads=36, override=40) == 36
+        @test P(; threads=36, override=1) == 1
     end
 
     @testset "bad nchunks" begin

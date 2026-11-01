@@ -51,7 +51,6 @@ const CPU_POOL_THREADS_ENV = "GESSO_CPU_POOL_THREADS"
 const CPU_POOL_SPIN_ENV = "GESSO_CPU_POOL_SPIN_US"
 const CPU_POOL_DEFAULT_SPIN_US = 200
 const _CPU_POOL_HOLD_YIELD_NS = UInt64(50_000)
-const _CPU_POOL_SYSFS = "/sys/devices/system/cpu"
 const _CPU_POOL_IDX_MASK = UInt64(0xffff_ffff)
 
 # Ticket word: high 32 bits hold the job generation, low 32 bits the number of
@@ -103,38 +102,6 @@ const _CPU_POOL_ATEXIT = Ref(false)
 
 # ------------------------------------------------------------ sizing
 
-# Distinct (package, core) pairs in a Linux sysfs topology tree. Offline CPUs
-# with no topology directory are skipped. Returns nothing when the tree is
-# missing or unreadable, so the caller can fall back.
-function _cpu_pool_sysfs_cores(base::AbstractString)::Union{Nothing, Int}
-    isdir(base) || return nothing
-    cores = Set{Tuple{Int, Int}}()
-    try
-        for name in readdir(base)
-            occursin(r"^cpu[0-9]+$", name) || continue
-            topo = joinpath(base, name, "topology")
-            isdir(topo) || continue
-            pkg = tryparse(Int, strip(read(joinpath(topo, "physical_package_id"), String)))
-            core = tryparse(Int, strip(read(joinpath(topo, "core_id"), String)))
-            (pkg === nothing || core === nothing) && continue
-            push!(cores, (pkg, core))
-        end
-    catch e
-        e isa Union{SystemError, Base.IOError} || rethrow()
-        return nothing
-    end
-    return isempty(cores) ? nothing : length(cores)
-end
-
-# Physical core count. Without a Linux topology tree the logical count is
-# halved, assuming 2-way SMT. That is conservative: it can under-count (Apple
-# silicon has no SMT) but cannot over-subscribe a hyperthreaded machine.
-function _cpu_pool_physical_cores(base::AbstractString=_CPU_POOL_SYSFS)::Int
-    n = _cpu_pool_sysfs_cores(base)
-    n === nothing || return n
-    return max(1, Sys.CPU_THREADS ÷ 2)
-end
-
 _cpu_pool_available_threads()::Int =
     max(1, min(Base.Threads.nthreads(), Base.Threads.threadpoolsize(:default)))
 
@@ -149,13 +116,15 @@ function _cpu_pool_env_int(name::AbstractString; minimum::Int=1)::Union{Nothing,
     return v
 end
 
-# Caller plus workers. Default: physical cores, the available Julia threads,
-# and the cap of 18. On the 18-core, 36-thread machine measured for this pool,
-# 36 threads was markedly slower than 16 to 18 under spin-based waiting.
-# GESSO_CPU_POOL_THREADS overrides the first two and is clamped to the
+# Caller plus workers. Default: the available Julia threads, capped at 18.
+# SMT siblings count. On an 8-core, 16-thread EPYC Rome VM, 16 participants
+# ran decode about 35% faster and a 512-token prefill about 50% faster than 8
+# (one per physical core), with the same output bits. On the 18-core,
+# 36-thread machine measured for this pool, 36 threads was markedly slower
+# than 16 to 18 under spin-based waiting, hence the cap.
+# GESSO_CPU_POOL_THREADS overrides the default and is clamped to the
 # available threads, so it may exceed 18.
 function _cpu_pool_participants(;
-    cores::Integer=_cpu_pool_physical_cores(),
     threads::Integer=_cpu_pool_available_threads(),
     override::Union{Nothing, Integer}=_cpu_pool_env_int(CPU_POOL_THREADS_ENV),
 )::Int
@@ -163,7 +132,7 @@ function _cpu_pool_participants(;
     if override !== nothing
         return clamp(Int(override), 1, threads)
     end
-    return clamp(min(Int(cores), threads, CPU_POOL_MAX_PARTICIPANTS), 1, threads)
+    return min(threads, CPU_POOL_MAX_PARTICIPANTS)
 end
 
 # ------------------------------------------------------------ lifecycle
