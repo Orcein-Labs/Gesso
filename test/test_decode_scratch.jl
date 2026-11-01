@@ -285,8 +285,10 @@ end
             sc = I._cpu_decode_scratch(nothing, 8; row=R, shape...)
             @test all(eltype(getfield(sc, f)) === R for f in rowfields)
         end
-        @test I._decode_xq(I._cpu_decode_scratch(nothing, 8; row=Float32, shape...), Val(:xq_dim)) isa
-              I.Q8KVec
+        # the shared input is a prepped Q8_K column (Q6KPrepVec) around the plain Q8_K row
+        xq = I._decode_xq(I._cpu_decode_scratch(nothing, 8; row=Float32, shape...), Val(:xq_dim))
+        @test xq isa I.Q6KPrepVec
+        @test I._q8k_of(xq) isa I.Q8KVec
         # Q8_K quantizes Float32 rows only; Float64 rows keep the generic matmul
         @test I._decode_xq(I._cpu_decode_scratch(nothing, 8; row=Float64, shape...), Val(:xq_dim)) ===
               nothing
@@ -294,7 +296,8 @@ end
 
     @testset "hybrid (GDN mixer): Q8_K route, rows stay Float32" begin
         sc = I._cpu_decode_scratch(mixer, 8; shape...)
-        @test I._decode_xq(sc, Val(:xq_dim)) isa I.Q8KVec
+        @test I._decode_xq(sc, Val(:xq_dim)) isa I.Q6KPrepVec
+        @test I._q8k_of(I._decode_xq(sc, Val(:xq_dim))) isa I.Q8KVec
         @test all(eltype(getfield(sc, f)) === Float32 for f in rowfields)
     end
 
