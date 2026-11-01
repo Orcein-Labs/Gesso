@@ -131,8 +131,10 @@ function _cpu_rmsnorm_storage!(
     nd = ndims(xs)
     d = size(xs, nd)                     # last dim is the feature dim
     length(ss) == d || error("rmsnorm!: scale length $(length(ss)) ≠ feature dim $d")
-    if nd >= 2 && xs isa Array && dsts isa Array && size(dsts) == size(xs)
-        L = length(xs) ÷ d
+    # decode (one row) keeps the row loop: the lead kernel's block scratch
+    # would be a per-token allocation
+    L = length(xs) ÷ d
+    if nd >= 2 && L > 1 && xs isa Array && dsts isa Array && size(dsts) == size(xs)
         X, D = reshape(xs, L, d), reshape(dsts, L, d)
         if _cpu_rows_threaded(xs, L)
             _cpu_split_rows!(cld(L, _CPU_LEAD_BLOCK)) do bs
