@@ -332,4 +332,10 @@ export DraftSource,
     complete_text,
     feedback_counts
 
+
+# precompile workload: a tiny synthetic Qwen3.5 GGUF through load, chat
+# render, tokenize, generate and detokenize, so a first reply does not pay
+# the inference compile (runs only while precompiling)
+include("precompile.jl")
+
 end

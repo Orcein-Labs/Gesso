@@ -1569,6 +1569,15 @@ export reference_prefill
 # EOS token id — the loader pins the tokenizer contract (PAD=0, BOS=1, EOS=2).
 const TOY_EOS = 2
 
+# A caller's hook, held untyped. Each closure has its own type, so passing hooks
+# through as they are compiles the whole generation body again for every call
+# site. Boxed, the body compiles once; the call costs one dynamic dispatch.
+struct _Hook
+    f::Any
+end
+(h::_Hook)(args...) = h.f(args...)
+_hook(f) = f === nothing ? nothing : _Hook(f)
+
 """
     reference_generate(model, tensors, prompt; max_new_tokens=8, info=nothing) -> Vector{Int}
 
@@ -1641,6 +1650,28 @@ Pass `backend=LavaBackend()` (the GPU default) or `backend=CUDABackend()`
 `to_device`, argmax computed per step (device-safe), ids on host.
 """
 function reference_generate(
+    model,
+    tensors,
+    prompt::AbstractVector{Int};
+    on_token=nothing,
+    on_hidden=nothing,
+    on_rows=nothing,
+    on_taps=nothing,
+    kwargs...,
+)
+    return _reference_generate(
+        model,
+        tensors,
+        prompt;
+        on_token=_hook(on_token),
+        on_hidden=_hook(on_hidden),
+        on_rows=_hook(on_rows),
+        on_taps=_hook(on_taps),
+        kwargs...,
+    )
+end
+
+function _reference_generate(
     model,
     tensors,
     prompt::AbstractVector{Int};
