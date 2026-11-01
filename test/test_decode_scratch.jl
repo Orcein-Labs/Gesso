@@ -280,18 +280,20 @@ end
     # the constructor reads only these four fields of a GDN mixer
     mixer = (; num_key_heads=2, num_value_heads=4, key_head_dim=4, value_head_dim=4)
 
-    @testset "dense (mx === nothing): no Q8_K route, rows take the tensor eltype" begin
+    @testset "dense (mx === nothing): rows take the tensor eltype, Float32 rows take the Q8_K route" begin
         for R in (Float64, Float32)
             sc = I._cpu_decode_scratch(nothing, 8; row=R, shape...)
-            @test sc.hybrid == false
-            @test I._decode_xq(sc, Val(:xq_dim)) === nothing
             @test all(eltype(getfield(sc, f)) === R for f in rowfields)
         end
+        @test I._decode_xq(I._cpu_decode_scratch(nothing, 8; row=Float32, shape...), Val(:xq_dim)) isa
+              I.Q8KVec
+        # Q8_K quantizes Float32 rows only; Float64 rows keep the generic matmul
+        @test I._decode_xq(I._cpu_decode_scratch(nothing, 8; row=Float64, shape...), Val(:xq_dim)) ===
+              nothing
     end
 
     @testset "hybrid (GDN mixer): Q8_K route, rows stay Float32" begin
         sc = I._cpu_decode_scratch(mixer, 8; shape...)
-        @test sc.hybrid == true
         @test I._decode_xq(sc, Val(:xq_dim)) isa I.Q8KVec
         @test all(eltype(getfield(sc, f)) === Float32 for f in rowfields)
     end

@@ -103,5 +103,74 @@ _bits(a::AbstractArray{Float32}) = reinterpret(UInt32, vec(a))
             xq,
             (w80,),
         )
+
+        # a Q8_K weight of another width cannot share `xq`: the helper falls
+        # back to the per-weight matmul instead of erroring
+        x2 = Gesso.Activation(; shape=(1, 2ne0), storage=randn(rng, Float32, 1, 2ne0))
+        w2 = _group_random_qm(rng, _GI.GGML_TYPE_IQ4_XS, 7, 2ne0)
+        out2 = (Gesso.Activation(; shape=(1, 7), storage=zeros(Float32, 1, 7)),)
+        _GI._dec_matmul_group!(
+            _GI.CPUBackend(),
+            out2,
+            xq,
+            x2,
+            (Gesso.ProjectionWeight((7, 2ne0), w2),),
+            Gesso.Semantics.DecodeWorkload(),
+        )
+        ref2 = zeros(Float32, 1, 7)
+        _GI._quant_matmul!(ref2, x2.storage, w2)
+        @test _bits(out2[1].storage) == _bits(ref2)
     end
+end
+
+# Random K-quant rows with finite Float16 d (and dmin, where the type has one)
+# at each type's own block offsets.
+function _group_random_kq(rng, ty::Int32, nrows::Int, ne0::Int)
+    rb = _GI._qrow_bytes(ty, ne0)
+    data = rand(rng, UInt8, nrows * rb)
+    bsz = _GI._ggml_traits(ty).type_size
+    offs = filter(>=(0), [_GI._q8k_d_offset(ty), _GI._q8k_dmin_offset(ty)])
+    for blk in 0:(nrows*div(rb, bsz)-1), off in offs
+        bits = reinterpret(UInt16, Float16(0.005f0 + 0.05f0 * rand(rng, Float32)))
+        data[blk*bsz+off+1] = UInt8(bits & 0xff)
+        data[blk*bsz+off+2] = UInt8(bits >> 8)
+    end
+    return _GI.QuantMatrix(data, 0, ty, ne0, nrows, rb, Int64(_GI.QK_K))
+end
+
+# Dense decode now groups its projections too. A Q4_K_M or Q3_K_S GGUF mixes
+# these types within one group (QKV, gate+up), so the bits must hold for each
+# type and for a mixed group.
+@testset "shared-input group matmul: every K-quant type, mixed groups" begin
+    rng = Xoshiro(20261101)
+    ne0 = 768
+    tys = (
+        _GI.GGML_TYPE_Q2_K,
+        _GI.GGML_TYPE_Q3_K,
+        _GI.GGML_TYPE_Q4_K,
+        _GI.GGML_TYPE_Q5_K,
+        _GI.GGML_TYPE_Q6_K,
+    )
+    x = randn(rng, Float32, 1, ne0)
+    xq = _GI.Q8KVec(div(ne0, _GI.QK_K))
+    _GI.quantize_q8_K!(xq, vec(x))
+    for ty in tys
+        @test _GI._quant_q8k_kind(_group_random_kq(rng, ty, 1, ne0))
+    end
+    ws = map((ty, n) -> _group_random_kq(rng, ty, n, ne0), tys, (29, 3, 64, 17, 40))
+    dsts = map(w -> zeros(Float32, 1, w.nrows), ws)
+    _GI._quant_matmul_group!(dsts, xq, ws)
+    for (d, w) in zip(dsts, ws)
+        ref = zeros(Float32, 1, w.nrows)
+        _GI._quant_matmul!(ref, x, w)
+        @test all(isfinite, ref)
+        @test _bits(d) == _bits(ref)
+    end
+    # negative control: a group over a different input must not match
+    xo = randn(rng, Float32, 1, ne0)
+    xqo = _GI.Q8KVec(div(ne0, _GI.QK_K))
+    _GI.quantize_q8_K!(xqo, vec(xo))
+    do_ = map(w -> zeros(Float32, 1, w.nrows), ws)
+    _GI._quant_matmul_group!(do_, xqo, ws)
+    @test all(_bits(a) != _bits(b) for (a, b) in zip(do_, dsts))
 end
