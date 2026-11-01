@@ -282,3 +282,35 @@ end
         @test _bits(d2) != _bits(ref)
     end
 end
+
+@testset "decode KV append on the pool matches the broadcast" begin
+    rng = Xoshiro(20261102)
+    for (ctx, nkv, d) in ((104, 32, 64), (37, 8, 128), (9, 3, 50)), row in (1, 5, 9)
+        kh = randn(rng, Float32, 1, nkv, d)
+        vh = randn(rng, Float32, 1, nkv, d)
+        kc0 = randn(rng, Float32, ctx, nkv, d)
+        vc0 = randn(rng, Float32, ctx, nkv, d)
+        kref, vref = copy(kc0), copy(vc0)
+        @views kref[row, :, :] .= kh[1, :, :]
+        @views vref[row, :, :] .= vh[1, :, :]
+        kc, vc = copy(kc0), copy(vc0)
+        _GI._kv_append_storage!(kc, vc, kh, vh, row)
+        @test _bits(kc) == _bits(kref)
+        @test _bits(vc) == _bits(vref)
+
+        # the chunks tile the row exactly, in any order, and touch no other row
+        n, nc = nkv * d, 7
+        kc, vc = copy(kc0), copy(vc0)
+        foreach(_GI._KVAppendChunk{Float32}(kc, vc, kh, vh, row, n, nc), nc:-1:1)
+        @test _bits(kc) == _bits(kref)
+        @test _bits(vc) == _bits(vref)
+
+        # negative control: a skipped chunk leaves its part of the row unwritten
+        kc, vc = copy(kc0), copy(vc0)
+        foreach(_GI._KVAppendChunk{Float32}(kc, vc, kh, vh, row, n, nc), 1:(nc - 1))
+        @test _bits(kc) != _bits(kref)
+    end
+    @test_throws BoundsError _GI._kv_append_storage!(
+        zeros(Float32, 4, 32, 64), zeros(Float32, 4, 32, 64),
+        zeros(Float32, 1, 32, 64), zeros(Float32, 1, 32, 64), 5)
+end
