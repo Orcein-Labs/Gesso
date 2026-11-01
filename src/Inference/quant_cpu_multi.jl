@@ -1183,23 +1183,37 @@ end
     i0 = _multi_d_base(dt, t0, K, nb)
     GC.@preserve w xqs begin
         xv = ntuple(c -> xqs[t0+c-1], Val(K))
-        sums = ntuple(_ -> VecElement(0.0f0), Val(8K))
         px = ntuple(c -> pointer(xv[c].xp), Val(K))
         pmo = ntuple(c -> Ptr{Int8}(pointer(xv[c].mo)), Val(K))
-        @inbounds for ib in 0:(nb-1)
-            b = woff + ib * 210
-            dw = _kq_f16(w, b + 208)
-            d = _multi_q6k_scales(_multi_tile_d(dt, xv, i0, ib, dw))
-            pq = ntuple(c -> px[c] + ib * QK_K, Val(K))
-            pm = ntuple(c -> pmo[c] + ib * QK_K, Val(K))
-            sums = _q6k_prep_multi_step(pointer(w, b + 1), pq, pm, sums, d)
-        end
-        tot = _multi_totals(sums, ntuple(_ -> 0.0f0, Val(K)))
+        tot = _q6k_prep_multi_row(w, woff, xv, px, pmo, nb, dt, i0)
         for c in 1:K
             out[t0+c-1] = tot[c].value
         end
     end
     return out
+end
+
+# The K column totals of the row at woff, as _q45k_multi_row.
+@inline function _q6k_prep_multi_row(
+    w::AbstractVector{UInt8},
+    woff::Int,
+    xv::NTuple{K, Any},
+    px::NTuple{K, Ptr{Int8}},
+    pmo::NTuple{K, Ptr{Int8}},
+    nb::Int,
+    dt,
+    i0::Int,
+) where {K}
+    sums = ntuple(_ -> VecElement(0.0f0), Val(8K))
+    @inbounds for ib in 0:(nb-1)
+        b = woff + ib * 210
+        dw = _kq_f16(w, b + 208)
+        d = _multi_q6k_scales(_multi_tile_d(dt, xv, i0, ib, dw))
+        pq = ntuple(c -> px[c] + ib * QK_K, Val(K))
+        pm = ntuple(c -> pmo[c] + ib * QK_K, Val(K))
+        sums = _q6k_prep_multi_step(pointer(w, b + 1), pq, pm, sums, d)
+    end
+    return _multi_totals(sums, ntuple(_ -> 0.0f0, Val(K)))
 end
 
 # ---------------------------------------------------------------- Q4_K and Q5_K
@@ -1413,29 +1427,47 @@ end
     prep = Val(T === Q6KPrepVec)
     GC.@preserve w xqs begin
         xv = ntuple(c -> xqs[t0+c-1], Val(K))
-        sums = ntuple(_ -> VecElement(0.0f0), Val(8K))
-        sumf = ntuple(_ -> 0.0f0, Val(K))
         # The column pointers, taken once: per block, the arrays' data pointers
         # were reloaded from memory, sixteen loads a block at K = 8.
         px = ntuple(c -> _q45k_xptr(xv[c], 0), Val(K))
         pbs = ntuple(c -> pointer(_q45k_src(xv[c]).bsums), Val(K))
-        @inbounds for ib in 0:(nb-1)
-            b = woff + ib * bs
-            d = _multi_q6k_scales(_multi_tile_d(dt, xv, i0, ib, _kq_f16(w, b)))
-            dmin = _multi_tile_d(dt, xv, i0, ib, _kq_f16(w, b + 2))
-            sc, mn = _kq_scale_min_k4_words(w, b + 4)
-            pq = ntuple(c -> px[c] + ib * QK_K, Val(K))
-            sums = _q45k_multi_step(pointer(w, b + 1), pq, _kq_i16x8(sc), sums, d, q5, prep)
-            md = _kq_mins_multi(ntuple(c -> pbs[c] + 32 * ib, Val(K)), mn)
-            sf = sumf
-            sumf = ntuple(c -> sf[c] - dmin[c] * Float32(md[c].value), Val(K))
-        end
-        tot = _multi_totals(sums, sumf)
+        tot = _q45k_multi_row(w, woff, xv, px, pbs, nb, dt, i0, q5, prep)
         for c in 1:K
             out[t0+c-1] = tot[c].value
         end
     end
     return out
+end
+
+# The K column totals of the row at woff. The caller checks the bounds and
+# holds w and the columns.
+@inline function _q45k_multi_row(
+    w::AbstractVector{UInt8},
+    woff::Int,
+    xv::NTuple{K, Any},
+    px::NTuple{K, Ptr{Int8}},
+    pbs::NTuple{K, Ptr{Int16}},
+    nb::Int,
+    dt,
+    i0::Int,
+    q5::Val{Q5},
+    prep::Val,
+) where {K, Q5}
+    bs = Q5 ? 176 : 144
+    sums = ntuple(_ -> VecElement(0.0f0), Val(8K))
+    sumf = ntuple(_ -> 0.0f0, Val(K))
+    @inbounds for ib in 0:(nb-1)
+        b = woff + ib * bs
+        d = _multi_q6k_scales(_multi_tile_d(dt, xv, i0, ib, _kq_f16(w, b)))
+        dmin = _multi_tile_d(dt, xv, i0, ib, _kq_f16(w, b + 2))
+        sc, mn = _kq_scale_min_k4_words(w, b + 4)
+        pq = ntuple(c -> px[c] + ib * QK_K, Val(K))
+        sums = _q45k_multi_step(pointer(w, b + 1), pq, _kq_i16x8(sc), sums, d, q5, prep)
+        md = _kq_mins_multi(ntuple(c -> pbs[c] + 32 * ib, Val(K)), mn)
+        sf = sumf
+        sumf = ntuple(c -> sf[c] - dmin[c] * Float32(md[c].value), Val(K))
+    end
+    return _multi_totals(sums, sumf)
 end
 
 # ---------------------------------------------------------------- Q3_K
@@ -1545,21 +1577,35 @@ end
     prep = Val(T === Q6KPrepVec)
     GC.@preserve w xqs begin
         xv = ntuple(c -> xqs[t0+c-1], Val(K))
-        sums = ntuple(_ -> VecElement(0.0f0), Val(8K))
         px = ntuple(c -> _q45k_xptr(xv[c], 0), Val(K))
-        @inbounds for ib in 0:(nb-1)
-            b = woff + ib * 110
-            d = _multi_q6k_scales(_multi_tile_d(dt, xv, i0, ib, _kq_f16(w, b + 108)))
-            lo, hi = _kq_scales_q3_words(w, b + 96)
-            pq = ntuple(c -> px[c] + ib * QK_K, Val(K))
-            sums = _q3k_multi_step(pointer(w, b + 1), pq, _kq_q3_scale_vec(lo, hi), sums, d, prep)
-        end
-        tot = _multi_totals(sums, ntuple(_ -> 0.0f0, Val(K)))
+        tot = _q3k_multi_row(w, woff, xv, px, nb, dt, i0, prep)
         for c in 1:K
             out[t0+c-1] = tot[c].value
         end
     end
     return out
+end
+
+# The K column totals of the row at woff, as _q45k_multi_row.
+@inline function _q3k_multi_row(
+    w::AbstractVector{UInt8},
+    woff::Int,
+    xv::NTuple{K, Any},
+    px::NTuple{K, Ptr{Int8}},
+    nb::Int,
+    dt,
+    i0::Int,
+    prep::Val,
+) where {K}
+    sums = ntuple(_ -> VecElement(0.0f0), Val(8K))
+    @inbounds for ib in 0:(nb-1)
+        b = woff + ib * 110
+        d = _multi_q6k_scales(_multi_tile_d(dt, xv, i0, ib, _kq_f16(w, b + 108)))
+        lo, hi = _kq_scales_q3_words(w, b + 96)
+        pq = ntuple(c -> px[c] + ib * QK_K, Val(K))
+        sums = _q3k_multi_step(pointer(w, b + 1), pq, _kq_q3_scale_vec(lo, hi), sums, d, prep)
+    end
+    return _multi_totals(sums, ntuple(_ -> 0.0f0, Val(K)))
 end
 
 # ---------------------------------------------------------------- Q8_0
@@ -2531,6 +2577,83 @@ function _dot_q8k_multi_kernel!(
         return _dot_q80_multi!(out, w, woff, xqs, t0, v, dt, Val(true))
     ggml_type == GGML_TYPE_Q5_1 && return _dot_q51_multi!(out, w, woff, xqs, t0, v, dt)
     return _dot_iq4_xs_multi!(out, w, woff, xqs, t0, v)
+end
+
+"""
+    _dot_q8k_rows_k1!(dst, ggml_type, w, base, rb, x, j0, j1) -> dst
+
+Rows `j0:j1` of a Q3_K, Q4_K, Q5_K or Q6_K weight against the one prepped
+column `x`, row j at 0-based byte `base + (j - 1) * rb` of `w`, stored as
+`dst[1, j] = 1.0f0 * acc + 0.0f0`. Each row runs the block loop of the K = 1
+multi tile, so it has the bits of `_dot_q8k_multi_kernel!` at `Val(1)`; the
+type dispatch, the bounds checks and the column setup run once for the range
+rather than once per row.
+"""
+function _dot_q8k_rows_k1!(
+    dst::AbstractMatrix{Float32},
+    ggml_type::Int32,
+    w::AbstractVector{UInt8},
+    base::Int,
+    rb::Int,
+    x::Q6KPrepVec,
+    j0::Int,
+    j1::Int,
+)
+    j0 > j1 && return dst
+    checkbounds(dst, 1, j0:j1)
+    nb = length(x.d)
+    bs = ggml_type == GGML_TYPE_Q3_K ? 110 :
+        ggml_type == GGML_TYPE_Q4_K ? 144 :
+        ggml_type == GGML_TYPE_Q5_K ? 176 :
+        ggml_type == GGML_TYPE_Q6_K ? 210 :
+        error("q8k rows: type $ggml_type has no prepped K = 1 kernel")
+    rb == bs * nb || error("q8k rows: row of $rb bytes, column has $nb blocks of $bs")
+    _q8k_check_row(w, base + (j0 - 1) * rb, rb * (j1 - j0 + 1))
+    ggml_type == GGML_TYPE_Q4_K && return _rows_q45k_k1!(dst, w, base, rb, x, j0, j1, Val(false))
+    ggml_type == GGML_TYPE_Q5_K && return _rows_q45k_k1!(dst, w, base, rb, x, j0, j1, Val(true))
+    ggml_type == GGML_TYPE_Q6_K && return _rows_q6k_k1!(dst, w, base, rb, x, j0, j1)
+    return _rows_q3k_k1!(dst, w, base, rb, x, j0, j1)
+end
+
+@noinline function _rows_q45k_k1!(dst, w, base, rb, x::Q6KPrepVec, j0, j1, q5::Val)
+    nb = length(x.d)
+    GC.@preserve w x begin
+        xv = (x,)
+        px = (_q45k_xptr(x, 0),)
+        pbs = (pointer(x.q.bsums),)
+        @inbounds for j in j0:j1
+            tot = _q45k_multi_row(w, base + (j - 1) * rb, xv, px, pbs, nb, nothing, 0, q5, Val(true))
+            dst[1, j] = 1.0f0 * tot[1].value + 0.0f0
+        end
+    end
+    return dst
+end
+
+@noinline function _rows_q3k_k1!(dst, w, base, rb, x::Q6KPrepVec, j0, j1)
+    nb = length(x.d)
+    GC.@preserve w x begin
+        xv = (x,)
+        px = (_q45k_xptr(x, 0),)
+        @inbounds for j in j0:j1
+            tot = _q3k_multi_row(w, base + (j - 1) * rb, xv, px, nb, nothing, 0, Val(true))
+            dst[1, j] = 1.0f0 * tot[1].value + 0.0f0
+        end
+    end
+    return dst
+end
+
+@noinline function _rows_q6k_k1!(dst, w, base, rb, x::Q6KPrepVec, j0, j1)
+    nb = length(x.d)
+    GC.@preserve w x begin
+        xv = (x,)
+        px = (pointer(x.xp),)
+        pmo = (Ptr{Int8}(pointer(x.mo)),)
+        @inbounds for j in j0:j1
+            tot = _q6k_prep_multi_row(w, base + (j - 1) * rb, xv, px, pmo, nb, nothing, 0)
+            dst[1, j] = 1.0f0 * tot[1].value + 0.0f0
+        end
+    end
+    return dst
 end
 
 # Writes out[t0 + c - 1] = _dot_q8k(ggml_type, w, woff, xqs[t0 + c - 1], simd)

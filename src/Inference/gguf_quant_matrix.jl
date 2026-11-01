@@ -759,21 +759,11 @@ function _gemv_q8k_rows_into!(
     return dst
 end
 
-# One prepped column as the column vector the multi kernels index, so a decode
-# row runs a K = 1 tile without allocating a Vector per call.
-struct _OneCol <: AbstractVector{Q6KPrepVec}
-    x::Q6KPrepVec
-end
-Base.size(::_OneCol) = (1,)
-Base.@propagate_inbounds function Base.getindex(c::_OneCol, i::Int)
-    @boundscheck i == 1 || throw(BoundsError(c, i))
-    return c.x
-end
-
 # The prepped column: a Q3_K, Q4_K, Q5_K or Q6_K row is a K = 1 multi tile,
 # whose integer lanes and final fmul and fadd match `_dot_q8k`, so the row has
 # the same bits. The store is the same `alpha * acc + beta * y` as above (it
-# turns a -0.0 dot into +0.0). Other types read the plain column.
+# turns a -0.0 dot into +0.0). The row loop runs inside one kernel call. Other
+# types read the plain column.
 function _gemv_q8k_rows_into!(
     dst::AbstractMatrix{Float32},
     xq::Q6KPrepVec,
@@ -784,14 +774,5 @@ function _gemv_q8k_rows_into!(
 )
     t = w.ggml_type
     (simd && _q6k_prep_type(t)) || return _gemv_q8k_rows_into!(dst, xq.q, w, j0, j1, simd)
-    rb = _qrow_bytes(t, w.ne0)
-    data = w.data
-    base = w.offset0
-    col = _OneCol(xq)
-    @inbounds for j in j0:j1
-        out = view(dst, 1, j:j)
-        _dot_q8k_multi_kernel!(out, t, data, base + (j - 1) * rb, col, 1, Val(1))
-        dst[1, j] = 1.0f0 * out[1] + 0.0f0
-    end
-    return dst
+    return _dot_q8k_rows_k1!(dst, t, w.data, w.offset0, _qrow_bytes(t, w.ne0), xq, j0, j1)
 end

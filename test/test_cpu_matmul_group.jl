@@ -248,6 +248,60 @@ end
     end
 end
 
+# The rows kernel runs a row range in one call: every row keeps the bits of
+# its own K = 1 tile, and rows outside the range are left alone.
+@testset "K = 1 rows kernel: row ranges match the per-row tile" begin
+    if _GI.q8k_simd_enabled()
+        rng = Xoshiro(20261101)
+        ne0 = 768
+        nb = div(ne0, _GI.QK_K)
+        x = randn(rng, Float32, ne0)
+        p = _GI._q6k_prep(_GI.Q8KVec(nb))
+        _GI.quantize_q8_K!(p.q, x)
+        _GI._q6k_prep!(p)
+        for ty in (
+            _GI.GGML_TYPE_Q3_K,
+            _GI.GGML_TYPE_Q4_K,
+            _GI.GGML_TYPE_Q5_K,
+            _GI.GGML_TYPE_Q6_K,
+        )
+            n = 23
+            w = _group_random_kq(rng, ty, n, ne0)
+            rb = _GI._qrow_bytes(ty, ne0)
+            ref = fill(NaN32, 1, n)
+            out = zeros(Float32, 1)
+            for j in 2:(n-1)
+                _GI._dot_q8k_multi_kernel!(out, ty, w.data, w.offset0 + (j - 1) * rb, [p], 1, Val(1))
+                ref[1, j] = 1.0f0 * out[1] + 0.0f0
+                @test ref[1, j] == _GI._dot_q8k(ty, w.data, w.offset0 + (j - 1) * rb, p.q, true)
+            end
+            got = fill(NaN32, 1, n)
+            _GI._dot_q8k_rows_k1!(got, ty, w.data, w.offset0, rb, p, 2, 9)
+            _GI._dot_q8k_rows_k1!(got, ty, w.data, w.offset0, rb, p, 10, n - 1)
+            _GI._dot_q8k_rows_k1!(got, ty, w.data, w.offset0, rb, p, 5, 4)
+            @test all(isfinite, got[1, 2:(n-1)])
+            @test isnan(got[1, 1]) && isnan(got[1, n])
+            @test _bits(got) == _bits(ref)
+            # past the weight's bytes, past dst, a row size that is not nb blocks
+            big = zeros(Float32, 1, n + 1)
+            @test_throws ErrorException _GI._dot_q8k_rows_k1!(big, ty, w.data, w.offset0, rb, p, 1, n + 1)
+            @test_throws BoundsError _GI._dot_q8k_rows_k1!(got, ty, w.data, w.offset0, rb, p, 1, n + 1)
+            @test_throws ErrorException _GI._dot_q8k_rows_k1!(got, ty, w.data, w.offset0, rb + 1, p, 1, 1)
+        end
+        w2 = _group_random_kq(rng, _GI.GGML_TYPE_Q2_K, 2, ne0)
+        @test_throws ErrorException _GI._dot_q8k_rows_k1!(
+            zeros(Float32, 1, 2),
+            _GI.GGML_TYPE_Q2_K,
+            w2.data,
+            w2.offset0,
+            _GI._qrow_bytes(_GI.GGML_TYPE_Q2_K, ne0),
+            p,
+            1,
+            2,
+        )
+    end
+end
+
 @testset "decode FFN activation on the pool matches the serial loop" begin
     rng = Xoshiro(20261101)
     cpu = _GI.CPUBackend()
