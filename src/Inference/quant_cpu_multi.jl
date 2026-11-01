@@ -1241,7 +1241,10 @@ function _kq_ir_q45k_multi(K::Int, q5::Bool, prep::Bool)
         "declare <32 x i8> @llvm.x86.avx2.pshuf.b(<32 x i8>, <32 x i8>)\n",
         "declare <16 x i16> @llvm.x86.avx2.pmadd.ub.sw(<32 x i8>, <32 x i8>)\n",
         "declare <8 x i32> @llvm.x86.avx2.pmadd.wd(<16 x i16>, <16 x i16>)\n",
-        "define <$(8K) x float> @entry(ptr %w, $qargs, <8 x i16> %sc, <$(8K) x float> %s, <$(8K) x float> %d) #0 {\n",
+        "define <$(8K) x float> @entry(ptr %w, $qargs, i64 %scw, ptr %mk, <$(8K) x float> %s, <$(8K) x float> %d) #0 {\n",
+        "  %scv = insertelement <4 x i64> poison, i64 %scw, i64 0\n",
+        "  %scq = shufflevector <4 x i64> %scv, <4 x i64> poison, <4 x i32> zeroinitializer\n",
+        "  %scb = bitcast <4 x i64> %scq to <32 x i8>\n",
     )
     for j in 0:3
         _kq_ld(io, "qr$j", "w", qs + 32 * j)
@@ -1270,11 +1273,11 @@ function _kq_ir_q45k_multi(K::Int, q5::Bool, prep::Bool)
             )
             u = "%uv$s"
         end
+        _kq_ld(io, "mk$s", "mk", 32 * s)
         print(
             io,
-            "  %sw$s = shufflevector <8 x i16> %sc, <8 x i16> poison, <16 x i32> <",
-            join(("i32 $s" for _ in 1:16), ", "),
-            ">\n",
+            "  %sb$s = call <32 x i8> @llvm.x86.avx2.pshuf.b(<32 x i8> %scb, <32 x i8> %mk$s)\n",
+            "  %sw$s = bitcast <32 x i8> %sb$s to <16 x i16>\n",
         )
         for c in 0:(K-1)
             if prep
@@ -1299,12 +1302,12 @@ end
 for K in 1:8, q5 in (false, true), prep in (false, true)
     qs = [:(pq[$c]) for c in 1:K]
     V = NTuple{8K, VecElement{Float32}}
-    S = NTuple{8, VecElement{Int16}}
-    argt = Tuple{Ptr{UInt8}, ntuple(_ -> Ptr{Int8}, K)..., S, V, V}
+    argt = Tuple{Ptr{UInt8}, ntuple(_ -> Ptr{Int8}, K)..., UInt64, Ptr{UInt8}, V, V}
     @eval @inline _q45k_multi_step(
         pw::Ptr{UInt8},
         pq::NTuple{$K, Ptr{Int8}},
-        sc::$S,
+        sc::UInt64,
+        mk::Ptr{UInt8},
         s::$V,
         d::$V,
         ::Val{$q5},
@@ -1316,6 +1319,7 @@ for K in 1:8, q5 in (false, true), prep in (false, true)
         pw,
         $(qs...),
         sc,
+        mk,
         s,
         d,
     )
@@ -1396,17 +1400,35 @@ end
     hi,
 )
 
-# The eight bytes of u as Int16 lanes, for the step's scale vector.
-@inline _kq_i16x8(u::UInt64) = Base.llvmcall(
-    """
-    %v = bitcast i64 %0 to <8 x i8>
-    %z = zext <8 x i8> %v to <8 x i16>
-    ret <8 x i16> %z
-    """,
-    NTuple{8, VecElement{Int16}},
-    Tuple{UInt64},
-    u,
-)
+# The two halves at byte off0 of w (a block's d and dmin) as Float32, from one
+# vcvtph2ps; the conversion is exact, so they equal _kq_f16(w, off0) and
+# _kq_f16(w, off0 + 2). The load is one dword, not the eight bytes vcvtph2ps
+# can read, so LLVM does not merge it with the scale bytes after it. The
+# caller holds w and has checked the block's bytes.
+@inline function _kq_f16x2(w::AbstractVector{UInt8}, off0::Int)
+    v = Base.llvmcall(
+        """
+        %u = load i32, ptr %0, align 1
+        %z = insertelement <2 x i32> zeroinitializer, i32 %u, i64 0
+        %v = bitcast <2 x i32> %z to <4 x half>
+        %f = fpext <4 x half> %v to <4 x float>
+        ret <4 x float> %f
+        """,
+        NTuple{4, VecElement{Float32}},
+        Tuple{Ptr{UInt8}},
+        pointer(w, off0 + 1),
+    )
+    return v[1].value, v[2].value
+end
+
+# The step's pshufb masks: mask s spreads byte s of the scale word, zero
+# extended, over all sixteen Int16 lanes. The step reads them from memory so
+# instcombine cannot fold the pshufb back into a two-shuffle splat. The mins
+# mask for _kq_mins_multi follows at byte 256: lane j takes byte j >> 1.
+const _Q45K_SPLAT = UInt8[
+    UInt8[iseven(i) ? UInt8(s) : 0x80 for s in 0:7 for i in 0:31];
+    UInt8[iseven(i) ? UInt8(i >> 2) : 0x80 for i in 0:31]
+]
 
 @noinline function _dot_q45k_multi!(
     out::AbstractVector{Float32},
@@ -1456,14 +1478,17 @@ end
     bs = Q5 ? 176 : 144
     sums = ntuple(_ -> VecElement(0.0f0), Val(8K))
     sumf = ntuple(_ -> 0.0f0, Val(K))
+    pm = pointer(_Q45K_SPLAT)
+    pn = pm + 256
     @inbounds for ib in 0:(nb-1)
         b = woff + ib * bs
-        d = _multi_q6k_scales(_multi_tile_d(dt, xv, i0, ib, _kq_f16(w, b)))
-        dmin = _multi_tile_d(dt, xv, i0, ib, _kq_f16(w, b + 2))
+        dw, mw = _kq_f16x2(w, b)
+        d = _multi_q6k_scales(_multi_tile_d(dt, xv, i0, ib, dw))
+        dmin = _multi_tile_d(dt, xv, i0, ib, mw)
         sc, mn = _kq_scale_min_k4_words(w, b + 4)
         pq = ntuple(c -> px[c] + ib * QK_K, Val(K))
-        sums = _q45k_multi_step(pointer(w, b + 1), pq, _kq_i16x8(sc), sums, d, q5, prep)
-        md = _kq_mins_multi(ntuple(c -> pbs[c] + 32 * ib, Val(K)), mn)
+        sums = _q45k_multi_step(pointer(w, b + 1), pq, sc, pm, sums, d, q5, prep)
+        md = _kq_mins_multi(ntuple(c -> pbs[c] + 32 * ib, Val(K)), mn, pn)
         sf = sumf
         sumf = ntuple(c -> sf[c] - dmin[c] * Float32(md[c].value), Val(K))
     end
@@ -1675,8 +1700,10 @@ end
 
 # _kq_mins_dot for K columns at once: each column's 16 bsums of the block
 # against the mins (packed one per byte in m, each paired with two bsums) in
-# one vpmaddwd, then summed by the tile phadd tree. Integer throughout, so each
-# lane is exactly the scalar dot.
+# one vpmaddwd, then summed by the tile phadd tree, or at K = 1 by halving
+# adds. Integer throughout, so each lane is exactly the scalar dot. The mins
+# vector is one pshufb of m broadcast, its mask read from mk (the tail of
+# _Q45K_SPLAT) so instcombine cannot turn it back into a zext and two shuffles.
 function _kq_ir_mins_multi(K::Int)
     io = IOBuffer()
     bargs = join(("ptr %b$c" for c in 0:(K-1)), ", ")
@@ -1684,12 +1711,14 @@ function _kq_ir_mins_multi(K::Int)
         io,
         "declare <8 x i32> @llvm.x86.avx2.pmadd.wd(<16 x i16>, <16 x i16>)\n",
         "declare <8 x i32> @llvm.x86.avx2.phadd.d(<8 x i32>, <8 x i32>)\n",
-        "define <$K x i32> @entry($bargs, i64 %m) #0 {\n",
-        "  %mb = bitcast i64 %m to <8 x i8>\n",
-        "  %mz = zext <8 x i8> %mb to <8 x i16>\n",
-        "  %m2 = shufflevector <8 x i16> %mz, <8 x i16> poison, <16 x i32> <",
-        join(("i32 $(j >> 1)" for j in 0:15), ", "),
-        ">\n",
+        "declare <32 x i8> @llvm.x86.avx2.pshuf.b(<32 x i8>, <32 x i8>)\n",
+        "define <$K x i32> @entry($bargs, i64 %m, ptr %mk) #0 {\n",
+        "  %mv = insertelement <4 x i64> poison, i64 %m, i64 0\n",
+        "  %mq = shufflevector <4 x i64> %mv, <4 x i64> poison, <4 x i32> zeroinitializer\n",
+        "  %mb = bitcast <4 x i64> %mq to <32 x i8>\n",
+        "  %mm = load <32 x i8>, ptr %mk, align 1\n",
+        "  %ms = call <32 x i8> @llvm.x86.avx2.pshuf.b(<32 x i8> %mb, <32 x i8> %mm)\n",
+        "  %m2 = bitcast <32 x i8> %ms to <16 x i16>\n",
     )
     for c in 0:(K-1)
         print(
@@ -1698,20 +1727,35 @@ function _kq_ir_mins_multi(K::Int)
             "  %p$c = call <8 x i32> @llvm.x86.avx2.pmadd.wd(<16 x i16> %v$c, <16 x i16> %m2)\n",
         )
     end
-    _kq_ir_tile_sums(io, K)
+    if K == 1
+        print(
+            io,
+            "  %lo = shufflevector <8 x i32> %p0, <8 x i32> poison, <4 x i32> <i32 0, i32 1, i32 2, i32 3>\n",
+            "  %hi = shufflevector <8 x i32> %p0, <8 x i32> poison, <4 x i32> <i32 4, i32 5, i32 6, i32 7>\n",
+            "  %t4 = add <4 x i32> %lo, %hi\n",
+            "  %u4 = shufflevector <4 x i32> %t4, <4 x i32> poison, <4 x i32> <i32 2, i32 3, i32 poison, i32 poison>\n",
+            "  %t2 = add <4 x i32> %t4, %u4\n",
+            "  %u2 = shufflevector <4 x i32> %t2, <4 x i32> poison, <4 x i32> <i32 1, i32 poison, i32 poison, i32 poison>\n",
+            "  %t1 = add <4 x i32> %t2, %u2\n",
+            "  %tk = shufflevector <4 x i32> %t1, <4 x i32> poison, <1 x i32> <i32 0>\n",
+        )
+    else
+        _kq_ir_tile_sums(io, K)
+    end
     print(io, "  ret <$K x i32> %tk\n}\n", _KQ_ATTRS)
     return String(take!(io))
 end
 
 for K in 1:8
     bs = [:(pb[$c]) for c in 1:K]
-    argt = Tuple{ntuple(_ -> Ptr{Int16}, K)..., UInt64}
-    @eval @inline _kq_mins_multi(pb::NTuple{$K, Ptr{Int16}}, m::UInt64) = Base.llvmcall(
+    argt = Tuple{ntuple(_ -> Ptr{Int16}, K)..., UInt64, Ptr{UInt8}}
+    @eval @inline _kq_mins_multi(pb::NTuple{$K, Ptr{Int16}}, m::UInt64, mk::Ptr{UInt8}) = Base.llvmcall(
         ($(_kq_ir_mins_multi(K)), "entry"),
         NTuple{$K, VecElement{Int32}},
         $argt,
         $(bs...),
         m,
+        mk,
     )
 end
 
