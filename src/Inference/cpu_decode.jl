@@ -37,12 +37,12 @@ struct CPUDecodeScratch{R <: AbstractFloat}
     nslab::Int
     # Q8_K quantizations of the shared decode inputs, one per input width:
     # residual stream (dim), attention merged (qdim), GDN merged (value_dim),
-    # FFN hidden (ff). Each is filled once per input and read by every
-    # projection of that input.
-    xq_dim::Q8KVec
-    xq_qdim::Q8KVec
-    xq_vdim::Q8KVec
-    xq_ff::Q8KVec
+    # FFN hidden (ff). Each is filled once per input, prepped for the K-quant
+    # multi kernels, and read by every projection of that input.
+    xq_dim::Q6KPrepVec
+    xq_qdim::Q6KPrepVec
+    xq_vdim::Q6KPrepVec
+    xq_ff::Q6KPrepVec
     # Decode activations, reused by every token. The residual stream, the
     # normed inputs, the projection outputs and the attention heads all live
     # here, so a decode step allocates nothing for them.
@@ -113,10 +113,10 @@ function _cpu_decode_scratch(
         zeros(Float32, nv),
         zeros(Float32, nv),
         nslab,
-        Q8KVec(div(Int(dim), QK_K)),
-        Q8KVec(div(max(Int(qdim), 1), QK_K)),
-        Q8KVec(div(value_dim, QK_K)),
-        Q8KVec(div(max(Int(ff), 1), QK_K)),
+        _q6k_prep(Q8KVec(div(Int(dim), QK_K))),
+        _q6k_prep(Q8KVec(div(max(Int(qdim), 1), QK_K))),
+        _q6k_prep(Q8KVec(div(value_dim, QK_K))),
+        _q6k_prep(Q8KVec(div(max(Int(ff), 1), QK_K))),
         zeros(R, 1, dim),
         zeros(R, 1, dim),
         zeros(R, 1, dim),
@@ -188,7 +188,8 @@ end
 # Q8_K kernel over `xq`'s width, `x` is quantized once into `xq` and the
 # weights run as one group (`_quant_matmul_group!`). Otherwise, and whenever
 # `xq` is `nothing` (prefill, the reference path), the backend runs them as
-# `_matmul_shared_input!`.
+# `_matmul_shared_input!`. A prepped `xq` is prepped once here when a weight of
+# the group reads it (see `_decode_group_act`).
 function _dec_matmul_group!(cpu, dsts::Tuple, xq, x::Activation, ws::Tuple, wl)
     if xq !== nothing &&
        all(
@@ -196,11 +197,32 @@ function _dec_matmul_group!(cpu, dsts::Tuple, xq, x::Activation, ws::Tuple, wl)
             w.storage.ne0 == length(xq),
         ws,
     )
-        quantize_q8_K!(xq, x.storage)
-        _quant_matmul_group!(map(d -> d.storage, dsts), xq, map(w -> w.storage, ws))
+        quantize_q8_K!(_q8k_of(xq), x.storage)
+        _quant_matmul_group!(
+            map(d -> d.storage, dsts),
+            _decode_group_act(xq, ws),
+            map(w -> w.storage, ws),
+        )
         return dsts
     end
     return _matmul_shared_input!(cpu, dsts, x, ws, wl)
+end
+
+_q8k_of(x::Q8KVec) = x
+_q8k_of(x::Q6KPrepVec) = x.q
+
+# The column a decode group reads: the prepped one when the AVX2 kernels and
+# the multi path are on (GESSO_PREFILL_MULTI=0 turns this off with prefill's)
+# and some weight of the group is a prep type. The prep is O(width) against the
+# group's O(rows * width), so one prep-type weight pays for it.
+_decode_group_act(xq::Q8KVec, ::Tuple) = xq
+function _decode_group_act(xq::Q6KPrepVec, ws::Tuple)
+    (
+        q8k_simd_enabled() &&
+        _prefill_multi_enabled() &&
+        any(w -> _q6k_prep_type(w.storage.ggml_type), ws)
+    ) || return xq.q
+    return _q6k_prep!(xq)
 end
 
 # A device backend may quantize the shared input once for the whole group (the
