@@ -203,8 +203,11 @@ function _cpu_rope_storage!(
     return storage
 end
 
+# The angle depends on the position and the pair, not the head, so each
+# (t, i) angle is computed once and applied to every head. Each element still
+# gets the same c and s from the same expression.
 function _cpu_rope_rows!(storage, positions, tθ, inv_freq, interleaved, rotary_dim, rows)
-    for t in rows, h in axes(storage, 2)
+    for t in rows
         m = Float64(positions[t])           # 0-based position
         d = size(storage, 3)                # d_head, even by contract
         rd = rotary_dim == 0 ? d : rotary_dim
@@ -212,9 +215,11 @@ function _cpu_rope_rows!(storage, positions, tθ, inv_freq, interleaved, rotary_
             θ = inv_freq === nothing ? m * tθ^(-2i / rd) : m * inv_freq[i+1]
             c, s = cos(θ), sin(θ)
             a, b = interleaved ? (2i + 1, 2i + 2) : (i + 1, i + 1 + rd ÷ 2)
-            x1, x2 = storage[t, h, a], storage[t, h, b]
-            storage[t, h, a] = x1 * c - x2 * s
-            storage[t, h, b] = x1 * s + x2 * c
+            for h in axes(storage, 2)
+                x1, x2 = storage[t, h, a], storage[t, h, b]
+                storage[t, h, a] = x1 * c - x2 * s
+                storage[t, h, b] = x1 * s + x2 * c
+            end
         end
     end
     return nothing
