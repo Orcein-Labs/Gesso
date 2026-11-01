@@ -37,12 +37,12 @@ struct CPUDecodeScratch{R <: AbstractFloat}
     nslab::Int
     # Q8_K quantizations of the shared decode inputs, one per input width:
     # residual stream (dim), attention merged (qdim), GDN merged (value_dim),
-    # FFN hidden (ff). Each is filled once per input and read by every
-    # projection of that input.
-    xq_dim::Q8KVec
-    xq_qdim::Q8KVec
-    xq_vdim::Q8KVec
-    xq_ff::Q8KVec
+    # FFN hidden (ff). Each is filled once per input, prepped for the K-quant
+    # multi kernels, and read by every projection of that input.
+    xq_dim::Q6KPrepVec
+    xq_qdim::Q6KPrepVec
+    xq_vdim::Q6KPrepVec
+    xq_ff::Q6KPrepVec
     # Decode activations, reused by every token. The residual stream, the
     # normed inputs, the projection outputs and the attention heads all live
     # here, so a decode step allocates nothing for them.
@@ -113,10 +113,10 @@ function _cpu_decode_scratch(
         zeros(Float32, nv),
         zeros(Float32, nv),
         nslab,
-        Q8KVec(div(Int(dim), QK_K)),
-        Q8KVec(div(max(Int(qdim), 1), QK_K)),
-        Q8KVec(div(value_dim, QK_K)),
-        Q8KVec(div(max(Int(ff), 1), QK_K)),
+        _q6k_prep(Q8KVec(div(Int(dim), QK_K))),
+        _q6k_prep(Q8KVec(div(max(Int(qdim), 1), QK_K))),
+        _q6k_prep(Q8KVec(div(value_dim, QK_K))),
+        _q6k_prep(Q8KVec(div(max(Int(ff), 1), QK_K))),
         zeros(R, 1, dim),
         zeros(R, 1, dim),
         zeros(R, 1, dim),
@@ -188,7 +188,8 @@ end
 # Q8_K kernel over `xq`'s width, `x` is quantized once into `xq` and the
 # weights run as one group (`_quant_matmul_group!`). Otherwise, and whenever
 # `xq` is `nothing` (prefill, the reference path), the backend runs them as
-# `_matmul_shared_input!`.
+# `_matmul_shared_input!`. A prepped `xq` is prepped once here when a weight of
+# the group reads it (see `_decode_group_act`).
 function _dec_matmul_group!(cpu, dsts::Tuple, xq, x::Activation, ws::Tuple, wl)
     if xq !== nothing &&
        all(
@@ -196,11 +197,72 @@ function _dec_matmul_group!(cpu, dsts::Tuple, xq, x::Activation, ws::Tuple, wl)
             w.storage.ne0 == length(xq),
         ws,
     )
-        quantize_q8_K!(xq, x.storage)
-        _quant_matmul_group!(map(d -> d.storage, dsts), xq, map(w -> w.storage, ws))
+        quantize_q8_K!(_q8k_of(xq), x.storage)
+        _quant_matmul_group!(
+            map(d -> d.storage, dsts),
+            _decode_group_act(xq, ws),
+            map(w -> w.storage, ws),
+        )
         return dsts
     end
     return _matmul_shared_input!(cpu, dsts, x, ws, wl)
+end
+
+_q8k_of(x::Q8KVec) = x
+_q8k_of(x::Q6KPrepVec) = x.q
+
+# The column a decode group reads: the prepped one when the AVX2 kernels and
+# the multi path are on (GESSO_PREFILL_MULTI=0 turns this off with prefill's)
+# and some weight of the group is a prep type. The prep is O(width) against the
+# group's O(rows * width), so one prep-type weight pays for it.
+_decode_group_act(xq::Q8KVec, ::Tuple) = xq
+function _decode_group_act(xq::Q6KPrepVec, ws::Tuple)
+    (
+        q8k_simd_enabled() &&
+        _prefill_multi_enabled() &&
+        any(w -> _q6k_prep_type(w.storage.ggml_type), ws)
+    ) || return xq.q
+    return _q6k_prep!(xq)
+end
+
+# Decode FFN activation, act = swiglu or geglu of (gate, up). Below the
+# 1 << 18 elements where the operators split work across spawned tasks, host
+# Float32 arrays run on the persistent pool in contiguous ranges. Every element
+# is the same scalar expression, so the result is bit-identical to the serial
+# loop for any chunk count. Anything else takes the operator path.
+const _DEC_ACT_POOL_MIN = 1 << 12
+const _DEC_ACT_CHUNK_MIN = 512
+
+struct _DecActChunk{GEGLU, A}
+    d::A
+    g::A
+    u::A
+    n::Int
+    nc::Int
+end
+
+function (f::_DecActChunk{GEGLU})(c::Int) where {GEGLU}
+    lo = div((c - 1) * f.n, f.nc) + 1
+    hi = div(c * f.n, f.nc)
+    if GEGLU
+        _cpu_geglu!(view(f.d, lo:hi), view(f.g, lo:hi), view(f.u, lo:hi))
+    else
+        _cpu_swiglu_range!(f.d, f.g, f.u, lo:hi)
+    end
+    return nothing
+end
+
+function _dec_ffn_act!(cpu, act, gate, up, geglu::Bool, wl)
+    d, g, u = act.storage, gate.storage, up.storage
+    n = length(d)
+    if cpu isa CPUBackend && d isa Array{Float32} && g isa typeof(d) && u isa typeof(d) &&
+       size(g) == size(u) == size(d) && Threads.nthreads() > 1 &&
+       _DEC_ACT_POOL_MIN <= n < 1 << 18
+        nc = min(Threads.nthreads(), div(n, _DEC_ACT_CHUNK_MIN))
+        _pool_run_chunks!(_DecActChunk{geglu, typeof(d)}(d, g, u, n, nc), nc)
+        return act
+    end
+    return geglu ? _geglu!(cpu, act, gate, up) : swiglu!(cpu, act, gate, up, wl)
 end
 
 # A device backend may quantize the shared input once for the whole group (the

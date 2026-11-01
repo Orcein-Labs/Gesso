@@ -572,8 +572,7 @@ function _window_dense_ffn!(bt, hwin, subT, W, bufs, cpu, wl, zeros_like; eps)
     act = Activation(; shape=size(W.ffn_act), storage=W.ffn_act)
     gate = Activation(; shape=size(W.ffn_gate), storage=W.ffn_gate)
     up = Activation(; shape=size(W.ffn_up), storage=W.ffn_up)
-    @decode_sub :ffn_act cpu haskey(bt, :ffn_geglu) ? _geglu!(cpu, act, gate, up) :
-        swiglu!(cpu, act, gate, up, wl)
+    @decode_sub :ffn_act cpu _dec_ffn_act!(cpu, act, gate, up, haskey(bt, :ffn_geglu), wl)
     @decode_sub :ffn_down cpu _window_matmul!(cpu, W.ffn_down, W.ffn_act, bt.wdown, wl, zeros_like)
     _add_storage!(hwin, W.ffn_down)
     return hwin

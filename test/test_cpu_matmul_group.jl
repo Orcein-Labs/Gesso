@@ -174,3 +174,111 @@ end
     _GI._quant_matmul_group!(do_, xqo, ws)
     @test all(_bits(a) != _bits(b) for (a, b) in zip(do_, dsts))
 end
+
+# Decode groups read a prepped column: Q3_K..Q6_K rows run the one-column multi
+# kernel, other types the plain dot. Either way each row must keep the bits of
+# the plain group.
+@testset "shared-input group matmul: prepped column, K = 1 multi kernel" begin
+    rng = Xoshiro(20261031)
+    ne0 = 768
+    tys = (
+        _GI.GGML_TYPE_Q2_K,
+        _GI.GGML_TYPE_Q3_K,
+        _GI.GGML_TYPE_Q4_K,
+        _GI.GGML_TYPE_Q5_K,
+        _GI.GGML_TYPE_Q6_K,
+    )
+    ws = map((ty, n) -> _group_random_kq(rng, ty, n, ne0), tys, (11, 33, 64, 17, 40))
+    x = randn(rng, Float32, 1, ne0)
+    xq = _GI.Q8KVec(div(ne0, _GI.QK_K))
+    _GI.quantize_q8_K!(xq, vec(x))
+    p = _GI._q6k_prep(_GI.Q8KVec(div(ne0, _GI.QK_K)))
+    _GI.quantize_q8_K!(p.q, vec(x))
+    _GI._q6k_prep!(p)
+    plain = map(w -> zeros(Float32, 1, w.nrows), ws)
+    prep = map(w -> zeros(Float32, 1, w.nrows), ws)
+    _GI._quant_matmul_group!(plain, xq, ws)
+    _GI._quant_matmul_group!(prep, p, ws)
+    for (a, b) in zip(plain, prep)
+        @test _bits(a) == _bits(b)
+    end
+    # each type alone, so a chunk split inside one weight is covered too
+    for w in ws
+        a = zeros(Float32, 1, w.nrows)
+        b = zeros(Float32, 1, w.nrows)
+        _GI._quant_matmul_group!((a,), xq, (w,))
+        _GI._quant_matmul_group!((b,), p, (w,))
+        @test _bits(a) == _bits(b)
+    end
+
+    # negative control: a prep left stale after requantizing must change the
+    # prep-type rows, so those rows do read xp and mo
+    _GI.quantize_q8_K!(p.q, randn(rng, Float32, ne0))
+    stale = map(w -> zeros(Float32, 1, w.nrows), ws)
+    _GI._quant_matmul_group!(stale, p, ws)
+    _GI._q6k_prep!(p)
+    fresh = map(w -> zeros(Float32, 1, w.nrows), ws)
+    _GI._quant_matmul_group!(fresh, p, ws)
+    if _GI.q8k_simd_enabled()
+        for (ty, a, b) in zip(tys, stale, fresh)
+            @test (_bits(a) == _bits(b)) == !_GI._q6k_prep_type(ty)
+        end
+    end
+
+    # the decode helper quantizes into p.q and preps once per group
+    xa = Gesso.Activation(; shape=(1, ne0), storage=randn(rng, Float32, 1, ne0))
+    pw = map(w -> Gesso.ProjectionWeight((w.nrows, ne0), w), ws)
+    outs = map(
+        w -> Gesso.Activation(; shape=(1, w.nrows), storage=zeros(Float32, 1, w.nrows)),
+        ws,
+    )
+    _GI._dec_matmul_group!(
+        _GI.CPUBackend(),
+        outs,
+        _GI._q6k_prep(_GI.Q8KVec(div(ne0, _GI.QK_K))),
+        xa,
+        pw,
+        Gesso.Semantics.DecodeWorkload(),
+    )
+    for (o, w) in zip(outs, ws)
+        ref = zeros(Float32, 1, w.nrows)
+        _GI._quant_matmul!(ref, xa.storage, w)
+        @test all(isfinite, ref)
+        @test _bits(o.storage) == _bits(ref)
+    end
+end
+
+@testset "decode FFN activation on the pool matches the serial loop" begin
+    rng = Xoshiro(20261101)
+    cpu = _GI.CPUBackend()
+    wl = Gesso.Semantics.DecodeWorkload()
+    for n in (4096, 6656, 9729), geglu in (false, true)
+        g = 4.0f0 .* randn(rng, Float32, 1, n)
+        g[1:4] .= (-0.0f0, 0.0f0, 30.0f0, -30.0f0)
+        u = randn(rng, Float32, 1, n)
+        ref = zeros(Float32, 1, n)
+        geglu ? Gesso._cpu_geglu!(ref, g, u) : Gesso._cpu_swiglu_range!(ref, g, u, 1:n)
+        act = Gesso.Activation(; shape=(1, n), storage=fill(NaN32, 1, n))
+        _GI._dec_ffn_act!(
+            cpu,
+            act,
+            Gesso.Activation(; shape=(1, n), storage=g),
+            Gesso.Activation(; shape=(1, n), storage=u),
+            geglu,
+            wl,
+        )
+        @test _bits(act.storage) == _bits(ref)
+
+        # the chunks tile 1:n exactly, in any order
+        nc = 7
+        d = fill(NaN32, 1, n)
+        f = _GI._DecActChunk{geglu, Matrix{Float32}}(d, g, u, n, nc)
+        foreach(f, nc:-1:1)
+        @test _bits(d) == _bits(ref)
+
+        # negative control: a skipped chunk leaves its range unwritten
+        d2 = fill(NaN32, 1, n)
+        foreach(_GI._DecActChunk{geglu, Matrix{Float32}}(d2, g, u, n, nc), 1:(nc - 1))
+        @test _bits(d2) != _bits(ref)
+    end
+end

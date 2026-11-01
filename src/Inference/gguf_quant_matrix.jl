@@ -649,17 +649,20 @@ _quant_q8k_kind(q::QuantMatrix) =
     _quant_matmul_group!(dsts, xq, ws; simd) -> dsts
 
 Seq = 1 projections of one shared input. `xq` is the Q8_K quantization of the
-input row (`Q8KVec`, length `ws[m].ne0`), `dsts[m]` a `(1, ws[m].nrows)` Float32
-matrix, and every `ws[m]` a `QuantMatrix` of Q8_K kind (see `_quant_q8k_kind`).
+input row (`Q8KVec`, length `ws[m].ne0`), or that quantization prepped by
+`_q6k_prep!` (`Q6KPrepVec`), `dsts[m]` a `(1, ws[m].nrows)` Float32 matrix, and
+every `ws[m]` a `QuantMatrix` of Q8_K kind (see `_quant_q8k_kind`).
 
 The rows of all weights form one range, split into row chunks that run as a
 single threaded pass. Each output row is the same `_dot_q8k` on the same
 `xq` as `_quant_matmul!` uses for that weight alone, so the outputs are
-bit-identical to separate matmuls for any chunk count.
+bit-identical to separate matmuls for any chunk count. With a prepped `xq`,
+Q3_K..Q6_K rows run the one-column multi kernel instead, which is bit-equal
+to `_dot_q8k` and about twice as fast per core.
 """
 function _quant_matmul_group!(
     dsts::Tuple,
-    xq::Q8KVec,
+    xq::Union{Q8KVec, Q6KPrepVec},
     ws::Tuple;
     simd::Bool=q8k_simd_enabled(),
 )
@@ -680,10 +683,10 @@ end
 
 # One chunk of a group pass, as a callable struct: the pool keeps a reference to
 # it for the call, so it is built once per call and its fields never change.
-struct _GroupChunk{D <: Tuple, W <: Tuple}
+struct _GroupChunk{D <: Tuple, W <: Tuple, X <: Union{Q8KVec, Q6KPrepVec}}
     dsts::D
     ws::W
-    xq::Q8KVec
+    xq::X
     total::Int
     nc::Int
     simd::Bool
@@ -707,7 +710,7 @@ _group_rows(ws::Tuple) = sum(w -> w.nrows, ws; init=0)
     base::Int,
     g0::Int,
     g1::Int,
-    xq::Q8KVec,
+    xq::Union{Q8KVec, Q6KPrepVec},
     simd::Bool,
 )
     w = first(ws)
@@ -724,8 +727,15 @@ _group_rows(ws::Tuple) = sum(w -> w.nrows, ws; init=0)
         simd,
     )
 end
-@inline _group_segments!(::Tuple{}, ::Tuple{}, ::Int, ::Int, ::Int, ::Q8KVec, ::Bool) =
-    nothing
+@inline _group_segments!(
+    ::Tuple{},
+    ::Tuple{},
+    ::Int,
+    ::Int,
+    ::Int,
+    ::Union{Q8KVec, Q6KPrepVec},
+    ::Bool,
+) = nothing
 
 # Rows j0:j1 of `w` into row 1 of `dst`, written as `alpha * acc + beta * y`
 # with alpha = 1 and beta = 0, the expression `_qgemv_q8k_rows!` evaluates.
@@ -745,6 +755,43 @@ function _gemv_q8k_rows_into!(
     @inbounds for j in j0:j1
         acc = _dot_q8k(t, data, base + (j - 1) * rb, xq, simd)
         dst[1, j] = 1.0f0 * acc + 0.0f0
+    end
+    return dst
+end
+
+# One prepped column as the column vector the multi kernels index, so a decode
+# row runs a K = 1 tile without allocating a Vector per call.
+struct _OneCol <: AbstractVector{Q6KPrepVec}
+    x::Q6KPrepVec
+end
+Base.size(::_OneCol) = (1,)
+Base.@propagate_inbounds function Base.getindex(c::_OneCol, i::Int)
+    @boundscheck i == 1 || throw(BoundsError(c, i))
+    return c.x
+end
+
+# The prepped column: a Q3_K, Q4_K, Q5_K or Q6_K row is a K = 1 multi tile,
+# whose integer lanes and final fmul and fadd match `_dot_q8k`, so the row has
+# the same bits. The store is the same `alpha * acc + beta * y` as above (it
+# turns a -0.0 dot into +0.0). Other types read the plain column.
+function _gemv_q8k_rows_into!(
+    dst::AbstractMatrix{Float32},
+    xq::Q6KPrepVec,
+    w::QuantMatrix,
+    j0::Int,
+    j1::Int,
+    simd::Bool,
+)
+    t = w.ggml_type
+    (simd && _q6k_prep_type(t)) || return _gemv_q8k_rows_into!(dst, xq.q, w, j0, j1, simd)
+    rb = _qrow_bytes(t, w.ne0)
+    data = w.data
+    base = w.offset0
+    col = _OneCol(xq)
+    @inbounds for j in j0:j1
+        out = view(dst, 1, j:j)
+        _dot_q8k_multi_kernel!(out, t, data, base + (j - 1) * rb, col, 1, Val(1))
+        dst[1, j] = 1.0f0 * out[1] + 0.0f0
     end
     return dst
 end
