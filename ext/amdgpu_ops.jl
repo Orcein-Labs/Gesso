@@ -72,7 +72,8 @@ end
         end
         @synchronize
     end
-    if @index(Local, Linear) == 1
+    lane = @index(Local, Linear)
+    if lane == 1
         stat[1] = part[1]
     end
     @synchronize
@@ -98,7 +99,8 @@ end
         end
         @synchronize
     end
-    if @index(Local, Linear) == 1
+    lane = @index(Local, Linear)
+    if lane == 1
         stat[2] = part[1]
     end
     @synchronize
