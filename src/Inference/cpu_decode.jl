@@ -35,9 +35,6 @@ struct CPUDecodeScratch{R <: AbstractFloat}
     decay::Vector{Float32}        # (nv,)
     beta::Vector{Float32}         # (nv,)
     nslab::Int
-    # True for a model with a GDN mixer. Only then do the decode projections
-    # take the Q8_K route read through `_decode_xq`.
-    hybrid::Bool
     # Q8_K quantizations of the shared decode inputs, one per input width:
     # residual stream (dim), attention merged (qdim), GDN merged (value_dim),
     # FFN hidden (ff). Each is filled once per input and read by every
@@ -116,7 +113,6 @@ function _cpu_decode_scratch(
         zeros(Float32, nv),
         zeros(Float32, nv),
         nslab,
-        mx !== nothing && !(mx isa ShortConvSpec),
         Q8KVec(div(Int(dim), QK_K)),
         Q8KVec(div(max(Int(qdim), 1), QK_K)),
         Q8KVec(div(value_dim, QK_K)),
@@ -164,10 +160,13 @@ end
     getfield(sc, N)
 
 # The Q8_K input of one decode projection group, or `nothing` for the generic
-# matmul. Only a hybrid model takes the Q8_K route. A dense model keeps the
-# generic route it had before the scratch covered it, so its numerics do not move.
+# matmul. Float32 rows take the Q8_K route, hybrid and dense alike: the
+# per-weight `_quant_matmul!` quantizes the same Float32 row to Q8_K for every
+# weight, so one shared quantization gives the same bits. Rows of any other
+# type keep the generic route.
 _decode_xq(::Nothing, ::Val) = nothing
-_decode_xq(sc::CPUDecodeScratch, ::Val{N}) where {N} = sc.hybrid ? getfield(sc, N) : nothing
+_decode_xq(sc::CPUDecodeScratch{Float32}, ::Val{N}) where {N} = getfield(sc, N)
+_decode_xq(::CPUDecodeScratch, ::Val) = nothing
 # A device backend's head scratch (`_head_scratch`) is a NamedTuple that
 # carries its own `xq_dim`, as it did before the CPU scratch took this route.
 _decode_xq(buf::NamedTuple, ::Val{N}) where {N} = getfield(buf, N)
@@ -186,12 +185,17 @@ function _copy_row!(dst::AbstractMatrix, src::AbstractMatrix, row::Int)
 end
 
 # Seq = 1 projections of one input `x` into `dsts`. When every weight has a
-# Q8_K kernel, `x` is quantized once into `xq` and the weights run as one
-# group (`_quant_matmul_group!`). Otherwise, and whenever `xq` is `nothing`
-# (prefill, the reference path), the backend runs them as `_matmul_shared_input!`.
+# Q8_K kernel over `xq`'s width, `x` is quantized once into `xq` and the
+# weights run as one group (`_quant_matmul_group!`). Otherwise, and whenever
+# `xq` is `nothing` (prefill, the reference path), the backend runs them as
+# `_matmul_shared_input!`.
 function _dec_matmul_group!(cpu, dsts::Tuple, xq, x::Activation, ws::Tuple, wl)
     if xq !== nothing &&
-       all(w -> w.storage isa QuantMatrix && _quant_q8k_kind(w.storage), ws)
+       all(
+        w -> w.storage isa QuantMatrix && _quant_q8k_kind(w.storage) &&
+            w.storage.ne0 == length(xq),
+        ws,
+    )
         quantize_q8_K!(xq, x.storage)
         _quant_matmul_group!(map(d -> d.storage, dsts), xq, map(w -> w.storage, ws))
         return dsts
