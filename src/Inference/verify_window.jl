@@ -596,8 +596,9 @@ function _window_attn_batch_ok(bt, W, bufs)
 end
 
 # The FFN half of a block over all rows. `subT` is the mixer output for every
-# row. Dense FFNs run gate, up and down over all rows. A MoE FFN routes each row
-# on its own, as decode does, so its rows run through the decode block.
+# row. Dense FFNs run gate, up and down over all rows, and so does a softmax MoE
+# on GGUF expert slabs (`_window_moe_ffn!`). Any other MoE runs its rows through
+# the decode block.
 function _window_ffn_block!(
     bt,
     hwin::AbstractMatrix,
@@ -611,6 +612,10 @@ function _window_ffn_block!(
 )
     T = size(hwin, 1)
     if haskey(bt, :wrouter)
+        if _window_moe_ok(bt, hwin, W, cpu)
+            _window_moe_ffn!(bt, hwin, subT, W, bufs, cpu, wl, zeros_like; eps)
+            return hwin
+        end
         for t in 1:T
             _win_load!(bufs.hp.storage, hwin, t)
             _win_load!(bufs.sub.storage, subT, t)
@@ -620,6 +625,77 @@ function _window_ffn_block!(
         return hwin
     end
     @decode_stage :dense_ffn cpu _window_dense_ffn!(bt, hwin, subT, W, bufs, cpu, wl, zeros_like; eps)
+    return hwin
+end
+
+# The window MoE path needs host Float32 rows, softmax routing and GGUF expert
+# slabs. Biased or sigmoid routers (LFM) and other banks keep the row loop.
+function _window_moe_ok(bt, hwin, W, cpu)
+    cpu isa CPUBackend || return false
+    haskey(bt, :wrouter_bias) && return false
+    haskey(bt, :router_gating) && bt.router_gating === :sigmoid && return false
+    hwin isa Matrix{Float32} && W.normed2 isa Matrix{Float32} &&
+        W.ffn_down isa Matrix{Float32} || return false
+    bt.wrouter.storage isa AbstractMatrix || return false
+    all(k -> haskey(bt, k), (:wexp_gate, :wexp_up, :wexp_down)) || return false
+    return bt.wexp_gate.storage isa GgufQuantSlice &&
+           bt.wexp_up.storage isa GgufQuantSlice &&
+           bt.wexp_down.storage isa GgufQuantSlice
+end
+
+# `_moe_ffn!` over all rows. The routed experts take the seq > 1 host route,
+# whose routing and expert sums match the one-token route op for op
+# (test_moe_host_prefill.jl). The shared expert's products go through
+# `_window_matmul!`, and its swiglu and sigmoid gate are per element and per row,
+# so every row gets decode's bits.
+function _window_moe_ffn!(bt, hwin, subT, W, bufs, cpu, wl, zeros_like; eps)
+    T, h = size(hwin)
+    _add_storage!(hwin, subT)
+    _window_rmsnorm!(cpu, W.normed2, hwin, bufs.hp, bufs.normed2, bt.ffn_rms, wl; eps)
+    x = W.normed2
+    y = W.ffn_down
+    n_used =
+        haskey(bt, :n_expert_used) ? Int(bt.n_expert_used) : size(bt.wrouter.storage, 1)
+    shared = haskey(bt, :wshared_gate)
+    sd = shared ? zeros_like((T, h)) : nothing
+    if shared
+        @decode_stage :shared_expert cpu begin
+            ff = size(bt.wshared_gate.storage, 1)
+            sg = zeros_like((T, ff))
+            su = zeros_like((T, ff))
+            sa = zeros_like((T, ff))
+            _window_matmul!(cpu, sg, x, bt.wshared_gate, wl, zeros_like)
+            _window_matmul!(cpu, su, x, bt.wshared_up, wl, zeros_like)
+            swiglu!(
+                cpu,
+                Activation(; shape=(T, ff), storage=sa),
+                Activation(; shape=(T, ff), storage=sg),
+                Activation(; shape=(T, ff), storage=su),
+                wl,
+            )
+            _window_matmul!(cpu, sd, sa, bt.wshared_down, wl, zeros_like)
+        end
+    end
+    _moe_topk_swiglu!(
+        cpu,
+        y,
+        x,
+        bt.wrouter.storage,
+        bt.wexp_gate.storage,
+        bt.wexp_up.storage,
+        bt.wexp_down.storage,
+        n_used,
+    )
+    if shared
+        @decode_stage :shared_expert cpu begin
+            if haskey(bt, :wshared_gate_inp)
+                _shared_gate_add!(cpu, y, x, sd, bt.wshared_gate_inp.storage)
+            else
+                y .+= sd
+            end
+        end
+    end
+    _add_storage!(hwin, y)
     return hwin
 end
 

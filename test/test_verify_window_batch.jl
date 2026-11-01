@@ -155,3 +155,64 @@ end
         close(oracle)
     end
 end
+
+# A random GGUF expert slab: `nexp` experts of (ne1, ne0), finite super-scales.
+function _vwb_slice(rng, ty::Int32, nexp::Int, ne0::Int, ne1::Int)
+    qm = _vwb_random_qm(rng, ty, nexp * ne1, ne0)
+    blk = ty == _GIB.GGML_TYPE_Q8_0 ? 32 : _GIB.QK_K
+    return Gesso.GgufQuantSlice(qm.data, 0, ty, nexp, ne0, ne1, ne1 * qm.row_bytes, Int64(blk))
+end
+
+# The window MoE FFN must give each row the bits of `_decode_ffn_block!` on that
+# row alone: K-quant slabs (batched host route), Q8_0 slabs (per-token route),
+# and a shared expert with and without its sigmoid gate, quantized or dense.
+@testset "verify window: batched MoE FFN vs decode rows" begin
+    rng = Xoshiro(20261101)
+    h, ff, nexp, T = 256, 256, 4, 5
+    cpu = Gesso.CPUBackend()
+    wl = _GIB.DecodeWorkload()
+    zl = dims -> zeros(Float32, dims)
+    pw(a) = Gesso.ProjectionWeight(; shape=size(a), storage=a)
+    fz(a) = Gesso.FrozenParameter(; shape=size(a), storage=a)
+    cases = (
+        (_GIB.GGML_TYPE_Q2_K, _GIB.GGML_TYPE_Q3_K, :quant, true),
+        (_GIB.GGML_TYPE_Q4_K, _GIB.GGML_TYPE_Q6_K, :quant, false),
+        (_GIB.GGML_TYPE_Q5_K, _GIB.GGML_TYPE_Q4_K, :dense, true),
+        (_GIB.GGML_TYPE_Q4_K, _GIB.GGML_TYPE_Q4_K, :none, false),
+        (_GIB.GGML_TYPE_Q8_0, _GIB.GGML_TYPE_Q8_0, :quant, true),
+    )
+    for (tgu, tdown, shared, gated) in cases
+        bt = (;
+            ffn_rms=fz(1.0f0 .+ 0.1f0 .* randn(rng, Float32, h)),
+            wrouter=pw(randn(rng, Float32, nexp, h)),
+            n_expert_used=2,
+            wexp_gate=(storage=_vwb_slice(rng, tgu, nexp, h, ff),),
+            wexp_up=(storage=_vwb_slice(rng, tgu, nexp, h, ff),),
+            wexp_down=(storage=_vwb_slice(rng, tdown, nexp, ff, h),),
+        )
+        if shared !== :none
+            sw(rows, cols) =
+                shared === :quant ?
+                pw(_vwb_random_qm(rng, _GIB.GGML_TYPE_Q4_K, rows, cols)) :
+                pw(0.05f0 .* randn(rng, Float32, rows, cols))
+            bt = merge(bt, (wshared_gate=sw(ff, h), wshared_up=sw(ff, h), wshared_down=sw(h, ff)))
+            gated && (bt = merge(bt, (wshared_gate_inp=fz(0.1f0 .* randn(rng, Float32, h)),)))
+        end
+        h0 = randn(rng, Float32, T, h)
+        subT = randn(rng, Float32, T, h)
+        bufs = _GIB._decode_row_buffers(nothing, zl, h, 8, 8, 1, 1, 8, ff)
+        W = (normed2=zl((T, h)), ffn_down=zl((T, h)))
+        @test _GIB._window_moe_ok(bt, h0, W, cpu)
+        hwin = copy(h0)
+        _GIB._window_ffn_block!(bt, hwin, subT, W, bufs, cpu, wl, zl; eps=1e-6)
+        ref = copy(h0)
+        for t in 1:T
+            _GIB._win_load!(bufs.hp.storage, ref, t)
+            _GIB._win_load!(bufs.sub.storage, subT, t)
+            _GIB._decode_ffn_block!(bt, bufs, cpu, wl, zl; eps=1e-6)
+            _GIB._win_store!(ref, t, bufs.hp.storage)
+        end
+        @test all(isfinite, ref)
+        @test _bits_vw(hwin) == _bits_vw(ref)
+    end
+end
