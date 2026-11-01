@@ -265,6 +265,57 @@ function _dec_ffn_act!(cpu, act, gate, up, geglu::Bool, wl)
     return geglu ? _geglu!(cpu, act, gate, up) : swiglu!(cpu, act, gate, up, wl)
 end
 
+# Decode's one-row KV append on host caches. The cache is (ctx, n_kv_heads,
+# d_head), so the row is n_kv_heads * d_head scattered writes, one cache line
+# each, and the weight stream of the step before has evicted those lines:
+# every write waits on a read for ownership. Split across the pool, the
+# misses overlap across cores. It is a copy, so any split writes the same
+# cache. Below the pool size, or for any other shape, the broadcast runs.
+const _KV_APPEND_POOL_MIN = 1 << 10
+const _KV_APPEND_CHUNK_MIN = 128
+
+struct _KVAppendChunk{T}
+    kc::Array{T, 3}
+    vc::Array{T, 3}
+    kh::Array{T, 3}
+    vh::Array{T, 3}
+    row::Int
+    n::Int
+    nc::Int
+end
+
+function (f::_KVAppendChunk)(c::Int)
+    lo = div((c - 1) * f.n, f.nc) + 1
+    hi = div(c * f.n, f.nc)
+    ctx = size(f.kc, 1)
+    @inbounds for i in lo:hi
+        o = f.row + ctx * (i - 1)
+        f.kc[o] = f.kh[i]
+        f.vc[o] = f.vh[i]
+    end
+    return nothing
+end
+
+function _kv_append_storage!(
+    kc::Array{T, 3},
+    vc::Array{T, 3},
+    kh::Array{T, 3},
+    vh::Array{T, 3},
+    row::Int,
+) where {T}
+    n = length(kh)
+    if size(kh, 1) == 1 && size(vh) == size(kh) && size(vc) == size(kc) &&
+       size(kc, 2) == size(kh, 2) && size(kc, 3) == size(kh, 3) &&
+       1 <= row <= size(kc, 1) && Threads.nthreads() > 1 && n >= _KV_APPEND_POOL_MIN
+        nc = min(Threads.nthreads(), div(n, _KV_APPEND_CHUNK_MIN))
+        _pool_run_chunks!(_KVAppendChunk{T}(kc, vc, kh, vh, row, n, nc), nc)
+        return nothing
+    end
+    @views kc[row, :, :] .= kh[1, :, :]
+    @views vc[row, :, :] .= vh[1, :, :]
+    return nothing
+end
+
 # A device backend may quantize the shared input once for the whole group (the
 # CUDA extension does); here each projection is an ordinary `matmul!`.
 function _matmul_shared_input!(cpu, dsts::Tuple, x::Activation, ws::Tuple, wl)
