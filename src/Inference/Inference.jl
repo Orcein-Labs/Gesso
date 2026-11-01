@@ -2076,6 +2076,8 @@ function reference_generate(
             )
             flush(stdout)
         end
+        # the correction a verify window already computed for the row in `h`
+        pending = -1
         while steps < cap
             tok_t0 = _profile_token_begin()
             # the row the head below reads belongs to ids[P + steps], the last input
@@ -2083,23 +2085,28 @@ function reference_generate(
                 on_hidden(P + steps, _final_normed_host(tensors, h, cpu, wd; eps))
             # greedy argmax at the current last position (row P + steps); the
             # argmax may run over device storage — only the scalar id crosses
-            # back to the host
+            # back to the host. After a window the argmax is already known.
             t_head = time_ns()
-            logits_row = @decode_stage :lm_head cpu _last_logits(
-                model,
-                tensors,
-                h,
-                cpu,
-                wd,
-                vocab,
-                1;
-                eps,
-                buf=cpu_scratch,
-            )
-            next = @decode_stage :sample cpu (
-                sampler === nothing ? _greedy_id(logits_row) :
-                _sample_id(sampler, logits_row)
-            )      # 0-based id
+            next = if pending >= 0
+                pending
+            else
+                logits_row = @decode_stage :lm_head cpu _last_logits(
+                    model,
+                    tensors,
+                    h,
+                    cpu,
+                    wd,
+                    vocab,
+                    1;
+                    eps,
+                    buf=cpu_scratch,
+                )
+                @decode_stage :sample cpu (
+                    sampler === nothing ? _greedy_id(logits_row) :
+                    _sample_id(sampler, logits_row)
+                )
+            end      # 0-based id
+            pending = -1
             head_ms = (time_ns() - t_head) / 1e6
             push!(ids, next)
             steps += 1
@@ -2118,9 +2125,9 @@ function reference_generate(
                 break
             end
             if draft !== nothing
-                # the window consumes the anchor and the accepted drafts; the
-                # correction is left for the next top-of-loop argmax, as in the
-                # baseline. An empty draft falls through to the plain step.
+                # the window consumes the anchor and the accepted drafts and
+                # returns the correction the next top-of-loop argmax would give.
+                # An empty draft falls through to the plain step.
                 Spec = getproperty(parentmodule(@__MODULE__), :Speculation)
                 d = Spec.propose(
                     draft,
@@ -2128,7 +2135,7 @@ function reference_generate(
                     max_tokens=min(max_draft, cap - steps),
                 )
                 if !isempty(d.ids)
-                    steps, accepted, stopped = _verify_window_round!(
+                    steps, accepted, stopped, pending = _verify_window_round!(
                         model,
                         tensors,
                         kc,

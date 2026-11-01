@@ -82,6 +82,30 @@ struct _VerifyWindow{H <: AbstractMatrix}
     preds::Vector{Int}
     recs::Vector{Any}
     tapX::Matrix{Float32}
+    cache::Union{Nothing, Dict{Any, Any}}
+end
+
+# Windows up to this many rows reuse their buffers through the decode scratch, so
+# a steady draft length allocates nothing per window. Longer windows (prompt
+# prefill chunks) allocate fresh, which keeps chunk-sized buffers from staying
+# alive for the rest of the session.
+const _WINDOW_REUSE_MAX_T = 32
+
+_window_cache(cpu_scratch, T::Int) =
+    cpu_scratch === nothing || T > _WINDOW_REUSE_MAX_T ? nothing : cpu_scratch.window
+
+# Buffers from `make()`, kept in `cache[slot]` with `key`. A hit zeroes them, so
+# a reused buffer starts as a fresh one would. A new key replaces the slot.
+function _window_reuse!(make, cache, slot, key)
+    cache === nothing && return make()
+    hit = get(cache, slot, nothing)
+    if hit !== nothing && hit[1] == key
+        foreach(b -> fill!(b, zero(eltype(b))), hit[2])
+        return hit[2]
+    end
+    bufs = make()
+    cache[slot] = (key, bufs)
+    return bufs
 end
 
 # Copies the residual rows `hwin` into the column block of each tap that equals `b`.
@@ -286,6 +310,8 @@ function _window_gdn_block!(
     rec_in,
     sc,
     eps,
+    cache=nothing,
+    bi::Int=0,
 )
     T = size(hwin, 1)
     sc === nothing && error(
@@ -299,16 +325,26 @@ function _window_gdn_block!(
     value_dim = nv * dv
     epsf = Float32(eps)
     ksz = spec.mixer.conv_kernel_dim
+    cols = _window_reuse!(cache, (:gdn, bi), (conv_dim, value_dim, nv, dk, dv, T)) do
+        (
+            zeros(Float32, conv_dim, T),
+            zeros(Float32, value_dim, T),
+            zeros(Float32, nv * dk, T),
+            zeros(Float32, nv * dk, T),
+            zeros(Float32, nv * dv, T),
+            zeros(Float32, nv, T),
+            zeros(Float32, nv, T),
+            zeros(Float32, nv * dv, T),
+        )
+    end
+    # the state this block's last commit displaced, if it can take the new state
+    spare = cache === nothing ? nothing : pop!(cache, (:spare, bi), nothing)
+    rec_out =
+        spare isa Array{Float32, 3} && size(spare) == size(rec_in) && spare !== rec_in ?
+        fill!(spare, 0.0f0) : zeros(Float32, size(rec_in))
     rec = _GDNWindowRec(
-        zeros(Float32, conv_dim, T),
-        zeros(Float32, value_dim, T),
-        zeros(Float32, nv * dk, T),
-        zeros(Float32, nv * dk, T),
-        zeros(Float32, nv * dv, T),
-        zeros(Float32, nv, T),
-        zeros(Float32, nv, T),
-        zeros(Float32, nv * dv, T),
-        zeros(Float32, size(rec_in)),
+        cols...,
+        rec_out,
         sc.nslab,
         nv,
         dk,
@@ -592,6 +628,10 @@ function _window_head!(tensors, hwin::AbstractMatrix, W, bufs, cpu, wl, zeros_li
         end
     end
     _window_matmul!(cpu, W.logits, W.hn, tensors.lm_head, wl, zeros_like)
+    # the softcap the decode head applies, so each row's argmax is decode's
+    if _spec_has_feature(tensors, :logit_softcap)
+        _apply_logit_softcap!(cpu, (storage=W.logits,), tensors)
+    end
     return W.logits
 end
 
@@ -653,18 +693,22 @@ function _decode_window!(
     )
     conv_dim = cpu_scratch === nothing ? 0 : size(cpu_scratch.mixed, 2)
     value_dim = cpu_scratch === nothing ? 0 : cpu_scratch.nv * cpu_scratch.dv
-    W = _window_buffers(
-        zeros_like,
-        T,
-        dim,
-        kdim,
-        qdim,
-        conv_dim,
-        value_dim,
-        hidden_ffn,
-        vocab,
-        head,
-    )
+    cache = _window_cache(cpu_scratch, T)
+    wkey = (typeof(hwin), T, dim, kdim, qdim, conv_dim, value_dim, hidden_ffn, vocab, head)
+    W = _window_reuse!(cache, :W, wkey) do
+        _window_buffers(
+            zeros_like,
+            T,
+            dim,
+            kdim,
+            qdim,
+            conv_dim,
+            value_dim,
+            hidden_ffn,
+            vocab,
+            head,
+        )
+    end
     tapX = zeros(Float32, isempty(taps) ? 0 : T, dim * length(taps))
     _window_tap_copy!(tapX, taps, 0, hwin, dim)
 
@@ -685,6 +729,8 @@ function _decode_window!(
                 gdn_rec[bi],
                 cpu_scratch,
                 eps,
+                cache,
+                bi,
             )
             subT = W.sub
         else
@@ -722,9 +768,9 @@ function _decode_window!(
         for t in 1:T
             preds[t] = _greedy_id(view(logits, t, :))
         end
-        return _VerifyWindow(T, hwin, logits, preds, recs, tapX)
+        return _VerifyWindow(T, hwin, logits, preds, recs, tapX, cache)
     end
-    return _VerifyWindow(T, hwin, W.logits, Int[], recs, tapX)
+    return _VerifyWindow(T, hwin, W.logits, Int[], recs, tapX, cache)
 end
 
 # Rebuilds the conv state after the first `m` window inputs. The state holds the
@@ -754,6 +800,9 @@ function _commit_window!(win::_VerifyWindow, m::Int, gdn_conv, gdn_rec, h::Activ
             _pool_run_chunks!(_GDNWindowChunk(gdn_rec[bi], rec.rec_out, rec, m), rec.nslab)
         end
         gdn_conv[bi] .= _gdn_conv_rebuild(gdn_conv[bi], rec.mixed, m)
+        # the displaced state is dead (checkpoints copy), so the next window
+        # writes its state there
+        win.cache === nothing || (win.cache[(:spare, bi)] = gdn_rec[bi])
         gdn_rec[bi] = rec.rec_out
     end
     @views h.storage[1, :] .= win.hwin[m, :]
@@ -777,8 +826,10 @@ end
 # One window round, entered right after the anchor (`ids[end]`) was emitted and
 # before it was consumed. `dids` are the non-empty drafts. Emits the accepted
 # drafts with the baseline's emission and stop rules, commits the consumed rows,
-# and leaves the correction for the caller's next top-of-loop argmax. Returns
-# `(steps, accepted, stopped)`.
+# and hands back the correction: the argmax of the last committed row, which is
+# the bits the caller's top-of-loop head would give for it, so the caller skips
+# that second head pass. Returns `(steps, accepted, stopped, correction)`, with
+# `correction == -1` when the round stopped.
 function _verify_window_round!(
     model,
     tensors,
@@ -842,12 +893,12 @@ function _verify_window_round!(
             _window_rows!(on_rows, tensors, win, base, i, cpu, wl; kw...)
             _window_taps!(on_taps, win, base, i)
             append!(sids, @view toks[1:i])
-            return (steps, i, true)
+            return (steps, i, true, -1)
         end
     end
     _commit_window!(win, n + 1, gdn_conv, gdn_rec, h)
     _window_rows!(on_rows, tensors, win, base, n + 1, cpu, wl; kw...)
     _window_taps!(on_taps, win, base, n + 1)
     append!(sids, @view toks[1:(n+1)])
-    return (steps, n, false)
+    return (steps, n, false, win.preds[n+1])
 end

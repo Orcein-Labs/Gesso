@@ -69,6 +69,7 @@ struct CPUDecodeScratch{R <: AbstractFloat}
     logits::Matrix{R}       # (1, vocab)
     lastrow::Matrix{R}      # (1, dim) final hidden row before the head
     final_normed::Matrix{R} # (1, dim) final RMSNorm output
+    window::Dict{Any, Any}  # verify-window buffers reused across windows
 end
 
 # Sizes come from the model. Attention and FFN widths default to 0 for a
@@ -140,6 +141,7 @@ function _cpu_decode_scratch(
         zeros(R, 1, vocab),
         zeros(R, 1, dim),
         zeros(R, 1, dim),
+        Dict{Any, Any}(),
     )
 end
 
