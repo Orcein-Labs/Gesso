@@ -247,3 +247,38 @@ end
         @test _bits(o.storage) == _bits(ref)
     end
 end
+
+@testset "decode FFN activation on the pool matches the serial loop" begin
+    rng = Xoshiro(20261101)
+    cpu = _GI.CPUBackend()
+    wl = Gesso.Semantics.DecodeWorkload()
+    for n in (4096, 6656, 9729), geglu in (false, true)
+        g = 4.0f0 .* randn(rng, Float32, 1, n)
+        g[1:4] .= (-0.0f0, 0.0f0, 30.0f0, -30.0f0)
+        u = randn(rng, Float32, 1, n)
+        ref = zeros(Float32, 1, n)
+        geglu ? Gesso._cpu_geglu!(ref, g, u) : Gesso._cpu_swiglu_range!(ref, g, u, 1:n)
+        act = Gesso.Activation(; shape=(1, n), storage=fill(NaN32, 1, n))
+        _GI._dec_ffn_act!(
+            cpu,
+            act,
+            Gesso.Activation(; shape=(1, n), storage=g),
+            Gesso.Activation(; shape=(1, n), storage=u),
+            geglu,
+            wl,
+        )
+        @test _bits(act.storage) == _bits(ref)
+
+        # the chunks tile 1:n exactly, in any order
+        nc = 7
+        d = fill(NaN32, 1, n)
+        f = _GI._DecActChunk{geglu, Matrix{Float32}}(d, g, u, n, nc)
+        foreach(f, nc:-1:1)
+        @test _bits(d) == _bits(ref)
+
+        # negative control: a skipped chunk leaves its range unwritten
+        d2 = fill(NaN32, 1, n)
+        foreach(_GI._DecActChunk{geglu, Matrix{Float32}}(d2, g, u, n, nc), 1:(nc - 1))
+        @test _bits(d2) != _bits(ref)
+    end
+end

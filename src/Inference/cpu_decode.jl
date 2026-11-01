@@ -225,6 +225,46 @@ function _decode_group_act(xq::Q6KPrepVec, ws::Tuple)
     return _q6k_prep!(xq)
 end
 
+# Decode FFN activation, act = swiglu or geglu of (gate, up). Below the
+# 1 << 18 elements where the operators split work across spawned tasks, host
+# Float32 arrays run on the persistent pool in contiguous ranges. Every element
+# is the same scalar expression, so the result is bit-identical to the serial
+# loop for any chunk count. Anything else takes the operator path.
+const _DEC_ACT_POOL_MIN = 1 << 12
+const _DEC_ACT_CHUNK_MIN = 512
+
+struct _DecActChunk{GEGLU, A}
+    d::A
+    g::A
+    u::A
+    n::Int
+    nc::Int
+end
+
+function (f::_DecActChunk{GEGLU})(c::Int) where {GEGLU}
+    lo = div((c - 1) * f.n, f.nc) + 1
+    hi = div(c * f.n, f.nc)
+    if GEGLU
+        _cpu_geglu!(view(f.d, lo:hi), view(f.g, lo:hi), view(f.u, lo:hi))
+    else
+        _cpu_swiglu_range!(f.d, f.g, f.u, lo:hi)
+    end
+    return nothing
+end
+
+function _dec_ffn_act!(cpu, act, gate, up, geglu::Bool, wl)
+    d, g, u = act.storage, gate.storage, up.storage
+    n = length(d)
+    if cpu isa CPUBackend && d isa Array{Float32} && g isa typeof(d) && u isa typeof(d) &&
+       size(g) == size(u) == size(d) && Threads.nthreads() > 1 &&
+       _DEC_ACT_POOL_MIN <= n < 1 << 18
+        nc = min(Threads.nthreads(), div(n, _DEC_ACT_CHUNK_MIN))
+        _pool_run_chunks!(_DecActChunk{geglu, typeof(d)}(d, g, u, n, nc), nc)
+        return act
+    end
+    return geglu ? _geglu!(cpu, act, gate, up) : swiglu!(cpu, act, gate, up, wl)
+end
+
 # A device backend may quantize the shared input once for the whole group (the
 # CUDA extension does); here each projection is an ordinary `matmul!`.
 function _matmul_shared_input!(cpu, dsts::Tuple, x::Activation, ws::Tuple, wl)

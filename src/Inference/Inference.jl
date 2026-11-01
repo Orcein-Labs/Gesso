@@ -63,6 +63,7 @@ using ..Gesso:
     _cpu_causal_conv1d_silu!,
     _cpu_sigmoid_mul!,
     _cpu_geglu!,
+    _cpu_swiglu_range!,
     _cpu_rethrow_task_error,
     _cpu_split_rows!,
     _cpu_silu,
@@ -726,11 +727,7 @@ function _ffn_block!(
         @decode_sub :ffn_gateup cpu begin
             _dec_matmul_group!(cpu, (gate, up), xq_in, normed2, (bt.wgate, bt.wup), wl)
         end
-        @decode_sub :ffn_act cpu if haskey(bt, :ffn_geglu)
-            _geglu!(cpu, act, gate, up)
-        else
-            swiglu!(cpu, act, gate, up, wl)
-        end
+        @decode_sub :ffn_act cpu _dec_ffn_act!(cpu, act, gate, up, haskey(bt, :ffn_geglu), wl)
         @decode_sub :ffn_down cpu _dec_matmul_group!(
             cpu,
             (down,),
