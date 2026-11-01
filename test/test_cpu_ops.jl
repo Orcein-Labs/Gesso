@@ -242,7 +242,12 @@ end
 # task must surface as the same GessoError the serial loop throws.
 @testset "threaded CPU rmsnorm and rope equal the serial loops" begin
     rng = Xoshiro(0x40be)
-    for xs in (randn(rng, Float32, 300, 1024), randn(rng, Float32, 300, 4, 256))
+    for xs in (
+        randn(rng, Float32, 300, 1024),
+        randn(rng, Float32, 300, 4, 256),
+        randn(rng, Float32, 5, 3, 64),
+        randn(rng, Float32, 1, 8, 128),
+    )
         ss = randn(rng, Float32, size(xs, ndims(xs)))
         nd = ndims(xs)
         stail = reshape(ss, (ntuple(_ -> 1, nd - 1)..., size(xs, nd)))
@@ -257,23 +262,27 @@ end
         )
         got = Gesso._cpu_rmsnorm_storage!(similar(xs), xs, ss, 1e-6)
         @test reinterpret(UInt32, got) == reinterpret(UInt32, ref)
+        inplace = copy(xs)
+        Gesso._cpu_rmsnorm_storage!(inplace, inplace, ss, 1e-6)
+        @test reinterpret(UInt32, inplace) == reinterpret(UInt32, ref)
     end
-    x = randn(rng, Float32, 300, 4, 256)
-    positions = collect(0:299)
-    for (inv_freq, interleaved, rd) in ((nothing, true, 0), (rand(rng, 32), false, 64))
-        ref = copy(x)
-        Gesso._cpu_rope_rows!(
-            ref,
-            positions,
-            10000.0,
-            inv_freq,
-            interleaved,
-            rd,
-            axes(ref, 1),
-        )
-        got =
-            Gesso._cpu_rope_storage!(copy(x), positions, 10000.0, inv_freq, interleaved, rd)
-        @test reinterpret(UInt32, got) == reinterpret(UInt32, ref)
+    for x in (randn(rng, Float32, 300, 4, 256), randn(rng, Float32, 7, 2, 64))
+        positions = collect(0:(size(x, 1)-1)) .+ 37
+        for (inv_freq, interleaved, rd) in ((nothing, true, 0), (rand(rng, 32), false, 64))
+            ref = copy(x)
+            Gesso._cpu_rope_rows!(
+                ref,
+                positions,
+                10000.0,
+                inv_freq,
+                interleaved,
+                rd,
+                axes(ref, 1),
+            )
+            got =
+                Gesso._cpu_rope_storage!(copy(x), positions, 10000.0, inv_freq, interleaved, rd)
+            @test reinterpret(UInt32, got) == reinterpret(UInt32, ref)
+        end
     end
     bad = randn(rng, Float32, 300, 1024)
     bad[200, 7] = NaN32

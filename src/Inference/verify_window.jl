@@ -207,8 +207,9 @@ end
 # conv reads only raw rows up to t and the pre-window state, so after the raw
 # rows are copied into `rec` the rows are independent and split across threads.
 # Each row runs decode's kernels on its own one-row buffers. A quantized a or b
-# weight keeps the rows on one task, since the quantized product shares scratch.
-function _window_gdn_rows!(rec, W, conv_in, bt, spec, sc, bufs, cpu, wl, ksz::Int)
+# product shares scratch, so it runs first over all rows through
+# `_window_matmul!`, whose rows are decode's bits, and the rows read it from there.
+function _window_gdn_rows!(rec, W, conv_in, bt, spec, sc, bufs, cpu, wl, zeros_like, ksz::Int)
     T = size(W.mixed, 1)
     _window_split_rows!(T) do rows
         for t in rows
@@ -221,6 +222,13 @@ function _window_gdn_rows!(rec, W, conv_in, bt, spec, sc, bufs, cpu, wl, ksz::In
     weight = bt.wgdn_conv.storage
     nk, nv, dk, dv = sc.nk, sc.nv, sc.dk, sc.dv
     tiled = spec.mixer.v_head_tiled
+    quant_ab = _is_quant_storage(bt.wgdn_a.storage) || _is_quant_storage(bt.wgdn_b.storage)
+    A = similar(sc.a, quant_ab ? T : 0, size(sc.a, 2))
+    B = similar(sc.b, quant_ab ? T : 0, size(sc.b, 2))
+    if quant_ab
+        _window_matmul!(cpu, A, W.normed, bt.wgdn_a, wl, zeros_like)
+        _window_matmul!(cpu, B, W.normed, bt.wgdn_b, wl, zeros_like)
+    end
     function run_rows(rows)
         xr = similar(bufs.normed.storage)
         a = similar(sc.a)
@@ -230,11 +238,16 @@ function _window_gdn_rows!(rec, W, conv_in, bt, spec, sc, bufs, cpu, wl, ksz::In
         ba = Activation(; shape=size(b), storage=b)
         convout = similar(sc.convout)
         for t in rows
-            _win_load!(xr, W.normed, t)
-            matmul!(cpu, aa, xa, bt.wgdn_a, wl)
-            matmul!(cpu, ba, xa, bt.wgdn_b, wl)
+            if quant_ab
+                av, bv = view(A, t, :), view(B, t, :)
+            else
+                _win_load!(xr, W.normed, t)
+                matmul!(cpu, aa, xa, bt.wgdn_a, wl)
+                matmul!(cpu, ba, xa, bt.wgdn_b, wl)
+                av, bv = vec(a), vec(b)
+            end
             _gdn_conv_window_row!(convout, rec.mixed, conv_in, weight, t, ksz)
-            _gdn_gates_row!(view(rec.beta, :, t), view(rec.decay, :, t), vec(a), vec(b), A_log, dt_bias, nv)
+            _gdn_gates_row!(view(rec.beta, :, t), view(rec.decay, :, t), av, bv, A_log, dt_bias, nv)
             _gdn_qk_row!(
                 view(rec.vn, :, t),
                 view(rec.qn, :, t),
@@ -249,11 +262,7 @@ function _window_gdn_rows!(rec, W, conv_in, bt, spec, sc, bufs, cpu, wl, ksz::In
         end
         return nothing
     end
-    if _is_quant_storage(bt.wgdn_a.storage) || _is_quant_storage(bt.wgdn_b.storage)
-        run_rows(1:T)
-    else
-        _window_split_rows!(run_rows, T)
-    end
+    _window_split_rows!(run_rows, T)
     return rec
 end
 
@@ -356,7 +365,7 @@ function _window_gdn_block!(
         _window_matmul!(cpu, W.zc, W.normed, bt.wgdn_z, wl, zeros_like)
     end
 
-    @decode_sub :gdn_rows cpu _window_gdn_rows!(rec, W, conv_in, bt, spec, sc, bufs, cpu, wl, ksz)
+    @decode_sub :gdn_rows cpu _window_gdn_rows!(rec, W, conv_in, bt, spec, sc, bufs, cpu, wl, zeros_like, ksz)
 
     @decode_sub :gdn_recur cpu _pool_run_chunks!(
         _GDNWindowChunk(rec_in, rec.rec_out, rec, T),
@@ -418,7 +427,7 @@ function _window_attn_block!(
         gated && _window_matmul!(cpu, W.gate, W.normed, bt.wattn_gate, wl, zeros_like)
     end
 
-    if cpu_scratch !== nothing && T > 1
+    if cpu_scratch !== nothing && T > 1 && _window_attn_batch_ok(bt, W, bufs)
         @decode_sub :attn_rows cpu _window_attn_rows_cpu!(
             bt,
             bi,
@@ -429,6 +438,7 @@ function _window_attn_block!(
             cpu,
             wl,
             tensors,
+            zeros_like,
             cpu_scratch,
             base;
             n_heads,
@@ -480,11 +490,13 @@ function _window_attn_block!(
     return W.sub
 end
 
-# The CPU attention core for all rows of the window, in three passes. Each row's
-# heads, norms and RoPE run and its KV is appended, in row order. Then every
-# (row, head) pair attends across the pool, row t over cache rows up to
-# base+t-1. Last, each row's heads are merged and gated. Row by row the
-# arithmetic is the decode core's, so the window and decode give the same bits.
+# The CPU attention core for all rows of the window, in three passes. The heads
+# of every row are split, normed and rotated in one batched call each, and the
+# rows' KV is written at cache rows base..base+T-1. Then every (row, head) pair
+# attends across the pool, row t over cache rows up to base+t-1. Last, the heads
+# are merged and gated over all rows. Each batched kernel runs decode's per-row
+# arithmetic on every row (the norm folds each (row, head) in decode's order, the
+# rope angle depends only on the row's position), so the bits are decode's.
 function _window_attn_rows_cpu!(
     bt,
     bi::Int,
@@ -495,6 +507,7 @@ function _window_attn_rows_cpu!(
     cpu,
     wl,
     tensors,
+    zeros_like,
     cpu_scratch,
     base::Int;
     n_heads::Int,
@@ -509,42 +522,43 @@ function _window_attn_rows_cpu!(
     T = size(W.q, 1)
     gated = haskey(bt, :wattn_gate)
     head_gated = haskey(bt, :wattn_head_gate)
-    qs = bufs.qh.storage
-    as = bufs.attn.storage
-    Qw = similar(qs, T, n_heads, d_head)
-    Aw = similar(as, T, n_heads, d_head)
-    GH = head_gated ? similar(bufs.gate_head.storage, T, n_heads) : nothing
-    kv_rot = false
-    for t in 1:T
-        _win_load!(bufs.q.storage, W.q, t)
-        _win_load!(bufs.k.storage, W.k, t)
-        _win_load!(bufs.v.storage, W.v, t)
-        if head_gated
-            _win_load!(bufs.normed.storage, W.normed, t)
-            matmul!(cpu, bufs.gate_head, bufs.normed, bt.wattn_head_gate, wl)
-            _win_store!(GH, t, bufs.gate_head.storage)
-        end
-        kv_rot = _decode_attn_qkv!(
-            bt,
-            bi,
-            kc,
-            vc,
-            bufs,
-            cpu,
-            wl,
-            tensors,
-            cpu_scratch,
-            base + t - 1;
-            n_heads,
-            n_kv_heads,
-            d_head,
-            eps,
-            theta,
-            inv_freq,
-            rotary_dim,
-        )
-        @views Qw[t, :, :] .= qs[1, :, :]
+    Qw = similar(bufs.qh.storage, T, n_heads, d_head)
+    Kw = similar(bufs.kh.storage, T, n_kv_heads, d_head)
+    Vw = similar(bufs.vh.storage, T, n_kv_heads, d_head)
+    Aw = similar(bufs.attn.storage, T, n_heads, d_head)
+    if head_gated
+        GH = similar(bufs.gate_head.storage, T, n_heads)
+        _window_matmul!(cpu, GH, W.normed, bt.wattn_head_gate, wl, zeros_like)
     end
+    @decode_sub :attn_headnorm_rope cpu begin
+        _split_heads!(Qw, W.q, n_heads, d_head)
+        _split_heads!(Kw, W.k, n_kv_heads, d_head)
+        _split_heads!(Vw, W.v, n_kv_heads, d_head)
+        Qa = Activation(; shape=size(Qw), storage=Qw)
+        Ka = Activation(; shape=size(Kw), storage=Kw)
+        if haskey(bt, :wq_norm)
+            rmsnorm!(cpu, Qa, Qa, bt.wq_norm, wl; eps)
+            rmsnorm!(cpu, Ka, Ka, bt.wk_norm, wl; eps)
+        end
+        br = _block_rope(bt, theta, inv_freq, rotary_dim)
+        rope!(
+            cpu,
+            Qa,
+            Ka,
+            collect((base-1):(base+T-2)),
+            wl;
+            theta=br.theta,
+            inv_freq=br.inv_freq,
+            interleaved=_tensors_rope_interleaved(tensors),
+            rotary_dim=br.rotary_dim,
+        )  # 0-based positions
+    end
+    @decode_sub :attn_kv_append cpu begin
+        _kv_write_rows!(kc[bi].storage, Kw, base)
+        _kv_write_rows!(vc[bi].storage, Vw, base)
+    end
+    kv_rot = _kv_rotated(kc[bi].storage)
+    kv_rot && _kv_rotate!(Qw, true)
     @decode_sub :attn_core cpu _attention_window_cpu!(
         Aw,
         Qw,
@@ -557,15 +571,28 @@ function _window_attn_rows_cpu!(
         eltype(cpu_scratch.probs);
         window=_block_window(bt),
     )
-    for t in 1:T
-        @views as[1, :, :] .= Aw[t, :, :]
-        kv_rot && _kv_rotate!(as, false)
-        gated && _win_load!(bufs.gate_attn.storage, W.gate, t)
-        head_gated && _win_load!(bufs.gate_head.storage, GH, t)
-        _attn_merge_gate!(bt, bufs, cpu, n_heads, d_head)
-        _win_store!(W.attn_merged, t, bufs.merged.storage)
-    end
-    return W.attn_merged
+    kv_rot && _kv_rotate!(Aw, false)
+    M = W.attn_merged
+    _merge_heads!(M, Aw, n_heads, d_head)
+    gated && _sigmoid_mul!(cpu, M, M, W.gate)
+    head_gated && _head_gate_mul!(cpu, M, GH, d_head)
+    return M
+end
+
+# The batched rows run in the window's element type end to end. Decode moves
+# each row through its one-row buffers, so a buffer of another element type
+# would round at a point the batched rows skip; such a window keeps decode's
+# per-row core.
+function _window_attn_batch_ok(bt, W, bufs)
+    E = eltype(W.q)
+    xs = (W.k, W.v, W.normed, W.attn_merged, bufs.q.storage, bufs.k.storage, bufs.v.storage,
+        bufs.qh.storage, bufs.kh.storage, bufs.vh.storage, bufs.attn.storage, bufs.merged.storage)
+    all(x -> eltype(x) == E, xs) || return false
+    haskey(bt, :wattn_gate) &&
+        (eltype(W.gate) == eltype(bufs.gate_attn.storage) == E || return false)
+    haskey(bt, :wattn_head_gate) &&
+        (eltype(bufs.gate_head.storage) == eltype(bufs.normed.storage) == E || return false)
+    return W.q isa Matrix && W.attn_merged isa Matrix
 end
 
 # The FFN half of a block over all rows. `subT` is the mixer output for every

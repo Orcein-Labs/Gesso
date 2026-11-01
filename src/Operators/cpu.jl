@@ -131,6 +131,19 @@ function _cpu_rmsnorm_storage!(
     nd = ndims(xs)
     d = size(xs, nd)                     # last dim is the feature dim
     length(ss) == d || error("rmsnorm!: scale length $(length(ss)) ≠ feature dim $d")
+    if nd >= 2 && xs isa Array && dsts isa Array && size(dsts) == size(xs)
+        L = length(xs) ÷ d
+        X, D = reshape(xs, L, d), reshape(dsts, L, d)
+        if _cpu_rows_threaded(xs, L)
+            _cpu_split_rows!(cld(L, _CPU_LEAD_BLOCK)) do bs
+                lo = (first(bs) - 1) * _CPU_LEAD_BLOCK + 1
+                _cpu_rmsnorm_lead!(D, X, ss, eps, d, lo:min(last(bs) * _CPU_LEAD_BLOCK, L))
+            end
+        else
+            _cpu_rmsnorm_lead!(D, X, ss, eps, d, 1:L)
+        end
+        return dsts
+    end
     stail = reshape(ss, (ntuple(_ -> 1, nd - 1)..., d))
     if nd >= 2 && _cpu_rows_threaded(xs, size(xs, 1))
         _cpu_split_rows!(size(xs, 1)) do rows
@@ -147,6 +160,42 @@ function _cpu_rmsnorm_storage!(
         _cpu_rmsnorm_rows!(dsts, xs, stail, eps, d, CartesianIndices(size(xs)[1:(nd-1)]))
     end
     return dsts
+end
+
+# Rows per block in the lead-major kernels below.
+const _CPU_LEAD_BLOCK = 64
+
+# `_cpu_rmsnorm_rows!` with the row index innermost. Its feature loop strides
+# by the row count, so a prefill-sized array misses cache on every element.
+# Here a block of rows walks each feature column together. Every row keeps its
+# own left fold over the features in the same order, so each value matches the
+# row loop bit for bit. X and D are (rows, d) views of the same memory layout.
+function _cpu_rmsnorm_lead!(D, X, ss, eps, d, rows)
+    acc = Vector{Float64}(undef, _CPU_LEAD_BLOCK)
+    for lo in first(rows):_CPU_LEAD_BLOCK:last(rows)
+        n = min(_CPU_LEAD_BLOCK, last(rows) - lo + 1)
+        fill!(acc, 0.0)
+        for f in 1:d, j in 1:n
+            @inbounds acc[j] += abs2(X[lo+j-1, f])
+        end
+        for j in 1:n
+            r = sqrt(acc[j] / d + eps)
+            isfinite(r) && r > 0 || throw(
+                gesso_error(
+                    ERR_NUMERICAL_INSTABILITY,
+                    "rmsnorm!: nonfinite normalization denominator",
+                ),
+            )
+            acc[j] = r
+        end
+        for f in 1:d
+            s = ss[f]
+            for j in 1:n
+                @inbounds D[lo+j-1, f] = (X[lo+j-1, f] / acc[j]) * s
+            end
+        end
+    end
+    return nothing
 end
 
 function _cpu_rmsnorm_rows!(dsts, xs, stail, eps, d, lead)
@@ -185,7 +234,18 @@ function _cpu_rope_storage!(
     interleaved::Bool=true,
     rotary_dim::Int=0,
 )
-    if _cpu_rows_threaded(storage, size(storage, 1))
+    T = size(storage, 1)
+    if storage isa Array && ndims(storage) == 3 && T > 1
+        if _cpu_rows_threaded(storage, T)
+            _cpu_split_rows!(cld(T, _CPU_LEAD_BLOCK)) do bs
+                lo = (first(bs) - 1) * _CPU_LEAD_BLOCK + 1
+                rows = lo:min(last(bs) * _CPU_LEAD_BLOCK, T)
+                _cpu_rope_lead!(storage, positions, tθ, inv_freq, interleaved, rotary_dim, rows)
+            end
+        else
+            _cpu_rope_lead!(storage, positions, tθ, inv_freq, interleaved, rotary_dim, 1:T)
+        end
+    elseif _cpu_rows_threaded(storage, size(storage, 1))
         _cpu_split_rows!(size(storage, 1)) do rows
             _cpu_rope_rows!(storage, positions, tθ, inv_freq, interleaved, rotary_dim, rows)
         end
@@ -219,6 +279,34 @@ function _cpu_rope_rows!(storage, positions, tθ, inv_freq, interleaved, rotary_
                 x1, x2 = storage[t, h, a], storage[t, h, b]
                 storage[t, h, a] = x1 * c - x2 * s
                 storage[t, h, b] = x1 * s + x2 * c
+            end
+        end
+    end
+    return nothing
+end
+
+# `_cpu_rope_rows!` with the row index innermost, for the same cache reason as
+# `_cpu_rmsnorm_lead!`. Each (t, i) angle, c and s come from the same
+# expression as the row loop, and every element gets the same update.
+function _cpu_rope_lead!(storage, positions, tθ, inv_freq, interleaved, rotary_dim, rows)
+    d = size(storage, 3)                    # d_head, even by contract
+    rd = rotary_dim == 0 ? d : rotary_dim
+    cs = Vector{Float64}(undef, _CPU_LEAD_BLOCK)
+    sn = Vector{Float64}(undef, _CPU_LEAD_BLOCK)
+    for lo in first(rows):_CPU_LEAD_BLOCK:last(rows)
+        n = min(_CPU_LEAD_BLOCK, last(rows) - lo + 1)
+        for i in 0:(rd÷2-1)
+            for j in 1:n
+                m = Float64(positions[lo+j-1])  # 0-based position
+                θ = inv_freq === nothing ? m * tθ^(-2i / rd) : m * inv_freq[i+1]
+                cs[j], sn[j] = cos(θ), sin(θ)
+            end
+            a, b = interleaved ? (2i + 1, 2i + 2) : (i + 1, i + 1 + rd ÷ 2)
+            for h in axes(storage, 2), j in 1:n
+                t = lo + j - 1
+                @inbounds x1, x2 = storage[t, h, a], storage[t, h, b]
+                @inbounds storage[t, h, a] = x1 * cs[j] - x2 * sn[j]
+                @inbounds storage[t, h, b] = x1 * sn[j] + x2 * cs[j]
             end
         end
     end
