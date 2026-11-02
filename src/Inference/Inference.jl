@@ -2185,7 +2185,9 @@ function _reference_generate(
                                 K,
                                 wp;
                                 window,
-                                kv_group=grouped ? group : 1,
+                                # only the CPU rows path takes kv_group; device
+                                # backends keep their own signature
+                                (grouped ? (; kv_group=group) : (;))...,
                             )
                             kx === ks || (
                                 _release_storage!(kx.storage);
