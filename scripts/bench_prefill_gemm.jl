@@ -15,6 +15,7 @@ const INF = Gesso.Inference
 
 function scale_offsets(t)
     t == INF.GGML_TYPE_Q6_K && return (208,)
+    t == INF.GGML_TYPE_Q3_K && return (108,)
     t in (INF.GGML_TYPE_Q4_K, INF.GGML_TYPE_Q5_K) && return (0, 2)
     return (0,)
 end

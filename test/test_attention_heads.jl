@@ -78,7 +78,9 @@ end
 @testset "CPU prefill attention skips masked keys bit for bit" begin
     rng = Xoshiro(0x5a1e)
     H = 2
-    for (L, K, d) in ((300, 300, 64), (200, 450, 48))
+    # The small shapes take the one-pass rows form too, since every multi-row
+    # CPU call does; d = 128 and 80 are true divides by the corrected reciprocal.
+    for (L, K, d) in ((300, 300, 64), (200, 450, 48), (3, 3, 128), (16, 40, 80))
         q = randn(rng, Float32, L, H, d)
         k = randn(rng, Float32, K, H, d)
         v = randn(rng, Float32, K, H, d)
@@ -150,4 +152,26 @@ end
         e
     end
     @test err isa Gesso.GessoError && err.code == Gesso.ERR_NUMERICAL_INSTABILITY
+end
+
+# The score scale for a non-power-of-two sqrt(d_head) takes the reciprocal with
+# an fma correction. It must give the divide's Float64 bits for every Float32;
+# the full 2^32 sweep ran offline for every d_head it is used on, so this
+# samples edge values and random bit patterns.
+@testset "corrected reciprocal score scale equals the Float64 divide" begin
+    I = Gesso.Inference
+    rng = Xoshiro(0x5ca1e)
+    edges = Float32[0, -0.0, 1, -1, floatmin(Float32), -floatmin(Float32),
+        nextfloat(0.0f0), -nextfloat(0.0f0), floatmax(Float32), -floatmax(Float32),
+        Inf32, -Inf32, prevfloat(Inf32), 3.0f-39, 1.0f20]
+    for d in (48, 80, 96, 128, 160, 192, 512, 1000, I._SCORE_RECIP_MAX_D - 1)
+        o = I._attention_score_scale(d)
+        @test o isa I._ScoreRecip
+        s = sqrt(d)
+        xs = vcat(edges, reinterpret(Float32, rand(rng, UInt32, 200_000)))
+        @test all(x -> isnan(x) || o(x) === Float64(x) / s, xs)
+        @test isnan(o(NaN32))
+    end
+    @test I._attention_score_scale(64) isa I._ScoreMul
+    @test I._attention_score_scale(I._SCORE_RECIP_MAX_D + 1) isa I._ScoreDiv
 end

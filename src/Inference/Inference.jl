@@ -1024,7 +1024,9 @@ _attention_prefill_device!(backend, attn, q, k, v, n_heads, d_head, group, L, K)
 #
 # Each term is (q * k) / sqrt(d_head) with the divide in Float64, since
 # sqrt(d_head) is a Float64. When sqrt(d_head) is a power of two, multiplying
-# by its inverse is the same exact scaling, without the slow divide.
+# by its inverse is the same exact scaling, without the slow divide. Otherwise
+# a Float32 product takes the reciprocal with one fma correction, which gives
+# the same correctly rounded quotient at a fraction of the divide's cost.
 @inline _attention_keys(t::Int, L::Int, K::Int, masked::Bool, window::Int) =
     masked ? ((window>0 ? max(1, K-L+t-window+1) : 1):(K-L+t)) : (1:K)
 
@@ -1034,8 +1036,24 @@ end
 struct _ScoreMul
     r::Float64
 end
+struct _ScoreRecip
+    s::Float64
+    r::Float64
+end
 @inline (o::_ScoreDiv)(p) = p / o.s
 @inline (o::_ScoreMul)(p) = p * o.r
+@inline (o::_ScoreRecip)(p) = p / o.s
+
+# q = x·r is within an ulp of x/s, e = x - q·s is exact under fma, and q + e·r
+# rounds to x/s. That holds for every Float32 x and every d_head the selector
+# below allows: checked exhaustively over all 2^32 inputs per d_head. Zeros,
+# infinities and NaNs skip the correction, which would turn -0 into +0 and an
+# infinity into NaN.
+@inline function (o::_ScoreRecip)(p::Float32)
+    x = Float64(p)
+    q = x * o.r
+    return ifelse(isfinite(q) & (q != 0), fma(o.r, fma(-q, o.s, x), q), q)
+end
 
 # acc + scale(p), rounded to acc's type. For Float32 and a power-of-two scale
 # the scaled product is exact in either type, and a Float32 sum rounded through
@@ -1045,9 +1063,13 @@ end
 @inline _score_add(acc, p, o) = acc + o(p)
 @inline _score_add(acc::Float32, p::Float32, o::_ScoreMul) = acc + p * Float32(o.r)
 
+# Head dims up to _SCORE_RECIP_MAX_D are the ones the reciprocal was checked on.
+const _SCORE_RECIP_MAX_D = 1024
+
 function _attention_score_scale(d_head::Int)
     s = sqrt(d_head)
-    return significand(s) == 1.0 ? _ScoreMul(inv(s)) : _ScoreDiv(s)
+    significand(s) == 1.0 && return _ScoreMul(inv(s))
+    return d_head <= _SCORE_RECIP_MAX_D ? _ScoreRecip(s, inv(s)) : _ScoreDiv(s)
 end
 
 # The keyword forms wrap positional methods: decode calls the positional ones,
@@ -1320,16 +1342,19 @@ function _attention_block_heads!(
     return attn
 end
 
-# Small calls (decode, short prompts) keep the plain loops above: they do not
+# Small calls (decode, short drafts) keep the plain loops above: they do not
 # allocate, which the warmed-decode allocation caps in test_decode_scratch.jl
 # rely on. Larger calls split their rows across threads.
 _attention_rows_threaded(L::Int, work::Int) =
     Threads.nthreads() > 1 && L > 1 && L * work >= 1 << 20
 
 # Whether `_attention_heads!` takes `_attention_heads_rows!`, which reads GQA
-# kv heads in place, so callers can skip `_repeat_heads`.
+# kv heads in place, so callers can skip `_repeat_heads`. Every CPU call with
+# more than one query row does, at any size and thread count: the rows form is
+# faster than the per-head loops even at 16 rows on one thread. Decode (one
+# row) keeps the per-head loops, which do not allocate.
 _attention_rows_path(backend, L::Int, K::Int, d_head::Int) =
-    backend isa CPUBackend && _attention_rows_threaded(L, K * d_head)
+    backend isa CPUBackend && L > 1
 
 function _attention_rows!(f, L::Int)
     nc = min(Threads.nthreads(), L)
