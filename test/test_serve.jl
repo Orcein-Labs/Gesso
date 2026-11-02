@@ -1010,3 +1010,117 @@ end
     @test p.n_calls == 1
     @test !occursin("tool_response", repr(events))
 end
+
+# ---------------------------------------------------------------------------
+# Spark-X2.6 dialect: the streaming parser and the tool-call round trip
+
+using Gesso.Serve: SparkParser
+
+const SV_SP_TOOLS = Any[Dict{String, Any}("type" => "function", "function" => Dict{String, Any}(
+    "name" => "lookup",
+    "parameters" => Dict{String, Any}("type" => "object", "properties" => Dict{String, Any}(
+        "key" => Dict{String, Any}("type" => "string"),
+        "limit" => Dict{String, Any}("type" => "integer"),
+        "opts" => Dict{String, Any}("type" => "object"),
+    )),
+))]
+
+function sv_sp_parse(text::AbstractString; start_in_reasoning::Bool=false, stop=String[], chunks=nothing,
+                     tools=SV_SP_TOOLS)
+    p = SparkParser(; tools=tools, start_in_reasoning=start_in_reasoning, stop=stop)
+    bytes = Vector{UInt8}(codeunits(text))
+    events = Any[]
+    for c in (chunks === nothing ? [bytes] : chunks)
+        append!(events, feed!(p, c))
+    end
+    append!(events, Gesso.Serve.finish!(p))
+    return sv_merge(events)
+end
+
+@testset "spark: the start state comes from the prompt" begin
+    user = Dict{String, Any}("role" => "user", "content" => "hi")
+    @test Gesso.Serve.opens_reasoning(Gesso.Inference.render_spark_chat(Any[user]))
+    @test !Gesso.Serve.opens_reasoning(Gesso.Inference.render_spark_chat(Any[user]; enable_thinking=false))
+    @test sv_sp_parse("plan</think>Paris"; start_in_reasoning=true) ==
+          [(:reasoning, "plan"), (:content, "Paris")]
+    @test sv_sp_parse("Paris") == [(:content, "Paris")]
+end
+
+@testset "spark: every chunking gives the whole-text events" begin
+    cases = [
+        ("plan\n</think>\n\nParis", true, [(:reasoning, "plan\n"), (:content, "Paris")]),
+        ("</think>Paris", true, [(:content, "Paris")]),
+        ("Paris <think>x", false, [(:content, "Paris "), (:reasoning, "x")]),
+        ("Paris <tool_ca", false, [(:content, "Paris <tool_ca")]),
+        ("café</think>naïve", true, [(:reasoning, "café"), (:content, "naïve")]),
+        ("Checking.<tool_call>lookup<arg_key>key</arg_key><arg_value>A-17</arg_value>" *
+         "<arg_key>limit</arg_key><arg_value>3</arg_value></tool_call>\nDone.", false,
+         [(:content, "Checking."), (:call, 0, "lookup", Dict("key" => "A-17", "limit" => 3)), (:content, "Done.")]),
+        ("<tool_call>lookup\n<arg_key>key</arg_key>\n<arg_value>42</arg_value>\n</tool_call>", false,
+         [(:call, 0, "lookup", Dict("key" => "42"))]),
+        ("<tool_call>ping</tool_call>", false, [(:call, 0, "ping", Dict{String, Any}())]),
+        ("<tool_call>ping<arg_key>n</arg_key><arg_value>{\"a\": [1, 2.5]}</arg_value></tool_call>", false,
+         [(:call, 0, "ping", Dict("n" => Dict("a" => Any[1, 2.5])))]),
+        ("<tool_call>ping<arg_key>n</arg_key><arg_value>not json</arg_value></tool_call>", false,
+         [(:call, 0, "ping", Dict("n" => "not json"))]),
+        ("<tool_call>lookup<arg_key>opts</arg_key><arg_value>[1]</arg_value></tool_call>", false,
+         [(:call, 0, "lookup", Dict("opts" => "[1]"))]),
+        ("<tool_call>two words</tool_call>", false, [(:content, "<tool_call>two words</tool_call>")]),
+        ("<tool_call>f<arg_key>a</arg_key>x</tool_call>", false,
+         [(:content, "<tool_call>f<arg_key>a</arg_key>x</tool_call>")]),
+        ("<tool_call>f<arg_key>a</arg_key><arg_value>1</arg_value><arg_key>a</arg_key><arg_value>2</arg_value></tool_call>",
+         false,
+         [(:content, "<tool_call>f<arg_key>a</arg_key><arg_value>1</arg_value><arg_key>a</arg_key><arg_value>2</arg_value></tool_call>")]),
+        ("<tool_call>f<arg_key>a</arg_key><arg_value>1", false,
+         [(:content, "<tool_call>f<arg_key>a</arg_key><arg_value>1")]),
+        ("<tool_call>ping</tool_call><tool_call>lookup<arg_key>key</arg_key><arg_value>b</arg_value></tool_call>", false,
+         [(:call, 0, "ping", Dict{String, Any}()), (:call, 1, "lookup", Dict("key" => "b"))]),
+    ]
+    rng = MersenneTwister(20261102)
+    for (text, start, expected) in cases
+        @testset "$(repr(text))" begin
+            bytes = Vector{UInt8}(codeunits(text))
+            @test sv_sp_parse(text; start_in_reasoning=start) == expected
+            for ch in sv_chunkings(bytes, rng)
+                @test sv_sp_parse(text; start_in_reasoning=start, chunks=ch) == expected
+            end
+        end
+    end
+end
+
+@testset "spark: a stop string ends the stream" begin
+    @test sv_sp_parse("Paris STOP more"; stop=["STOP"]) == [(:content, "Paris ")]
+    bytes = Vector{UInt8}(codeunits("Paris STOP more"))
+    @test sv_sp_parse("Paris STOP more"; stop=["STOP"], chunks=[UInt8[b] for b in bytes]) ==
+          [(:content, "Paris ")]
+end
+
+function sv_od(pairs...)
+    d = Gesso.Inference._OrderedDict()
+    for (k, v) in pairs
+        d[k] = v
+    end
+    return d
+end
+
+@testset "spark: tool-call arguments round-trip through the renderer" begin
+    args = sv_od(
+        "key" => "say \"hi\" {a: [1, 2]} a,b\nline two ✓",
+        "limit" => 42,
+        "opts" => sv_od(
+            "float" => 2.5, "tiny" => 1e-7, "flag" => true, "none" => nothing,
+            "list" => Any[1, "two", Dict{String, Any}("k" => false)], "empty" => Dict{String, Any}(),
+        ),
+    )
+    call = Dict{String, Any}("function" => Dict{String, Any}("name" => "lookup", "arguments" => args))
+    io = IOBuffer()
+    Gesso.Inference._sp_tool_calls!(io, Any[call])
+    text = String(take!(io))
+    expected = [(:call, 0, "lookup", JSON.parse(JSON.json(args)))]
+    @test sv_sp_parse(text) == expected
+    bytes = Vector{UInt8}(codeunits(text))
+    rng = MersenneTwister(11)
+    for ch in sv_chunkings(bytes, rng)
+        @test sv_sp_parse(text; chunks=ch) == expected
+    end
+end

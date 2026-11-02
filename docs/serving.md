@@ -66,6 +66,7 @@ families from the template text and refuses any other:
 | LFM2 | no |
 | LFM2.5 | no |
 | Gemma 4 | yes |
+| Spark-X2.6 | yes |
 
 The server stops on the tokenizer's end-of-sequence token plus any of
 `<|im_end|>`, `<|endoftext|>`, `<turn|>` and `<|tool_response>` that exist in

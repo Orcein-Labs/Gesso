@@ -169,6 +169,7 @@ using Gesso: reference_prefill, reference_generate
     include("test_lfm_chat.jl")
     include("test_gemma4_tokenizer.jl")
     include("test_gemma4_chat.jl")
+    include("test_spark_chat.jl")
     include("test_gemma4.jl")
 
     # Phase 3 (§LXXVI item D): the REAL-model gate — one named skip unless

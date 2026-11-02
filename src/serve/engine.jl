@@ -4,7 +4,7 @@
 # GPU type and the package stays free of CUDA.
 
 using ..Inference:
-    GGUFBPE, GGUFGemma4BPE, render_chat, render_gemma4_chat, chat_family,
+    GGUFBPE, GGUFGemma4BPE, render_chat, render_gemma4_chat, render_spark_chat, chat_family,
     reference_generate, GenerateState, Sampler
 import ..Inference: encode, decode
 
@@ -84,7 +84,7 @@ function gguf_chat_model(
         model_id=model_id,
         prefix_len=(msgs, tools, thinking, ids) ->
             _system_prefix_len(tk, family, msgs, tools, thinking, ids),
-        accepts_tools=family in (:qwen35_xml, :gemma4),
+        accepts_tools=family in (:qwen35_xml, :gemma4, :spark25),
         family=family,
         thinking_default=family !== :gemma4,
     )
@@ -99,7 +99,7 @@ function _template_family(template::AbstractString)::Symbol
         e isa ErrorException || rethrow()
         throw(ArgumentError("gguf_chat_model: " * e.msg))
     end
-    family in (:qwen35_xml, :lfm2, :lfm25, :gemma4) || throw(
+    family in (:qwen35_xml, :lfm2, :lfm25, :gemma4, :spark25) || throw(
         ArgumentError("gguf_chat_model: the server cannot serve chat family $family yet"),
     )
     return family
@@ -125,6 +125,13 @@ function _render_prompt(
         )
     elseif family === :gemma4
         return render_gemma4_chat(
+            msgs;
+            tools=tools,
+            add_generation_prompt=add_generation_prompt,
+            enable_thinking=thinking,
+        )
+    elseif family === :spark25
+        return render_spark_chat(
             msgs;
             tools=tools,
             add_generation_prompt=add_generation_prompt,

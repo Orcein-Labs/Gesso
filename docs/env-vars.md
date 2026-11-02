@@ -135,7 +135,7 @@ accepted by the chat server. New GPU work goes into Lava.
 | `GESSO_SALUKI_GGUF` | `test/test_quant_cpu_iq_s.jl`, `test/test_quant_cpu_multi.jl` |
 | `GESSO_SCHEMA_VERSION` | `src/versions.jl`, `test/test_export_inventory.jl`, `test/test_foundation.jl` |
 | `GESSO_SMOLLM2_DIR` | `benchmark/runbenchmarks.jl`, `test/freeze_smollm2_golden.jl`, `test/regime_i_batch.jl`, `test/regime_i_containment.jl`, `test/regime_i_context.jl`, `test/regime_i_cuda.jl`, `test/regime_i_device.jl`, `test/regime_i_lava.jl`, `test/regime_i_numerics.jl`, `test/regime_i_observability.jl`, `test/regime_i_package.jl`, `test/regime_i_performance.jl`, `test/regime_i_probe.jl`, `test/regime_ii_attribution.jl`, `test/runtests.jl`, `test/test_cuda_smollm2.jl`, `test/test_decode_scratch.jl`, `test/test_hf_parity.jl`, `test/test_session_smollm2.jl`, `test/test_smollm2.jl` |
-| `GESSO_SPARK25_GGUF` | `test/runtests.jl`, `test/test_spark25.jl`, `test/test_spark25_tokenizer.jl` |
+| `GESSO_SPARK25_GGUF` | `test/runtests.jl`, `test/test_spark25.jl`, `test/test_spark25_tokenizer.jl`, `test/test_spark_chat.jl` |
 | `GESSO_SUFFIX_MIN` | `scripts/saluki_combo_bench.jl` |
 | `GESSO_TEST_XVFB` | `scripts/test.jl` |
 | `GESSO_TIMING` | `src/Inference/Inference.jl` |

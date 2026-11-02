@@ -451,6 +451,7 @@ Identify a chat template by its markers. Returns one of:
 * `:gemma4`: Gemma 4 turn and thought-channel markers (`<|turn>`, `<|channel>thought`).
 * `:lfm25`: LFM2.5 markers (`CONTINUE_FINAL_MESSAGE_TAG`, `render_tool_calls`).
 * `:lfm2`: LFM2 markers (`<|tool_list_start|>`, `<|tool_response_start|>`).
+* `:spark25`: Spark-X2.6 markers (`<|Bot|>`, `<arg_key>`, `<｜end▁of▁sentence｜>`).
 * `:qwen35_xml`: Qwen3.5 XML family (`<function=`, `<tool_response>`, `<think>`).
 
 Any other template is an error.
@@ -464,13 +465,17 @@ function chat_family(template::AbstractString)::Symbol
     elseif occursin("<|tool_list_start|>", template) && occursin("<|tool_response_start|>", template)
         return :lfm2
     end
+    if occursin("<|Bot|>", template) && occursin("<arg_key>", template) &&
+       occursin("<｜end▁of▁sentence｜>", template)
+        return :spark25
+    end
     if occursin("<function=", template) &&
        occursin("<tool_response>", template) &&
        occursin("<think>", template)
         return :qwen35_xml
     end
     error(
-        "chat_family: template is not a supported chat family (expected Qwen3.5 XML or LFM markers)",
+        "chat_family: template is not a supported chat family (expected Qwen3.5 XML, LFM2, LFM2.5, Gemma 4 or Spark-X2.6 markers)",
     )
 end
 

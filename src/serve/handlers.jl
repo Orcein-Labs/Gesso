@@ -53,13 +53,19 @@ function _require_method(req::HTTPRequest, method::String)
 end
 
 # The output parser of the model's chat family.
-const OutputParser = Union{QwenXMLParser, Gemma4Parser}
+const OutputParser = Union{QwenXMLParser, Gemma4Parser, SparkParser}
 
 # One parser per request, chosen by the family the engine renders.
 function _new_parser(model::ChatModel, prompt::AbstractString, tools, stop)::OutputParser
     if model.family === :gemma4
         return Gemma4Parser(;
             start_in_reasoning=gemma4_opens_reasoning(prompt),
+            stop=stop,
+        )
+    elseif model.family === :spark25
+        return SparkParser(;
+            tools=tools,
+            start_in_reasoning=opens_reasoning(prompt),
             stop=stop,
         )
     end

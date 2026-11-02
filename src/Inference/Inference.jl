@@ -3165,6 +3165,7 @@ include("gguf_tokenizer.jl")       # GGUF tokenizer section: qwen35 BPE, streami
 include("chat_template.jl")         # Qwen3.5 XML chat template renderer (no Jinja)
 include("lfm2_chat.jl")
 include("gemma4_chat.jl")
+include("spark_chat.jl")
 include("qwen4exp.jl")              # Flash-Next (qwen4exp) CPU forward
 include("import_report.jl")      # Passes I/J: report + generated matrix
 
