@@ -496,6 +496,74 @@ function _half_widen_rows!(W::Matrix{Float32}, q::QuantMatrix, r0::Int, nr::Int,
     return W
 end
 
+# One allocation per field for all of a prefill's token activations; each
+# token's vectors wrap its slice. Thousands of separate 2.5-10 KB vectors cost
+# more in malloc than the quantization itself.
+struct _PrefillActMem
+    d::Memory{Float32}
+    qs::Memory{Int8}
+    bsums::Memory{Int16}
+    xp::Memory{Int8}
+    mo::Memory{Int16}
+end
+
+# Element counts of the d, qs, bsums, xp and mo fields.
+function _prefill_act_sizes(q80::Bool, seq::Int, ne0::Int, prep::Bool)
+    nd = q80 ? ne0 ÷ 32 : ne0 ÷ QK_K
+    return (
+        seq * nd,
+        seq * ne0,
+        q80 ? 0 : seq * (ne0 ÷ 16),
+        prep ? seq * ne0 : 0,
+        prep ? seq * (ne0 >> 1) : 0,
+    )
+end
+
+function _PrefillActMem(q80::Bool, seq::Int, ne0::Int, prep::Bool)
+    n = _prefill_act_sizes(q80, seq, ne0, prep)
+    return _PrefillActMem(
+        Memory{Float32}(undef, n[1]),
+        Memory{Int8}(undef, n[2]),
+        Memory{Int16}(undef, n[3]),
+        Memory{Int8}(undef, n[4]),
+        Memory{Int16}(undef, n[5]),
+    )
+end
+
+# Prefill activation buffers outlive one _quant_matmul_multi! call only, so they
+# are reused: a fresh 10-20 MB allocation per matmul pays its page faults every
+# call. At most _PREFILL_ACT_POOL_MAX buffers of up to _PREFILL_ACT_POOL_BYTES
+# each are kept.
+const _PREFILL_ACT_POOL = _PrefillActMem[]
+const _PREFILL_ACT_LOCK = ReentrantLock()
+const _PREFILL_ACT_POOL_MAX = 4
+const _PREFILL_ACT_POOL_BYTES = 64 << 20
+
+_act_bytes(m::_PrefillActMem) =
+    sizeof(m.d) + sizeof(m.qs) + sizeof(m.bsums) + sizeof(m.xp) + sizeof(m.mo)
+
+_act_lengths(m::_PrefillActMem) =
+    (length(m.d), length(m.qs), length(m.bsums), length(m.xp), length(m.mo))
+
+# A pooled buffer at least as large as each field needs, else a new one.
+function _prefill_act_acquire(q80::Bool, seq::Int, ne0::Int, prep::Bool)
+    need = _prefill_act_sizes(q80, seq, ne0, prep)
+    m = lock(_PREFILL_ACT_LOCK) do
+        i = findfirst(m -> all(_act_lengths(m) .>= need), _PREFILL_ACT_POOL)
+        i === nothing ? nothing : popat!(_PREFILL_ACT_POOL, i)
+    end
+    return m === nothing ? _PrefillActMem(q80, seq, ne0, prep) : m
+end
+
+function _prefill_act_release(m::_PrefillActMem)
+    _act_bytes(m) > _PREFILL_ACT_POOL_BYTES && return
+    lock(_PREFILL_ACT_LOCK) do
+        push!(_PREFILL_ACT_POOL, m)
+        length(_PREFILL_ACT_POOL) > _PREFILL_ACT_POOL_MAX && popfirst!(_PREFILL_ACT_POOL)
+    end
+    return
+end
+
 # Prefill (seq > 1) of a Q8_K-kind weight: each token row is quantized once, and
 # the weight rows are split across threads. A chunk walks its rows in blocks of
 # _MULTI_ROW_BLOCK; for each tile of _MULTI_TILE tokens it runs every row of the
@@ -506,8 +574,19 @@ function _quant_matmul_multi!(dst::AbstractMatrix, x::AbstractMatrix, q::QuantMa
     simd = q8k_simd_enabled()
     # Q3_K to Q6_K: shuffle each activation once here rather than once per
     # weight row.
-    xqs =
-        _prefill_quantize(q.ggml_type, x, seq, q.ne0, simd && _q6k_prep_type(q.ggml_type))
+    prep = simd && _q6k_prep_type(q.ggml_type)
+    mem = _prefill_act_acquire(_q80_act_type(q.ggml_type), seq, q.ne0, prep)
+    try
+        _quant_matmul_multi!(dst, x, q, _prefill_quantize(q.ggml_type, x, seq, q.ne0, prep, mem))
+    finally
+        _prefill_act_release(mem)
+    end
+    return dst
+end
+
+function _quant_matmul_multi!(dst::AbstractMatrix, x::AbstractMatrix, q::QuantMatrix, xqs)
+    seq = size(x, 1)
+    simd = q8k_simd_enabled()
     # Ticketed chunks as in the decode GEMV: one chunk per thread waits on the
     # slowest thread (2-3x on the 27B's verify window). Rows are independent,
     # so the bits do not depend on the chunk count.
@@ -524,6 +603,34 @@ function _quant_matmul_multi!(dst::AbstractMatrix, x::AbstractMatrix, q::QuantMa
     return dst
 end
 
+# Prefill projections of one x through several weights whose activations
+# quantize alike: x is quantized once and each weight runs the multi path on
+# it, as `_quant_matmul!` would run each alone. Returns false, having done
+# nothing, when `_quant_matmul!` would not take that path for every weight.
+function _quant_matmul_shared!(dsts::Tuple, x::AbstractMatrix, qs::Tuple)
+    seq, ne0 = size(x)
+    (seq > 1 && _prefill_multi_enabled()) || return false
+    simd = q8k_simd_enabled()
+    t1 = first(qs).ggml_type
+    q80, prep = _q80_act_type(t1), simd && _q6k_prep_type(t1)
+    for i in eachindex(qs)
+        q, t = qs[i], qs[i].ggml_type
+        (_quant_native(t) && _quant_q8k_native(t) && q.ne0 == ne0) || return false
+        (_q80_act_type(t) == q80 && (simd && _q6k_prep_type(t)) == prep) || return false
+        size(dsts[i]) == (seq, q.nrows) || return false
+    end
+    mem = _prefill_act_acquire(q80, seq, ne0, prep)
+    try
+        xqs = _prefill_quantize(t1, x, seq, ne0, prep, mem)
+        for i in eachindex(qs)
+            _quant_matmul_multi!(dsts[i], x, qs[i], xqs)
+        end
+    finally
+        _prefill_act_release(mem)
+    end
+    return true
+end
+
 # Quantizes each token row (and preps it, for Q3_K to Q6_K), with the
 # tokens split across threads.
 function _prefill_quantize(
@@ -532,9 +639,10 @@ function _prefill_quantize(
     seq::Int,
     ne0::Int,
     prep::Bool=false,
+    mem::_PrefillActMem=_PrefillActMem(_q80_act_type(ggml_type), seq, ne0, prep),
 )
     x1 = _prefill_quantize_row(ggml_type, x, 1, Vector{Float32}(undef, ne0), prep)
-    return _prefill_quantize_rest!(fill(x1, seq), ggml_type, x, prep)
+    return _prefill_quantize_rest!(fill(x1, seq), ggml_type, x, prep, mem)
 end
 
 function _prefill_quantize_row(
@@ -556,18 +664,78 @@ function _prefill_quantize_rest!(
     ggml_type::Int32,
     x::AbstractMatrix,
     prep::Bool,
+    mem::_PrefillActMem,
 )
     seq = length(xqs)
     ne0 = size(x, 2)
     nc = max(1, min(Threads.nthreads(), seq - 1))
+    q80 = _q80_act_type(ggml_type)
     _run_row_chunks!(nc, (seq - 1) * ne0 * 16) do c
-        xf = Vector{Float32}(undef, ne0)
-        for t in (div((c-1)*(seq-1), nc)+2):(div(c*(seq-1), nc)+1)
-            xqs[t] = _prefill_quantize_row(ggml_type, x, t, xf, prep)
+        lo, hi = div((c - 1) * (seq - 1), nc) + 2, div(c * (seq - 1), nc) + 1
+        q80 ? _prefill_quantize_tiles!(xqs, Q80Vec, mem, x, lo, hi, prep) :
+        _prefill_quantize_tiles!(xqs, Q8KVec, mem, x, lo, hi, prep)
+    end
+    return xqs
+end
+
+# Elements (t-1)n+1 to tn of m, as a Vector sharing m's storage.
+_act_slice(m::Memory, t::Int, n::Int) = Base.wrap(Array, memoryref(m, (t - 1) * n + 1), n)
+
+_prefill_act(::Type{Q80Vec}, m::_PrefillActMem, t::Int, ne0::Int) =
+    Q80Vec(_act_slice(m.d, t, ne0 ÷ 32), _act_slice(m.qs, t, ne0))
+_prefill_act(::Type{Q8KVec}, m::_PrefillActMem, t::Int, ne0::Int) = Q8KVec(
+    _act_slice(m.d, t, ne0 ÷ QK_K),
+    _act_slice(m.qs, t, ne0),
+    _act_slice(m.bsums, t, ne0 ÷ 16),
+)
+_prefill_prep(y::Q8KVec, m::_PrefillActMem, t::Int, ne0::Int) =
+    _q6k_prep!(Q6KPrepVec(y.d, y, _act_slice(m.xp, t, ne0), _act_slice(m.mo, t, ne0 >> 1)))
+_prefill_block_values(::Type{Q80Vec}) = 32
+_prefill_block_values(::Type{Q8KVec}) = QK_K
+_prefill_quantize_block!(y::Q80Vec, ib, buf, o) = _quantize_q8_0_block!(y, ib, buf, o)
+_prefill_quantize_block!(y::Q8KVec, ib, buf, o) = _quantize_q8_K_block!(y, ib, buf, o)
+
+# Tokens lo:hi of _prefill_quantize_rest!. A token row of a column-major x is
+# strided by seq, one cache line per value. Each step gathers one activation
+# block for _PREFILL_QTILE tokens (a cache line per value) into an L1-sized
+# buffer and quantizes it there, block by block as the row quantizers do.
+function _prefill_quantize_tiles!(
+    xqs::Vector,
+    ::Type{V},
+    mem::_PrefillActMem,
+    x::AbstractMatrix,
+    lo::Int,
+    hi::Int,
+    prep::Bool,
+) where {V}
+    ne0 = size(x, 2)
+    bv = _prefill_block_values(V)
+    buf = Matrix{Float32}(undef, bv, _PREFILL_QTILE)
+    ys = Vector{V}(undef, _PREFILL_QTILE)
+    for t0 in lo:_PREFILL_QTILE:hi
+        n = min(_PREFILL_QTILE, hi - t0 + 1)
+        for k in 1:n
+            ys[k] = _prefill_act(V, mem, t0 + k - 1, ne0)
+        end
+        for ib in 1:(ne0÷bv)
+            io = (ib - 1) * bv
+            @inbounds for j in 1:bv, k in 1:n
+                buf[j, k] = Float32(x[t0+k-1, io+j])
+            end
+            for k in 1:n
+                _prefill_quantize_block!(ys[k], ib, buf, (k - 1) * bv)
+            end
+        end
+        for k in 1:n
+            t = t0 + k - 1
+            xqs[t] = prep ? _prefill_prep(ys[k], mem, t, ne0) : ys[k]
         end
     end
     return xqs
 end
+
+# Tokens per gather tile of _prefill_quantize_rest!: 16 Float32 fill a cache line.
+const _PREFILL_QTILE = 16
 
 # Weight rows per block of a prefill chunk. On Spark-sized Q6_K FFN matrices (Xeon
 # E5-2699 v3, 8 threads) 32 and 64 tie; row by row is 1.2x slower, 1.6x with the

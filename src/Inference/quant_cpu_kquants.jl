@@ -1307,10 +1307,18 @@ _q80_act_type(ggml_type::Int32) =
 _q8k_block_values(ggml_type::Int32) = _q80_act_type(ggml_type) ? 32 : QK_K
 
 function _q8k_quantize_act(ggml_type::Int32, x::AbstractVector{Float32})
+    # The quantizers write every field, so the vectors start uninitialized.
     if _q80_act_type(ggml_type)
-        return quantize_q8_0!(Q80Vec(div(length(x), 32)), x)
+        nb = div(length(x), 32)
+        return quantize_q8_0!(Q80Vec(Vector{Float32}(undef, nb), Vector{Int8}(undef, 32nb)), x)
     end
-    return quantize_q8_K!(Q8KVec(div(length(x), QK_K)), x)
+    nb = div(length(x), QK_K)
+    y = Q8KVec(
+        Vector{Float32}(undef, nb),
+        Vector{Int8}(undef, QK_K * nb),
+        Vector{Int16}(undef, (QK_K ÷ 16) * nb),
+    )
+    return quantize_q8_K!(y, x)
 end
 
 _kq_supported(ggml_type::Int32) = ggml_type in (

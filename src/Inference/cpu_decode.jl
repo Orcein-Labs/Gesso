@@ -319,8 +319,15 @@ function _kv_append_storage!(
 end
 
 # A device backend may quantize the shared input once for the whole group (the
-# CUDA extension does); here each projection is an ordinary `matmul!`.
+# CUDA extension does). On the CPU a prefill group of quantized weights shares
+# one quantized x (`_quant_matmul_shared!`); otherwise each projection is an
+# ordinary `matmul!`.
 function _matmul_shared_input!(cpu, dsts::Tuple, x::Activation, ws::Tuple, wl)
+    if cpu isa CPUBackend && length(ws) > 1 && x.storage isa Matrix{Float32} &&
+       all(w -> w.storage isa QuantMatrix, ws) && all(d -> d.storage isa Matrix{Float32}, dsts)
+        _quant_matmul_shared!(map(d -> d.storage, dsts), x.storage, map(w -> w.storage, ws)) &&
+            return dsts
+    end
     for i in eachindex(dsts)
         matmul!(cpu, dsts[i], x, ws[i], wl)
     end

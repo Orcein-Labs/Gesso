@@ -49,37 +49,58 @@ function quantize_q8_K!(y::Q8KVec, x::AbstractArray{Float32})
     nb = length(y.d)
     length(x) == QK_K * nb ||
         error("quantize_q8_K!: x length $(length(x)) ≠ QK_K * nb = $(QK_K * nb)")
-    @inbounds for i in 1:nb
-        xo = (i - 1) * QK_K
+    for i in 1:nb
+        _quantize_q8_K_block!(y, i, x, (i - 1) * QK_K)
+    end
+    return y
+end
+
+# Block i of quantize_q8_K!, from the values x[xo+1:xo+QK_K].
+@inline function _quantize_q8_K_block!(y::Q8KVec, i::Int, x::AbstractArray{Float32}, xo::Int)
+    @inbounds begin
+        qo = (i - 1) * QK_K
         bo = (i - 1) * 16
-        amax = 0.0f0
+        # The serial reference keeps the first x[j] whose |x[j]| beats every
+        # earlier one, skipping NaN. On the magnitude bits of a non-NaN float
+        # the order is the unsigned integer order, so a vector max of those
+        # bits (NaN mapped to 0) gives amax, and the first j holding it gives mx.
+        ab = UInt32(0)
+        for j in 1:QK_K
+            b = reinterpret(UInt32, x[xo+j]) & 0x7fffffff
+            ab = max(ab, ifelse(b > 0x7f800000, UInt32(0), b))
+        end
+        amax = reinterpret(Float32, ab)
         mx = 0.0f0
         for j in 1:QK_K
-            ax = abs(x[xo+j])
-            if ax > amax
-                amax = ax
+            if reinterpret(UInt32, x[xo+j]) & 0x7fffffff == ab
                 mx = x[xo+j]
+                break
             end
         end
         if amax == 0.0f0
             y.d[i] = 0.0f0
             for j in 1:QK_K
-                y.qs[xo+j] = 0
+                y.qs[qo+j] = 0
             end
             for j in 1:16
                 y.bsums[bo+j] = 0
             end
-            continue
+            return y
         end
         iscale = -127.0f0 / mx
+        # Int8(v) checks every value and keeps the loop scalar; checking the
+        # block minimum once throws for the same blocks (non-finite input).
+        vmin = typemax(Int32)
         for j in 1:QK_K
-            v = _q8k_nearest_int(iscale * x[xo+j])
-            y.qs[xo+j] = Int8(min(Int32(127), v))
+            v = min(Int32(127), _q8k_nearest_int(iscale * x[xo+j]))
+            vmin = min(vmin, v)
+            y.qs[qo+j] = v % Int8
         end
+        vmin < -128 && throw(InexactError(:trunc, Int8, vmin))
         for j in 1:16
             s = Int32(0)
             for ii in 1:16
-                s += Int32(y.qs[xo+(j-1)*16+ii])
+                s += Int32(y.qs[qo+(j-1)*16+ii])
             end
             y.bsums[bo+j] = Int16(s)
         end
@@ -138,8 +159,16 @@ function quantize_q8_0!(y::Q80Vec, x::AbstractVector{Float32})
     nb = length(y.d)
     length(x) == 32 * nb ||
         error("quantize_q8_0!: x length $(length(x)) ≠ 32 * nb = $(32 * nb)")
-    @inbounds for i in 1:nb
-        xo = (i - 1) * 32
+    for i in 1:nb
+        _quantize_q8_0_block!(y, i, x, (i - 1) * 32)
+    end
+    return y
+end
+
+# Block i of quantize_q8_0!, from the values x[xo+1:xo+32].
+@inline function _quantize_q8_0_block!(y::Q80Vec, i::Int, x::AbstractArray{Float32}, xo::Int)
+    @inbounds begin
+        qo = (i - 1) * 32
         amax = 0.0f0
         for j in 1:32
             amax = max(amax, abs(x[xo+j]))
@@ -147,9 +176,15 @@ function quantize_q8_0!(y::Q80Vec, x::AbstractVector{Float32})
         d = amax / 127.0f0
         id = d != 0.0f0 ? 1.0f0 / d : 0.0f0
         y.d[i] = Float32(Float16(d))
+        # As in _quantize_q8_K_block!, one range check per block rather than
+        # a checked Int8 per value; NaN fails both comparisons.
+        ok = true
         for j in 1:32
-            y.qs[xo+j] = Int8(round(x[xo+j] * id, RoundNearestTiesAway))
+            r = round(x[xo+j] * id, RoundNearestTiesAway)
+            ok &= (r >= -128.0f0) & (r <= 127.0f0)
+            y.qs[qo+j] = unsafe_trunc(Int32, r) % Int8
         end
+        ok || throw(InexactError(:trunc, Int8, maximum(j -> abs(x[xo+j] * id), 1:32)))
     end
     return y
 end
