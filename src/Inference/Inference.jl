@@ -452,11 +452,37 @@ end
 # Per-head attention output gate: head h of row t of the merged attention
 # output is scaled by sigmoid(g[t, h]). `merged` is (L, n_heads * d_head),
 # head-major as `_merge_heads!` writes it; `g` is (L, n_heads).
+# Prefill-sized arrays walk column-major across threads, with each (t, h)
+# gate computed once. Each element gets the same Float64 product either way;
+# decode-sized ones keep the allocation-free row loop.
 function _head_gate_mul!(backend, merged::Array, g::Array, d_head::Int)
-    for h in axes(g, 2), t in axes(g, 1)
-        s = _cpu_sigmoid(Float64(g[t, h]))
-        for j in ((h-1)*d_head+1):(h*d_head)
-            merged[t, j] *= s
+    seq, ncol = size(merged)
+    if Threads.nthreads() == 1 || seq * ncol < 1 << 18
+        for h in axes(g, 2), t in axes(g, 1)
+            s = _cpu_sigmoid(Float64(g[t, h]))
+            for j in ((h-1)*d_head+1):(h*d_head)
+                merged[t, j] *= s
+            end
+        end
+        return merged
+    end
+    sg = Matrix{Float64}(undef, size(g))
+    @inbounds for i in eachindex(g)
+        sg[i] = _cpu_sigmoid(Float64(g[i]))
+    end
+    nc = min(Threads.nthreads(), ncol)
+    @sync for c in 1:nc
+        js = (div((c - 1) * ncol, nc)+1):div(c * ncol, nc)
+        Threads.@spawn _head_gate_cols!(merged, sg, $js, d_head)
+    end
+    return merged
+end
+function _head_gate_cols!(merged, sg, js, d_head)
+    seq = size(merged, 1)
+    @inbounds for j in js
+        h = cld(j, d_head)
+        @simd for t in 1:seq
+            merged[t, j] *= sg[t, h]
         end
     end
     return merged
@@ -877,9 +903,10 @@ function _attention_heads!(
     K::Int,
     workload;
     window::Int=0,
+    kv_group::Int=1,
 )
     sc, probs = scores.storage, scores_out.storage
-    if backend isa CPUBackend && _attention_rows_threaded(L, K * d_head)
+    if _attention_rows_path(backend, L, K, d_head)
         return _attention_heads_rows!(
             attn,
             q,
@@ -891,9 +918,11 @@ function _attention_heads!(
             K,
             window,
             eltype(sc),
-            eltype(probs),
+            eltype(probs);
+            group=kv_group,
         )
     end
+    kv_group == 1 || throw(ArgumentError("_attention_heads!: kv_group > 1 needs the rows path"))
     on_cpu = backend_name(backend) === :cpu
     on_cpu && fill!(attn, zero(eltype(attn)))
     for hh in 1:n_heads
@@ -1145,56 +1174,147 @@ function _attention_heads_rows!(
     K::Int,
     window::Int,
     ::Type{S},
-    ::Type{P},
+    ::Type{P};
+    group::Int=1,
 ) where {S, P}
     scale = _attention_score_scale(d_head)
-    vt = Array{eltype(v)}(undef, d_head, K, n_heads)
-    _attention_rows!(n_heads) do heads
-        @inbounds for hh in heads, u in 1:K, j in 1:d_head
-            vt[j, u, hh] = v[u, hh, j]
+    n_kv = size(v, 2)
+    vt = Array{eltype(v)}(undef, d_head, K, n_kv)
+    _attention_rows!(n_kv) do heads
+        @inbounds for kh in heads, u in 1:K, j in 1:d_head
+            vt[j, u, kh] = v[u, kh, j]
         end
     end
-    _attention_rows!(L) do rows
-        s = Vector{S}(undef, K)
-        acc = Vector{eltype(attn)}(undef, d_head)
-        for t in rows
-            keys = _attention_keys(t, L, K, true, window)
-            for hh in 1:n_heads
-                @inbounds for u in keys
-                    s[u] = zero(S)
+    T = eltype(attn)
+    B = _ATTN_ROW_BLOCK
+    nfull = L ÷ B
+    _attention_rows!(nfull + L % B) do blks
+        s = Matrix{S}(undef, K, B)
+        acc = Matrix{T}(undef, d_head, B)
+        for blk in blks
+            if blk > nfull
+                t = B * nfull + (blk - nfull)
+                for hh in 1:n_heads
+                    _attention_row_head!(
+                        attn, q, k, vt, view(s, :, 1), view(acc, :, 1),
+                        t, hh, cld(hh, group), d_head, L, K, window, scale, S, P,
+                    )
                 end
-                for j in 1:d_head
-                    qv = q[t, hh, j]
-                    @inbounds for u in keys
-                        s[u] = _score_add(s[u], qv * k[u, hh, j], scale)
-                    end
-                end
-                row_max = maximum(view(s, keys))
-                isfinite(row_max) || throw(
-                    gesso_error(
-                        ERR_NUMERICAL_INSTABILITY,
-                        "softmax!: no finite unmasked maximum",
-                    ),
+            else
+                _attention_block_heads!(
+                    attn, q, k, vt, s, acc, (blk - 1) * B,
+                    n_heads, group, d_head, L, K, window, scale, S, P,
                 )
-                total = 0.0
-                @inbounds for u in keys
-                    s[u] = exp(s[u] - row_max)
-                    total += s[u]
-                end
-                @inbounds for u in keys
-                    s[u] /= total
-                end
-                fill!(acc, zero(eltype(attn)))
-                for u in keys
-                    p = P(s[u])
-                    @inbounds for j in 1:d_head
-                        acc[j] += p * vt[j, u, hh]
-                    end
-                end
-                @inbounds for j in 1:d_head
-                    attn[t, hh, j] = acc[j]
+            end
+        end
+    end
+    return attn
+end
+
+# Softmax over one row's kept keys, in place: Float64 total, as
+# `_cpu_softmax_storage!` computes it.
+@inline function _attention_softmax_keys!(s, keys)
+    row_max = maximum(view(s, keys))
+    isfinite(row_max) || throw(
+        gesso_error(ERR_NUMERICAL_INSTABILITY, "softmax!: no finite unmasked maximum"),
+    )
+    total = 0.0
+    @inbounds for u in keys
+        s[u] = exp(s[u] - row_max)
+        total += s[u]
+    end
+    @inbounds for u in keys
+        s[u] /= total
+    end
+    return s
+end
+
+# One query row of query head `hh`, which reads kv head `kh`: scores, softmax
+# and outputs.
+function _attention_row_head!(
+    attn, q, k, vt, s, acc, t, hh, kh, d_head, L, K, window, scale, ::Type{S}, ::Type{P},
+) where {S, P}
+    keys = _attention_keys(t, L, K, true, window)
+    @inbounds for u in keys
+        s[u] = zero(S)
+    end
+    for j in 1:d_head
+        qv = q[t, hh, j]
+        @inbounds for u in keys
+            s[u] = _score_add(s[u], qv * k[u, kh, j], scale)
+        end
+    end
+    _attention_softmax_keys!(s, keys)
+    fill!(acc, zero(eltype(acc)))
+    for u in keys
+        p = P(s[u])
+        @inbounds for j in 1:d_head
+            acc[j] += p * vt[j, u, kh]
+        end
+    end
+    @inbounds for j in 1:d_head
+        attn[t, hh, j] = acc[j]
+    end
+    return attn
+end
+
+# Query rows per block in `_attention_heads_rows!`.
+const _ATTN_ROW_BLOCK = 4
+
+# Rows t0+1:t0+4 of every head together, so each k and vt element loaded
+# serves four rows. Every row gets `_attention_row_head!`'s arithmetic element
+# for element. Scores run over the union of the rows' key ranges, and a row
+# never reads its entries outside its own keys. Outputs add each row's keys in
+# ascending order: the keys all four rows keep go through a joint loop, and
+# the ones only some rows keep go through a per-row check before and after it.
+function _attention_block_heads!(
+    attn, q, k, vt, s, acc, t0, n_heads, group, d_head, L, K, window, scale,
+    ::Type{S}, ::Type{P},
+) where {S, P}
+    Base.Cartesian.@nexprs 4 b -> (keys_b = _attention_keys(t0 + b, L, K, true, window))
+    ulo, uhi = first(keys_1), last(keys_4)
+    mlo, mhi = first(keys_4), last(keys_1)
+    for hh in 1:n_heads
+        kh = cld(hh, group)
+        @inbounds for b in 1:4, u in ulo:uhi
+            s[u, b] = zero(S)
+        end
+        for j in 1:d_head
+            Base.Cartesian.@nexprs 4 b -> (qv_b = q[t0 + b, hh, j])
+            @inbounds @simd for u in ulo:uhi
+                kv = k[u, kh, j]
+                Base.Cartesian.@nexprs 4 b -> (s[u, b] = _score_add(s[u, b], qv_b * kv, scale))
+            end
+        end
+        Base.Cartesian.@nexprs 4 b -> _attention_softmax_keys!(view(s, :, b), keys_b)
+        fill!(acc, zero(eltype(acc)))
+        for u in ulo:min(mlo - 1, uhi)
+            for b in 1:4
+                u in _attention_keys(t0 + b, L, K, true, window) || continue
+                p = P(s[u, b])
+                @inbounds @simd for j in 1:d_head
+                    acc[j, b] += p * vt[j, u, kh]
                 end
             end
+        end
+        for u in mlo:mhi
+            Base.Cartesian.@nexprs 4 b -> (p_b = @inbounds P(s[u, b]))
+            @inbounds @simd for j in 1:d_head
+                vj = vt[j, u, kh]
+                Base.Cartesian.@nexprs 4 b -> (acc[j, b] += p_b * vj)
+            end
+        end
+        for u in max(mhi + 1, mlo):uhi
+            for b in 1:4
+                u in _attention_keys(t0 + b, L, K, true, window) || continue
+                p = P(s[u, b])
+                @inbounds @simd for j in 1:d_head
+                    acc[j, b] += p * vt[j, u, kh]
+                end
+            end
+        end
+        @inbounds for b in 1:4, j in 1:d_head
+            attn[t0 + b, hh, j] = acc[j, b]
         end
     end
     return attn
@@ -1205,6 +1325,11 @@ end
 # rely on. Larger calls split their rows across threads.
 _attention_rows_threaded(L::Int, work::Int) =
     Threads.nthreads() > 1 && L > 1 && L * work >= 1 << 20
+
+# Whether `_attention_heads!` takes `_attention_heads_rows!`, which reads GQA
+# kv heads in place, so callers can skip `_repeat_heads`.
+_attention_rows_path(backend, L::Int, K::Int, d_head::Int) =
+    backend isa CPUBackend && _attention_rows_threaded(L, K * d_head)
 
 function _attention_rows!(f, L::Int)
     nc = min(Threads.nthreads(), L)
@@ -1968,19 +2093,23 @@ function _reference_generate(
                     hp.storage .+= sub.storage
                 else
                     @decode_stage :attn_mixer cpu begin
-                        rmsnorm!(cpu, normed, hp, bt.attn_rms, wp; eps)
-                        matmul!(cpu, q, normed, bt.wq, wp)
-                        matmul!(cpu, k, normed, bt.wk, wp)
-                        matmul!(cpu, v, normed, bt.wv, wp)
-                        _split_heads!(qh, q, n_heads, d_head)
-                        _split_heads!(kh, k, n_kv_heads, d_head)
-                        _split_heads!(vh, v, n_kv_heads, d_head)
-                        if haskey(bt, :wq_norm)
+                        @decode_sub :attn_proj cpu begin
+                            rmsnorm!(cpu, normed, hp, bt.attn_rms, wp; eps)
+                            matmul!(cpu, q, normed, bt.wq, wp)
+                            matmul!(cpu, k, normed, bt.wk, wp)
+                            matmul!(cpu, v, normed, bt.wv, wp)
+                        end
+                        @decode_sub :attn_rows cpu begin
+                            _split_heads!(qh, q, n_heads, d_head)
+                            _split_heads!(kh, k, n_kv_heads, d_head)
+                            _split_heads!(vh, v, n_kv_heads, d_head)
+                        end
+                        @decode_sub :attn_headnorm_rope cpu if haskey(bt, :wq_norm)
                             rmsnorm!(cpu, qh, qh, bt.wq_norm, wp; eps)
                             rmsnorm!(cpu, kh, kh, bt.wk_norm, wp; eps)
                         end
                         br = _block_rope(bt, theta, inv_freq, rotary_dim)
-                        rope!(
+                        @decode_sub :attn_headnorm_rope cpu rope!(
                             cpu,
                             qh,
                             kh,
@@ -1993,8 +2122,10 @@ function _reference_generate(
                         )
                         # KV APPEND: the pass's post-rope K/V become cache rows s0..s1,
                         # stored at n_kv_heads (GQA caches the small side, §LXXVI)
+                        @decode_sub :attn_kv_append cpu begin
                         _kv_write_rows!(kc[bi].storage, kh.storage, s0)
                         _kv_write_rows!(vc[bi].storage, vh.storage, s0)
+                        end
                         # a later pass attends the cached rows before it as well. A
                         # cache in another format is read back on the first pass too,
                         # so prefill attends the same keys decode will.
@@ -2034,10 +2165,13 @@ function _reference_generate(
                                 scores_out =
                                     TemporaryWorkspace(; shape=(n, K), storage=tmp((n, K)))
                             end
-                            # repeat KV heads for the contraction only (identity when MHA)
-                            kx = _repeat_heads(ks, group)
-                            vx = _repeat_heads(vs, group)
-                            _attention_heads!(
+                            # the rows path reads kv heads in place; the others
+                            # repeat them for the contraction (identity when MHA)
+                            grouped = _attention_rows_path(cpu, n, K, d_head)
+                            kx, vx =
+                                grouped ? (ks, vs) :
+                                (_repeat_heads(ks, group), _repeat_heads(vs, group))
+                            @decode_sub :attn_core cpu _attention_heads!(
                                 cpu,
                                 attn.storage,
                                 scores,
@@ -2051,6 +2185,7 @@ function _reference_generate(
                                 K,
                                 wp;
                                 window,
+                                kv_group=grouped ? group : 1,
                             )
                             kx === ks || (
                                 _release_storage!(kx.storage);
@@ -2059,6 +2194,7 @@ function _reference_generate(
                         end
                         kv_rot && _kv_rotate!(attn.storage, false)
 
+                        @decode_sub :attn_outproj cpu begin
                         _merge_heads!(merged, attn, n_heads, d_head)
                         if haskey(bt, :wattn_gate)
                             matmul!(cpu, gate_attn, normed, bt.wattn_gate, wp)
@@ -2074,6 +2210,7 @@ function _reference_generate(
                             _head_gate_mul!(cpu, merged.storage, gate_head.storage, d_head)
                         end
                         matmul!(cpu, sub, merged, bt.wo, wp)
+                        end
                         hp.storage .+= sub.storage
                     end
                 end

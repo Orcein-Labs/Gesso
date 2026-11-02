@@ -1500,10 +1500,12 @@ end
 # The Q6_K lanes with Q3_K weights: a 32-value chunk holds sub-blocks 2c and
 # 2c + 1 at the same offsets as Q6_K's i and j, so the pair order, the
 # vpmaddubsw / vpmaddwd pairing and the lane slots are the Q6_K ones. The
-# weights go in unsigned (0..7) and 4 x the activation pair sums come off before
-# vpmaddwd, so every step is exact and each lane equals _q3k_ints_avx2's. The
-# pair order and the 2-bit / high-bit extraction are bytewise, so the qs and
-# hmask loads are reordered once per block and shared by the K columns.
+# weights go in signed (-4..3) against |x|, with x's sign moved onto them by
+# psign, as the IQ kernels do: one vpmaddubsw per column. Each pair sum is
+# _q3k_ints_avx2's (w - 4) . x, at most 2 * 128 * 4 in size, so every step is
+# exact and each lane equals _q3k_ints_avx2's. The pair order and the 2-bit /
+# high-bit extraction are bytewise, so the qs and hmask loads are reordered
+# once per block and shared by the K columns.
 
 function _kq_ir_q3k_multi(K::Int, prep::Bool)
     io = IOBuffer()
@@ -1514,6 +1516,7 @@ function _kq_ir_q3k_multi(K::Int, prep::Bool)
         "declare <32 x i8> @llvm.x86.avx2.pshuf.b(<32 x i8>, <32 x i8>)\n",
         "declare <16 x i16> @llvm.x86.avx2.pmadd.ub.sw(<32 x i8>, <32 x i8>)\n",
         "declare <8 x i32> @llvm.x86.avx2.pmadd.wd(<16 x i16>, <16 x i16>)\n",
+        "declare <32 x i8> @llvm.x86.avx2.psign.b(<32 x i8>, <32 x i8>)\n",
         "define <$(8K) x float> @entry(ptr %w, $qargs, <16 x i16> %scw, <$(8K) x float> %s, <$(8K) x float> %d) #0 {\n",
     )
     _kq_ld(io, "hr", "w", 0)
@@ -1535,6 +1538,7 @@ function _kq_ir_q3k_multi(K::Int, prep::Bool)
             "  %hm$ht = and <32 x i8> %hs$ht, splat (i8 1)\n",
             "  %hb$ht = shl <32 x i8> %hm$ht, splat (i8 2)\n",
             "  %up$ht = or <32 x i8> %qb$ht, %hb$ht\n",
+            "  %ws$ht = sub <32 x i8> %up$ht, splat (i8 4)\n",
             "  %sw$ht = shufflevector <16 x i16> %scw, <16 x i16> poison, <16 x i32> <",
             join(("i32 $(isodd(k) ? i + 1 : i)" for k in 0:15), ", "),
             ">\n",
@@ -1548,9 +1552,9 @@ function _kq_ir_q3k_multi(K::Int, prep::Bool)
             end
             print(
                 io,
-                "  %mu$c.$ht = call <16 x i16> @llvm.x86.avx2.pmadd.ub.sw(<32 x i8> %up$ht, <32 x i8> %xp$c.$ht)\n",
-                "  %mo$c.$ht = call <16 x i16> @llvm.x86.avx2.pmadd.ub.sw(<32 x i8> splat (i8 4), <32 x i8> %xp$c.$ht)\n",
-                "  %mf$c.$ht = sub <16 x i16> %mu$c.$ht, %mo$c.$ht\n",
+                "  %ax$c.$ht = call <32 x i8> @llvm.x86.avx2.psign.b(<32 x i8> %xp$c.$ht, <32 x i8> %xp$c.$ht)\n",
+                "  %sg$c.$ht = call <32 x i8> @llvm.x86.avx2.psign.b(<32 x i8> %ws$ht, <32 x i8> %xp$c.$ht)\n",
+                "  %mf$c.$ht = call <16 x i16> @llvm.x86.avx2.pmadd.ub.sw(<32 x i8> %ax$c.$ht, <32 x i8> %sg$c.$ht)\n",
                 "  %ms$c.$ht = call <8 x i32> @llvm.x86.avx2.pmadd.wd(<16 x i16> %mf$c.$ht, <16 x i16> %sw$ht)\n",
                 "  %A$c.$ht = add <8 x i32> $(acc[c + 1]), %ms$c.$ht\n",
             )
