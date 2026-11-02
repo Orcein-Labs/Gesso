@@ -339,7 +339,7 @@ function reference_prefill(
                 _sigmoid_mul!(cpu, merged.storage, merged.storage, gate_attn.storage)
             end
             if haskey(bt, :wattn_head_gate)
-                matmul!(cpu, gate_head, normed, bt.wattn_head_gate, wl)
+                _head_gate_proj!(cpu, gate_head, normed, bt.wattn_head_gate, wl)
                 _head_gate_mul!(cpu, merged.storage, gate_head.storage, d_head)
             end
             matmul!(cpu, sub, merged, bt.wo, wl)
@@ -492,6 +492,87 @@ function _head_gate_mul!(backend, merged, g, d_head::Int)
     m3 .*=
         reshape(one(eltype(g)) ./ (one(eltype(g)) .+ exp.(-g)), size(g, 1), 1, size(g, 2))
     return merged
+end
+
+# The per-head gate projection g = x * transpose(W), W the small (n_heads, in)
+# F32 weight. On host arrays each output is one left fold over the input in
+# Float64, where the product of two Float32s is exact, so its bits do not
+# depend on the row count, the thread count or the machine. OpenBLAS SGEMM's
+# do, and its threads keep spinning after the call and slow the next pooled
+# matmul. Other storage goes through `matmul!`.
+_head_gate_host(a) =
+    a isa AbstractMatrix{<:Union{Float32,Float64}} && _backend_storage_root(a) isa Array
+
+function _head_gate_proj!(cpu, dst::Activation, x::Activation, w, wl)
+    if _head_gate_host(w.storage) && _head_gate_host(x.storage) && _head_gate_host(dst.storage)
+        _head_gate_proj!(dst.storage, x.storage, w.storage)
+        return dst
+    end
+    return matmul!(cpu, dst, x, w, wl)
+end
+
+function _head_gate_proj!(Y::AbstractMatrix, X::AbstractMatrix, W::AbstractMatrix)
+    L = size(X, 1)
+    (size(X, 2) == size(W, 2) && size(Y) == (L, size(W, 1))) ||
+        error("head gate: x $(size(X)), weight $(size(W)), dst $(size(Y)) do not line up")
+    if L * length(W) < 1 << 18
+        _head_gate_rows!(Y, X, W, 1:L)
+    else
+        _cpu_split_rows!(L) do rows
+            _head_gate_block!(Y, X, W, rows, Matrix{Float64}(undef, 32, size(W, 1)))
+        end
+    end
+    return Y
+end
+
+# Decode-sized calls: four outputs per pass over the row, no scratch.
+function _head_gate_rows!(Y, X, W, rows)
+    nout, nin = size(W)
+    @inbounds for r in rows
+        o = 1
+        while o + 3 <= nout
+            s1 = s2 = s3 = s4 = 0.0
+            for k in 1:nin
+                xk = Float64(X[r, k])
+                s1 += xk * Float64(W[o, k])
+                s2 += xk * Float64(W[o+1, k])
+                s3 += xk * Float64(W[o+2, k])
+                s4 += xk * Float64(W[o+3, k])
+            end
+            Y[r, o], Y[r, o+1], Y[r, o+2], Y[r, o+3] = s1, s2, s3, s4
+            o += 4
+        end
+        while o <= nout
+            s = 0.0
+            for k in 1:nin
+                s += Float64(X[r, k]) * Float64(W[o, k])
+            end
+            Y[r, o] = s
+            o += 1
+        end
+    end
+    return Y
+end
+
+# Prefill-sized calls: blocks of rows read down the columns of X. acc[i, o]
+# runs the same fold in input order as `_head_gate_rows!`, so the bits match.
+function _head_gate_block!(Y, X, W, rows, acc)
+    nout, nin = size(W)
+    rb = size(acc, 1)
+    @inbounds for r0 in first(rows):rb:last(rows)
+        nr = min(rb, last(rows) - r0 + 1)
+        fill!(acc, 0.0)
+        for k in 1:nin, o in 1:nout
+            w = Float64(W[o, k])
+            for i in 1:nr
+                acc[i, o] += Float64(X[r0+i-1, k]) * w
+            end
+        end
+        for o in 1:nout, i in 1:nr
+            Y[r0+i-1, o] = acc[i, o]
+        end
+    end
+    return Y
 end
 
 function _silu_mul!(backend, dst, src, gate)
@@ -2233,7 +2314,7 @@ function _reference_generate(
                             )
                         end
                         if haskey(bt, :wattn_head_gate)
-                            matmul!(cpu, gate_head, normed, bt.wattn_head_gate, wp)
+                            _head_gate_proj!(cpu, gate_head, normed, bt.wattn_head_gate, wp)
                             _head_gate_mul!(cpu, merged.storage, gate_head.storage, d_head)
                         end
                         matmul!(cpu, sub, merged, bt.wo, wp)
@@ -2737,7 +2818,7 @@ function _decode_attn_block!(
             end
             # the per-head gate is a small F32 projection of the same row
             haskey(bt, :wattn_head_gate) &&
-                matmul!(cpu, bufs.gate_head, normed, bt.wattn_head_gate, wl)
+                _head_gate_proj!(cpu, bufs.gate_head, normed, bt.wattn_head_gate, wl)
         end
         _decode_attn_core!(
             bt,

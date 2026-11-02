@@ -4,6 +4,7 @@
 
 using Test
 using Gesso
+using Random: MersenneTwister
 
 # erf of a BigFloat from the MPFR library Julia already links.
 function _mpfr_erf(x::BigFloat)
@@ -74,6 +75,30 @@ end
     d = Gesso.Inference._window_mask!(zeros(1, 10), 1, 10, 4)
     @test count(isfinite, d) == 4
     @test all(isfinite, d[1, 7:10])
+end
+
+@testset "spark2_5: head gate projection is one Float64 fold per output" begin
+    rng = MersenneTwister(20261102)
+    W = randn(rng, Float32, 18, 300)   # 18 outputs: four-wide passes plus a tail of two
+    for L in (1, 7, 1024)              # 1024 rows crosses the threaded cut
+        X = randn(rng, Float32, L, 300)
+        Y = Gesso.Inference._head_gate_proj!(zeros(Float32, L, 18), X, W)
+        fold(r, o) = foldl((s, k) -> s + Float64(X[r, k]) * Float64(W[o, k]), 1:300; init=0.0)
+        @test Y == Float32[fold(r, o) for r in 1:L, o in 1:18]
+        # one row at a time and one thread give the same bits
+        Y1 = zeros(Float32, L, 18)
+        for r in 1:L
+            Y1[r:r, :] = Gesso.Inference._head_gate_proj!(zeros(Float32, 1, 18), X[r:r, :], W)
+        end
+        @test Y1 == Y
+        @test Gesso.Inference._head_gate_rows!(zeros(Float32, L, 18), X, W, 1:L) == Y
+        @test Gesso.Inference._head_gate_block!(
+            zeros(Float32, L, 18), X, W, 1:L, zeros(32, 18),
+        ) == Y
+    end
+    @test_throws ErrorException Gesso.Inference._head_gate_proj!(
+        zeros(Float32, 2, 18), zeros(Float32, 2, 299), W,
+    )
 end
 
 @testset "spark2_5: per-layer window and RoPE lookups" begin

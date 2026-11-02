@@ -460,7 +460,7 @@ function _window_attn_block!(
         gated && _win_load!(bufs.gate_attn.storage, W.gate, t)
         if haskey(bt, :wattn_head_gate)
             _win_load!(bufs.normed.storage, W.normed, t)
-            matmul!(cpu, bufs.gate_head, bufs.normed, bt.wattn_head_gate, wl)
+            _head_gate_proj!(cpu, bufs.gate_head, bufs.normed, bt.wattn_head_gate, wl)
         end
         _decode_attn_core!(
             bt,
@@ -528,7 +528,12 @@ function _window_attn_rows_cpu!(
     Aw = similar(bufs.attn.storage, T, n_heads, d_head)
     if head_gated
         GH = similar(bufs.gate_head.storage, T, n_heads)
-        _window_matmul!(cpu, GH, W.normed, bt.wattn_head_gate, wl, zeros_like)
+        if _head_gate_host(GH) && _head_gate_host(W.normed) &&
+           _head_gate_host(bt.wattn_head_gate.storage)
+            _head_gate_proj!(GH, W.normed, bt.wattn_head_gate.storage)
+        else
+            _window_matmul!(cpu, GH, W.normed, bt.wattn_head_gate, wl, zeros_like)
+        end
     end
     @decode_sub :attn_headnorm_rope cpu begin
         _split_heads!(Qw, W.q, n_heads, d_head)
