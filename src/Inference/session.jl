@@ -128,7 +128,7 @@ function _validate_session_plan!(model, tensors, eos)
             bt=tensors.blocks[i]
             # The paged Session implements plain GQA + SwiGLU only; plans that need
             # gates, windows, per-layer RoPE or GEGLU run through `reference_generate`.
-            for k in (:wattn_gate, :wattn_head_gate, :attn_window, :rope_layer, :ffn_geglu)
+            for k in (:wattn_gate, :wattn_head_gate, :attn_window, :rope_layer, :ffn_geglu, :sandwich_norm)
                 haskey(bt, k) &&
                     error("block $i needs $k, which Session does not implement")
             end

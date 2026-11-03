@@ -270,6 +270,7 @@ function reference_prefill(
         # --- attention sublayer (pre-norm) -----------------------------------
         if _block_mixer(bt) === :short_convolution
             _short_convolution_block!(cpu, h, normed, sub, bt, wl, eps, zeros_like)
+            _sandwich_post!(cpu, sub, bt, :attn_post_rms, wl, eps, zeros_like)
             h.storage .+= sub.storage
         elseif _block_mixer(bt) === :linear_attention
             _hybrid_linear_block!(
@@ -343,12 +344,14 @@ function reference_prefill(
                 _head_gate_mul!(cpu, merged.storage, gate_head.storage, d_head)
             end
             matmul!(cpu, sub, merged, bt.wo, wl)
+            _sandwich_post!(cpu, sub, bt, :attn_post_rms, wl, eps, zeros_like)
             h.storage .+= sub.storage               # residual (interpreter add)
         end
 
         # --- ffn sublayer (pre-norm) -----------------------------------------
         rmsnorm!(cpu, normed2, h, bt.ffn_rms, wl; eps)
         _ffn_block!(cpu, down, gate, up, act, normed2, bt, wl, zeros_like)
+        _sandwich_post!(cpu, down, bt, :ffn_post_rms, wl, eps, zeros_like)
         h.storage .+= down.storage              # residual
     end
 
@@ -2181,6 +2184,7 @@ function _reference_generate(
                 end
                 if _block_mixer(bt) === :short_convolution
                     @decode_stage :conv_mixer cpu _short_convolution_block!(cpu, hp, normed, sub, bt, wp, eps, block_tmp; state=gdn_conv[bi])
+                    _sandwich_post!(cpu, sub, bt, :attn_post_rms, wp, eps, block_tmp)
                     hp.storage .+= sub.storage
                 elseif _block_mixer(bt) === :linear_attention
                     @decode_stage :gdn_mixer cpu _hybrid_linear_block!(
@@ -2319,11 +2323,13 @@ function _reference_generate(
                         end
                         matmul!(cpu, sub, merged, bt.wo, wp)
                         end
+                        _sandwich_post!(cpu, sub, bt, :attn_post_rms, wp, eps, block_tmp)
                         hp.storage .+= sub.storage
                     end
                 end
                 rmsnorm!(cpu, normed2, hp, bt.ffn_rms, wp; eps)
                 _ffn_block!(cpu, down, gate, up, act, normed2, bt, wp, block_tmp)
+                _sandwich_post!(cpu, down, bt, :ffn_post_rms, wp, eps, block_tmp)
                 hp.storage .+= down.storage
                 _arena_release!(block_tmp)
             end
@@ -3029,7 +3035,8 @@ end
 # in `bufs.hp`.
 function _decode_ffn_block!(bt, bufs, cpu, wl, zeros_like; eps)
     (; hp, sub, normed2, down, gate, up, act, xq_dim, xq_ff) = bufs
-    # both mixers leave their output in `sub`: residual add, then norm
+    # both mixers leave their output in `sub`: sandwich norm, residual add, then norm
+    _sandwich_post!(cpu, sub, bt, :attn_post_rms, wl, eps, zeros_like)
     @decode_stage :norm cpu _add_rmsnorm!(
         cpu,
         normed2,
@@ -3052,6 +3059,7 @@ function _decode_ffn_block!(bt, bufs, cpu, wl, zeros_like; eps)
         xq_in=xq_dim,
         xq_ff=xq_ff,
     )
+    _sandwich_post!(cpu, down, bt, :ffn_post_rms, wl, eps, zeros_like)
     _add_storage!(hp.storage, down.storage)  # residual
     return hp
 end

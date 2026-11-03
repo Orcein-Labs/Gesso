@@ -255,6 +255,13 @@ function _probe(backend, cap::Symbol)
         return _conformance_run(
             () -> Gesso.Inference._head_gate_mul!(backend, merged, g, 4),
         )
+    elseif cap === :sandwich_norm
+        # the post-norm runs only on blocks flagged :sandwich_norm, on the named slot
+        bt = (; sandwich_norm=true, attn_post_rms=_froz(ones(4)))
+        return _conformance_run(
+            () -> Gesso.Inference._sandwich_post!(backend, _act(randn(rng, 2, 4)), bt,
+                :attn_post_rms, wl, 1e-5, dims -> zeros(dims)),
+        )
     elseif cap === :sliding_window_attention
         sc = randn(rng, 3, 5)
         return _conformance_run(() -> Gesso.Inference._window_mask!(sc, 3, 5, 2))

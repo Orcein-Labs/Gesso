@@ -499,7 +499,7 @@ function required_semantics(spec::ArchitectureSpec)
     spec.rope.rotary_dim != 0 && push!(req, :rope_partial_dim)
     spec.rope.interleaved && push!(req, :rope_interleaved)
     push!(req, Symbol("rope_", caps.rope_scaling))
-    for f in (:shared_expert, :embedding_scale, :logit_softcap, :v_norm_weightless, :k_only_global_attention, :gemma4_parallel_moe, :layer_output_scale, :rope_freq_factors)
+    for f in (:shared_expert, :embedding_scale, :logit_softcap, :v_norm_weightless, :k_only_global_attention, :gemma4_parallel_moe, :layer_output_scale, :rope_freq_factors, :sandwich_norm)
         f in spec.features && !(f in req) && push!(req, f)
     end
     return req

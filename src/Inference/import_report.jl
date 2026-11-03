@@ -187,6 +187,7 @@ const _MATRIX_FEATURES = (
     [:linear_attention],
     [:attn_output_gate],
     [:attn_head_gate],
+    [:sandwich_norm],
     [:mrope],
 )
 const _MATRIX_WINDOWS = (nothing, 64)

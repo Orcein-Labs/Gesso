@@ -132,6 +132,7 @@ const CPU_SUPPORTED_CAPS = Set([
     :k_only_global_attention,
     :gemma4_parallel_moe,
     :layer_output_scale,
+    :sandwich_norm,
     :rope_freq_factors,
 ])
 supports(::CPUBackend, cap::Symbol) = cap in CPU_SUPPORTED_CAPS

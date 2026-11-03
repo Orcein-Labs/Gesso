@@ -166,6 +166,7 @@ using Gesso: reference_prefill, reference_generate
     # llama.cpp dump is gated on GESSO_QWEN4EXP_GGUF (skips without it)
     include("test_qwen4exp.jl")
     include("test_lfm25.jl")
+    include("test_lfm_unified.jl")
     include("test_lfm_chat.jl")
     include("test_gemma4_tokenizer.jl")
     include("test_gemma4_chat.jl")

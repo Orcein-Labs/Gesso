@@ -820,6 +820,14 @@ function _decode_window!(
     tapX = zeros(Float32, isempty(taps) ? 0 : T, dim * length(taps))
     _window_tap_copy!(tapX, taps, 0, hwin, dim)
 
+    for bt in tensors.blocks
+        _block_mixer(bt) === :short_convolution && error(
+            "_decode_window!: short-convolution (LFM) blocks have no window path",
+        )
+        haskey(bt, :sandwich_norm) && error(
+            "_decode_window!: sandwich-norm blocks have no window path",
+        )
+    end
     recs = Vector{Any}(nothing, length(model.blocks))
     for (bi, blk) in enumerate(model.blocks)
         bt = tensors.blocks[bi]

@@ -304,6 +304,7 @@ function materialize_architecture(
         if spec.sliding_window !== nothing
             slots[:attn_window] = layer_window(spec, layer)
         end
+        :sandwich_norm in spec.features && (slots[:sandwich_norm] = true)
         if spec.family === :gemma4
             slots[:gemma4_layer] = true
             slots[:d_head_layer] = layer_head_dim(spec, layer)
@@ -311,7 +312,8 @@ function materialize_architecture(
             rf = (layer_window(spec, layer) == 0) ? rope_freqs_param : nothing
             slots[:rope_layer] = _layer_rope_slot(layer_rope(spec, layer), layer_head_dim(spec, layer); rope_freqs=rf)
         elseif spec.rope_swa !== nothing
-            slots[:rope_layer] = _layer_rope_slot(layer_rope(spec, layer), spec.head_dim)
+            rf = (layer_window(spec, layer) == 0) ? rope_freqs_param : nothing
+            slots[:rope_layer] = _layer_rope_slot(layer_rope(spec, layer), spec.head_dim; rope_freqs=rf)
         end
         if spec.activation_kind === :geglu
             slots[:ffn_geglu] = true
