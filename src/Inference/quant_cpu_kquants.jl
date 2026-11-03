@@ -907,6 +907,194 @@ end
     return (v[1].value, v[2].value)
 end
 
+# ------------------------------------------------------------- generic-IR Q8_0, Q4_0, IQ4_NL, Q5_1
+#
+# Generic-IR kernels for the Q8_0 family on hosts other than x86_64 (aarch64 in
+# practice). Each sum is exact integer arithmetic, so its order is free, and the
+# results match the scalar reference bit for bit. Only sext, zext, mul,
+# shufflevector, select and the integer add reduction are used.
+
+const _KQ_IR_GEN_Q80 = let io = IOBuffer()
+    print(
+        io,
+        "declare i32 @llvm.vector.reduce.add.v32i32(<32 x i32>)\n",
+        "define i32 @entry(ptr %w, ptr %q) #0 {\n",
+        "  %wp = getelementptr i8, ptr %w, i64 2\n",
+        "  %wv = load <32 x i8>, ptr %wp, align 1\n",
+        "  %qv = load <32 x i8>, ptr %q, align 1\n",
+        "  %w32 = sext <32 x i8> %wv to <32 x i32>\n",
+        "  %q32 = sext <32 x i8> %qv to <32 x i32>\n",
+        "  %p = mul <32 x i32> %w32, %q32\n",
+        "  %s = call i32 @llvm.vector.reduce.add.v32i32(<32 x i32> %p)\n",
+        "  ret i32 %s\n}\n",
+        _KQ_ATTRS,
+    )
+    String(take!(io))
+end
+
+# Table lookup on <16 x i8> nibbles by a select chain: generic IR has no
+# variable byte shuffle. Returns the name of the final value.
+function _kq_gen_lut(io::IOBuffer, dst::String, src::String, lut)
+    print(io, "  %$(dst)_0 = add <16 x i8> zeroinitializer, splat (i8 $(Int(lut[1])))\n")
+    for k in 1:15
+        print(
+            io,
+            "  %$(dst)_c$k = icmp eq <16 x i8> %$src, splat (i8 $k)\n",
+            "  %$(dst)_$k = select <16 x i1> %$(dst)_c$k, ",
+            "<16 x i8> splat (i8 $(Int(lut[k+1]))), <16 x i8> %$(dst)_$(k-1)\n",
+        )
+    end
+    return "$(dst)_15"
+end
+
+# Q4_0 (lut = nothing: nibble - 8) and IQ4_NL (nibble through the table). Lanes
+# 0..15 are the low nibbles against qs[0..15], lanes 16..31 the high nibbles
+# against qs[16..31], the order the scalar reference uses.
+function _kq_gen_nibble(lut)
+    io = IOBuffer()
+    print(
+        io,
+        "declare i32 @llvm.vector.reduce.add.v32i32(<32 x i32>)\n",
+        "define i32 @entry(ptr %w, ptr %q) #0 {\n",
+        "  %wp = getelementptr i8, ptr %w, i64 2\n",
+        "  %wb = load <16 x i8>, ptr %wp, align 1\n",
+        "  %lo = and <16 x i8> %wb, splat (i8 15)\n",
+        "  %hi = lshr <16 x i8> %wb, splat (i8 4)\n",
+    )
+    if lut === nothing
+        print(
+            io,
+            "  %lo8 = sub <16 x i8> %lo, splat (i8 8)\n",
+            "  %hi8 = sub <16 x i8> %hi, splat (i8 8)\n",
+        )
+        lo_v, hi_v = "lo8", "hi8"
+    else
+        lo_v = _kq_gen_lut(io, "lo8", "lo", lut)
+        hi_v = _kq_gen_lut(io, "hi8", "hi", lut)
+    end
+    print(
+        io,
+        "  %wn = shufflevector <16 x i8> %$lo_v, <16 x i8> %$hi_v, <32 x i32> <$(_kq_idx(0, 32))>\n",
+        "  %w32 = sext <32 x i8> %wn to <32 x i32>\n",
+        "  %qv = load <32 x i8>, ptr %q, align 1\n",
+        "  %q32 = sext <32 x i8> %qv to <32 x i32>\n",
+        "  %p = mul <32 x i32> %w32, %q32\n",
+        "  %s = call i32 @llvm.vector.reduce.add.v32i32(<32 x i32> %p)\n",
+        "  ret i32 %s\n}\n",
+        _KQ_ATTRS,
+    )
+    return String(take!(io))
+end
+
+const _KQ_IR_GEN_Q40 = _kq_gen_nibble(nothing)
+const _KQ_IR_GEN_IQ4NL = _kq_gen_nibble(KVALUES_IQ4NL)
+
+# Q5_1: the same lane layout as _KQ_IR_Q51, returning <sumi, sumx>.
+const _KQ_IR_GEN_Q51 = let io = IOBuffer()
+    print(
+        io,
+        "declare i32 @llvm.vector.reduce.add.v32i32(<32 x i32>)\n",
+        "define <2 x i32> @entry(ptr %w, ptr %q) #0 {\n",
+        "  %hp = getelementptr i8, ptr %w, i64 4\n",
+        "  %qh = load i32, ptr %hp, align 1\n",
+        "  %hb = bitcast i32 %qh to <32 x i1>\n",
+        "  %hz = zext <32 x i1> %hb to <32 x i8>\n",
+        "  %h16 = shl <32 x i8> %hz, splat (i8 4)\n",
+        "  %wp = getelementptr i8, ptr %w, i64 8\n",
+        "  %wb = load <16 x i8>, ptr %wp, align 1\n",
+        "  %wlo = and <16 x i8> %wb, splat (i8 15)\n",
+        "  %whi = lshr <16 x i8> %wb, splat (i8 4)\n",
+        "  %wn = shufflevector <16 x i8> %wlo, <16 x i8> %whi, <32 x i32> <$(_kq_idx(0, 32))>\n",
+        "  %w32b = or <32 x i8> %wn, %h16\n",
+        "  %w32 = zext <32 x i8> %w32b to <32 x i32>\n",
+        "  %qv = load <32 x i8>, ptr %q, align 1\n",
+        "  %q32 = sext <32 x i8> %qv to <32 x i32>\n",
+        "  %p = mul <32 x i32> %w32, %q32\n",
+        "  %si = call i32 @llvm.vector.reduce.add.v32i32(<32 x i32> %p)\n",
+        "  %sx = call i32 @llvm.vector.reduce.add.v32i32(<32 x i32> %q32)\n",
+        "  %r0 = insertelement <2 x i32> poison, i32 %si, i64 0\n",
+        "  %r = insertelement <2 x i32> %r0, i32 %sx, i64 1\n",
+        "  ret <2 x i32> %r\n}\n",
+        _KQ_ATTRS,
+    )
+    String(take!(io))
+end
+
+@noinline function _q80_sumi_gen(w::AbstractVector{UInt8}, b::Int, x::Q80Vec, ib::Int)::Int32
+    return GC.@preserve w x @simd_llvmcall(
+        (_KQ_IR_GEN_Q80, "entry"),
+        Int32,
+        Tuple{Ptr{UInt8}, Ptr{Int8}},
+        pointer(w, b + 1),
+        pointer(x.qs, 32 * ib + 1),
+    )
+end
+
+@noinline function _q40_sumi_gen(w::AbstractVector{UInt8}, b::Int, x::Q80Vec, ib::Int)::Int32
+    return GC.@preserve w x @simd_llvmcall(
+        (_KQ_IR_GEN_Q40, "entry"),
+        Int32,
+        Tuple{Ptr{UInt8}, Ptr{Int8}},
+        pointer(w, b + 1),
+        pointer(x.qs, 32 * ib + 1),
+    )
+end
+
+@noinline function _iq4nl_sumi_gen(w::AbstractVector{UInt8}, b::Int, x::Q80Vec, ib::Int)::Int32
+    return GC.@preserve w x @simd_llvmcall(
+        (_KQ_IR_GEN_IQ4NL, "entry"),
+        Int32,
+        Tuple{Ptr{UInt8}, Ptr{Int8}},
+        pointer(w, b + 1),
+        pointer(x.qs, 32 * ib + 1),
+    )
+end
+
+@noinline function _q51_sumi_gen(w::AbstractVector{UInt8}, b::Int, x::Q80Vec, ib::Int)::NTuple{2, Int32}
+    v = GC.@preserve w x @simd_llvmcall(
+        (_KQ_IR_GEN_Q51, "entry"),
+        NTuple{2, VecElement{Int32}},
+        Tuple{Ptr{UInt8}, Ptr{Int8}},
+        pointer(w, b + 1),
+        pointer(x.qs, 32 * ib + 1),
+    )
+    return (v[1].value, v[2].value)
+end
+
+# Arch selection: the x86 kernel is compiled only on x86_64 and the generic one
+# only elsewhere (@static drops the other branch at expansion time).
+@inline function _q80_sumi_simd(w::AbstractVector{UInt8}, b::Int, x::Q80Vec, ib::Int)::Int32
+    @static if Sys.ARCH === :x86_64
+        return _q80_sumi_avx2(w, b, x, ib)
+    else
+        return _q80_sumi_gen(w, b, x, ib)
+    end
+end
+
+@inline function _q40_sumi_simd(w::AbstractVector{UInt8}, b::Int, x::Q80Vec, ib::Int)::Int32
+    @static if Sys.ARCH === :x86_64
+        return _q40_sumi_avx2(w, b, x, ib)
+    else
+        return _q40_sumi_gen(w, b, x, ib)
+    end
+end
+
+@inline function _iq4nl_sumi_simd(w::AbstractVector{UInt8}, b::Int, x::Q80Vec, ib::Int)::Int32
+    @static if Sys.ARCH === :x86_64
+        return _iq4nl_sumi_avx2(w, b, x, ib)
+    else
+        return _iq4nl_sumi_gen(w, b, x, ib)
+    end
+end
+
+@inline function _q51_sumi_simd(w::AbstractVector{UInt8}, b::Int, x::Q80Vec, ib::Int)::NTuple{2, Int32}
+    @static if Sys.ARCH === :x86_64
+        return _q51_sumi_avx2(w, b, x, ib)
+    else
+        return _q51_sumi_gen(w, b, x, ib)
+    end
+end
+
 # ------------------------------------------------------------- scalar Q8_0, Q4_0, IQ4_NL, Q5_1
 
 @inline function _q80_sumi_ref(w::AbstractVector{UInt8}, b::Int, x::Q80Vec, ib::Int)::Int32
@@ -1070,7 +1258,7 @@ function _dot_q8_0_q8_0(w::AbstractVector{UInt8}, woff::Int, x::Q80Vec, simd::Bo
     sumf = 0.0f0
     @inbounds for ib in 0:(nb-1)
         b = woff + ib * 34
-        sumi = simd ? _q80_sumi_avx2(w, b, x, ib) : _q80_sumi_ref(w, b, x, ib)
+        sumi = simd ? _q80_sumi_simd(w, b, x, ib) : _q80_sumi_ref(w, b, x, ib)
         sumf += Float32(sumi) * (_kq_f16(w, b) * x.d[ib+1])
     end
     return sumf
@@ -1083,7 +1271,7 @@ function _dot_q4_0_q8_0(w::AbstractVector{UInt8}, woff::Int, x::Q80Vec, simd::Bo
     sumf = 0.0f0
     @inbounds for ib in 0:(nb-1)
         b = woff + ib * 18
-        sumi = simd ? _q40_sumi_avx2(w, b, x, ib) : _q40_sumi_ref(w, b, x, ib)
+        sumi = simd ? _q40_sumi_simd(w, b, x, ib) : _q40_sumi_ref(w, b, x, ib)
         sumf += (Float32(sumi) * _kq_f16(w, b)) * x.d[ib+1]
     end
     return sumf
@@ -1096,7 +1284,7 @@ function _dot_iq4_nl_q8_0(w::AbstractVector{UInt8}, woff::Int, x::Q80Vec, simd::
     sumf = 0.0f0
     @inbounds for ib in 0:(nb-1)
         b = woff + ib * 18
-        sumi = simd ? _iq4nl_sumi_avx2(w, b, x, ib) : _iq4nl_sumi_ref(w, b, x, ib)
+        sumi = simd ? _iq4nl_sumi_simd(w, b, x, ib) : _iq4nl_sumi_ref(w, b, x, ib)
         sumf += (x.d[ib+1] * _kq_f16(w, b)) * Float32(sumi)
     end
     return sumf
@@ -1110,7 +1298,7 @@ function _dot_q5_1_q8_0(w::AbstractVector{UInt8}, woff::Int, x::Q80Vec, simd::Bo
     sumf = 0.0f0
     @inbounds for ib in 0:(nb-1)
         b = woff + ib * 24
-        sumi, sumx = simd ? _q51_sumi_avx2(w, b, x, ib) : _q51_sumi_ref(w, b, x, ib)
+        sumi, sumx = simd ? _q51_sumi_simd(w, b, x, ib) : _q51_sumi_ref(w, b, x, ib)
         dx = x.d[ib+1]
         sumf += (_kq_f16(w, b) * dx) * Float32(sumi) + _kq_f16(w, b + 2) * (dx * Float32(sumx))
     end

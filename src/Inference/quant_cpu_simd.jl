@@ -134,12 +134,14 @@ end
 _cpu_has_simd()::Bool = Sys.ARCH === :aarch64 || _cpu_has_avx2()
 
 # Types with a SIMD kernel on this architecture. x86_64 has every kernel. On
-# aarch64 only the generic-IR K-quant kernels exist (Q2_K to Q6_K); the other
-# types stay on the scalar reference until their aarch64 kernels are ported.
+# aarch64 the generic-IR kernels cover the K-quants (Q2_K to Q6_K) and the
+# Q8_0 family (Q8_0, Q4_0, IQ4_NL, Q5_1); the IQ types stay on the scalar
+# reference until their aarch64 kernels are ported.
 @inline function _simd_type_ok(t::Int32)::Bool
     Sys.ARCH === :x86_64 && return true
     return t == GGML_TYPE_Q2_K || t == GGML_TYPE_Q3_K || t == GGML_TYPE_Q4_K ||
-           t == GGML_TYPE_Q5_K || t == GGML_TYPE_Q6_K
+           t == GGML_TYPE_Q5_K || t == GGML_TYPE_Q6_K || t == GGML_TYPE_Q8_0 ||
+           t == GGML_TYPE_Q4_0 || t == GGML_TYPE_IQ4_NL || t == GGML_TYPE_Q5_1
 end
 
 # -1 unresolved, 0 scalar, 1 SIMD. The result is cached on first use, not at

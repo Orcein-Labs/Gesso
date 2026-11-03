@@ -27,6 +27,17 @@ const _QTYPES = (
     ("IQ2_XS", _QSIMD.GGML_TYPE_IQ2_XS),
     ("IQ3_XXS", _QSIMD.GGML_TYPE_IQ3_XXS),
 )
+# Q8_0 family: 32-value blocks, activations are Q80Vec (see _q8k_quantize_act).
+const _Q80TYPES = (
+    ("Q8_0", _QSIMD.GGML_TYPE_Q8_0),
+    ("Q4_0", _QSIMD.GGML_TYPE_Q4_0),
+    ("IQ4_NL", _QSIMD.GGML_TYPE_IQ4_NL),
+    ("Q5_1", _QSIMD.GGML_TYPE_Q5_1),
+)
+# Types with an aarch64 SIMD kernel. The IQ types stay scalar there for now.
+const _AARCH64_SIMD_NAMES = (
+    "Q2_K", "Q3_K", "Q4_K", "Q5_K", "Q6_K", "Q8_0", "Q4_0", "IQ4_NL", "Q5_1",
+)
 
 # Little-endian f16 store at a 0-based byte offset.
 function _q_write_f16!(w, off0::Int, v::Float32)
@@ -48,6 +59,25 @@ function _q_random_rows(rng, ggml_type::Int32, nrows::Int, nb::Int)
     w = rand(rng, UInt8, nrows * nb * bsz)
     for blk in 0:(nrows*nb-1)
         _q_write_f16!(w, blk * bsz + doff, 0.005f0 + 0.05f0 * rand(rng, Float32))
+        if moff >= 0
+            _q_write_f16!(w, blk * bsz + moff, 0.005f0 + 0.05f0 * rand(rng, Float32))
+        end
+    end
+    return w
+end
+
+# Block bytes and the m offset (-1 when there is none) of a Q8_0-family type.
+_q80_block(ty::Int32) =
+    ty == _QSIMD.GGML_TYPE_Q8_0 ? (34, -1) :
+    ty == _QSIMD.GGML_TYPE_Q5_1 ? (24, 2) : (18, -1)
+
+# Random Q8_0-family rows of nb 32-value blocks: arbitrary quant bytes, small
+# f16 scale (and f16 min for Q5_1) per block.
+function _q80_random_rows(rng, ty::Int32, nrows::Int, nb::Int)
+    bsz, moff = _q80_block(ty)
+    w = rand(rng, UInt8, nrows * nb * bsz)
+    for blk in 0:(nrows*nb-1)
+        _q_write_f16!(w, blk * bsz, 0.005f0 + 0.05f0 * rand(rng, Float32))
         if moff >= 0
             _q_write_f16!(w, blk * bsz + moff, 0.005f0 + 0.05f0 * rand(rng, Float32))
         end
@@ -218,6 +248,59 @@ end
     end
 end
 
+@testset "Q8_0 family: SIMD bit-exact against scalar reference" begin
+    if !_QSIMD._cpu_has_simd()
+        _skip("no SIMD on this CPU: Q8_0-family bit-exact check skipped")
+    else
+        rng = Xoshiro(10)
+        for (name, ty) in _Q80TYPES
+            ntrial = 0
+            nmismatch = 0
+            for trial in 1:300
+                nb = 1 + (trial % 8)            # 32 to 256 values
+                W = _q80_random_rows(rng, ty, 4, nb)
+                x = randn(rng, Float32, 32 * nb) .* Float32(0.1 + 10 * rand(rng))
+                if trial % 7 == 0               # extreme activations: quants saturate at ±127
+                    x .= x .* 1000.0f0
+                end
+                if trial % 11 == 0              # zeros in the first half-block
+                    x[1:16] .= 0.0f0
+                end
+                xq = _QSIMD._q8k_quantize_act(ty, x)
+                rb = nb * _q80_block(ty)[1]
+                for j in 1:4
+                    r = _QSIMD._dot_q8k(ty, W, (j - 1) * rb, xq, false)
+                    a = _QSIMD._dot_q8k(ty, W, (j - 1) * rb, xq, true)
+                    ntrial += 1
+                    nmismatch += reinterpret(UInt32, r) != reinterpret(UInt32, a)
+                end
+            end
+            @testset "$name" begin
+                @test nmismatch == 0
+                @test ntrial == 1200
+            end
+        end
+        @testset "saturating bytes and zero scale" begin
+            for (name, ty) in _Q80TYPES
+                nb = 2
+                bsz, moff = _q80_block(ty)
+                W = fill(UInt8(0xff), nb * bsz)
+                for ib in 0:(nb-1)
+                    _q_write_f16!(W, ib * bsz, 0.0f0)
+                    if moff >= 0
+                        _q_write_f16!(W, ib * bsz + moff, 0.0f0)
+                    end
+                end
+                xq = _QSIMD._q8k_quantize_act(ty, fill(1.0f0, 32 * nb))
+                r = _QSIMD._dot_q8k(ty, W, 0, xq, false)
+                a = _QSIMD._dot_q8k(ty, W, 0, xq, true)
+                @test r === 0.0f0
+                @test reinterpret(UInt32, r) == reinterpret(UInt32, a)
+            end
+        end
+    end
+end
+
 @testset "SIMD gate follows the architecture" begin
     if Sys.ARCH === :aarch64
         # NEON is the ARMv8 baseline: the gate is open on every aarch64 host
@@ -225,12 +308,11 @@ end
         if get(ENV, "GESSO_QUANT_SIMD", "1") != "0"
             @test _QSIMD.q8k_simd_enabled()
         end
-        for (name, ty) in _QTYPES
-            kquant = name[1] == 'Q'
-            @test _QSIMD._simd_type_ok(ty) == kquant
+        for (name, ty) in (_QTYPES..., _Q80TYPES...)
+            @test _QSIMD._simd_type_ok(ty) == (name in _AARCH64_SIMD_NAMES)
         end
     elseif Sys.ARCH === :x86_64
-        for (_, ty) in _QTYPES
+        for (_, ty) in (_QTYPES..., _Q80TYPES...)
             @test _QSIMD._simd_type_ok(ty)
         end
     end
