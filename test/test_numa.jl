@@ -7,6 +7,7 @@ using Gesso
 using Test
 
 const _RN = Gesso.Runtime
+const _RP = Gesso.Runtime
 const _NUMA_ENV = "GESSO_NUMA_NODES"
 
 # Builds a fake sysfs tree and runs f(root) on it. `nodes` maps a node id to
@@ -138,4 +139,86 @@ end
     @test _RN.numa_node_count(t) >= 1
     @test all(!isempty(n.cpus) for n in t.nodes)
     @test t.source in (:sysfs, :single)
+end
+
+@testset "NUMA: pin plan and gate" begin
+    topo = _RN.parse_numa_override("0-8;9-17")
+    # Workers fill node 0 before node 1.
+    @test _RN.pin_plan(topo, 12) == vcat(0:8, 9:11)
+    @test length(_RN.pin_plan(topo, 20)) == 20
+    @test isempty(_RN.pin_plan(topo, 0))
+
+    one = _RN.parse_numa_override("0-7")
+    @test !_RN.pin_threads_enabled(one; env=Dict{String, String}())
+    @test _RN.pin_threads_enabled(topo; env=Dict{String, String}())
+    @test _RN.pin_threads_enabled(one; env=Dict(_RN.PIN_ENV => "1"))
+    @test !_RN.pin_threads_enabled(topo; env=Dict(_RN.PIN_ENV => "0"))
+    @test_throws Gesso.GessoException _RN.pin_threads_enabled(one; env=Dict(_RN.PIN_ENV => "yes"))
+end
+
+@testset "NUMA: thread affinity round trip" begin
+    if !Sys.islinux()
+        @test !_RN.set_current_thread_affinity!([0])
+        @test _RN.current_thread_cpus() === nothing
+    else
+        saved = _RN.current_thread_cpus()
+        @test saved !== nothing && !isempty(saved)
+        try
+            @test _RN.set_current_thread_affinity!([saved[1]])
+            @test _RN.current_thread_cpus() == [saved[1]]
+            # A CPU this kernel does not have is refused and leaves the mask alone.
+            @test !_RN.set_current_thread_affinity!([1000])
+            @test _RN.current_thread_cpus() == [saved[1]]
+        finally
+            _RN.set_current_thread_affinity!(saved)
+        end
+        @test _RN.current_thread_cpus() == saved
+    end
+end
+
+@testset "NUMA: pool workers pin one CPU per thread" begin
+    host = _RN.current_thread_cpus()
+    old_n = _RP._cpu_pool().participants
+    n = min(4, _RP._cpu_pool_available_threads())
+    if !Sys.islinux() || host === nothing || n < 2
+        @info "pool pinning check skipped" linux=Sys.islinux() threads=n
+    else
+        # One fake node made of host CPUs, so the planned CPUs exist here.
+        spec = join(host[1:min(length(host), 4)], ",")
+        try
+            withenv(_NUMA_ENV => spec, _RN.PIN_ENV => "1") do
+                _RP._cpu_pool_configure!(n)
+                report = _RN.pool_pin_report()
+                @test length(report) == n - 1
+                @test all(r.status in (:pinned, :shared) for r in report)
+                pinned = [r for r in report if r.status === :pinned]
+                @test !isempty(pinned)
+                @test all(r.cpu in host for r in pinned)
+
+                # Chunks running on a pinned worker thread see exactly its CPU.
+                seen = Dict{Int, Vector{Int}}()
+                lk = ReentrantLock()
+                _RP.pool_run!(64) do c
+                    sleep(0.001)
+                    tid = Threads.threadid()
+                    aff = _RN.current_thread_cpus()
+                    lock(() -> (seen[tid] = aff), lk)
+                end
+                @test any(haskey(seen, r.tid) for r in pinned)
+                for r in pinned
+                    haskey(seen, r.tid) && @test seen[r.tid] == [r.cpu]
+                end
+            end
+        finally
+            _RP._cpu_pool_configure!(old_n)
+        end
+        # The workers restored their threads, so pinning does not leak into the next pool.
+        restored = Dict{Int, Vector{Int}}()
+        lk = ReentrantLock()
+        _RP.pool_run!(64) do c
+            sleep(0.001)
+            lock(() -> (restored[Threads.threadid()] = _RN.current_thread_cpus()), lk)
+        end
+        @test all(v == host for v in values(restored))
+    end
 end

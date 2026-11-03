@@ -23,6 +23,7 @@ export BatchRequest, BatchResult, run_batch, cancel!
 # pool_run! is internal plumbing, reached as Runtime.pool_run!; the exported surface is pinned by test_batch.jl.
 
 include("numa.jl")
+include("numa_pin.jl")
 include("cpu_pool.jl")
 
 struct BatchRequest

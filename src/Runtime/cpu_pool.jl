@@ -139,8 +139,15 @@ end
 
 function _cpu_pool_start(participants::Int, spin_us::Int)::CPUPool
     p = CPUPool(participants, UInt64(spin_us) * UInt64(1000))
-    for _ in 2:participants
-        push!(p.workers, Base.Threads.@spawn _cpu_pool_worker!(p))
+    pins = _cpu_pool_pin_plan(participants)
+    pins === nothing || _pin_reset!()
+    for k in 2:participants
+        if pins === nothing
+            push!(p.workers, Base.Threads.@spawn _cpu_pool_worker!(p))
+        else
+            cpu = pins[k - 1]
+            push!(p.workers, Base.Threads.@spawn _cpu_pool_pinned_worker!(p, cpu))
+        end
     end
     # A freshly spawned task can sit in the spawning thread's queue until that
     # thread yields. Yield here until every worker has run once, so the first
@@ -148,7 +155,22 @@ function _cpu_pool_start(participants::Int, spin_us::Int)::CPUPool
     while !all(istaskstarted, p.workers)
         yield()
     end
+    # Pinned workers record their outcome when they start; wait for all of them.
+    if pins !== nothing
+        while _pin_logged_count() < participants - 1
+            yield()
+        end
+    end
     return p
+end
+
+# One CPU per worker, grouped by node. The caller thread is never pinned.
+# nothing means pinning is off and the pool starts exactly as before.
+function _cpu_pool_pin_plan(participants::Int)::Union{Nothing, Vector{Int}}
+    participants > 1 || return nothing
+    topo = numa_topology()
+    pin_threads_enabled(topo) || return nothing
+    return pin_plan(topo, participants - 1)
 end
 
 function _cpu_pool_stop!(p::CPUPool)
@@ -252,6 +274,17 @@ function _cpu_pool_worker!(p::CPUPool)
         Base.invokelatest(_cpu_pool_help!, p)
     end
     return nothing
+end
+
+# Pins the worker's OS thread to `cpu` (when this worker is the first on its
+# thread), runs the worker loop, then restores the thread's affinity.
+function _cpu_pool_pinned_worker!(p::CPUPool, cpu::Int)
+    claim = _pin_claim!(cpu)
+    try
+        return _cpu_pool_worker!(p)
+    finally
+        claim === nothing || _pin_release!(claim)
+    end
 end
 
 # A worker reads the job only after it has read a claimable ticket. A
