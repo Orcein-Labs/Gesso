@@ -165,11 +165,23 @@ function parse_numa_override(spec::AbstractString)::NUMATopology
     return NUMATopology(nodes, :env)
 end
 
+# The real machine's sysfs topology, read once. A load asks once per large
+# tensor, and each sysfs read costs ~170 us.
+const _HOST_TOPOLOGY = Ref{Union{Nothing, NUMATopology}}(nothing)
+
+function _sysfs_topology(sysfs::AbstractString)::NUMATopology
+    topo = _topology_from_sysfs(sysfs)
+    return topo === nothing ? _single_node_topology(sysfs) : topo
+end
+
 # Topology for this process. The env override wins over sysfs; sysfs wins over
-# the single-node fallback. `sysfs` and `env` are injectable for tests.
+# the single-node fallback. `sysfs` and `env` are injectable for tests; only
+# the default sysfs root is cached.
 function numa_topology(; sysfs::AbstractString=NUMA_SYSFS_ROOT, env::AbstractDict=ENV)::NUMATopology
     spec = strip(get(env, NUMA_ENV, ""))
     isempty(spec) || return parse_numa_override(spec)
-    topo = _topology_from_sysfs(sysfs)
-    return topo === nothing ? _single_node_topology(sysfs) : topo
+    sysfs == NUMA_SYSFS_ROOT || return _sysfs_topology(sysfs)
+    topo = _HOST_TOPOLOGY[]
+    topo === nothing || return topo
+    return _HOST_TOPOLOGY[] = _sysfs_topology(sysfs)
 end
