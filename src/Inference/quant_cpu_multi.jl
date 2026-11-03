@@ -785,7 +785,7 @@ for K in 1:8
         pw::Ptr{UInt8},
         pq::NTuple{$K, Ptr{Int8}},
         pb::NTuple{$K, Ptr{Int16}},
-    ) = Base.llvmcall(
+    ) = @x86_llvmcall(
         ($(_kq_ir_q2k_multi(K)), "entry"),
         NTuple{$(2K), VecElement{Int32}},
         $argt,
@@ -972,7 +972,7 @@ for K in 1:8
     V = NTuple{8K, VecElement{Float32}}
     argt = Tuple{Ptr{UInt8}, ntuple(_ -> Ptr{Int8}, K)..., V, V}
     @eval @inline _q6k_multi_step(pw::Ptr{UInt8}, pq::NTuple{$K, Ptr{Int8}}, s::$V, d::$V) =
-        Base.llvmcall(($(_kq_ir_q6k_multi(K)), "entry"), $V, $argt, pw, $(qs...), s, d)
+        @x86_llvmcall(($(_kq_ir_q6k_multi(K)), "entry"), $V, $argt, pw, $(qs...), s, d)
 end
 
 # Each column's dw * d, repeated across its 8 lanes.
@@ -1156,7 +1156,7 @@ for K in 1:8
         pm::NTuple{$K, Ptr{Int8}},
         s::$V,
         d::$V,
-    ) = Base.llvmcall(
+    ) = @x86_llvmcall(
         ($(_kq_ir_q6k_prep_multi(K)), "entry"),
         $V,
         $argt,
@@ -1312,7 +1312,7 @@ for K in 1:8, q5 in (false, true), prep in (false, true)
         d::$V,
         ::Val{$q5},
         ::Val{$prep},
-    ) = Base.llvmcall(
+    ) = @x86_llvmcall(
         ($(_kq_ir_q45k_multi(K, q5, prep)), "entry"),
         $V,
         $argt,
@@ -1577,7 +1577,7 @@ for K in 1:8, prep in (false, true)
         s::$V,
         d::$V,
         ::Val{$prep},
-    ) = Base.llvmcall(
+    ) = @x86_llvmcall(
         ($(_kq_ir_q3k_multi(K, prep)), "entry"),
         $V,
         $argt,
@@ -1753,7 +1753,7 @@ end
 for K in 1:8
     bs = [:(pb[$c]) for c in 1:K]
     argt = Tuple{ntuple(_ -> Ptr{Int16}, K)..., UInt64, Ptr{UInt8}}
-    @eval @inline _kq_mins_multi(pb::NTuple{$K, Ptr{Int16}}, m::UInt64, mk::Ptr{UInt8}) = Base.llvmcall(
+    @eval @inline _kq_mins_multi(pb::NTuple{$K, Ptr{Int16}}, m::UInt64, mk::Ptr{UInt8}) = @x86_llvmcall(
         ($(_kq_ir_mins_multi(K)), "entry"),
         NTuple{$K, VecElement{Int32}},
         $argt,
@@ -1882,16 +1882,16 @@ for K in 1:8
     V = NTuple{K, VecElement{Float32}}
     argt = Tuple{Ptr{UInt8}, ntuple(_ -> Ptr{Int8}, K)..., V, V}
     @eval @inline _q80_multi_step(pw::Ptr{UInt8}, pq::NTuple{$K, Ptr{Int8}}, s::$V, d::$V) =
-        Base.llvmcall(($(_kq_ir_q80_multi(K)), "entry"), $V, $argt, pw, $(qs...), s, d)
+        @x86_llvmcall(($(_kq_ir_q80_multi(K)), "entry"), $V, $argt, pw, $(qs...), s, d)
     @eval @inline _iq4nl_multi_step(pw::Ptr{UInt8}, pq::NTuple{$K, Ptr{Int8}}, s::$V, d::$V) =
-        Base.llvmcall(($(_kq_ir_q80_multi(K, :iq4nl)), "entry"), $V, $argt, pw, $(qs...), s, d)
+        @x86_llvmcall(($(_kq_ir_q80_multi(K, :iq4nl)), "entry"), $V, $argt, pw, $(qs...), s, d)
     # The same steps with the tile's d-table row in place of the d vectors, and
     # with the tile's packed quants in place of the column pointers.
     argtp = Tuple{Ptr{UInt8}, ntuple(_ -> Ptr{Int8}, K)..., V, Ptr{Float32}}
     for (f, wt) in ((:_q80_multi_step, :q80), (:_iq4nl_multi_step, :iq4nl), (:_q40_multi_step, :q40))
         @eval @inline $f(pw::Ptr{UInt8}, pq::NTuple{$K, Ptr{Int8}}, s::$V, dp::Ptr{Float32}) =
-            Base.llvmcall(($(_kq_ir_q80_multi(K, wt, true)), "entry"), $V, $argtp, pw, $(qs...), s, dp)
-        @eval @inline $f(pw::Ptr{UInt8}, qb::Ptr{Int8}, s::$V, dp::Ptr{Float32}) = Base.llvmcall(
+            @x86_llvmcall(($(_kq_ir_q80_multi(K, wt, true)), "entry"), $V, $argtp, pw, $(qs...), s, dp)
+        @eval @inline $f(pw::Ptr{UInt8}, qb::Ptr{Int8}, s::$V, dp::Ptr{Float32}) = @x86_llvmcall(
             ($(_kq_ir_q80_multi(K, wt, true, true)), "entry"),
             $V,
             Tuple{Ptr{UInt8}, Ptr{Int8}, $V, Ptr{Float32}},
@@ -1907,7 +1907,7 @@ for K in 1:8
         s::$V,
         dp::Ptr{Float32},
         sp::Ptr{Float32},
-    ) = Base.llvmcall(
+    ) = @x86_llvmcall(
         ($(_kq_ir_q80_multi(K, :q51, true, true)), "entry"),
         $V,
         Tuple{Ptr{UInt8}, Ptr{Int8}, $V, Ptr{Float32}, Ptr{Float32}},
@@ -1924,7 +1924,7 @@ for K in 1:8
         s::$V,
         dw::$V,
         d::$V,
-    ) = Base.llvmcall(
+    ) = @x86_llvmcall(
         ($(_kq_ir_q80_multi(K, :q40)), "entry"),
         $V,
         $argt4,
@@ -2081,7 +2081,7 @@ for K in 1:8
             q::NTuple{$K, Ptr{Int8}},
             s::$V,
             d::$D,
-        ) = Base.llvmcall(
+        ) = @x86_llvmcall(
             ($(_kq_ir_iq2xs_multi(K, dp)), "entry"),
             $V,
             Tuple{$(head...), $V, $D},
@@ -2102,7 +2102,7 @@ for K in 1:8
         qb::Ptr{Int8},
         s::$V,
         dp::Ptr{Float32},
-    ) = Base.llvmcall(
+    ) = @x86_llvmcall(
         ($(_kq_ir_iq2xs_multi(K, true, true)), "entry"),
         $V,
         Tuple{Ptr{UInt8}, Ptr{UInt64}, Ptr{UInt64}, Ptr{Int16}, Ptr{Int8}, $V, Ptr{Float32}},
@@ -2313,7 +2313,7 @@ for K in 1:8
         s::$V,
         dp::Ptr{Float32},
         dwf::Float32,
-    ) = Base.llvmcall(
+    ) = @x86_llvmcall(
         ($(_kq_ir_iq2xs_decoded(K)), "entry"),
         $V,
         Tuple{Ptr{UInt8}, Ptr{Int8}, $V, Ptr{Float32}, Float32},

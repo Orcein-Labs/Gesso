@@ -18,13 +18,24 @@
 # the reference's order. The AVX2 result therefore equals the scalar result bit
 # for bit, and test/test_quant_cpu_simd.jl checks that.
 #
-# Dependency law: only Base.llvmcall and LLVM x86 intrinsics. The AVX2 kernels
-# are @noinline, so their intrinsics are compiled only when a kernel runs, and
-# the dispatcher runs one only when CPUID reports AVX2 and the OS saves YMM
-# state. On other CPUs and architectures the scalar path runs.
-# GESSO_QUANT_SIMD=0 forces the scalar path.
+# Dependency law: only Base.llvmcall and LLVM x86 intrinsics. The dispatcher
+# runs an AVX2 kernel only when CPUID reports AVX2 and the OS saves YMM state;
+# otherwise the scalar path runs. GESSO_QUANT_SIMD=0 forces the scalar path.
+#
+# A runtime gate does not keep a kernel out of codegen: any compiled caller
+# that can reach it compiles it, @noinline or not, and LLVM aborts the process
+# on an x86 intrinsic for another target. So every llvmcall that uses x86
+# intrinsics or x86 asm goes through @x86_llvmcall, which off x86_64 expands to
+# a throwing stub instead of the IR.
 
 using ..Gesso.Log: glog, LOG_INFO
+
+@noinline _x86_kernel_unavailable() = error("x86 SIMD kernel reached on $(Sys.ARCH)")
+
+macro x86_llvmcall(args...)
+    Sys.ARCH === :x86_64 || return :(_x86_kernel_unavailable())
+    return esc(Expr(:call, GlobalRef(Base, :llvmcall), args...))
+end
 
 # Dequantized values per 4-bit nibble, duplicated across both 128-bit lanes so
 # one vpshufb serves a full 32-byte vector.
@@ -34,7 +45,7 @@ const _Q8K_KV_IQ4NL_X2 = ntuple(i -> VecElement(KVALUES_IQ4NL[((i-1)&15)+1]), 32
 
 # CPUID leaves as single-register asm calls. Each cpuid clobbers the other
 # three registers, so every call declares them clobbered.
-@noinline _cpuid_eax(leaf::UInt32, sub::UInt32)::UInt32 = Base.llvmcall(
+@noinline _cpuid_eax(leaf::UInt32, sub::UInt32)::UInt32 = @x86_llvmcall(
     (
         """
 define i32 @entry(i32 %leaf, i32 %sub) #0 {
@@ -51,7 +62,7 @@ attributes #0 = { alwaysinline }
     sub,
 )
 
-@noinline _cpuid_ebx(leaf::UInt32, sub::UInt32)::UInt32 = Base.llvmcall(
+@noinline _cpuid_ebx(leaf::UInt32, sub::UInt32)::UInt32 = @x86_llvmcall(
     (
         """
 define i32 @entry(i32 %leaf, i32 %sub) #0 {
@@ -68,7 +79,7 @@ attributes #0 = { alwaysinline }
     sub,
 )
 
-@noinline _cpuid_ecx(leaf::UInt32, sub::UInt32)::UInt32 = Base.llvmcall(
+@noinline _cpuid_ecx(leaf::UInt32, sub::UInt32)::UInt32 = @x86_llvmcall(
     (
         """
 define i32 @entry(i32 %leaf, i32 %sub) #0 {
@@ -85,7 +96,7 @@ attributes #0 = { alwaysinline }
     sub,
 )
 
-@noinline _xgetbv_lo()::UInt32 = Base.llvmcall(
+@noinline _xgetbv_lo()::UInt32 = @x86_llvmcall(
     (
         """
 define i32 @entry() #0 {
@@ -363,7 +374,7 @@ function _iq4_sub_avx2(
     qs::Ptr{UInt8},
     q8::Ptr{Int8},
 )::Int32
-    Base.llvmcall(
+    @x86_llvmcall(
         (_Q8K_IR_IQ4, "entry"),
         Int32,
         Tuple{NTuple{32, VecElement{Int8}}, Ptr{UInt8}, Ptr{Int8}},
@@ -383,7 +394,7 @@ const _IQ_ACC_ZERO = ntuple(_ -> VecElement(Int32(0)), 8)
     ls1::Int32,
     ls2::Int32,
 )::NTuple{8, VecElement{Int32}}
-    Base.llvmcall(
+    @x86_llvmcall(
         (_Q8K_IR_IQ2, "entry"),
         NTuple{8, VecElement{Int32}},
         Tuple{
@@ -410,7 +421,7 @@ end
     q8::Ptr{Int8},
     ls::Int32,
 )::NTuple{8, VecElement{Int32}}
-    Base.llvmcall(
+    @x86_llvmcall(
         (_Q8K_IR_IQ3, "entry"),
         NTuple{8, VecElement{Int32}},
         Tuple{

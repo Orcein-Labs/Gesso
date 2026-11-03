@@ -760,7 +760,7 @@ end
     ib::Int,
     sc::NTuple{8, Int32},
 )::NTuple{8, Int32}
-    v = GC.@preserve w x Base.llvmcall(
+    v = GC.@preserve w x @x86_llvmcall(
         (_KQ_IR_Q4K, "entry"),
         NTuple{8, VecElement{Int32}},
         Tuple{Ptr{UInt8}, Ptr{Int8}, NTuple{8, VecElement{Int32}}},
@@ -778,7 +778,7 @@ end
     ib::Int,
     sc::NTuple{8, Int32},
 )::NTuple{8, Int32}
-    v = GC.@preserve w x Base.llvmcall(
+    v = GC.@preserve w x @x86_llvmcall(
         (_KQ_IR_Q5K, "entry"),
         NTuple{8, VecElement{Int32}},
         Tuple{Ptr{UInt8}, Ptr{Int8}, NTuple{8, VecElement{Int32}}},
@@ -795,7 +795,7 @@ end
     x::Q8KVec,
     ib::Int,
 )::NTuple{8, Int32}
-    v = GC.@preserve w x Base.llvmcall(
+    v = GC.@preserve w x @x86_llvmcall(
         (_KQ_IR_Q6K, "entry"),
         NTuple{8, VecElement{Int32}},
         Tuple{Ptr{UInt8}, Ptr{Int8}},
@@ -812,7 +812,7 @@ end
     ib::Int,
     sc::NTuple{16, Int32},
 )::NTuple{8, Int32}
-    v = GC.@preserve w x Base.llvmcall(
+    v = GC.@preserve w x @x86_llvmcall(
         (_KQ_IR_Q3K, "entry"),
         NTuple{8, VecElement{Int32}},
         Tuple{
@@ -835,7 +835,7 @@ end
     x::Q8KVec,
     ib::Int,
 )::NTuple{8, Int32}
-    v = GC.@preserve w x Base.llvmcall(
+    v = GC.@preserve w x @x86_llvmcall(
         (_KQ_IR_Q2K, "entry"),
         NTuple{8, VecElement{Int32}},
         Tuple{Ptr{UInt8}, Ptr{Int8}},
@@ -851,7 +851,7 @@ end
     x::Q80Vec,
     ib::Int,
 )::Int32
-    return GC.@preserve w x Base.llvmcall(
+    return GC.@preserve w x @x86_llvmcall(
         (_KQ_IR_Q80, "entry"),
         Int32,
         Tuple{Ptr{UInt8}, Ptr{Int8}},
@@ -866,7 +866,7 @@ end
     x::Q80Vec,
     ib::Int,
 )::Int32
-    return GC.@preserve w x Base.llvmcall(
+    return GC.@preserve w x @x86_llvmcall(
         (_KQ_IR_Q40, "entry"),
         Int32,
         Tuple{Ptr{UInt8}, Ptr{Int8}},
@@ -881,7 +881,7 @@ end
     x::Q80Vec,
     ib::Int,
 )::Int32
-    return GC.@preserve w x Base.llvmcall(
+    return GC.@preserve w x @x86_llvmcall(
         (_KQ_IR_IQ4NL, "entry"),
         Int32,
         Tuple{Ptr{UInt8}, Ptr{Int8}},
@@ -896,7 +896,7 @@ end
     x::Q80Vec,
     ib::Int,
 )::NTuple{2, Int32}
-    v = GC.@preserve w x Base.llvmcall(
+    v = GC.@preserve w x @x86_llvmcall(
         (_KQ_IR_Q51, "entry"),
         NTuple{2, VecElement{Int32}},
         Tuple{Ptr{UInt8}, Ptr{Int8}},

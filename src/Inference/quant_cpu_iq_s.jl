@@ -296,7 +296,7 @@ attributes #0 = { alwaysinline }
     q8::Ptr{Int8},
     w::NTuple{16, VecElement{Int32}},
 )::NTuple{16, VecElement{Int32}}
-    Base.llvmcall(
+    @x86_llvmcall(
         (_IQ1M_IR, "entry"),
         NTuple{16, VecElement{Int32}},
         Tuple{
