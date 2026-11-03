@@ -108,6 +108,9 @@ using Gesso: reference_prefill, reference_generate
     include("test_quant_cpu_simd.jl")
     include("test_cpu_pool.jl")
 
+    # NUMA topology (sysfs fixtures, GESSO_NUMA_NODES), pinning and node-local rows
+    include("test_numa.jl")
+
     # Native CPU K-quant (Q2_K..Q6_K) and Q8_0 dot products: Q8_0 quantizer vs
     # port, F32 dequant references (bit-equal to ggml's oracle when GESSO_GGML_DIR
     # is set), AVX2 bit-exact vs scalar, real Ornith / Qwen3.8-27B tensors (env-gated)
