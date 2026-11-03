@@ -53,6 +53,20 @@ const CPU_POOL_DEFAULT_SPIN_US = 200
 const _CPU_POOL_HOLD_YIELD_NS = UInt64(50_000)
 const _CPU_POOL_IDX_MASK = UInt64(0xffff_ffff)
 
+# Node lanes (pinned pools on more than one NUMA node). Chunks 1:n are split
+# into contiguous ranges, one per lane, in proportion to the lane's worker
+# count. Each lane has its own ticket. A lane's workers claim from their lane
+# first and take chunks from other lanes only when their own is empty, so every
+# chunk is still claimed by someone and nothing can be stranded. A chunk's
+# lane is fixed by its index, so a copy of a chunk's rows made by its lane's
+# worker lands on that worker's node.
+struct _CPULanes
+    weights::Vector{Int}          # workers per lane
+    tickets::Vector{Atomic{UInt64}}
+    bases::Vector{Int}            # chunk index before the lane's first chunk
+    counts::Vector{Int}           # chunks in the lane for the current job
+end
+
 # Ticket word: high 32 bits hold the job generation, low 32 bits the number of
 # chunks claimed so far. A claim is a compare-and-swap on the whole word, so a
 # stale claim against an earlier generation always fails.
@@ -71,6 +85,7 @@ mutable struct CPUPool
     nchunks::Int
     job::Any
     err::Any
+    lanes::Union{Nothing, _CPULanes}
 
     function CPUPool(participants::Int, spin_ns::UInt64)
         return new(
@@ -86,6 +101,7 @@ mutable struct CPUPool
             Task[],
             Base.IdSet{Any}(),
             0,
+            nothing,
             nothing,
             nothing,
         )
@@ -139,14 +155,25 @@ end
 
 function _cpu_pool_start(participants::Int, spin_us::Int)::CPUPool
     p = CPUPool(participants, UInt64(spin_us) * UInt64(1000))
-    pins = _cpu_pool_pin_plan(participants)
-    pins === nothing || _pin_reset!()
+    assign = _cpu_pool_pin_assignments(participants)
+    assign === nothing || _pin_reset!()
+    lane_of, weights = _cpu_lane_plan(assign)
+    if weights !== nothing
+        L = length(weights)
+        p.lanes = _CPULanes(
+            weights,
+            [Atomic{UInt64}(0) for _ in 1:L],
+            zeros(Int, L),
+            zeros(Int, L),
+        )
+    end
     for k in 2:participants
-        if pins === nothing
+        if assign === nothing
             push!(p.workers, Base.Threads.@spawn _cpu_pool_worker!(p))
         else
-            cpu = pins[k - 1]
-            push!(p.workers, Base.Threads.@spawn _cpu_pool_pinned_worker!(p, cpu))
+            _, cpu = assign[k - 1]
+            lane = lane_of === nothing ? 0 : lane_of[k - 1]
+            push!(p.workers, Base.Threads.@spawn _cpu_pool_pinned_worker!(p, cpu, lane))
         end
     end
     # A freshly spawned task can sit in the spawning thread's queue until that
@@ -156,7 +183,7 @@ function _cpu_pool_start(participants::Int, spin_us::Int)::CPUPool
         yield()
     end
     # Pinned workers record their outcome when they start; wait for all of them.
-    if pins !== nothing
+    if assign !== nothing
         while _pin_logged_count() < participants - 1
             yield()
         end
@@ -164,13 +191,25 @@ function _cpu_pool_start(participants::Int, spin_us::Int)::CPUPool
     return p
 end
 
-# One CPU per worker, grouped by node. The caller thread is never pinned.
+# One (node_index, cpu) per worker. The caller thread is never pinned.
 # nothing means pinning is off and the pool starts exactly as before.
-function _cpu_pool_pin_plan(participants::Int)::Union{Nothing, Vector{Int}}
+function _cpu_pool_pin_assignments(participants::Int)::Union{Nothing, Vector{Tuple{Int, Int}}}
     participants > 1 || return nothing
     topo = numa_topology()
     pin_threads_enabled(topo) || return nothing
-    return pin_plan(topo, participants - 1)
+    return pin_assignments(topo, participants - 1)
+end
+
+# Lanes exist only when the pinned workers span at least two nodes. Returns the
+# lane of each worker and the workers per lane, or (nothing, nothing).
+function _cpu_lane_plan(assign)
+    assign === nothing && return nothing, nothing
+    nodes = unique(first.(assign))
+    length(nodes) >= 2 || return nothing, nothing
+    lane_of_node = Dict(n => i for (i, n) in enumerate(nodes))
+    lane_of = [lane_of_node[node] for (node, _) in assign]
+    weights = [count(==(n), first.(assign)) for n in nodes]
+    return lane_of, weights
 end
 
 function _cpu_pool_stop!(p::CPUPool)
@@ -277,14 +316,24 @@ function _cpu_pool_worker!(p::CPUPool)
 end
 
 # Pins the worker's OS thread to `cpu` (when this worker is the first on its
-# thread), runs the worker loop, then restores the thread's affinity.
-function _cpu_pool_pinned_worker!(p::CPUPool, cpu::Int)
+# thread), runs the worker loop, then restores the thread's affinity. lane 0
+# means the pool has no lanes.
+function _cpu_pool_pinned_worker!(p::CPUPool, cpu::Int, lane::Int)
     claim = _pin_claim!(cpu)
     try
-        return _cpu_pool_worker!(p)
+        return lane == 0 ? _cpu_pool_worker!(p) : _cpu_pool_lane_worker!(p, lane)
     finally
         claim === nothing || _pin_release!(claim)
     end
+end
+
+function _cpu_pool_lane_worker!(p::CPUPool, lane::Int)
+    seen = p.ticket[] >> 32
+    while _cpu_pool_wait!(p, seen)
+        seen = p.ticket[] >> 32
+        Base.invokelatest(_cpu_pool_lane_help!, p, lane)
+    end
+    return nothing
 end
 
 # A worker reads the job only after it has read a claimable ticket. A
@@ -310,6 +359,32 @@ function _cpu_pool_claim!(p::CPUPool, f::F) where {F}
         idx < p.nchunks || return nothing
         atomic_cas!(p.ticket, t, t + 1) == t || continue
         _cpu_pool_run!(p, f, idx + 1)
+    end
+end
+
+# Lane claim loop, used by a lane worker (own = its lane) and by the caller
+# (own = 1). Scans from `own` and takes one chunk from the first lane that has
+# one, so a worker leaves its own lane for another only when its own is empty.
+# Read the job before the claim, as _cpu_pool_help! does: a successful claim
+# proves the job read belongs to the ticket. Returns when no lane has a chunk
+# left to claim.
+function _cpu_pool_lane_help!(p::CPUPool, own::Int)
+    lanes = p.lanes::_CPULanes
+    nl = length(lanes.tickets)
+    while true
+        pending = false
+        for k in 0:(nl - 1)
+            li = mod1(own + k, nl)
+            t = lanes.tickets[li][]
+            idx = Int(t & _CPU_POOL_IDX_MASK)
+            idx < lanes.counts[li] || continue
+            pending = true
+            f = p.job
+            atomic_cas!(lanes.tickets[li], t, t + 1) == t || continue
+            _cpu_pool_run!(p, f, lanes.bases[li] + idx + 1)
+            break
+        end
+        pending || return nothing
     end
 end
 
@@ -343,18 +418,40 @@ function _cpu_pool_publish!(p::CPUPool, f::F, n::Int) where {F}
         precompile(_cpu_pool_run!, (CPUPool, F, Int))
         push!(p.warmed, F)
     end
+    lanes = p.lanes
     gen = p.ticket[] >> 32
     p.ticket[] = (gen << 32) | _CPU_POOL_IDX_MASK
+    if lanes !== nothing
+        for t in lanes.tickets
+            t[] = (gen << 32) | _CPU_POOL_IDX_MASK
+        end
+    end
     p.completed[] = 0
     p.failed[] = 0
     p.nchunks = n
     p.job = f
+    lanes === nothing || _cpu_lanes_layout!(lanes, n)
     lock(p.cond)
     try
         p.ticket[] = (gen + 1) << 32
+        if lanes !== nothing
+            for t in lanes.tickets
+                t[] = (gen + 1) << 32
+            end
+        end
         notify(p.cond)
     finally
         unlock(p.cond)
+    end
+    return nothing
+end
+
+# Sets each lane's chunk range for a job of n chunks. Called while every lane
+# ticket is closed, so no claim can read a half-written range.
+function _cpu_lanes_layout!(lanes::_CPULanes, n::Int)
+    for (li, r) in enumerate(proportional_ranges(n, lanes.weights))
+        lanes.bases[li] = first(r) - 1
+        lanes.counts[li] = length(r)
     end
     return nothing
 end
@@ -409,7 +506,11 @@ function pool_run!(f::F, nchunks::Integer) where {F}
     end
     try
         _cpu_pool_publish!(p, f, n)
-        _cpu_pool_claim!(p, f)
+        if p.lanes === nothing
+            _cpu_pool_claim!(p, f)
+        else
+            _cpu_pool_lane_help!(p, 1)
+        end
         _cpu_pool_await!(p, n)
         if p.failed[] != 0
             e = p.err

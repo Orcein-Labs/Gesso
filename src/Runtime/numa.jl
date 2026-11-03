@@ -25,6 +25,55 @@ end
 
 numa_node_count(t::NUMATopology) = length(t.nodes)
 
+# Splits 1:n into len(weights) contiguous blocks whose sizes follow `weights`
+# (each block gets its share, rounded down; the last block ends at n). Returns
+# the cumulative bounds: block i is (bounds[i-1]+1):bounds[i], bounds[0] = 0.
+# Pure integer arithmetic, so every index lands in exactly one block and the
+# same n and weights always give the same split.
+function proportional_bounds(n::Integer, weights::AbstractVector{<:Integer})::Vector{Int}
+    n >= 0 || throw(ArgumentError("proportional_bounds: n must be nonnegative"))
+    all(w -> w >= 0, weights) || throw(ArgumentError("proportional_bounds: weights must be nonnegative"))
+    total = sum(weights; init=0)
+    total > 0 || throw(ArgumentError("proportional_bounds: weights sum to zero"))
+    out = Vector{Int}(undef, length(weights))
+    cum = 0
+    for (i, w) in enumerate(weights)
+        cum += Int(w)
+        out[i] = div(Int(n) * cum, total)
+    end
+    return out
+end
+
+"""
+    proportional_ranges(n, weights) -> Vector{UnitRange{Int}}
+
+Contiguous ranges that cover 1:n exactly once, sized in proportion to `weights`.
+"""
+function proportional_ranges(n::Integer, weights::AbstractVector{<:Integer})::Vector{UnitRange{Int}}
+    b = proportional_bounds(n, weights)
+    out = Vector{UnitRange{Int}}(undef, length(b))
+    lo = 0
+    for (i, hi) in enumerate(b)
+        out[i] = (lo + 1):hi
+        lo = hi
+    end
+    return out
+end
+
+# Whether node-local weight copies are made. GESSO_NUMA=1 forces them on and
+# 0 forces them off; unset means on for a real multi-node sysfs topology only.
+# Copies need more than one node, so a single node is always off.
+const NUMA_WEIGHTS_ENV = "GESSO_NUMA"
+
+function numa_weights_enabled(topo::NUMATopology; env::AbstractDict=ENV)::Bool
+    numa_node_count(topo) > 1 || return false
+    raw = strip(get(env, NUMA_WEIGHTS_ENV, ""))
+    isempty(raw) && return topo.source === :sysfs
+    raw == "1" && return true
+    raw == "0" && return false
+    throw(gesso_error(ERR_INVALID_PLAN, "$NUMA_WEIGHTS_ENV must be 0 or 1, got $(repr(raw))"))
+end
+
 # Parses a sysfs cpulist such as "0-15,32-47". Empty input is an empty list
 # (memory-only nodes). Malformed entries and reversed ranges are rejected.
 function parse_cpulist(s::AbstractString)::Vector{Int}

@@ -1056,6 +1056,67 @@ function _quant_resident(info::GgufTensorInfo)
     return get(ENV, "GESSO_GGUF_UNREORDER_V", "") != "1"
 end
 
+# Node-local weight copies. On a pinned pool that spans NUMA nodes (see
+# Runtime/cpu_pool.jl lanes), a large resident QuantMatrix is copied into fresh
+# anonymous memory by the lane that owns each row range, so the pages are
+# first-touched on that lane's node. Its file range is then dropped from the
+# page cache. Gated by Runtime.numa_weights_enabled and pin_threads_enabled.
+const _NUMA_LOCALIZE_MIN_BYTES = 1 << 20
+const _MADV_DONTNEED = Cint(4)          # Linux
+const _POSIX_FADV_DONTNEED = Cint(4)    # Linux
+
+function _numa_localize_enabled(nbytes::Integer)::Bool
+    nbytes >= _NUMA_LOCALIZE_MIN_BYTES || return false
+    R = parentmodule(@__MODULE__).Runtime
+    topo = R.numa_topology()
+    return R.numa_weights_enabled(topo) && R.pin_threads_enabled(topo)
+end
+
+# Copies rows 1:nrows of the matrix at 0-based byte offset `offset0` into a new
+# buffer. Chunk c copies exactly the rows that _qgemv_chunk! gives chunk c for
+# the same chunk count, so the copy and the GEMV agree on which lane owns a row.
+function _numa_localize_rows(src::Vector{UInt8}, offset0::Int, nrows::Int, rb::Int)::Vector{UInt8}
+    out = Vector{UInt8}(undef, nrows * rb)
+    nc = _qgemv_nchunks(nrows)
+    _pool_run_chunks!(nc) do c
+        j0 = div((c - 1) * nrows, nc) + 1
+        j1 = div(c * nrows, nc)
+        j1 >= j0 || return nothing
+        nb = (j1 - j0 + 1) * rb
+        copyto!(out, (j0 - 1) * rb + 1, src, offset0 + (j0 - 1) * rb + 1, nb)
+        return nothing
+    end
+    return out
+end
+
+# Drops a file range that is no longer read through the mapping: madvise
+# DONTNEED on the whole pages inside the range, then posix_fadvise DONTNEED on
+# the file. Both are advice. A later read of those bytes faults them back in
+# from the file, so nothing is lost if the kernel ignores them.
+function _release_file_range!(path::AbstractString, src::Vector{UInt8}, offset0::Int, nbytes::Int)::Bool
+    Sys.islinux() || return false
+    pg = UInt(ccall(:getpagesize, Cint, ()))
+    addr = UInt(pointer(src, offset0 + 1))
+    lo = cld(addr, pg) * pg
+    hi = fld(addr + UInt(nbytes), pg) * pg
+    if hi > lo
+        ccall(:madvise, Cint, (Ptr{Cvoid}, Csize_t, Cint), Ptr{Cvoid}(lo), Csize_t(hi - lo), _MADV_DONTNEED)
+    end
+    fd = ccall(:open, Cint, (Cstring, Cint), path, Cint(0))   # O_RDONLY
+    fd < 0 && return false
+    rc = ccall(
+        :posix_fadvise,
+        Cint,
+        (Cint, Int64, Int64, Cint),
+        fd,
+        Int64(offset0),
+        Int64(nbytes),
+        _POSIX_FADV_DONTNEED,
+    )
+    ccall(:close, Cint, (Cint,), fd)
+    return rc == 0
+end
+
 function _quant_matrix(hdr, info::GgufTensorInfo)
     ne0, nrows = info.dims
     traits = _ggml_traits(info.ggml_type; tensor=info.name)
@@ -1063,10 +1124,17 @@ function _quant_matrix(hdr, info::GgufTensorInfo)
         "gguf_import: $(info.name) ne0 $ne0 not divisible by blck_size $(traits.blck_size)",
     )
     rb = div(ne0, Int(traits.blck_size)) * traits.type_size
-    _check_extent(hdr.path, hdr, info, rb * nrows)
+    nbytes = rb * nrows
+    _check_extent(hdr.path, hdr, info, nbytes)
+    offset0 = Int(hdr.data_start) + Int(info.offset)
+    if _numa_localize_enabled(nbytes)
+        local_bytes = _numa_localize_rows(hdr.data, offset0, nrows, rb)
+        _release_file_range!(hdr.path, hdr.data, offset0, nbytes)
+        return QuantMatrix(local_bytes, 0, info.ggml_type, ne0, nrows, rb, traits.blck_size)
+    end
     return QuantMatrix(
         hdr.data,
-        Int(hdr.data_start) + Int(info.offset),
+        offset0,
         info.ggml_type,
         ne0,
         nrows,

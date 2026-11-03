@@ -60,20 +60,44 @@ function set_current_thread_affinity!(cpus::AbstractVector{<:Integer})::Bool
 end
 
 """
+    pin_assignments(topo, workers) -> Vector{Tuple{Int, Int}}
+
+One `(node_index, cpu)` per worker. Workers are split across nodes in
+proportion to each node's CPU count (largest remainder, ties to the lower node
+index), so a dual-socket box gets workers on both sockets. A node's workers take
+its CPUs in order and wrap when they outnumber them. `node_index` is the
+position in `topo.nodes`.
+"""
+function pin_assignments(topo::NUMATopology, workers::Integer)::Vector{Tuple{Int, Int}}
+    w = Int(workers)
+    out = Tuple{Int, Int}[]
+    w <= 0 && return out
+    nodes = [i for i in eachindex(topo.nodes) if !isempty(topo.nodes[i].cpus)]
+    isempty(nodes) && return out
+    sizes = [length(topo.nodes[i].cpus) for i in nodes]
+    total = sum(sizes)
+    counts = [div(w * s, total) for s in sizes]
+    left = w - sum(counts)
+    order = sort(eachindex(nodes); by=k -> (-mod(w * sizes[k], total), k))
+    for k in order[1:left]
+        counts[k] += 1
+    end
+    for (k, i) in enumerate(nodes)
+        cpus = topo.nodes[i].cpus
+        for j in 1:counts[k]
+            push!(out, (i, cpus[mod1(j, length(cpus))]))
+        end
+    end
+    return out
+end
+
+"""
     pin_plan(topo, workers) -> Vector{Int}
 
-One CPU per worker, taken from the topology's nodes in node order, so workers
-fill node 0 before node 1 and each node's workers are contiguous. Wraps when
-there are more workers than CPUs.
+The CPU of each `pin_assignments` entry, in the same order.
 """
-function pin_plan(topo::NUMATopology, workers::Integer)::Vector{Int}
-    flat = Int[]
-    for n in topo.nodes, c in n.cpus
-        push!(flat, c)
-    end
-    isempty(flat) && return Int[]
-    return [flat[mod1(k, length(flat))] for k in 1:Int(workers)]
-end
+pin_plan(topo::NUMATopology, workers::Integer)::Vector{Int} =
+    [cpu for (_, cpu) in pin_assignments(topo, workers)]
 
 """
     pin_threads_enabled(topo; env) -> Bool
