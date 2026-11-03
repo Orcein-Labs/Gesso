@@ -176,7 +176,7 @@ function deepseek41_config(kv::AbstractDict)
             error("deepseek41_config: ple.layers must be ascending layers in range")
         ple_ngram = Int(req("ple.ngram_size"))
         ple_hpn = Int(req("ple.heads_per_ngram"))
-        ple_head_dim = Int(req("embedding_length_per_layer"))
+        ple_head_dim = Int(req("embedding_length_per_layer_input"))
         ple_mult = UInt64[UInt64(x) for x in req("ple.layer_multipliers")]
         ple_off = ints(req("ple.head_offsets"))
         ple_voc = ints(req("ple.head_vocab_sizes"))
@@ -197,6 +197,9 @@ function deepseek41_config(kv::AbstractDict)
     toks = get(kv, "tokenizer.ggml.tokens", nothing)
     vocab = toks isa Integer ? Int(toks) : toks === nothing ? 0 : length(toks)
 
+    # compressed layers always run YaRN; llama defaults a missing scaling type to linear
+    rope_type = req("rope.scaling.type")
+    rope_type == "yarn" || error("deepseek41_config: rope.scaling.type must be yarn, got $rope_type")
     return Deepseek41Config(
         n_embd, n_layer, n_head, n_head_kv, head_dim, n_rot,
         Float64(req("rope.freq_base")),
@@ -646,7 +649,7 @@ end
 # compressed layers, the rows topk[t] of the KV owner. The sink enters the
 # denominator only. Output: derope at each query, then wo_a per group and wo_b.
 function _ds41_attn(m::Deepseek41Model, st::Deepseek41State, il::Int, x::Matrix{Float32},
-                    qr::Matrix{Float32}, pos0::Int, topk)
+                    qr::Matrix{Float32}, pos0::Int, topk; taps=nothing)
     cfg = m.cfg
     ratio = cfg.compress[il + 1]
     NH, hd, W, eps = cfg.n_head, cfg.head_dim, cfg.window, cfg.eps
@@ -655,9 +658,11 @@ function _ds41_attn(m::Deepseek41Model, st::Deepseek41State, il::Int, x::Matrix{
     pos = collect(pos0:(pos0 + T - 1))
     q = _ds41_mm(m, qr, "blk.$il.attn_q_b.weight")
     _ds41_rope!(q, NH, hd, mul, pos)
+    _q4x_tap!(taps, "q-$il", q)
     kv = _q4x_group_rms(_ds41_mm(m, x, "blk.$il.attn_kv.weight"), hd,
         _ds41_w(m, "blk.$il.attn_kv_a_norm.weight"), eps)
     _ds41_rope!(kv, 1, hd, mul, pos)
+    _q4x_tap!(taps, "kv-$il", kv)
     old = get(st.raw, il, zeros(Float32, 0, hd))
     base = pos0 - size(old, 1)
     R = vcat(old, kv)
@@ -697,7 +702,9 @@ function _ds41_attn(m::Deepseek41Model, st::Deepseek41State, il::Int, x::Matrix{
             end
         end
     end
+    _q4x_tap!(taps, "attn_comp-$il", o)
     _ds41_rope!(o, NH, hd, mul, pos; inverse=true)
+    _q4x_tap!(taps, "attn_derope-$il", o)
     G, OL = cfg.o_groups, cfg.o_lora
     ne0 = NH * hd ÷ G
     Wa = _ds41_w(m, "blk.$il.attn_output_a.weight")
@@ -709,6 +716,7 @@ function _ds41_attn(m::Deepseek41Model, st::Deepseek41State, il::Int, x::Matrix{
         yo[t, (g * OL + 1):((g + 1) * OL)] .= buf
     end
     keep = min(size(R, 1), W)
+    _q4x_tap!(taps, "attn_wo_a-$il", yo)
     st.raw[il] = R[(size(R, 1) - keep + 1):end, :]
     return _ds41_mm(m, yo, "blk.$il.attn_output_b.weight")
 end
@@ -871,12 +879,17 @@ function deepseek41_forward!(m::Deepseek41Model, st::Deepseek41State, tokens::Ab
         apre, apost, acomb = _ds41_hc_mixes(m, S, "blk.$il.hc_attn")
         A = prev === nothing ? Matrix{Float32}(S[:, 1:NE]) : _ds41_hc_pre(S, prev, NE)
         x = _q4x_group_rms(A, NE, _ds41_w(m, "blk.$il.attn_norm.weight"), cfg.eps)
+        _q4x_tap!(taps, "attn_norm-$il", x)
         qr = _q4x_group_rms(_ds41_mm(m, x, "blk.$il.attn_q_a.weight"), cfg.q_lora,
             _ds41_w(m, "blk.$il.attn_q_a_norm.weight"), cfg.eps)
+        _q4x_tap!(taps, "qr_norm-$il", qr)
         ratio = cfg.compress[il + 1]
         topk = nothing
         if ratio > 0
-            cfg.kv_src[il + 1] == il && _ds41_compress!(m, st, il, x, pos0)
+            if cfg.kv_src[il + 1] == il
+                _ds41_compress!(m, st, il, x, pos0)
+                _q4x_tap!(taps, "comp_k-$il", st.comp[il][:, 1:cfg.head_dim])
+            end
             if cfg.idx_src[il + 1] == il
                 sel, cand = _ds41_indexer(m, st, il, x, qr, pos0, cand_prev)
                 topk_of[il] = sel
@@ -884,7 +897,7 @@ function deepseek41_forward!(m::Deepseek41Model, st::Deepseek41State, tokens::Ab
             end
             topk = topk_of[cfg.idx_src[il + 1]]
         end
-        att = _ds41_attn(m, st, il, x, qr, pos0, topk)
+        att = _ds41_attn(m, st, il, x, qr, pos0, topk; taps = taps)
         _q4x_tap!(taps, "attn_out-$il", att)
         S_mid = _ds41_hc_post(att, S, apost, acomb)
         fpre, fpost, fcomb = _ds41_hc_mixes(m, S_mid, "blk.$il.hc_ffn")
@@ -920,4 +933,20 @@ function deepseek41_logits(m::Deepseek41Model, res; taps=nothing)
     logits = _ds41_mm(m, x, "output.weight")
     _q4x_tap!(taps, "result_output", logits)
     return vec(logits)
+end
+
+"""
+    deepseek41_logits_all(m, res; taps=nothing) -> Matrix{Float32}
+
+Logits for every row of `res` (T x n_vocab), the same head as
+`deepseek41_logits` applied to all positions at once.
+"""
+function deepseek41_logits_all(m::Deepseek41Model, res; taps=nothing)
+    cfg = m.cfg
+    h = _ds41_hc_pre(res.S, res.pre, cfg.n_embd)
+    x = _q4x_group_rms(h, cfg.n_embd, _ds41_w(m, "output_norm.weight"), cfg.eps)
+    _q4x_tap!(taps, "result_norm", x)
+    logits = _ds41_mm(m, x, "output.weight")
+    _q4x_tap!(taps, "result_output", logits)
+    return logits
 end
