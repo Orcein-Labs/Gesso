@@ -703,7 +703,7 @@ end
 # scaled sub-block dots) and summs (bsums against the mins). Integer addition
 # is exact, so any grouping of the products that yields the same two totals
 # keeps every column bit-equal. That frees the core from the lane layout of
-# _q2k_ints_avx2: here each 32-value plane is one vpmaddubsw (weight 0..3 as the
+# _q2k_ints_simd: here each 32-value plane is one vpmaddubsw (weight 0..3 as the
 # unsigned operand, so a pair sums to at most 2*3*128 and cannot saturate)
 # followed by one vpmaddwd against the two sub-block scales. The planes, scales
 # and mins are built once per block and shared by the K columns.
@@ -1060,16 +1060,26 @@ function _q6k_prep!(p::Q6KPrepVec)
     return p
 end
 
+# The multi-column kernels use x86 intrinsics (vpmaddubsw, vpmaddwd, vpermd,
+# vpshufb), so they exist on x86_64 only. Off x86_64 no column is prepped and no
+# tile reads a d or packed table, and every column takes the per-column SIMD
+# kernel (quant_cpu_simd.jl, _simd_type_ok) or the scalar reference.
+_multi_kernels_ok()::Bool = Sys.ARCH === :x86_64
+
 # The types whose multi kernel reads prepped columns: Q6_K uses xp and mo; Q3_K,
 # Q4_K and Q5_K use xp.
 _q6k_prep_type(t::Int32) =
-    t == GGML_TYPE_Q3_K || t == GGML_TYPE_Q4_K || t == GGML_TYPE_Q5_K || t == GGML_TYPE_Q6_K
+    _multi_kernels_ok() &&
+    (t == GGML_TYPE_Q3_K || t == GGML_TYPE_Q4_K || t == GGML_TYPE_Q5_K || t == GGML_TYPE_Q6_K)
 
 # The types whose tiles read their columns' d values from a d table.
-_multi_dt_type(t::Int32) = _q6k_prep_type(t) || _q80_act_type(t) || t == GGML_TYPE_IQ2_XS
+_multi_dt_type(t::Int32) =
+    _multi_kernels_ok() &&
+    (_q6k_prep_type(t) || _q80_act_type(t) || t == GGML_TYPE_IQ2_XS)
 
 # The types whose tiles read their columns' quants from a _MultiPacked table.
-_multi_pack_type(t::Int32) = _q80_act_type(t) || t == GGML_TYPE_IQ2_XS
+_multi_pack_type(t::Int32) =
+    _multi_kernels_ok() && (_q80_act_type(t) || t == GGML_TYPE_IQ2_XS)
 
 # The fallback for a prepped column is the plain Q8_K dot.
 @inline _dot_q8k(
@@ -1221,7 +1231,7 @@ end
 # A 32-value chunk is one sub-block with one scale, so the Q6_K pair order
 # carries over: after it, vpmaddubsw then vpmaddwd against the sub-block scale
 # leave in i32 slot l the scaled sum of the values with index l mod 8, which is
-# lane l of _q4k_ints_avx2 and _q5k_ints_avx2. The weights go in unsigned (0..31)
+# lane l of _q4k_ints_simd and _q5k_ints_simd. The weights go in unsigned (0..31)
 # so a pair sums to at most 2*31*128 and cannot saturate, and every later step is
 # exact, so each lane equals the single kernel's and the float steps repeat it.
 # The pair order is a byte permutation and the nibble and high-bit extraction
@@ -1502,8 +1512,8 @@ end
 # vpmaddubsw / vpmaddwd pairing and the lane slots are the Q6_K ones. The
 # weights go in signed (-4..3) against |x|, with x's sign moved onto them by
 # psign, as the IQ kernels do: one vpmaddubsw per column. Each pair sum is
-# _q3k_ints_avx2's (w - 4) . x, at most 2 * 128 * 4 in size, so every step is
-# exact and each lane equals _q3k_ints_avx2's. The pair order and the 2-bit /
+# _q3k_ints_simd's (w - 4) . x, at most 2 * 128 * 4 in size, so every step is
+# exact and each lane equals _q3k_ints_simd's. The pair order and the 2-bit /
 # high-bit extraction are bytewise, so the qs and hmask loads are reordered
 # once per block and shared by the K columns.
 
@@ -2575,9 +2585,11 @@ end
 
 # ---------------------------------------------------------------- dispatch
 
-# True for the types with a multi-column kernel. Every other type takes the
-# per-column loop in _dot_q8k_multi_tile!.
+# True for the types with a multi-column kernel (x86_64 only, see
+# _multi_kernels_ok). Every other type takes the per-column loop in
+# _dot_q8k_multi_tile!.
 _q8k_multi_type(t::Int32) =
+    _multi_kernels_ok() && (
     t == GGML_TYPE_IQ2_XXS ||
     t == GGML_TYPE_IQ3_S ||
     t == GGML_TYPE_IQ2_S ||
@@ -2594,7 +2606,7 @@ _q8k_multi_type(t::Int32) =
     t == GGML_TYPE_Q8_0 ||
     t == GGML_TYPE_Q4_0 ||
     t == GGML_TYPE_IQ4_NL ||
-    t == GGML_TYPE_Q5_1
+    t == GGML_TYPE_Q5_1)
 
 function _dot_q8k_multi_kernel!(
     out::AbstractVector{Float32},

@@ -1,7 +1,7 @@
 # Native CPU quantized dot products (quant_q8k.jl, quant_cpu_simd.jl):
 #   * Q8_K quantizer against an independent scalar port of quantize_row_q8_K_ref
 #   * scalar reference dots against the existing F32 dequant path
-#   * AVX2 kernels bit-exact against the scalar reference, per format
+#   * SIMD kernels (AVX2 on x86_64, NEON on aarch64) bit-exact against the scalar reference, per format
 #   * row-chunked GEMV, threading-invariant
 #   * accuracy on a real Ornith expert slice (env GESSO_ORNITH35_GGUF; skipped if unset)
 
@@ -18,21 +18,39 @@ end
 
 const _QSIMD = Gesso.Inference
 const _QTYPES = (
+    ("Q2_K", _QSIMD.GGML_TYPE_Q2_K),
+    ("Q3_K", _QSIMD.GGML_TYPE_Q3_K),
+    ("Q4_K", _QSIMD.GGML_TYPE_Q4_K),
+    ("Q5_K", _QSIMD.GGML_TYPE_Q5_K),
+    ("Q6_K", _QSIMD.GGML_TYPE_Q6_K),
     ("IQ4_XS", _QSIMD.GGML_TYPE_IQ4_XS),
     ("IQ2_XS", _QSIMD.GGML_TYPE_IQ2_XS),
     ("IQ3_XXS", _QSIMD.GGML_TYPE_IQ3_XXS),
 )
 
+# Little-endian f16 store at a 0-based byte offset.
+function _q_write_f16!(w, off0::Int, v::Float32)
+    bits = reinterpret(UInt16, Float16(v))
+    w[off0+1] = UInt8(bits & 0xff)
+    w[off0+2] = UInt8(bits >> 8)
+    return w
+end
+
 # Random valid rows: arbitrary bytes for the grid/sign/scale fields, a finite
-# small f16 super-scale per block (random f16 bits would be NaN or Inf often).
+# small f16 super-scale (and f16 min, where the format has one) per block.
+# Random f16 bits would be NaN or Inf often. Offsets per format come from the
+# kernel layout tables (d at 0 for IQ and Q4_K/Q5_K, 80 for Q2_K, 108 for
+# Q3_K, 208 for Q6_K; dmin at 82 for Q2_K, 2 for Q4_K/Q5_K).
 function _q_random_rows(rng, ggml_type::Int32, nrows::Int, nb::Int)
     bsz = _QSIMD._iq_block_bytes(ggml_type)
+    doff = _QSIMD._q8k_d_offset(ggml_type)
+    moff = _QSIMD._q8k_dmin_offset(ggml_type)
     w = rand(rng, UInt8, nrows * nb * bsz)
     for blk in 0:(nrows*nb-1)
-        d = Float16(0.005f0 + 0.05f0 * rand(rng, Float32))
-        bits = reinterpret(UInt16, d)
-        w[blk*bsz+1] = UInt8(bits & 0xff)
-        w[blk*bsz+2] = UInt8(bits >> 8)
+        _q_write_f16!(w, blk * bsz + doff, 0.005f0 + 0.05f0 * rand(rng, Float32))
+        if moff >= 0
+            _q_write_f16!(w, blk * bsz + moff, 0.005f0 + 0.05f0 * rand(rng, Float32))
+        end
     end
     return w
 end
@@ -137,12 +155,16 @@ end
     end
 end
 
-@testset "AVX2 kernels bit-exact against scalar reference" begin
-    if !_QSIMD._cpu_has_avx2()
-        _skip("no AVX2 on this CPU: AVX2-vs-scalar bit-exact check skipped")
+@testset "SIMD kernels bit-exact against scalar reference" begin
+    if !_QSIMD._cpu_has_simd()
+        _skip("no SIMD on this CPU: SIMD-vs-scalar bit-exact check skipped")
     else
         rng = Xoshiro(4)
         for (name, ty) in _QTYPES
+            if !_QSIMD._simd_type_ok(ty)
+                _skip("$name: no SIMD kernel on this architecture, scalar only")
+                continue
+            end
             ntrial = 0
             nmismatch = 0
             for trial in 1:300
@@ -172,12 +194,18 @@ end
         # a row whose every byte is 0xff in the sign/grid fields, and a zero-scale block
         @testset "saturating fields" begin
             for (name, ty) in _QTYPES
+                _QSIMD._simd_type_ok(ty) || continue
                 nb = 2
                 bsz = _QSIMD._iq_block_bytes(ty)
+                doff = _QSIMD._q8k_d_offset(ty)
+                moff = _QSIMD._q8k_dmin_offset(ty)
                 W = fill(UInt8(0xff), nb * bsz)
                 for ib in 0:(nb-1)
-                    W[ib*bsz+1] = 0x00
-                    W[ib*bsz+2] = 0x00   # d = 0: contributes exactly zero
+                    # d = 0 (and dmin = 0): contributes exactly zero
+                    _q_write_f16!(W, ib * bsz + doff, 0.0f0)
+                    if moff >= 0
+                        _q_write_f16!(W, ib * bsz + moff, 0.0f0)
+                    end
                 end
                 x = fill(1.0f0, 256 * nb)
                 xq = _QSIMD.quantize_q8_K!(_QSIMD.Q8KVec(nb), x)
@@ -190,6 +218,24 @@ end
     end
 end
 
+@testset "SIMD gate follows the architecture" begin
+    if Sys.ARCH === :aarch64
+        # NEON is the ARMv8 baseline: the gate is open on every aarch64 host
+        @test _QSIMD._cpu_has_simd()
+        if get(ENV, "GESSO_QUANT_SIMD", "1") != "0"
+            @test _QSIMD.q8k_simd_enabled()
+        end
+        for (name, ty) in _QTYPES
+            kquant = name[1] == 'Q'
+            @test _QSIMD._simd_type_ok(ty) == kquant
+        end
+    elseif Sys.ARCH === :x86_64
+        for (_, ty) in _QTYPES
+            @test _QSIMD._simd_type_ok(ty)
+        end
+    end
+end
+
 @testset "dot kernels do not allocate" begin
     rng = Xoshiro(5)
     for (name, ty) in _QTYPES
@@ -198,7 +244,7 @@ end
         x = randn(rng, Float32, 256 * nb)
         xq = _QSIMD.quantize_q8_K!(_QSIMD.Q8KVec(nb), x)
         for simd in (false, true)
-            if simd && !_QSIMD._cpu_has_avx2()
+            if simd && !(_QSIMD._cpu_has_simd() && _QSIMD._simd_type_ok(ty))
                 continue
             end
             _QSIMD._dot_q8k(ty, W, 0, xq, simd)
@@ -329,7 +375,7 @@ end
                 )
                 @test reinterpret.(UInt32, y8) == reinterpret.(UInt32, y8s)
                 @test relrms <= 2.0e-2
-                if _QSIMD._cpu_has_avx2()
+                if _QSIMD._cpu_has_simd() && _QSIMD._simd_type_ok(slice.ggml_type)
                     y8a = zeros(Float32, slice.ne1)
                     _QSIMD._qgemv_q8k!(
                         y8a,

@@ -750,17 +750,18 @@ const _KQ_IR_Q51 = let io = IOBuffer()
     String(take!(io))
 end
 
-# Each AVX2 block kernel: the same lane sums as the scalar reference, for one
-# block. @noinline so the AVX2 code is compiled only when a kernel runs.
+# Each SIMD block kernel (Q2_K to Q6_K): the same lane sums as the scalar
+# reference, for one block, built from generic IR so it compiles on x86_64 and
+# aarch64. @noinline so the code is compiled only when a kernel runs.
 
-@noinline function _q4k_ints_avx2(
+@noinline function _q4k_ints_simd(
     w::AbstractVector{UInt8},
     b::Int,
     x::Q8KVec,
     ib::Int,
     sc::NTuple{8, Int32},
 )::NTuple{8, Int32}
-    v = GC.@preserve w x @x86_llvmcall(
+    v = GC.@preserve w x @simd_llvmcall(
         (_KQ_IR_Q4K, "entry"),
         NTuple{8, VecElement{Int32}},
         Tuple{Ptr{UInt8}, Ptr{Int8}, NTuple{8, VecElement{Int32}}},
@@ -771,14 +772,14 @@ end
     return _kq_unvec8(v)
 end
 
-@noinline function _q5k_ints_avx2(
+@noinline function _q5k_ints_simd(
     w::AbstractVector{UInt8},
     b::Int,
     x::Q8KVec,
     ib::Int,
     sc::NTuple{8, Int32},
 )::NTuple{8, Int32}
-    v = GC.@preserve w x @x86_llvmcall(
+    v = GC.@preserve w x @simd_llvmcall(
         (_KQ_IR_Q5K, "entry"),
         NTuple{8, VecElement{Int32}},
         Tuple{Ptr{UInt8}, Ptr{Int8}, NTuple{8, VecElement{Int32}}},
@@ -789,13 +790,13 @@ end
     return _kq_unvec8(v)
 end
 
-@noinline function _q6k_ints_avx2(
+@noinline function _q6k_ints_simd(
     w::AbstractVector{UInt8},
     b::Int,
     x::Q8KVec,
     ib::Int,
 )::NTuple{8, Int32}
-    v = GC.@preserve w x @x86_llvmcall(
+    v = GC.@preserve w x @simd_llvmcall(
         (_KQ_IR_Q6K, "entry"),
         NTuple{8, VecElement{Int32}},
         Tuple{Ptr{UInt8}, Ptr{Int8}},
@@ -805,14 +806,14 @@ end
     return _kq_unvec8(v)
 end
 
-@noinline function _q3k_ints_avx2(
+@noinline function _q3k_ints_simd(
     w::AbstractVector{UInt8},
     b::Int,
     x::Q8KVec,
     ib::Int,
     sc::NTuple{16, Int32},
 )::NTuple{8, Int32}
-    v = GC.@preserve w x @x86_llvmcall(
+    v = GC.@preserve w x @simd_llvmcall(
         (_KQ_IR_Q3K, "entry"),
         NTuple{8, VecElement{Int32}},
         Tuple{
@@ -829,13 +830,13 @@ end
     return _kq_unvec8(v)
 end
 
-@noinline function _q2k_ints_avx2(
+@noinline function _q2k_ints_simd(
     w::AbstractVector{UInt8},
     b::Int,
     x::Q8KVec,
     ib::Int,
 )::NTuple{8, Int32}
-    v = GC.@preserve w x @x86_llvmcall(
+    v = GC.@preserve w x @simd_llvmcall(
         (_KQ_IR_Q2K, "entry"),
         NTuple{8, VecElement{Int32}},
         Tuple{Ptr{UInt8}, Ptr{Int8}},
@@ -976,7 +977,7 @@ function _dot_q4k_q8k(w::AbstractVector{UInt8}, woff::Int, x::Q8KVec, simd::Bool
         d = _kq_f16(w, b) * x.d[ib+1]
         dmin = _kq_f16(w, b + 2) * x.d[ib+1]
         sc, mn = _kq_scale_min_k4(w, b + 4)
-        aux = simd ? _q4k_ints_avx2(w, b, x, ib, sc) : _q4k_ints_ref(w, b, x, ib, sc)
+        aux = simd ? _q4k_ints_simd(w, b, x, ib, sc) : _q4k_ints_ref(w, b, x, ib, sc)
         sums = _kq_fsum(sums, d, aux)
         sumf -= dmin * Float32(_kq_mins_dot(x, ib, mn))
     end
@@ -996,7 +997,7 @@ function _dot_q5k_q8k(w::AbstractVector{UInt8}, woff::Int, x::Q8KVec, simd::Bool
         d = _kq_f16(w, b) * x.d[ib+1]
         dmin = _kq_f16(w, b + 2) * x.d[ib+1]
         sc, mn = _kq_scale_min_k4(w, b + 4)
-        aux = simd ? _q5k_ints_avx2(w, b, x, ib, sc) : _q5k_ints_ref(w, b, x, ib, sc)
+        aux = simd ? _q5k_ints_simd(w, b, x, ib, sc) : _q5k_ints_ref(w, b, x, ib, sc)
         sums = _kq_fsum(sums, d, aux)
         sumf -= dmin * Float32(_kq_mins_dot(x, ib, mn))
     end
@@ -1014,7 +1015,7 @@ function _dot_q6k_q8k(w::AbstractVector{UInt8}, woff::Int, x::Q8KVec, simd::Bool
     @inbounds for ib in 0:(nb-1)
         b = woff + ib * 210
         d = _kq_f16(w, b + 208) * x.d[ib+1]
-        aux = simd ? _q6k_ints_avx2(w, b, x, ib) : _q6k_ints_ref(w, b, x, ib)
+        aux = simd ? _q6k_ints_simd(w, b, x, ib) : _q6k_ints_ref(w, b, x, ib)
         sums = _kq_fsum(sums, d, aux)
     end
     for l in 1:8
@@ -1032,7 +1033,7 @@ function _dot_q3k_q8k(w::AbstractVector{UInt8}, woff::Int, x::Q8KVec, simd::Bool
         b = woff + ib * 110
         d = _kq_f16(w, b + 108) * x.d[ib+1]
         sc = _kq_scales_q3(w, b + 96)
-        aux = simd ? _q3k_ints_avx2(w, b, x, ib, sc) : _q3k_ints_ref(w, b, x, ib, sc)
+        aux = simd ? _q3k_ints_simd(w, b, x, ib, sc) : _q3k_ints_ref(w, b, x, ib, sc)
         sums = _kq_fsum(sums, d, aux)
     end
     for l in 1:8
@@ -1049,7 +1050,7 @@ function _dot_q2k_q8k(w::AbstractVector{UInt8}, woff::Int, x::Q8KVec, simd::Bool
         b = woff + ib * 84
         dall = x.d[ib+1] * _kq_f16(w, b + 80)
         dmin = x.d[ib+1] * _kq_f16(w, b + 82)
-        aux = simd ? _q2k_ints_avx2(w, b, x, ib) : _q2k_ints_ref(w, b, x, ib)
+        aux = simd ? _q2k_ints_simd(w, b, x, ib) : _q2k_ints_ref(w, b, x, ib)
         isum = Int32(0)
         for l in 1:8
             isum += aux[l]

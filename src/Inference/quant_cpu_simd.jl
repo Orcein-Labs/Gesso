@@ -18,15 +18,17 @@
 # the reference's order. The AVX2 result therefore equals the scalar result bit
 # for bit, and test/test_quant_cpu_simd.jl checks that.
 #
-# Dependency law: only Base.llvmcall and LLVM x86 intrinsics. The dispatcher
-# runs an AVX2 kernel only when CPUID reports AVX2 and the OS saves YMM state;
-# otherwise the scalar path runs. GESSO_QUANT_SIMD=0 forces the scalar path.
+# Dependency law: only Base.llvmcall and LLVM intrinsics. The dispatcher runs
+# a SIMD kernel only when the CPU has one (AVX2 on x86_64, which needs CPUID
+# AVX2 and the OS saving YMM state; NEON on aarch64, which is baseline).
+# Otherwise the scalar path runs. GESSO_QUANT_SIMD=0 forces the scalar path.
 #
 # A runtime gate does not keep a kernel out of codegen: any compiled caller
 # that can reach it compiles it, @noinline or not, and LLVM aborts the process
 # on an x86 intrinsic for another target. So every llvmcall that uses x86
 # intrinsics or x86 asm goes through @x86_llvmcall, which off x86_64 expands to
-# a throwing stub instead of the IR.
+# a throwing stub instead of the IR. Generic IR (no target intrinsics) goes
+# through @simd_llvmcall, which compiles on every target.
 
 using ..Gesso.Log: glog, LOG_INFO
 
@@ -34,6 +36,11 @@ using ..Gesso.Log: glog, LOG_INFO
 
 macro x86_llvmcall(args...)
     Sys.ARCH === :x86_64 || return :(_x86_kernel_unavailable())
+    return esc(Expr(:call, GlobalRef(Base, :llvmcall), args...))
+end
+
+# Generic LLVM IR only: vector arithmetic and ops LLVM lowers on every target.
+macro simd_llvmcall(args...)
     return esc(Expr(:call, GlobalRef(Base, :llvmcall), args...))
 end
 
@@ -122,26 +129,40 @@ function _cpu_has_avx2()::Bool
     return (_cpuid_ebx(UInt32(7), UInt32(0)) >> 5) & 1 == 1
 end
 
-# -1 unresolved, 0 scalar, 1 AVX2. The result is cached on first use, not at
+# The SIMD kernels usable on this CPU: AVX2 on x86_64, NEON on aarch64. NEON
+# (Advanced SIMD) is part of the ARMv8 baseline, so it needs no runtime probe.
+_cpu_has_simd()::Bool = Sys.ARCH === :aarch64 || _cpu_has_avx2()
+
+# Types with a SIMD kernel on this architecture. x86_64 has every kernel. On
+# aarch64 only the generic-IR K-quant kernels exist (Q2_K to Q6_K); the other
+# types stay on the scalar reference until their aarch64 kernels are ported.
+@inline function _simd_type_ok(t::Int32)::Bool
+    Sys.ARCH === :x86_64 && return true
+    return t == GGML_TYPE_Q2_K || t == GGML_TYPE_Q3_K || t == GGML_TYPE_Q4_K ||
+           t == GGML_TYPE_Q5_K || t == GGML_TYPE_Q6_K
+end
+
+# -1 unresolved, 0 scalar, 1 SIMD. The result is cached on first use, not at
 # precompile time, so a precompiled image never carries the build machine's CPU.
 const _Q8K_SIMD_MODE = Ref{Int8}(-1)
 
 """
     q8k_simd_enabled() -> Bool
 
-True when the AVX2 kernels are selected. Resolved once per process: false if
-`GESSO_QUANT_SIMD=0`, or if the CPU or OS lacks AVX2 (logged once).
+True when the SIMD kernels are selected (AVX2 on x86_64, NEON on aarch64; see
+`_simd_type_ok` for which types have one). Resolved once per process: false if
+`GESSO_QUANT_SIMD=0`, or if the CPU has no SIMD kernels (logged once).
 """
 function q8k_simd_enabled()::Bool
     m = _Q8K_SIMD_MODE[]
     if m < 0
         if get(ENV, "GESSO_QUANT_SIMD", "1") == "0"
             m = Int8(0)
-        elseif _cpu_has_avx2()
+        elseif _cpu_has_simd()
             m = Int8(1)
         else
             m = Int8(0)
-            glog(LOG_INFO, :quant_simd_unavailable; kernel=:q8k_scalar, reason=:no_avx2)
+            glog(LOG_INFO, :quant_simd_unavailable; kernel=:q8k_scalar, reason=:no_simd)
         end
         _Q8K_SIMD_MODE[] = m
     end
@@ -601,9 +622,10 @@ end
 """
     _dot_q8k(ggml_type, w, woff, x, simd) -> Float32
 
-Dot product of one weight row (IQ4_XS, IQ2_XS or IQ3_XXS, starting at 0-based
-byte `woff` of `w`) with the Q8_K activation `x`. `simd=true` takes the AVX2
-kernel, `false` the scalar reference. The two agree bit for bit.
+Dot product of one weight row (starting at 0-based byte `woff` of `w`) with the
+Q8_K activation `x`. `simd=true` takes the SIMD kernel when this architecture
+has one for the type (`_simd_type_ok`), and the scalar reference otherwise.
+The two agree bit for bit.
 """
 @inline function _dot_q8k(
     ggml_type::Int32,
@@ -612,6 +634,7 @@ kernel, `false` the scalar reference. The two agree bit for bit.
     x,
     simd::Bool,
 )::Float32
+    simd = simd && _simd_type_ok(ggml_type)
     if ggml_type == GGML_TYPE_IQ4_XS
         return simd ? _dot_iq4_xs_q8k_avx2(w, woff, x) : _dot_iq4_xs_q8k_ref(w, woff, x)
     elseif ggml_type == GGML_TYPE_IQ2_XS
