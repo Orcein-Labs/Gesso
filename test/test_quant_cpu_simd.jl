@@ -26,6 +26,11 @@ const _QTYPES = (
     ("IQ4_XS", _QSIMD.GGML_TYPE_IQ4_XS),
     ("IQ2_XS", _QSIMD.GGML_TYPE_IQ2_XS),
     ("IQ3_XXS", _QSIMD.GGML_TYPE_IQ3_XXS),
+    ("IQ2_XXS", _QSIMD.GGML_TYPE_IQ2_XXS),
+    ("IQ2_S", _QSIMD.GGML_TYPE_IQ2_S),
+    ("IQ3_S", _QSIMD.GGML_TYPE_IQ3_S),
+    ("IQ1_S", _QSIMD.GGML_TYPE_IQ1_S),
+    ("IQ1_M", _QSIMD.GGML_TYPE_IQ1_M),
 )
 # Q8_0 family: 32-value blocks, activations are Q80Vec (see _q8k_quantize_act).
 const _Q80TYPES = (
@@ -34,9 +39,11 @@ const _Q80TYPES = (
     ("IQ4_NL", _QSIMD.GGML_TYPE_IQ4_NL),
     ("Q5_1", _QSIMD.GGML_TYPE_Q5_1),
 )
-# Types with an aarch64 SIMD kernel. The IQ types stay scalar there for now.
+# Types with an aarch64 SIMD kernel. IQ4_XS stays scalar: its AVX2 kernel is a
+# pshufb table lookup with no generic-IR port yet.
 const _AARCH64_SIMD_NAMES = (
     "Q2_K", "Q3_K", "Q4_K", "Q5_K", "Q6_K", "Q8_0", "Q4_0", "IQ4_NL", "Q5_1",
+    "IQ2_XS", "IQ3_XXS", "IQ2_XXS", "IQ2_S", "IQ3_S", "IQ1_S", "IQ1_M",
 )
 
 # Little-endian f16 store at a 0-based byte offset.
@@ -47,6 +54,15 @@ function _q_write_f16!(w, off0::Int, v::Float32)
     return w
 end
 
+# Writes the super-scale d of one block. IQ1_M has no plain d field: its f16
+# super-scale is packed into the top nibbles of the four scale words (bytes 48-54).
+function _q_write_super!(w, ggml_type::Int32, boff::Int, v::Float32)
+    if ggml_type == _QSIMD.GGML_TYPE_IQ1_M
+        return _QSIMD._iq1m_write_scale!(w, boff, v)
+    end
+    return _q_write_f16!(w, boff + _QSIMD._q8k_d_offset(ggml_type), v)
+end
+
 # Random valid rows: arbitrary bytes for the grid/sign/scale fields, a finite
 # small f16 super-scale (and f16 min, where the format has one) per block.
 # Random f16 bits would be NaN or Inf often. Offsets per format come from the
@@ -54,11 +70,10 @@ end
 # Q3_K, 208 for Q6_K; dmin at 82 for Q2_K, 2 for Q4_K/Q5_K).
 function _q_random_rows(rng, ggml_type::Int32, nrows::Int, nb::Int)
     bsz = _QSIMD._iq_block_bytes(ggml_type)
-    doff = _QSIMD._q8k_d_offset(ggml_type)
     moff = _QSIMD._q8k_dmin_offset(ggml_type)
     w = rand(rng, UInt8, nrows * nb * bsz)
     for blk in 0:(nrows*nb-1)
-        _q_write_f16!(w, blk * bsz + doff, 0.005f0 + 0.05f0 * rand(rng, Float32))
+        _q_write_super!(w, ggml_type, blk * bsz, 0.005f0 + 0.05f0 * rand(rng, Float32))
         if moff >= 0
             _q_write_f16!(w, blk * bsz + moff, 0.005f0 + 0.05f0 * rand(rng, Float32))
         end
@@ -227,12 +242,11 @@ end
                 _QSIMD._simd_type_ok(ty) || continue
                 nb = 2
                 bsz = _QSIMD._iq_block_bytes(ty)
-                doff = _QSIMD._q8k_d_offset(ty)
                 moff = _QSIMD._q8k_dmin_offset(ty)
                 W = fill(UInt8(0xff), nb * bsz)
                 for ib in 0:(nb-1)
                     # d = 0 (and dmin = 0): contributes exactly zero
-                    _q_write_f16!(W, ib * bsz + doff, 0.0f0)
+                    _q_write_super!(W, ty, ib * bsz, 0.0f0)
                     if moff >= 0
                         _q_write_f16!(W, ib * bsz + moff, 0.0f0)
                     end

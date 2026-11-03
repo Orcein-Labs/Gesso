@@ -134,14 +134,18 @@ end
 _cpu_has_simd()::Bool = Sys.ARCH === :aarch64 || _cpu_has_avx2()
 
 # Types with a SIMD kernel on this architecture. x86_64 has every kernel. On
-# aarch64 the generic-IR kernels cover the K-quants (Q2_K to Q6_K) and the
-# Q8_0 family (Q8_0, Q4_0, IQ4_NL, Q5_1); the IQ types stay on the scalar
-# reference until their aarch64 kernels are ported.
+# aarch64 the generic-IR kernels cover the K-quants (Q2_K to Q6_K), the Q8_0
+# family (Q8_0, Q4_0, IQ4_NL, Q5_1) and the IQ types that use only the shared
+# sub-block primitives (IQ2_XXS, IQ2_XS, IQ2_S, IQ3_XXS, IQ3_S, IQ1_S, IQ1_M).
+# IQ4_XS stays scalar: its AVX2 kernel is a pshufb table lookup not yet ported.
 @inline function _simd_type_ok(t::Int32)::Bool
     Sys.ARCH === :x86_64 && return true
     return t == GGML_TYPE_Q2_K || t == GGML_TYPE_Q3_K || t == GGML_TYPE_Q4_K ||
            t == GGML_TYPE_Q5_K || t == GGML_TYPE_Q6_K || t == GGML_TYPE_Q8_0 ||
-           t == GGML_TYPE_Q4_0 || t == GGML_TYPE_IQ4_NL || t == GGML_TYPE_Q5_1
+           t == GGML_TYPE_Q4_0 || t == GGML_TYPE_IQ4_NL || t == GGML_TYPE_Q5_1 ||
+           t == GGML_TYPE_IQ2_XXS || t == GGML_TYPE_IQ2_XS || t == GGML_TYPE_IQ2_S ||
+           t == GGML_TYPE_IQ3_XXS || t == GGML_TYPE_IQ3_S || t == GGML_TYPE_IQ1_S ||
+           t == GGML_TYPE_IQ1_M
 end
 
 # -1 unresolved, 0 scalar, 1 SIMD. The result is cached on first use, not at
@@ -409,7 +413,7 @@ end
 
 const _IQ_ACC_ZERO = ntuple(_ -> VecElement(Int32(0)), 8)
 
-@inline function _iq2_sub_acc(
+@inline function _iq2_sub_acc_x86(
     acc::NTuple{8, VecElement{Int32}},
     g::NTuple{4, VecElement{UInt64}},
     s::NTuple{4, VecElement{UInt64}},
@@ -437,7 +441,7 @@ const _IQ_ACC_ZERO = ntuple(_ -> VecElement(Int32(0)), 8)
     )
 end
 
-@inline function _iq3_sub_acc(
+@inline function _iq3_sub_acc_x86(
     acc::NTuple{8, VecElement{Int32}},
     g::NTuple{8, VecElement{UInt32}},
     s::NTuple{4, VecElement{UInt64}},
@@ -460,6 +464,164 @@ end
         q8,
         ls,
     )
+end
+
+# ----------------------------------------------- generic IR (every target)
+#
+# Portable sub-block primitives for aarch64. No target intrinsics: products are
+# formed in int32 and summed over four-byte groups, so each sum is an exact
+# integer. The x86 forms use pmaddubsw, which saturates pair sums to int16; the
+# grid bounds keep those sums far below 32767, so both give the same integers.
+# Lane k of each result holds the sum over bytes 4k..4k+3, as in the x86 IR.
+
+# Lane k of the <8 x i32> value %dst is the sum of lanes 4k..4k+3 of %src.
+function _iq_gen_groupsum_ir(src::AbstractString, dst::AbstractString)::String
+    lines = String[]
+    for j in 0:3
+        lanes = join(("i32 $(4k + j)" for k in 0:7), ", ")
+        push!(lines, "  %$(dst)_s$j = shufflevector <32 x i32> $src, <32 x i32> poison, <8 x i32> <$lanes>")
+    end
+    push!(lines, "  %$(dst)_t0 = add <8 x i32> %$(dst)_s0, %$(dst)_s1")
+    push!(lines, "  %$(dst)_t1 = add <8 x i32> %$(dst)_s2, %$(dst)_s3")
+    push!(lines, "  %$dst = add <8 x i32> %$(dst)_t0, %$(dst)_t1")
+    return join(lines, "\n")
+end
+
+# psign's sign of each byte of %sb as an int32 (-1, 0 or +1), applied to %av.
+const _IQ_GEN_SIGN_IR = """
+  %sv = sext <32 x i8> %sb to <32 x i32>
+  %spos = icmp sgt <32 x i32> %sv, zeroinitializer
+  %sneg = icmp slt <32 x i32> %sv, zeroinitializer
+  %s1 = select <32 x i1> %spos, <32 x i32> splat (i32 1), <32 x i32> zeroinitializer
+  %sg = select <32 x i1> %sneg, <32 x i32> splat (i32 -1), <32 x i32> %s1
+  %asg = mul <32 x i32> %av, %sg
+"""
+
+# IQ2_XS, IQ2_XXS and IQ2_S: the grid bytes are unsigned, the signs come from
+# the sign masks, and lanes 0-3 take ls1 while lanes 4-7 take ls2.
+const _IQ2_SUB_GEN_IR = """
+define <8 x i32> @entry(<8 x i32> %acc, <4 x i64> %g, <4 x i64> %s, ptr %q8, i32 %ls1, i32 %ls2) #0 {
+  %gb = bitcast <4 x i64> %g to <32 x i8>
+  %sb = bitcast <4 x i64> %s to <32 x i8>
+  %a = load <32 x i8>, ptr %q8, align 1
+  %gv = zext <32 x i8> %gb to <32 x i32>
+  %av = sext <32 x i8> %a to <32 x i32>
+$(_IQ_GEN_SIGN_IR)
+  %pr = mul <32 x i32> %gv, %asg
+$(_iq_gen_groupsum_ir("%pr", "gs"))
+  %l1 = insertelement <8 x i32> poison, i32 %ls1, i64 0
+  %L1 = shufflevector <8 x i32> %l1, <8 x i32> poison, <8 x i32> zeroinitializer
+  %l2 = insertelement <8 x i32> poison, i32 %ls2, i64 0
+  %L2 = shufflevector <8 x i32> %l2, <8 x i32> poison, <8 x i32> zeroinitializer
+  %W = shufflevector <8 x i32> %L1, <8 x i32> %L2, <8 x i32> <i32 0, i32 1, i32 2, i32 3, i32 12, i32 13, i32 14, i32 15>
+  %m = mul <8 x i32> %gs, %W
+  %r = add <8 x i32> %acc, %m
+  ret <8 x i32> %r
+}
+attributes #0 = { alwaysinline }
+"""
+
+# IQ3_XXS and IQ3_S: one scale per sub-block, so the multiplier is a splat.
+const _IQ3_SUB_GEN_IR = """
+define <8 x i32> @entry(<8 x i32> %acc, <8 x i32> %g, <4 x i64> %s, ptr %q8, i32 %ls) #0 {
+  %gb = bitcast <8 x i32> %g to <32 x i8>
+  %sb = bitcast <4 x i64> %s to <32 x i8>
+  %a = load <32 x i8>, ptr %q8, align 1
+  %gv = zext <32 x i8> %gb to <32 x i32>
+  %av = sext <32 x i8> %a to <32 x i32>
+$(_IQ_GEN_SIGN_IR)
+  %pr = mul <32 x i32> %gv, %asg
+$(_iq_gen_groupsum_ir("%pr", "gs"))
+  %l = insertelement <8 x i32> poison, i32 %ls, i64 0
+  %W = shufflevector <8 x i32> %l, <8 x i32> poison, <8 x i32> zeroinitializer
+  %m = mul <8 x i32> %gs, %W
+  %r = add <8 x i32> %acc, %m
+  ret <8 x i32> %r
+}
+attributes #0 = { alwaysinline }
+"""
+
+@inline function _iq2_sub_acc_gen(
+    acc::NTuple{8, VecElement{Int32}},
+    g::NTuple{4, VecElement{UInt64}},
+    s::NTuple{4, VecElement{UInt64}},
+    q8::Ptr{Int8},
+    ls1::Int32,
+    ls2::Int32,
+)::NTuple{8, VecElement{Int32}}
+    return @simd_llvmcall(
+        (_IQ2_SUB_GEN_IR, "entry"),
+        NTuple{8, VecElement{Int32}},
+        Tuple{
+            NTuple{8, VecElement{Int32}},
+            NTuple{4, VecElement{UInt64}},
+            NTuple{4, VecElement{UInt64}},
+            Ptr{Int8},
+            Int32,
+            Int32,
+        },
+        acc,
+        g,
+        s,
+        q8,
+        ls1,
+        ls2,
+    )
+end
+
+@inline function _iq3_sub_acc_gen(
+    acc::NTuple{8, VecElement{Int32}},
+    g::NTuple{8, VecElement{UInt32}},
+    s::NTuple{4, VecElement{UInt64}},
+    q8::Ptr{Int8},
+    ls::Int32,
+)::NTuple{8, VecElement{Int32}}
+    return @simd_llvmcall(
+        (_IQ3_SUB_GEN_IR, "entry"),
+        NTuple{8, VecElement{Int32}},
+        Tuple{
+            NTuple{8, VecElement{Int32}},
+            NTuple{8, VecElement{UInt32}},
+            NTuple{4, VecElement{UInt64}},
+            Ptr{Int8},
+            Int32,
+        },
+        acc,
+        g,
+        s,
+        q8,
+        ls,
+    )
+end
+
+# Dispatch: x86_64 runs the AVX2 IR, every other architecture the generic IR.
+@inline function _iq2_sub_acc(
+    acc::NTuple{8, VecElement{Int32}},
+    g::NTuple{4, VecElement{UInt64}},
+    s::NTuple{4, VecElement{UInt64}},
+    q8::Ptr{Int8},
+    ls1::Int32,
+    ls2::Int32,
+)::NTuple{8, VecElement{Int32}}
+    @static if Sys.ARCH === :x86_64
+        return _iq2_sub_acc_x86(acc, g, s, q8, ls1, ls2)
+    else
+        return _iq2_sub_acc_gen(acc, g, s, q8, ls1, ls2)
+    end
+end
+
+@inline function _iq3_sub_acc(
+    acc::NTuple{8, VecElement{Int32}},
+    g::NTuple{8, VecElement{UInt32}},
+    s::NTuple{4, VecElement{UInt64}},
+    q8::Ptr{Int8},
+    ls::Int32,
+)::NTuple{8, VecElement{Int32}}
+    @static if Sys.ARCH === :x86_64
+        return _iq3_sub_acc_x86(acc, g, s, q8, ls)
+    else
+        return _iq3_sub_acc_gen(acc, g, s, q8, ls)
+    end
 end
 
 # Horizontal sum of the eight int32 lanes. Integer, so the order is immaterial.

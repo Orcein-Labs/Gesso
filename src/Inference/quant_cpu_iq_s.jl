@@ -290,7 +290,7 @@ define <16 x i32> @entry(<16 x i32> %acc, <4 x i64> %g, ptr %q8, <16 x i32> %w) 
 attributes #0 = { alwaysinline }
 """
 
-@inline function _iq1m_sub_acc(
+@inline function _iq1m_sub_acc_x86(
     acc::NTuple{16, VecElement{Int32}},
     g::NTuple{4, VecElement{UInt64}},
     q8::Ptr{Int8},
@@ -310,6 +310,66 @@ attributes #0 = { alwaysinline }
         q8,
         w,
     )
+end
+
+# Generic IR for the IQ1_M sub-block step, matching _IQ1M_IR. Grid and quant
+# bytes are multiplied per byte in int32 and summed over four-byte groups.
+# Lanes 0-7 take w[0..7] on the grid sums, lanes 8-15 take w[8..15] on the
+# quant sums.
+const _IQ1M_GEN_IR = """
+define <16 x i32> @entry(<16 x i32> %acc, <4 x i64> %g, ptr %q8, <16 x i32> %w) #0 {
+  %gb = bitcast <4 x i64> %g to <32 x i8>
+  %a = load <32 x i8>, ptr %q8, align 1
+  %gv = sext <32 x i8> %gb to <32 x i32>
+  %av = sext <32 x i8> %a to <32 x i32>
+  %pr = mul <32 x i32> %gv, %av
+$(_iq_gen_groupsum_ir("%pr", "gp"))
+$(_iq_gen_groupsum_ir("%av", "gq"))
+  %w1 = shufflevector <16 x i32> %w, <16 x i32> poison, <8 x i32> <i32 0, i32 1, i32 2, i32 3, i32 4, i32 5, i32 6, i32 7>
+  %w2 = shufflevector <16 x i32> %w, <16 x i32> poison, <8 x i32> <i32 8, i32 9, i32 10, i32 11, i32 12, i32 13, i32 14, i32 15>
+  %m1 = mul <8 x i32> %gp, %w1
+  %m2 = mul <8 x i32> %gq, %w2
+  %m = shufflevector <8 x i32> %m1, <8 x i32> %m2, <16 x i32> <i32 0, i32 1, i32 2, i32 3, i32 4, i32 5, i32 6, i32 7, i32 8, i32 9, i32 10, i32 11, i32 12, i32 13, i32 14, i32 15>
+  %r = add <16 x i32> %acc, %m
+  ret <16 x i32> %r
+}
+attributes #0 = { alwaysinline }
+"""
+
+@inline function _iq1m_sub_acc_gen(
+    acc::NTuple{16, VecElement{Int32}},
+    g::NTuple{4, VecElement{UInt64}},
+    q8::Ptr{Int8},
+    w::NTuple{16, VecElement{Int32}},
+)::NTuple{16, VecElement{Int32}}
+    return @simd_llvmcall(
+        (_IQ1M_GEN_IR, "entry"),
+        NTuple{16, VecElement{Int32}},
+        Tuple{
+            NTuple{16, VecElement{Int32}},
+            NTuple{4, VecElement{UInt64}},
+            Ptr{Int8},
+            NTuple{16, VecElement{Int32}},
+        },
+        acc,
+        g,
+        q8,
+        w,
+    )
+end
+
+# Dispatch: x86_64 runs the AVX2 IR, every other architecture the generic IR.
+@inline function _iq1m_sub_acc(
+    acc::NTuple{16, VecElement{Int32}},
+    g::NTuple{4, VecElement{UInt64}},
+    q8::Ptr{Int8},
+    w::NTuple{16, VecElement{Int32}},
+)::NTuple{16, VecElement{Int32}}
+    @static if Sys.ARCH === :x86_64
+        return _iq1m_sub_acc_x86(acc, g, q8, w)
+    else
+        return _iq1m_sub_acc_gen(acc, g, q8, w)
+    end
 end
 
 # ---------------------------------------------------------------- AVX2 kernels
