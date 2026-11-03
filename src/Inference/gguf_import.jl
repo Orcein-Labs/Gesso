@@ -359,6 +359,58 @@ function _malformed_gguf(path::AbstractString, msg::AbstractString; kw...)
     )
 end
 
+# Linux 5.14+: map pages now instead of on first touch.
+const _MADV_POPULATE_READ = Cint(22)
+
+# The largest share of MemAvailable a whole-file prefault may take.
+const _PREFAULT_MEM_FRACTION = 0.7
+
+# 0 when /proc/meminfo is missing or unreadable, which skips the prefault.
+function _mem_available_bytes()::Int
+    try
+        for line in eachline("/proc/meminfo")
+            startswith(line, "MemAvailable:") && return parse(Int, split(line)[2]) * 1024
+        end
+    catch
+    end
+    return 0
+end
+
+"""
+    _prefault_gguf_data!(hdr; avail=_mem_available_bytes()) -> Symbol
+
+Fault in the tensor bytes of an mmap'd GGUF with one sequential
+`MADV_POPULATE_READ`. Dense CPU weights are views into the mapping; left lazy,
+decode demand-faults them a page at a time from the model disk. On the
+spinning model disk that ran at ~1 MB/s, and a dense 9 GB model never became
+resident (RssFile 1.2 of 9 GB, 4.2 s per step). Read in one pass, the file
+streams at disk speed and is resident before the first token.
+
+Skipped, leaving decode to fault lazily as before: off Linux, with
+`GESSO_PREFAULT=0`, when the data does not fit in `_PREFAULT_MEM_FRACTION` of
+MemAvailable, or when madvise fails. The bytes are not touched, so output is
+unchanged. Returns `:done`, `:off`, `:too_big` or `:failed`.
+"""
+function _prefault_gguf_data!(hdr; avail::Integer=_mem_available_bytes())::Symbol
+    Sys.islinux() || return :off
+    get(ENV, "GESSO_PREFAULT", "1") == "0" && return :off
+    data = hdr.data
+    length(data) > hdr.data_start || return :off
+    length(data) - hdr.data_start <= _PREFAULT_MEM_FRACTION * avail || return :too_big
+    page = UInt(ccall(:getpagesize, Cint, ()))
+    rc = GC.@preserve data begin
+        base = UInt(pointer(data))
+        lo = (base + UInt(hdr.data_start)) & ~(page - 1)
+        hi = base + UInt(length(data))
+        ccall(:madvise, Cint, (Ptr{Cvoid}, Csize_t, Cint), Ptr{Cvoid}(lo), hi - lo, _MADV_POPULATE_READ)
+    end
+    if rc != 0
+        @debug "gguf prefault skipped" path=hdr.path errno=Libc.errno()
+        return :failed
+    end
+    return :done
+end
+
 """
     gguf_header(path) -> (; data, kv, tensors, data_start)
 
@@ -1128,6 +1180,7 @@ one selected expert at a time. `tensors.mtp` records the MTP blocks (not run).
 """
 function load_gguf(path::AbstractString; T::Type=Float32, verbose::Bool=false)
     hdr = gguf_header(path)
+    _prefault_gguf_data!(hdr)
     spec = spec_from_gguf_kv(hdr.kv; tensor_names=Set(t.name for t in hdr.tensors))
     pmap = _gguf_param_map(spec)
     info_by = Dict{String, GgufTensorInfo}(info.name => info for info in hdr.tensors)

@@ -60,6 +60,32 @@ end
     rm(path; force=true)
 end
 
+@testset "whole-file gguf prefault: done, opt-out, empty data, too big" begin
+    path, io = mktemp()
+    bytes = rand(deterministic_rng(9), UInt8, 5 * 65536 + 123)
+    write(io, bytes)
+    close(io)
+    data = open(f -> _EC_Inf.Mmap.mmap(f, Vector{UInt8}; grow=false, shared=false), path)
+    hdr = (data=data, data_start=4096 + 32, path=path)
+    @test _EC_Inf._prefault_gguf_data!(hdr) === (Sys.islinux() ? :done : :off)
+    @test data == bytes
+    withenv("GESSO_PREFAULT" => "0") do
+        @test _EC_Inf._prefault_gguf_data!(hdr) === :off
+    end
+    @test _EC_Inf._prefault_gguf_data!((data=data, data_start=length(data), path=path)) === :off
+    if Sys.islinux()
+        @test _EC_Inf._mem_available_bytes() > 0
+        n = length(data) - hdr.data_start
+        # The data must fit in _PREFAULT_MEM_FRACTION of MemAvailable.
+        @test _EC_Inf._prefault_gguf_data!(hdr; avail=n) === :too_big
+        @test _EC_Inf._prefault_gguf_data!(hdr; avail=0) === :too_big
+        @test _EC_Inf._prefault_gguf_data!(hdr; avail=2n) === :done
+    end
+    data = nothing
+    GC.gc()
+    rm(path; force=true)
+end
+
 @testset "expert residency: quota, fill order, profile, trace (host)" begin
     rng = deterministic_rng(31)
     n_exp, h, ff = 6, 4, 3

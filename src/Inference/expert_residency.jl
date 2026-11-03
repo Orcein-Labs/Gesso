@@ -228,8 +228,7 @@ end
 # the middle of decode: the first generation's tokens ran 50 to 90 ms instead
 # of 32 while new experts were routed (CUDA, Ornith 35B). MADV_POPULATE_READ
 # (Linux 5.14) maps the pages at load instead; where it is missing, decode
-# faults lazily as before.
-const _MADV_POPULATE_READ = Cint(22)
+# faults lazily as before. `_MADV_POPULATE_READ` is defined in gguf_import.jl.
 
 const _HOST_EXPERT_KEYS = (:wexp_gate, :wexp_up, :wexp_gate_up, :wexp_down)
 
