@@ -1,0 +1,59 @@
+# Shared deepseek41 toy fixture: the synthetic GGUF metadata header and a random
+# model with every tensor the forward reads. Six layers: SWA only (0, 1), one
+# ratio-1 compressed block (2, 3, indexer source 2, KV source 2), one ratio-2
+# block (4, 5, source 4), candidate selection from layer 4, Engram on layers 1
+# and 4, sqrtsoftplus MoE with a shared expert on every layer.
+
+function _ds41_toy_kv()
+    vocab = 40
+    return Dict{String, Any}(
+        "general.architecture" => "deepseek41",
+        "tokenizer.ggml.tokens" => vocab,
+        "deepseek41.block_count" => 6,
+        "deepseek41.embedding_length" => 16,
+        "deepseek41.attention.head_count" => 4,
+        "deepseek41.attention.head_count_kv" => 1,
+        "deepseek41.attention.key_length" => 8,
+        "deepseek41.rope.dimension_count" => 4,
+        "deepseek41.rope.freq_base" => 10000.0,
+        "deepseek41.attention.compress_rope_freq_base" => 160000.0,
+        "deepseek41.rope.scaling.factor" => 4.0,
+        "deepseek41.rope.scaling.original_context_length" => 64,
+        "deepseek41.attention.layer_norm_rms_epsilon" => 1e-6,
+        "deepseek41.attention.q_lora_rank" => 8,
+        "deepseek41.attention.sliding_window" => 8,
+        "deepseek41.attention.output_group_count" => 2,
+        "deepseek41.attention.output_lora_rank" => 4,
+        "deepseek41.attention.compress_ratios" => [0, 0, 1, 1, 2, 2],
+        "deepseek41.attention.kv_source_layers" => [2, 4],
+        "deepseek41.attention.indexer.source_layers" => [2, 4],
+        "deepseek41.attention.indexer.head_count" => 2,
+        "deepseek41.attention.indexer.key_length" => 4,
+        "deepseek41.attention.indexer.top_k" => 4,
+        "deepseek41.attention.indexer.candidate_source_layer" => 4,
+        "deepseek41.attention.indexer.candidate_top_k_blocks" => 2,
+        "deepseek41.attention.indexer.candidate_block_size" => 4,
+        "deepseek41.hyper_connection.count" => 2,
+        "deepseek41.hyper_connection.sinkhorn_iterations" => 3,
+        "deepseek41.hyper_connection.epsilon" => 1e-6,
+        "deepseek41.expert_gating_func" => 4,
+        "deepseek41.expert_count" => 4,
+        "deepseek41.expert_used_count" => 2,
+        "deepseek41.expert_feed_forward_length" => 6,
+        "deepseek41.expert_shared_count" => 1,
+        "deepseek41.expert_weights_scale" => 1.5,
+        "deepseek41.expert_weights_norm" => true,
+        "deepseek41.swiglu_clamp_exp" => 10.0,
+        "deepseek41.swiglu_clamp_shexp" => 10.0,
+        "deepseek41.ple.layers" => [1, 4],
+        "deepseek41.ple.ngram_size" => 3,
+        "deepseek41.ple.heads_per_ngram" => 2,
+        "deepseek41.embedding_length_per_layer" => 4,
+        "deepseek41.ple.layer_multipliers" => UInt64[23703573157769, 20109073645365, 8052911324071,
+            1000003, 999983, 1000033],
+        "deepseek41.ple.head_offsets" => [0, 10, 20, 30, 40, 50, 60, 70],
+        "deepseek41.ple.head_vocab_sizes" => [10, 10, 10, 10, 10, 10, 10, 10],
+        "deepseek41.engram.pad_token_id" => 0,
+        "deepseek41.engram.token_map" => [i % 10 for i in 0:(vocab - 1)],
+    )
+end

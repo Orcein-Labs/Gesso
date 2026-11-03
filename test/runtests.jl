@@ -168,6 +168,9 @@ using Gesso: reference_prefill, reference_generate
     # random toy model, the QSA context refusal; the real-GGUF run against the
     # llama.cpp dump is gated on GESSO_QWEN4EXP_GGUF (skips without it)
     include("test_qwen4exp.jl")
+    # deepseek41 (DeepSeek-V4.1-Flash): metadata reader and spec on a synthetic header,
+    # bad metadata refused; the real-GGUF llama.cpp check is gated on GESSO_DSV41_GGUF
+    include("test_deepseek41.jl")
     include("test_lfm25.jl")
     include("test_lfm_unified.jl")
     include("test_lfm_chat.jl")

@@ -3256,6 +3256,7 @@ include("lfm2_chat.jl")
 include("gemma4_chat.jl")
 include("spark_chat.jl")
 include("qwen4exp.jl")              # Flash-Next (qwen4exp) CPU forward
+include("deepseek41.jl")             # DeepSeek-V4.1-Flash (text) CPU forward
 include("import_report.jl")      # Passes I/J: report + generated matrix
 
 end # module Inference
