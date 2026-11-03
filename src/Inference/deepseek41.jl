@@ -56,7 +56,7 @@ struct Deepseek41Config
     ple_mult::Vector{UInt64}  # per Engram module, ngram values
     ple_off::Vector{Int}      # per Engram module and head
     ple_voc::Vector{Int}      # per Engram module and head (bucket count)
-    engram_pad::Int           # engram.pad_token_id, a compressed id
+    engram_pad::Int           # raw engram.pad_token_id; mapped through token_map before use
     token_map::Vector{Int}    # engram.token_map: token id -> compressed id
     vocab::Int
 end
@@ -250,4 +250,96 @@ function _spec_from_gguf_deepseek41(kv::AbstractDict, tensor_names)
         rms_norm_eps=cfg.eps,
         moe=nothing,
     )
+end
+
+# ------------------------------------------------------------------ weights
+
+"""
+    Deepseek41Model
+
+The config plus a lazy tensor store, as in `Qwen4expModel`. GGUF tensors are
+mapped on first use: 1-D tensors as flat Float32, 3-D tensors (experts and the
+per-group `attn_output_a`) as `GgufQuantSlice` banks, the router, hyper-
+connection mixers and Engram gate as dense (out, in) matrices, and other 2-D
+weights as `QuantMatrix`. A model built from a `Dict` of dense arrays uses the
+same names and layouts, with 3-D banks as (n_bank, out, in) arrays.
+
+Tensors the text forward never reads (the DSpark / MTP draft head, vision
+experts) are indexed but never mapped, so their presence does not fail a load.
+"""
+struct Deepseek41Model
+    cfg::Deepseek41Config
+    index::Dict{String, Tuple{Any, GgufTensorInfo}}
+    cache::Dict{String, Any}
+end
+
+Deepseek41Model(cfg::Deepseek41Config, tensors::AbstractDict) =
+    Deepseek41Model(cfg, Dict{String, Tuple{Any, GgufTensorInfo}}(), Dict{String, Any}(tensors))
+
+# Tensors multiplied as dense Float32 matrices whatever their storage type.
+_ds41_dense(name::AbstractString) =
+    endswith(name, "ffn_gate_inp.weight") || endswith(name, "hc_attn_fn.weight") ||
+    endswith(name, "hc_ffn_fn.weight") || endswith(name, "engram_gate.weight") ||
+    endswith(name, "indexer.proj.weight")
+
+function _ds41_load(m::Deepseek41Model, name::String)
+    haskey(m.index, name) || error("deepseek41: no tensor $name")
+    h, t = m.index[name]
+    nd = length(t.dims)
+    nd == 1 && return _dequant_f32(h.data, Int(h.data_start) + Int(t.offset), t.ggml_type, prod(t.dims))
+    nd == 3 && return _expert_slice(h, t)
+    (t.ggml_type == GGML_TYPE_F32 || _ds41_dense(name)) && return _gguf_array(h, t)
+    return _quant_matrix(h, t)
+end
+
+_ds41_w(m::Deepseek41Model, name::String) = get!(() -> _ds41_load(m, name), m.cache, name)
+
+# x (T, in) -> (T, out)
+_ds41_mm(W::AbstractMatrix, x::AbstractMatrix) = Matrix{Float32}(x * transpose(W))
+
+function _ds41_mm(W::QuantMatrix, x::AbstractMatrix)
+    y = zeros(Float32, size(x, 1), W.nrows)
+    xf = Matrix{Float32}(x)
+    _quant_half(W.ggml_type) ? _half_matmul!(y, xf, W) : _quant_matmul!(y, xf, W)
+    return y
+end
+
+_ds41_mm(m::Deepseek41Model, x::AbstractMatrix, name::String) = _ds41_mm(_ds41_w(m, name), x)
+
+# Rows of an embedding table for 0-based ids, (length(ids), width).
+_ds41_rows(W::AbstractMatrix, ids) = Matrix{Float32}(W[ids .+ 1, :])
+
+function _ds41_rows(W::QuantMatrix, ids)
+    out = zeros(Float32, length(ids), W.ne0)
+    _quant_embedding_rows!(out, W, ids)
+    return out
+end
+
+# y = W[e, :, :] * x for one bank member.
+_ds41_bank_mv!(y::AbstractVector{Float32}, x::AbstractVector{Float32}, W::GgufQuantSlice, e::Int) =
+    _qgemv_expert!(y, x, W, e; alpha=1.0f0, beta=0.0f0)
+
+function _ds41_bank_mv!(y::AbstractVector{Float32}, x::AbstractVector{Float32},
+                        W::AbstractArray{<:Any, 3}, e::Int)
+    y .= Float32.(@views(W[e, :, :]) * x)
+    return y
+end
+
+"""
+    load_deepseek41(path) -> Deepseek41Model
+
+Open a DeepSeek-V4.1 GGUF. `path` may be any shard of a `-0000N-of-0000M.gguf`
+split; every sibling is read so that tensors spread over the shards resolve.
+"""
+function load_deepseek41(path::AbstractString)
+    m = match(r"^(.*)-(\d{5})-of-(\d{5})\.gguf$", path)
+    files = m === nothing ? [path] :
+        [string(m[1], "-", lpad(i, 5, '0'), "-of-", m[3], ".gguf") for i in 1:parse(Int, m[3])]
+    hdrs = [gguf_header(f) for f in files]
+    cfg = deepseek41_config(hdrs[1].kv)
+    index = Dict{String, Tuple{Any, GgufTensorInfo}}()
+    for h in hdrs, t in h.tensors
+        index[t.name] = (h, t)
+    end
+    return Deepseek41Model(cfg, index, Dict{String, Any}())
 end
