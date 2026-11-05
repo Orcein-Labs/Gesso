@@ -228,6 +228,10 @@ function Gesso.Inference._check_device_storage(op::Symbol, backend::LavaBackend,
     t isa Gesso.ExpertWeight &&
         t.storage isa Gesso.Inference.GgufQuantSlice &&
         return nothing
+    # Untied GGUF embedding tables stay on the host (_lava_host_quant_embed!).
+    t isa Gesso.EmbeddingTable &&
+        t.storage isa Gesso.Inference.QuantMatrix &&
+        return nothing
     return _lava_device_storage!(op, t)
 end
 
@@ -300,6 +304,35 @@ function _lava_embedding_lookup!(dst, table, tokens)
     dst.storage .= tab[tok, :]
     a.enabled && _lava_note_op!(:embed, time_ns() - t0)
     return dst
+end
+
+# Untied GGUF embedding: the table stays as quant bytes on the host and only the
+# looked-up rows are dequantized and uploaded. Device F32 would be vocab x dim x 4
+# bytes (4 GB on Ornith 9B, more than the 8 GB card can spare next to the weights).
+function _lava_host_quant_embed!(dst, table, tokens)
+    a = _LAVA_DECODE_AUDIT
+    t0 = a.enabled ? time_ns() : UInt64(0)
+    Gesso._validate_embedding_inputs(dst, table, tokens)
+    q = table.storage
+    host = Matrix{Float32}(undef, length(tokens), q.ne0)
+    Gesso.Inference._quant_embedding_rows!(host, q, tokens)
+    staged = _lava_upload(Float32, host)
+    dst.storage .= staged
+    Lava.unsafe_free!(staged)
+    a.enabled && _lava_note_op!(:embed, time_ns() - t0)
+    return dst
+end
+
+function _lava_embed_dispatch!(dst, table, tokens, workload)
+    _lava_device_storage!(:embedding_lookup!, dst)
+    r = if table.storage isa Gesso.Inference.QuantMatrix
+        _lava_host_quant_embed!(dst, table, tokens)
+    else
+        _lava_device_storage!(:embedding_lookup!, table)
+        _lava_embedding_lookup!(dst, table, tokens)
+    end
+    _lava_after_op!(workload)
+    return r
 end
 
 # Float32 RMS rows use the CPU contract: round each square in Float32, sum
@@ -927,11 +960,7 @@ function embedding_lookup!(
     tokens::AbstractVector{Int},
     workload::Gesso.PrefillWorkload,
 )
-    _lava_device_storage!(:embedding_lookup!, dst)
-    _lava_device_storage!(:embedding_lookup!, table)
-    r = _lava_embedding_lookup!(dst, table, tokens)
-    _lava_after_op!(workload)
-    return r
+    return _lava_embed_dispatch!(dst, table, tokens, workload)
 end
 
 function embedding_lookup!(
@@ -941,11 +970,7 @@ function embedding_lookup!(
     tokens::AbstractVector{Int},
     workload::Gesso.DecodeWorkload,
 )
-    _lava_device_storage!(:embedding_lookup!, dst)
-    _lava_device_storage!(:embedding_lookup!, table)
-    r = _lava_embedding_lookup!(dst, table, tokens)
-    _lava_after_op!(workload)
-    return r
+    return _lava_embed_dispatch!(dst, table, tokens, workload)
 end
 
 function rmsnorm!(
@@ -1564,11 +1589,14 @@ function _lava_to_device(tensors)
             _host_expert_key(k) && _host_expert_t(t) ? t : _conv_t(t; proj=true)
         end,
     )
-    embedding = _conv_t(tensors.embedding)
+    # An untied GGUF embedding is a row-gather table only: it stays as host
+    # quant bytes. A tied one is also the head, so it goes to the device.
+    tied = tensors.lm_head === tensors.embedding
+    embedding =
+        !tied && tensors.embedding.storage isa Gesso.Inference.QuantMatrix ?
+        tensors.embedding : _conv_t(tensors.embedding)
     blocks = [_conv_blk(b) for b in tensors.blocks]
-    lm_head =
-        tensors.lm_head === tensors.embedding ? embedding :
-        _conv_t(tensors.lm_head; proj=true)
+    lm_head = tied ? embedding : _conv_t(tensors.lm_head; proj=true)
     fr = haskey(tensors, :final_rms) ? tensors.final_rms : nothing
     final_rms = fr === nothing ? nothing : _conv_t(fr)
     if used[] > budget
