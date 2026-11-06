@@ -711,22 +711,39 @@ struct _MoePrefillCombine{S <: MoePrefillScratch, M <: AbstractMatrix{Float32}, 
     nc::Int
 end
 
+# Tokens per combine tile. Y is seq x h, so a token's row is strided; each tile
+# sums its tokens into the chunk's contiguous h x tile buffer, then writes Y one
+# h index at a time, a tile of consecutive tokens per write.
+const _MOE_COMBINE_TILE = 16
+
 function (g::_MoePrefillCombine)(c::Int)
     s = g.s
+    h = s.h
     t0 = div((c - 1) * g.seq, g.nc) + 1
     t1 = div(c * g.seq, g.nc)
-    @inbounds for t in t0:t1
-        for i in 1:s.h
-            g.Y[t, i] = 0.0f0
-        end
-        g.live[t] || continue
-        for k in 1:g.n_used
-            _moe_on_cpu(g.cpu, g.experts[k, t]) || continue
-            w = g.weights[k, t]
-            p = (t - 1) * g.n_used + k
-            for i in 1:s.h
-                g.Y[t, i] += w * s.dn[i, p]
+    acc = s.cbuf[c]
+    # The loop below runs @inbounds; one check here turns a caller that skipped
+    # _moe_prefill_bufs! into a BoundsError instead of heap corruption.
+    checkbounds(acc, h * _MOE_COMBINE_TILE)
+    @inbounds for a0 in t0:_MOE_COMBINE_TILE:t1
+        a1 = min(t1, a0 + _MOE_COMBINE_TILE - 1)
+        for t in a0:a1
+            o = (t - a0) * h
+            for i in 1:h
+                acc[o+i] = 0.0f0
             end
+            g.live[t] || continue
+            for k in 1:g.n_used
+                _moe_on_cpu(g.cpu, g.experts[k, t]) || continue
+                w = g.weights[k, t]
+                p = (t - 1) * g.n_used + k
+                for i in 1:h
+                    acc[o+i] += w * s.dn[i, p]
+                end
+            end
+        end
+        for i in 1:h, t in a0:a1
+            g.Y[t, i] = acc[(t-a0)*h+i]
         end
     end
     return nothing
@@ -811,6 +828,7 @@ function _moe_prefill_run!(
         nc = clamp(cnc, 1, tot)
         _run_row_chunks!(_MoePrefillDown(s, down_s, nc, simd, multi, packed), nc, tot * ff)
     end
+    _moe_prefill_bufs!(s, tnc, h * _MOE_COMBINE_TILE)
     _run_row_chunks!(
         _MoePrefillCombine(s, Y, experts, weights, cpu, live, seq, n_used, tnc),
         tnc,
