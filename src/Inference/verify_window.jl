@@ -131,6 +131,26 @@ _win_load!(dst::AbstractArray, src::AbstractMatrix, t::Int) =
 _win_store!(dst::AbstractMatrix, t::Int, src::AbstractArray) =
     (copyto!(view(dst, t, :), vec(src)); dst)
 
+# R[:, t] = W[t, :] for t in `rows`. One strided column copy per row touches a new
+# cache line of W for every element, so the rows go in 16-row blocks over
+# 64-column tiles: each W line read serves 16 rows. A plain copy, so the values
+# are the per-row copy's.
+function _window_transpose_rows!(R::AbstractMatrix, W::AbstractMatrix, rows::UnitRange{Int})
+    n = size(W, 2)
+    @inbounds for t0 in first(rows):16:last(rows)
+        t1 = min(last(rows), t0 + 15)
+        for c0 in 1:64:n
+            c1 = min(n, c0 + 63)
+            for t in t0:t1
+                @simd for c in c0:c1
+                    R[c, t] = W[t, c]
+                end
+            end
+        end
+    end
+    return R
+end
+
 # The quantized weight behind a projection, or `nothing` for a dense weight.
 _window_quant(w) =
     hasfield(typeof(w), :storage) && getfield(w, :storage) isa QuantMatrix ?
@@ -233,10 +253,8 @@ end
 function _window_gdn_rows!(rec, W, conv_in, bt, spec, sc, bufs, cpu, wl, zeros_like, ksz::Int)
     T = size(W.mixed, 1)
     _window_split_rows!(T) do rows
-        for t in rows
-            copyto!(view(rec.mixed, :, t), view(W.mixed, t, :))
-            copyto!(view(rec.z, :, t), view(W.zc, t, :))
-        end
+        _window_transpose_rows!(rec.mixed, W.mixed, rows)
+        _window_transpose_rows!(rec.z, W.zc, rows)
     end
     A_log = bt.wgdn_A_log.storage::Vector{Float32}
     dt_bias = bt.wgdn_dt_bias.storage::Vector{Float32}
