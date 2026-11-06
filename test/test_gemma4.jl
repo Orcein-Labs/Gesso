@@ -125,6 +125,7 @@ end
         @test_throws Gesso.LoweringNotImplemented _gemma4_inf._gemma4_parallel_moe_ffn!(be, h_dummy, bt, 1e-6)
         @test_throws Gesso.LoweringNotImplemented _gemma4_inf._gemma4_layer_output_scale!(be, zeros(Float32, 1, 32), Float32[1.0])
         @test_throws Gesso.LoweringNotImplemented _gemma4_inf._apply_rope_neox!(be, zeros(Float32, 1, 16), 0:0, 2, 8, 8, [1.0, 0.5, 0.25, 0.125])
+        @test_throws Gesso.LoweringNotImplemented _gemma4_inf._g4_norm_rope!(be, zeros(Float32, 1, 16), 2, 8, nothing, 1e-6, 0:0, 8, [1.0, 0.5, 0.25, 0.125])
     end
 end
 
@@ -384,6 +385,18 @@ end
     R = _gemma4_inf._apply_rope_neox!(Gesso.CPUBackend(), copy(X), positions, nh, hd, hd, inv_freq)
     @test R == by_row(t -> _gemma4_inf._apply_rope_neox!(Gesso.CPUBackend(), X[t:t, :], positions[t:t], nh, hd, hd, inv_freq))
     @test R != X
+
+    # Fused norm + RoPE: same bits as the two passes, chunked or by row, for
+    # full and partial rotary.
+    for n_rot in (hd, hd ÷ 2)
+        f_inv = inv_freq[1:(n_rot ÷ 2)]
+        two = _gemma4_inf._apply_rope_neox!(Gesso.CPUBackend(),
+            _gemma4_inf._g4_head_norm!(copy(X), nh, hd, wh, eps), positions, nh, hd, n_rot, f_inv)
+        F = _gemma4_inf._g4_norm_rope!(Gesso.CPUBackend(), copy(X), nh, hd, wh, eps, positions, n_rot, f_inv)
+        @test F == two
+        @test F == by_row(t -> _gemma4_inf._g4_norm_rope!(Gesso.CPUBackend(), X[t:t, :], nh, hd, wh, eps, positions[t:t], n_rot, f_inv))
+        @test F != _gemma4_inf._g4_norm_rope!(Gesso.CPUBackend(), copy(X), nh, hd, wh, eps, positions .+ 1, n_rot, f_inv)
+    end
 
     r = randn(rng, Float32, n_exp, nh * hd)
     scale = 0.5f0 .+ rand(rng, Float32, n_exp)

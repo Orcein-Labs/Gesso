@@ -351,21 +351,86 @@ function _apply_rope_neox!(backend, A::AbstractMatrix{Float32}, positions, nhead
 end
 
 function _g4_rope_rows!(A, positions, nheads::Int, hd::Int, n_rot::Int, inv_freq::Vector{Float64}, rows::UnitRange{Int})
+    length(rows) == 1 && return _g4_rope_row!(A, positions, nheads, hd, n_rot, inv_freq, first(rows))
+    c, s = _g4_rope_table(positions, n_rot, inv_freq, rows)
+    for h in 1:nheads
+        _g4_rope_head!(A, c, s, (h - 1) * hd, n_rot ÷ 2, rows)
+    end
+    return A
+end
+
+# One row (decode): no table, the angles go straight to registers.
+function _g4_rope_row!(A, positions, nheads::Int, hd::Int, n_rot::Int, inv_freq::Vector{Float64}, t::Int)
     half = n_rot ÷ 2
-    @inbounds for t in rows
-        pos = Float64(positions[t])
-        for i in 1:half
-            theta = pos * inv_freq[i]
-            c = Float32(cos(theta))
-            s = Float32(sin(theta))
-            for h in 1:nheads
-                o = (h - 1) * hd
-                x0 = A[t, o + i]
-                x1 = A[t, o + i + half]
-                A[t, o + i] = x0 * c - x1 * s
-                A[t, o + i + half] = x0 * s + x1 * c
-            end
+    pos = Float64(positions[t])
+    @inbounds for i in 1:half
+        theta = pos * inv_freq[i]
+        c = Float32(cos(theta))
+        s = Float32(sin(theta))
+        for h in 1:nheads
+            o = (h - 1) * hd
+            x0 = A[t, o + i]
+            x1 = A[t, o + i + half]
+            A[t, o + i] = x0 * c - x1 * s
+            A[t, o + i + half] = x0 * s + x1 * c
         end
+    end
+    return A
+end
+
+# cos and sin of pos * inv_freq[i] for each row of `rows`, (row, i).
+function _g4_rope_table(positions, n_rot::Int, inv_freq::Vector{Float64}, rows::UnitRange{Int})
+    half = n_rot ÷ 2
+    c = Matrix{Float32}(undef, length(rows), half)
+    s = similar(c)
+    r0 = first(rows) - 1
+    @inbounds for i in 1:half, t in rows
+        theta = Float64(positions[t]) * inv_freq[i]
+        c[t - r0, i] = Float32(cos(theta))
+        s[t - r0, i] = Float32(sin(theta))
+    end
+    return c, s
+end
+
+# Rotates the head at column offset o down each column of the row block. A
+# matrix is (rows, cols), so walking a row instead strides a whole column per
+# element and a 32-row block of a 4096-wide Q spills L2.
+function _g4_rope_head!(A, c::Matrix{Float32}, s::Matrix{Float32}, o::Int, half::Int, rows::UnitRange{Int})
+    r0 = first(rows) - 1
+    @inbounds for i in 1:half, t in rows
+        k = t - r0
+        x0 = A[t, o + i]
+        x1 = A[t, o + i + half]
+        A[t, o + i] = x0 * c[k, i] - x1 * s[k, i]
+        A[t, o + i + half] = x0 * s[k, i] + x1 * c[k, i]
+    end
+    return A
+end
+
+# Per-head RMSNorm then NeoX RoPE in one pass, one head at a time so its columns
+# are still in cache when they rotate. Every element gets the arithmetic of
+# _g4_head_norm! followed by _apply_rope_neox!.
+_g4_norm_rope!(backend, A::AbstractMatrix{Float32}, nheads::Int, hd::Int, w::FrozenParameter, eps::Real, positions, n_rot::Int, inv_freq::Vector{Float64}) =
+    _g4_norm_rope!(backend, A, nheads, hd, w.storage, eps, positions, n_rot, inv_freq)
+
+function _g4_norm_rope!(backend, A::AbstractMatrix{Float32}, nheads::Int, hd::Int, w_vec, eps::Real, positions, n_rot::Int, inv_freq::Vector{Float64})
+    backend_name(backend) === :cpu || throw(LoweringNotImplemented(:rope_freq_factors, backend_name(backend)))
+    eps_f = Float32(eps)
+    _g4_rows!(size(A, 1)) do rows
+        if length(rows) == 1
+            for h in 1:nheads
+                _g4_rmsnorm_block!(A, A, w_vec, eps_f, (h - 1) * hd, hd, rows)
+            end
+            _g4_rope_row!(A, positions, nheads, hd, n_rot, inv_freq, first(rows))
+            return nothing
+        end
+        c, s = _g4_rope_table(positions, n_rot, inv_freq, rows)
+        for h in 1:nheads
+            o = (h - 1) * hd
+            _g4_rmsnorm_block!(A, A, w_vec, eps_f, o, hd, rows)
+            _g4_rope_head!(A, c, s, o, n_rot ÷ 2, rows)
+        end
+        return nothing
     end
     return A
 end
@@ -727,13 +792,10 @@ function _gemma4_prefill_block!(backend, h, bt, tensors, positions, wl, eps, zer
     end
 
     # Q/K/V norms and RoPE
-    _g4_head_norm!(Q, nh, hd, bt.wq_norm, eps_f)
-    _g4_head_norm!(K, nkv, hd, bt.wk_norm, eps_f)
-    _gemma4_v_norm!(backend, V, eps_f; nheads=nkv, hd=hd)
-
     n_rot = bt.rope_layer.rotary_dim == 0 ? hd : bt.rope_layer.rotary_dim
-    _apply_rope_neox!(backend, Q, positions, nh, hd, n_rot, bt.rope_layer.inv_freq)
-    _apply_rope_neox!(backend, K, positions, nkv, hd, n_rot, bt.rope_layer.inv_freq)
+    _g4_norm_rope!(backend, Q, nh, hd, bt.wq_norm, eps_f, positions, n_rot, bt.rope_layer.inv_freq)
+    _g4_norm_rope!(backend, K, nkv, hd, bt.wk_norm, eps_f, positions, n_rot, bt.rope_layer.inv_freq)
+    _gemma4_v_norm!(backend, V, eps_f; nheads=nkv, hd=hd)
 
     # Causal attention with scale 1.0 over this pass's own rows
     O = _g4_mat!(scratch, :O, N, qdim)
@@ -794,14 +856,11 @@ function _gemma4_generate_block!(backend, hp, kc_layer, vc_layer, bt, tensors, s
 
         # Q/K/V norms and RoPE
         @decode_sub :attn_headnorm_rope nothing begin
-            _g4_head_norm!(Q, nh, hd, bt.wq_norm, eps_f)
-            _g4_head_norm!(K, nkv, hd, bt.wk_norm, eps_f)
-            _gemma4_v_norm!(backend, V, eps_f; nheads=nkv, hd=hd)
-
             n_rot = bt.rope_layer.rotary_dim == 0 ? hd : bt.rope_layer.rotary_dim
             positions = (s0 - 1):(s1 - 1)
-            _apply_rope_neox!(backend, Q, positions, nh, hd, n_rot, bt.rope_layer.inv_freq)
-            _apply_rope_neox!(backend, K, positions, nkv, hd, n_rot, bt.rope_layer.inv_freq)
+            _g4_norm_rope!(backend, Q, nh, hd, bt.wq_norm, eps_f, positions, n_rot, bt.rope_layer.inv_freq)
+            _g4_norm_rope!(backend, K, nkv, hd, bt.wk_norm, eps_f, positions, n_rot, bt.rope_layer.inv_freq)
+            _gemma4_v_norm!(backend, V, eps_f; nheads=nkv, hd=hd)
         end
 
         # Write K and V into per-layer KV cache for rows s0:s1. A quantized cache

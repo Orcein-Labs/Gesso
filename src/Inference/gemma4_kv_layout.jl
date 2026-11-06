@@ -91,8 +91,16 @@ function _g4_kv_write!(dst::Union{G4KeyTiles, G4ValBlocks}, src::AbstractMatrix{
         throw(BoundsError(dst, (row0 + N - 1, nkv, hd)))
     d = dst.data
     m = _g4_map(dst)
-    @inbounds for h in 1:nkv, j in 1:hd, t in 1:N
-        d[1 + _g4_off(m, row0 + t - 1, h, j)] = src[t, (h - 1) * hd + j]
+    # Columns (h, j) write disjoint elements, so the pool splits them; a decode
+    # row stays below one chunk and runs inline.
+    _g4_rows!(nkv * hd, max(1, cld(_G4_ELEMS_PER_CHUNK, N))) do cols
+        @inbounds for col in cols
+            h = (col - 1) ÷ hd + 1
+            j = col - (h - 1) * hd
+            for t in 1:N
+                d[1 + _g4_off(m, row0 + t - 1, h, j)] = src[t, col]
+            end
+        end
     end
     return dst
 end
