@@ -611,15 +611,26 @@ struct _PrefillActMem
     mo::Memory{Int16}
 end
 
+# Per-token stride, in elements, of the qs, xp and mo fields: an odd multiple
+# of 256 bytes. A tile reads its tokens' rows in lockstep, four cache lines per
+# block each. At ne0 = 4096 or 8192 unpadded rows sit a multiple of 4 KiB
+# apart, so every token falls in the same L1 sets and the Q6_K tile (xp and mo)
+# ran at half speed; an odd multiple of 256 bytes gives each of 16 tokens its
+# own four sets.
+function _act_stride(n::Int, ::Type{T}) where {T}
+    u = cld(n * sizeof(T), 256)
+    return (u + iseven(u)) * 256 ÷ sizeof(T)
+end
+
 # Element counts of the d, qs, bsums, xp and mo fields.
 function _prefill_act_sizes(q80::Bool, seq::Int, ne0::Int, prep::Bool)
     nd = q80 ? ne0 ÷ 32 : ne0 ÷ QK_K
     return (
         seq * nd,
-        seq * ne0,
+        seq * _act_stride(ne0, Int8),
         q80 ? 0 : seq * (ne0 ÷ 16),
-        prep ? seq * ne0 : 0,
-        prep ? seq * (ne0 >> 1) : 0,
+        prep ? seq * _act_stride(ne0, Int8) : 0,
+        prep ? seq * _act_stride(ne0 >> 1, Int16) : 0,
     )
 end
 
@@ -782,18 +793,22 @@ function _prefill_quantize_rest!(
     return xqs
 end
 
-# Elements (t-1)n+1 to tn of m, as a Vector sharing m's storage.
-_act_slice(m::Memory, t::Int, n::Int) = Base.wrap(Array, memoryref(m, (t - 1) * n + 1), n)
+# Token t's n elements of m, whose tokens are stride elements apart, as a
+# Vector sharing m's storage.
+_act_slice(m::Memory, t::Int, n::Int, stride::Int=n) =
+    Base.wrap(Array, memoryref(m, (t - 1) * stride + 1), n)
+
+_act_row(m::Memory{T}, t::Int, n::Int) where {T} = _act_slice(m, t, n, _act_stride(n, T))
 
 _prefill_act(::Type{Q80Vec}, m::_PrefillActMem, t::Int, ne0::Int) =
-    Q80Vec(_act_slice(m.d, t, ne0 ÷ 32), _act_slice(m.qs, t, ne0))
+    Q80Vec(_act_slice(m.d, t, ne0 ÷ 32), _act_row(m.qs, t, ne0))
 _prefill_act(::Type{Q8KVec}, m::_PrefillActMem, t::Int, ne0::Int) = Q8KVec(
     _act_slice(m.d, t, ne0 ÷ QK_K),
-    _act_slice(m.qs, t, ne0),
+    _act_row(m.qs, t, ne0),
     _act_slice(m.bsums, t, ne0 ÷ 16),
 )
 _prefill_prep(y::Q8KVec, m::_PrefillActMem, t::Int, ne0::Int) =
-    _q6k_prep!(Q6KPrepVec(y.d, y, _act_slice(m.xp, t, ne0), _act_slice(m.mo, t, ne0 >> 1)))
+    _q6k_prep!(Q6KPrepVec(y.d, y, _act_row(m.xp, t, ne0), _act_row(m.mo, t, ne0 >> 1)))
 _prefill_block_values(::Type{Q80Vec}) = 32
 _prefill_block_values(::Type{Q8KVec}) = QK_K
 _prefill_quantize_block!(y::Q80Vec, ib, buf, o) = _quantize_q8_0_block!(y, ib, buf, o)
