@@ -234,6 +234,26 @@ end
     @test any(rows_q[i] != rows_f[i] for i in eachindex(rows_f, rows_q))
 end
 
+# A prefill split into passes shares one scratch, so each pass must rebuild the
+# RoPE table for its own positions. Chunks of 3 over 11 tokens give three passes
+# of the same length, which a table keyed on length alone would reuse.
+@testset "Gemma4: chunked prefill matches one pass" begin
+    spec = _gemma4_inf.spec_from_gguf_kv(_gemma4_toy_kv_wide())
+    model, tensors = _gemma4_bind(spec, _gemma4_toy(spec))
+    prompt = [3, 7, 1, 12, 5, 9, 2, 4, 8, 6, 11]
+    gen(chunk) = withenv("GESSO_PREFILL_CHUNK" => chunk) do
+        cap = _Gemma4Capture(Vector{Float32}[])
+        ids = Gesso.reference_generate(model, tensors, prompt;
+            max_new_tokens=4, sampler=cap, eos_ids=(), eps=spec.rms_norm_eps)
+        return ids, cap.rows
+    end
+    ids_1, rows_1 = gen("0")
+    ids_3, rows_3 = gen("3")
+    @test ids_3 == ids_1
+    @test length(rows_3) == length(rows_1) == 4
+    @test all(isapprox(rows_3[k], rows_1[k]; atol=2e-5, rtol=2e-5) for k in eachindex(rows_1))
+end
+
 # -----------------------------------------------------------------------------
 # Testset 4: Local GGUF metadata and geometry (env-gated)
 # -----------------------------------------------------------------------------
