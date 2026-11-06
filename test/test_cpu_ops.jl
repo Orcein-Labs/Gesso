@@ -338,7 +338,10 @@ end
 @testset "tiled rmsnorm, rope table and pooled head copies are bit-exact" begin
     rng = Xoshiro(0x51ce)
     for xs in (randn(rng, Float32, 512, 8, 256), randn(rng, Float32, 37, 3, 256),
-               randn(rng, Float32, 517, 2048), randn(rng, Float32, 16, 64))
+               randn(rng, Float32, 517, 2048), randn(rng, Float32, 16, 64),
+               # pp512 hidden norm (16-row blocks per thread), and a row count
+               # whose last block is a partial tile under the thread-sized split
+               randn(rng, Float32, 512, 2048), randn(rng, Float32, 203, 2048))
         nd = ndims(xs)
         ss = randn(rng, Float32, size(xs, nd))
         stail = reshape(ss, (ntuple(_ -> 1, nd - 1)..., size(xs, nd)))

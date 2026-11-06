@@ -135,9 +135,14 @@ function _cpu_rmsnorm_storage!(
     if nd >= 2 && L > 1 && xs isa Array && dsts isa Array && size(dsts) == size(xs)
         X, D = reshape(xs, L, d), reshape(dsts, L, d)
         if _cpu_rows_threaded(xs, L)
-            _cpu_split_rows!(cld(L, _CPU_LEAD_BLOCK)) do bs
-                lo = (first(bs) - 1) * _CPU_LEAD_BLOCK + 1
-                _cpu_rmsnorm_lead!(D, X, ss, eps, d, lo:min(last(bs) * _CPU_LEAD_BLOCK, L))
+            # A block per thread when 64-row blocks would leave threads idle
+            # (pp512 on 16 threads made 8). Blocks stay whole tiles, so the
+            # same rows take the tile path and the tail; the bits don't move.
+            blk = clamp(cld(cld(L, Threads.nthreads()), _CPU_NORM_TILE) * _CPU_NORM_TILE,
+                _CPU_NORM_TILE, _CPU_LEAD_BLOCK)
+            _cpu_split_rows!(cld(L, blk)) do bs
+                lo = (first(bs) - 1) * blk + 1
+                _cpu_rmsnorm_lead!(D, X, ss, eps, d, lo:min(last(bs) * blk, L))
             end
         else
             _cpu_rmsnorm_lead!(D, X, ss, eps, d, 1:L)
