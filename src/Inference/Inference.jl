@@ -1506,6 +1506,31 @@ function _split_heads!(
     return dst_storage
 end
 
+# Prefill-sized CPU Arrays: the same element copy, split over (head, feature)
+# columns on the CPU pool with t innermost. A copy is exact, so the values are
+# the broadcast's. Small (decode) copies and aliased arguments keep the broadcast.
+_heads_copy_pooled(a::Array, b::Array) =
+    Threads.nthreads() > 1 && length(a) >= 1 << 18 && !Base.mightalias(a, b)
+
+function _split_heads!(dst_storage::Array{<:Any,3}, src_storage::Matrix, n_heads, d_head)
+    _heads_copy_pooled(dst_storage, src_storage) &&
+        size(dst_storage) == (size(src_storage, 1), n_heads, d_head) &&
+        size(src_storage, 2) >= n_heads * d_head ||
+        return invoke(_split_heads!, Tuple{AbstractArray,AbstractArray,Any,Any},
+            dst_storage, src_storage, n_heads, d_head)
+    T = size(src_storage, 1)
+    _cpu_split_rows!(n_heads * d_head) do cols
+        for c in cols
+            hh = (c - 1) ÷ d_head + 1
+            f = c - (hh - 1) * d_head
+            @inbounds @simd for t in 1:T
+                dst_storage[t, hh, f] = src_storage[t, c]
+            end
+        end
+    end
+    return dst_storage
+end
+
 _split_heads!(dst::Activation, src::Activation, n_heads, d_head) =
     _split_heads!(dst.storage, src.storage, n_heads, d_head)
 
@@ -1517,6 +1542,25 @@ function _merge_heads!(
 )
     for hh in 1:n_heads
         @views dst_storage[:, ((hh-1)*d_head+1):(hh*d_head)] .= src_storage[:, hh, :]
+    end
+    return dst_storage
+end
+
+function _merge_heads!(dst_storage::Matrix, src_storage::Array{<:Any,3}, n_heads, d_head)
+    _heads_copy_pooled(dst_storage, src_storage) &&
+        size(src_storage) == (size(dst_storage, 1), n_heads, d_head) &&
+        size(dst_storage, 2) >= n_heads * d_head ||
+        return invoke(_merge_heads!, Tuple{AbstractArray,AbstractArray,Any,Any},
+            dst_storage, src_storage, n_heads, d_head)
+    T = size(dst_storage, 1)
+    _cpu_split_rows!(n_heads * d_head) do cols
+        for c in cols
+            hh = (c - 1) ÷ d_head + 1
+            f = c - (hh - 1) * d_head
+            @inbounds @simd for t in 1:T
+                dst_storage[t, c] = src_storage[t, hh, f]
+            end
+        end
     end
     return dst_storage
 end

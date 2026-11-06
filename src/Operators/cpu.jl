@@ -170,29 +170,72 @@ const _CPU_LEAD_BLOCK = 64
 # Here a block of rows walks each feature column together. Every row keeps its
 # own left fold over the features in the same order, so each value matches the
 # row loop bit for bit. X and D are (rows, d) views of the same memory layout.
+#
+# Full 16-row tiles copy the rows into a contiguous tile on the summing pass and
+# scale from the tile. X's feature columns sit a power-of-two stride apart
+# (T * n_heads for the per-head norm), so re-reading X missed cache on every
+# column; the tile also gives the j loops a constant trip count, so they
+# vectorize. A partial tail (and decode's few rows) keeps the plain loop.
+const _CPU_NORM_TILE = 16
+
 function _cpu_rmsnorm_lead!(D, X, ss, eps, d, rows)
     acc = Vector{Float64}(undef, _CPU_LEAD_BLOCK)
-    for lo in first(rows):_CPU_LEAD_BLOCK:last(rows)
+    lo = first(rows)
+    if length(rows) >= _CPU_NORM_TILE
+        buf = Matrix{eltype(X)}(undef, _CPU_NORM_TILE, d)
+        while lo + _CPU_NORM_TILE - 1 <= last(rows)
+            _cpu_rmsnorm_tile!(D, X, ss, eps, d, lo, buf, acc)
+            lo += _CPU_NORM_TILE
+        end
+    end
+    lo <= last(rows) || return nothing
+    for lo in lo:_CPU_LEAD_BLOCK:last(rows)
         n = min(_CPU_LEAD_BLOCK, last(rows) - lo + 1)
         fill!(acc, 0.0)
         for f in 1:d, j in 1:n
             @inbounds acc[j] += abs2(X[lo+j-1, f])
         end
         for j in 1:n
-            r = sqrt(acc[j] / d + eps)
-            isfinite(r) && r > 0 || throw(
-                gesso_error(
-                    ERR_NUMERICAL_INSTABILITY,
-                    "rmsnorm!: nonfinite normalization denominator",
-                ),
-            )
-            acc[j] = r
+            acc[j] = _cpu_rms_denominator(acc[j], d, eps)
         end
         for f in 1:d
             s = ss[f]
             for j in 1:n
                 @inbounds D[lo+j-1, f] = (X[lo+j-1, f] / acc[j]) * s
             end
+        end
+    end
+    return nothing
+end
+
+function _cpu_rms_denominator(acc, d, eps)
+    r = sqrt(acc / d + eps)
+    isfinite(r) && r > 0 || throw(
+        gesso_error(ERR_NUMERICAL_INSTABILITY, "rmsnorm!: nonfinite normalization denominator"),
+    )
+    return r
+end
+
+# Rows lo:lo+15. The j lanes are independent rows, and each row's fold over f
+# keeps its order, so `ivdep` changes no value.
+function _cpu_rmsnorm_tile!(D, X, ss, eps, d, lo, buf, acc)
+    @inbounds for j in 1:_CPU_NORM_TILE
+        acc[j] = 0.0
+    end
+    @inbounds for f in 1:d
+        @simd ivdep for j in 1:_CPU_NORM_TILE
+            x = X[lo+j-1, f]
+            buf[j, f] = x
+            acc[j] += abs2(x)
+        end
+    end
+    for j in 1:_CPU_NORM_TILE
+        @inbounds acc[j] = _cpu_rms_denominator(acc[j], d, eps)
+    end
+    @inbounds for f in 1:d
+        s = ss[f]
+        @simd ivdep for j in 1:_CPU_NORM_TILE
+            D[lo+j-1, f] = (buf[j, f] / acc[j]) * s
         end
     end
     return nothing
@@ -232,19 +275,15 @@ function _cpu_rope_storage!(
     tθ,
     inv_freq,
     interleaved::Bool=true,
-    rotary_dim::Int=0,
+    rotary_dim::Int=0;
+    table=nothing,
 )
     T = size(storage, 1)
     if storage isa Array && ndims(storage) == 3 && T > 1
-        if _cpu_rows_threaded(storage, T)
-            _cpu_split_rows!(cld(T, _CPU_LEAD_BLOCK)) do bs
-                lo = (first(bs) - 1) * _CPU_LEAD_BLOCK + 1
-                rows = lo:min(last(bs) * _CPU_LEAD_BLOCK, T)
-                _cpu_rope_lead!(storage, positions, tθ, inv_freq, interleaved, rotary_dim, rows)
-            end
-        else
-            _cpu_rope_lead!(storage, positions, tθ, inv_freq, interleaved, rotary_dim, 1:T)
-        end
+        rd = rotary_dim == 0 ? size(storage, 3) : rotary_dim
+        cs, sn = table === nothing ?
+            _cpu_rope_table(storage, positions, tθ, inv_freq, rd) : table
+        _cpu_rope_apply!(storage, cs, sn, interleaved, rd)
     elseif _cpu_rows_threaded(storage, size(storage, 1))
         _cpu_split_rows!(size(storage, 1)) do rows
             _cpu_rope_rows!(storage, positions, tθ, inv_freq, interleaved, rotary_dim, rows)
@@ -285,30 +324,54 @@ function _cpu_rope_rows!(storage, positions, tθ, inv_freq, interleaved, rotary_
     return nothing
 end
 
-# `_cpu_rope_rows!` with the row index innermost, for the same cache reason as
-# `_cpu_rmsnorm_lead!`. Each (t, i) angle, c and s come from the same
-# expression as the row loop, and every element gets the same update.
-function _cpu_rope_lead!(storage, positions, tθ, inv_freq, interleaved, rotary_dim, rows)
-    d = size(storage, 3)                    # d_head, even by contract
-    rd = rotary_dim == 0 ? d : rotary_dim
-    cs = Vector{Float64}(undef, _CPU_LEAD_BLOCK)
-    sn = Vector{Float64}(undef, _CPU_LEAD_BLOCK)
-    for lo in first(rows):_CPU_LEAD_BLOCK:last(rows)
-        n = min(_CPU_LEAD_BLOCK, last(rows) - lo + 1)
-        for i in 0:(rd÷2-1)
-            for j in 1:n
-                m = Float64(positions[lo+j-1])  # 0-based position
-                θ = inv_freq === nothing ? m * tθ^(-2i / rd) : m * inv_freq[i+1]
-                cs[j], sn[j] = cos(θ), sin(θ)
-            end
-            a, b = interleaved ? (2i + 1, 2i + 2) : (i + 1, i + 1 + rd ÷ 2)
-            for h in axes(storage, 2), j in 1:n
-                t = lo + j - 1
-                @inbounds x1, x2 = storage[t, h, a], storage[t, h, b]
-                @inbounds storage[t, h, a] = x1 * cs[j] - x2 * sn[j]
-                @inbounds storage[t, h, b] = x1 * sn[j] + x2 * cs[j]
+# Prefill RoPE for a 3-D Array. The (position, pair) angle table is built once
+# (and shared by Q and K through `table`): w = tθ^(-2i/rd) per pair, then
+# θ = m * w, which is the same product the row loop forms, so cos and sin are the
+# same values. The rotation then runs over (pair, head) columns with t innermost.
+function _cpu_rope_table(storage, positions, tθ, inv_freq, rd)
+    T = size(storage, 1)
+    np = rd ÷ 2
+    cs = Matrix{Float64}(undef, T, np)
+    sn = Matrix{Float64}(undef, T, np)
+    fill_pairs! = pairs -> begin
+        for p in pairs
+            i = p - 1
+            w = inv_freq === nothing ? tθ^(-2i / rd) : inv_freq[i+1]
+            @inbounds for t in 1:T
+                θ = Float64(positions[t]) * w
+                cs[t, p] = cos(θ)
+                sn[t, p] = sin(θ)
             end
         end
+    end
+    if _cpu_rows_threaded(storage, T) && np > 1
+        _cpu_split_rows!(fill_pairs!, np)
+    else
+        fill_pairs!(1:np)
+    end
+    return cs, sn
+end
+
+function _cpu_rope_apply!(storage, cs, sn, interleaved, rd)
+    T, nh = size(storage, 1), size(storage, 2)
+    np = rd ÷ 2
+    apply_cols! = cols -> begin
+        for c in cols
+            i = (c - 1) ÷ nh
+            h = c - i * nh
+            a, b = interleaved ? (2i + 1, 2i + 2) : (i + 1, i + 1 + np)
+            @inbounds @simd ivdep for t in 1:T
+                x1, x2 = storage[t, h, a], storage[t, h, b]
+                c_, s_ = cs[t, i+1], sn[t, i+1]
+                storage[t, h, a] = x1 * c_ - x2 * s_
+                storage[t, h, b] = x1 * s_ + x2 * c_
+            end
+        end
+    end
+    if _cpu_rows_threaded(storage, T)
+        _cpu_split_rows!(apply_cols!, np * nh)
+    else
+        apply_cols!(1:(np*nh))
     end
     return nothing
 end
@@ -496,8 +559,14 @@ function _cpu_rope!(
     # noticed because the counts are equal). Q is rotated first, then K, as
     # before.
     rd = Int(rotary_dim)
-    _cpu_rope_storage!(q.storage, positions, tθ, inv_freq, interleaved, rd)
-    _cpu_rope_storage!(k.storage, positions, tθ, inv_freq, interleaved, rd)
+    qs, ks = q.storage, k.storage
+    table = if qs isa Array && ks isa Array && ndims(qs) == 3 && size(qs, 1) > 1
+        _cpu_rope_table(qs, positions, tθ, inv_freq, rd == 0 ? size(qs, 3) : rd)
+    else
+        nothing
+    end
+    _cpu_rope_storage!(qs, positions, tθ, inv_freq, interleaved, rd; table)
+    _cpu_rope_storage!(ks, positions, tθ, inv_freq, interleaved, rd; table)
     return q
 end
 

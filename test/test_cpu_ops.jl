@@ -294,3 +294,60 @@ end
     end
     @test err isa Gesso.GessoError && err.code == Gesso.ERR_NUMERICAL_INSTABILITY
 end
+
+# Qwen3.5-like per-head shapes: (T, heads, d_head) with T * heads * d_head past
+# the threading cut, plus a row count that leaves a partial 16-row tile. The
+# tiled rmsnorm, the shared RoPE table and the pooled head copies must equal the
+# plain loops bit for bit.
+@testset "tiled rmsnorm, rope table and pooled head copies are bit-exact" begin
+    rng = Xoshiro(0x51ce)
+    for xs in (randn(rng, Float32, 512, 8, 256), randn(rng, Float32, 37, 3, 256),
+               randn(rng, Float32, 517, 2048), randn(rng, Float32, 16, 64))
+        nd = ndims(xs)
+        ss = randn(rng, Float32, size(xs, nd))
+        stail = reshape(ss, (ntuple(_ -> 1, nd - 1)..., size(xs, nd)))
+        ref = similar(xs)
+        Gesso._cpu_rmsnorm_rows!(ref, xs, stail, 1e-6, size(xs, nd),
+            CartesianIndices(size(xs)[1:(nd-1)]))
+        got = Gesso._cpu_rmsnorm_storage!(similar(xs), xs, ss, 1e-6)
+        @test reinterpret(UInt32, got) == reinterpret(UInt32, ref)
+    end
+    for row in (5, 515)   # inside a full tile, inside the partial tail
+        bad = randn(rng, Float32, 517, 2048)
+        bad[row, 9] = Inf32
+        err = try
+            Gesso._cpu_rmsnorm_storage!(similar(bad), bad, ones(Float32, 2048), 1e-6)
+            nothing
+        catch e
+            e
+        end
+        @test err isa Gesso.GessoError && err.code == Gesso.ERR_NUMERICAL_INSTABILITY
+    end
+    positions = collect(0:511) .+ 3
+    for (inv_freq, interleaved, rd, θ) in ((nothing, false, 64, 1e7), (nothing, true, 0, 1e4),
+                                          (rand(rng, 32), false, 64, 1e7))
+        q = randn(rng, Float32, 512, 8, 256)
+        k = randn(rng, Float32, 512, 2, 256)
+        table = Gesso._cpu_rope_table(q, positions, θ, inv_freq, rd == 0 ? 256 : rd)
+        for x in (q, k)
+            ref = copy(x)
+            Gesso._cpu_rope_rows!(ref, positions, θ, inv_freq, interleaved, rd, axes(ref, 1))
+            got = Gesso._cpu_rope_storage!(copy(x), positions, θ, inv_freq, interleaved, rd; table)
+            @test reinterpret(UInt32, got) == reinterpret(UInt32, ref)
+            own = Gesso._cpu_rope_storage!(copy(x), positions, θ, inv_freq, interleaved, rd)
+            @test reinterpret(UInt32, own) == reinterpret(UInt32, ref)
+        end
+    end
+    generic = Tuple{AbstractArray,AbstractArray,Any,Any}
+    for (T, nh, dh) in ((512, 8, 256), (512, 2, 256), (3, 8, 256))
+        src = randn(rng, Float32, T, nh * dh)
+        ref = zeros(Float32, T, nh, dh)
+        invoke(Gesso.Inference._split_heads!, generic, ref, src, nh, dh)
+        got = Gesso.Inference._split_heads!(zeros(Float32, T, nh, dh), src, nh, dh)
+        @test got == ref
+        back = zeros(Float32, T, nh * dh)
+        invoke(Gesso.Inference._merge_heads!, generic, back, ref, nh, dh)
+        mgot = Gesso.Inference._merge_heads!(zeros(Float32, T, nh * dh), ref, nh, dh)
+        @test mgot == back == src
+    end
+end
