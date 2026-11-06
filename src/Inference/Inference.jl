@@ -425,7 +425,22 @@ function _causal_conv1d_silu!(backend, dst, x, weight, conv_state)
     return _cpu_causal_conv1d_silu!(dst, x, weight, conv_state)
 end
 
+# dst = src .* sigmoid(gate), elementwise. Prefill-sized arrays split contiguous
+# ranges over the shared CPU pool; each element is the same product either way.
+# Decode-sized ones keep the plain loop. Qwen3.5-2B pp512 on 16 threads: prefill
+# 2.271 -> 2.215 s, same ids.
 function _sigmoid_mul!(backend, dst, src, gate)
+    n = length(dst)
+    if dst isa Array && src isa Array && gate isa Array && Threads.nthreads() > 1 &&
+       n >= 1 << 18 && length(src) == n && length(gate) == n
+        nc = Threads.nthreads()
+        _pool_run_chunks!(nc) do c
+            lo = div((c - 1) * n, nc) + 1
+            hi = div(c * n, nc)
+            _cpu_sigmoid_mul!(view(dst, lo:hi), view(src, lo:hi), view(gate, lo:hi))
+        end
+        return dst
+    end
     return _cpu_sigmoid_mul!(dst, src, gate)
 end
 
