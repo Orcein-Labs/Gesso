@@ -222,8 +222,48 @@ end
 
 _multi_d_base(p::_MultiPacked, t0::Int, K::Int, nb::Int) = _multi_d_base(p.d, t0, K, nb)
 
+# A d table plus the Q4_K / Q5_K mins table. Per tile i and block ib, the mins
+# table keeps 64 Int16 at 64 * (nb * i + ib): lane 16p + 2c + h holds column c's
+# pair sum B = bsums[16ib + 2s + 1] + bsums[16ib + 2s + 2] of sub-block
+# s = 2p + h, at most 2 * 16 * 128 in size, zero past the last column. Against
+# the block's mins, one vpmaddwd per sub-block pair then gives all eight
+# columns' mins dots in column order, so the min term and the float epilogue
+# run as one vector op instead of a phadd tree and K scalar chains.
+struct _MultiQ45K
+    d::Vector{Float32}
+    m::Vector{Int16}
+end
+
+_multi_q45k_tables(xqs::AbstractVector) =
+    _MultiQ45K(_multi_d_table(xqs), _multi_mins_table!(Int16[], xqs))
+
+function _multi_mins_table!(mt::Vector{Int16}, xqs::AbstractVector)
+    T = _MULTI_TILE
+    T == 8 || error("q8k multi: the mins table is laid out for tiles of 8")
+    nb = length(xqs[1].d)
+    fill!(resize!(mt, 64 * nb * cld(length(xqs), T)), Int16(0))
+    @inbounds for t in eachindex(xqs)
+        i, c = divrem(t - 1, T)
+        bsm = _q45k_src(xqs[t]).bsums
+        length(bsm) == 16 * nb ||
+            error("q8k multi: column $t has $(length(bsm)) bsums, not $(16 * nb)")
+        for ib in 0:(nb-1), s in 0:7
+            mt[64*(nb*i+ib)+16*(s>>1)+2c+(s&1)+1] = bsm[16ib+2s+1] + bsm[16ib+2s+2]
+        end
+    end
+    return mt
+end
+
+function _multi_d_base(p::_MultiQ45K, t0::Int, K::Int, nb::Int)
+    i0 = _multi_d_base(p.d, t0, K, nb)
+    length(p.m) == 8 * length(p.d) ||
+        error("q8k multi: the mins table does not match the d table")
+    return i0
+end
+
 # The plain d table, for kernels that do not read the packed quants.
 _multi_d_only(p::_MultiPacked) = p.d
+_multi_d_only(p::_MultiQ45K) = p.d
 _multi_d_only(dt) = dt
 
 # dw * d for each tile column at block ib: the same products either way.
@@ -1457,13 +1497,20 @@ const _Q45K_SPLAT = UInt8[
     nb == 0 && return _multi_zero!(out, t0, K)
     i0 = _multi_d_base(dt, t0, K, nb)
     prep = Val(T === Q6KPrepVec)
-    GC.@preserve w xqs begin
+    GC.@preserve w xqs dt begin
         xv = ntuple(c -> xqs[t0+c-1], Val(K))
         # The column pointers, taken once: per block, the arrays' data pointers
         # were reloaded from memory, sixteen loads a block at K = 8.
         px = ntuple(c -> _q45k_xptr(xv[c], 0), Val(K))
-        pbs = ntuple(c -> pointer(_q45k_src(xv[c]).bsums), Val(K))
-        tot = _q45k_multi_row(w, woff, xv, px, pbs, nb, dt, i0, q5, prep)
+        tot = if dt isa _MultiQ45K
+            # i0 floats into d is 8 * i0 Int16 into m.
+            pdt = pointer(dt.d) + 4 * i0
+            pmt = pointer(dt.m) + 16 * i0
+            _q45k_multi_row_tab(w, woff, px, pdt, pmt, nb, q5, prep)
+        else
+            pbs = ntuple(c -> pointer(_q45k_src(xv[c]).bsums), Val(K))
+            _q45k_multi_row(w, woff, xv, px, pbs, nb, _multi_d_only(dt), i0, q5, prep)
+        end
         for c in 1:K
             out[t0+c-1] = tot[c].value
         end
@@ -1503,6 +1550,114 @@ end
         sumf = ntuple(c -> sf[c] - dmin[c] * Float32(md[c].value), Val(K))
     end
     return _multi_totals(sums, sumf)
+end
+
+# The block epilogue on the mins table (see _MultiQ45K), all eight tile lanes:
+# sf - (mw * dt[c]) * Float32(md[c]), md[c] the pmaddwd sum of the table's four
+# rows against the zero-extended mins. The same IEEE ops, unfused, as the scalar
+# chains of _q45k_multi_row, so each lane is bit-equal to them; the pmaddwd
+# lanes are at most 2 * 4096 * 63 and their sum fits Int32. Padding columns
+# have d and B zero.
+const _KQ_IR_Q45K_EPI = string(
+    "declare <8 x i32> @llvm.x86.avx2.pmadd.wd(<16 x i16>, <16 x i16>)\n",
+    "define <8 x float> @entry(ptr %t, i64 %m, ptr %dt, float %minw, <8 x float> %sf) #0 {\n",
+    "  %mv = insertelement <2 x i64> poison, i64 %m, i64 0\n",
+    "  %mb = bitcast <2 x i64> %mv to <16 x i8>\n",
+    "  %m8 = shufflevector <16 x i8> %mb, <16 x i8> poison, <8 x i32> <i32 0, i32 1, i32 2, i32 3, i32 4, i32 5, i32 6, i32 7>\n",
+    "  %mz = zext <8 x i8> %m8 to <8 x i16>\n",
+    "  %md = bitcast <8 x i16> %mz to <4 x i32>\n",
+    join((
+        string(
+            "  %b$p = shufflevector <4 x i32> %md, <4 x i32> poison, <8 x i32> <$(join(("i32 $p" for _ in 1:8), ", "))>\n",
+            "  %s$p = bitcast <8 x i32> %b$p to <16 x i16>\n",
+            "  %q$p = getelementptr inbounds i8, ptr %t, i64 $(32p)\n",
+            "  %v$p = load <16 x i16>, ptr %q$p, align 2\n",
+            "  %r$p = call <8 x i32> @llvm.x86.avx2.pmadd.wd(<16 x i16> %v$p, <16 x i16> %s$p)\n",
+        ) for p in 0:3
+    )),
+    "  %a0 = add <8 x i32> %r0, %r1\n",
+    "  %a1 = add <8 x i32> %r2, %r3\n",
+    "  %a = add <8 x i32> %a0, %a1\n",
+    "  %mdf = sitofp <8 x i32> %a to <8 x float>\n",
+    "  %dv = load <8 x float>, ptr %dt, align 4\n",
+    "  %w0 = insertelement <8 x float> poison, float %minw, i64 0\n",
+    "  %wv = shufflevector <8 x float> %w0, <8 x float> poison, <8 x i32> zeroinitializer\n",
+    "  %dmin = fmul <8 x float> %wv, %dv\n",
+    "  %p = fmul <8 x float> %dmin, %mdf\n",
+    "  %r = fsub <8 x float> %sf, %p\n",
+    "  ret <8 x float> %r\n}\n",
+    _KQ_ATTRS,
+)
+
+const _V8F = NTuple{8, VecElement{Float32}}
+
+@inline _q45k_mins_epi(pt::Ptr{Int16}, m::UInt64, pd::Ptr{Float32}, mw::Float32, sf::_V8F) =
+    @x86_llvmcall(
+        (_KQ_IR_Q45K_EPI, "entry"),
+        _V8F,
+        Tuple{Ptr{Int16}, UInt64, Ptr{Float32}, Float32, _V8F},
+        pt,
+        m,
+        pd,
+        mw,
+        sf,
+    )
+
+# The step's d lanes from a tile row of the d table: lane i = dw * dt[i >> 3],
+# the products _multi_q6k_scales(_multi_tile_d(...)) repeats, from one load.
+function _kq_ir_tile_d_lanes(K::Int)
+    idx = join(("i32 $(i >> 3)" for i in 0:(8K-1)), ", ")
+    return string(
+        "define <$(8K) x float> @entry(ptr %dt, float %dw) #0 {\n",
+        "  %dv = load <8 x float>, ptr %dt, align 4\n",
+        "  %w0 = insertelement <8 x float> poison, float %dw, i64 0\n",
+        "  %wv = shufflevector <8 x float> %w0, <8 x float> poison, <8 x i32> zeroinitializer\n",
+        "  %d = fmul <8 x float> %wv, %dv\n",
+        "  %r = shufflevector <8 x float> %d, <8 x float> poison, <$(8K) x i32> <$idx>\n",
+        "  ret <$(8K) x float> %r\n}\n",
+        _KQ_ATTRS,
+    )
+end
+
+for K in 1:8
+    @eval @inline _multi_tile_d_lanes(pd::Ptr{Float32}, dw::Float32, ::Val{$K}) = @simd_llvmcall(
+        ($(_kq_ir_tile_d_lanes(K)), "entry"),
+        NTuple{$(8K), VecElement{Float32}},
+        Tuple{Ptr{Float32}, Float32},
+        pd,
+        dw,
+    )
+end
+
+# _q45k_multi_row on a _MultiQ45K: pdt and pmt point at the tile's rows of the
+# d and mins tables. Bit-equal to it column for column.
+@inline function _q45k_multi_row_tab(
+    w::AbstractVector{UInt8},
+    woff::Int,
+    px::NTuple{K, Ptr{Int8}},
+    pdt::Ptr{Float32},
+    pmt::Ptr{Int16},
+    nb::Int,
+    q5::Val{Q5},
+    prep::Val,
+) where {K, Q5}
+    bs = Q5 ? 176 : 144
+    sums = ntuple(_ -> VecElement(0.0f0), Val(8K))
+    sumf = ntuple(_ -> VecElement(0.0f0), Val(8))
+    pm = pointer(_Q45K_SPLAT)
+    @inbounds for ib in 0:(nb-1)
+        b = woff + ib * bs
+        dw, mw = _kq_f16x2(w, b)
+        pdb = pdt + 32 * ib
+        d = _multi_tile_d_lanes(pdb, dw, Val(K))
+        sc, mn = _kq_scale_min_k4_words(w, b + 4)
+        pq = ntuple(c -> px[c] + ib * QK_K, Val(K))
+        sums = _q45k_multi_step(pointer(w, b + 1), pq, sc, pm, sums, d, q5, prep)
+        sumf = _q45k_mins_epi(pmt + 128 * ib, mn, pdb, mw, sumf)
+    end
+    # A fresh binding: the closure would box the loop's sumf.
+    sv = sumf
+    return _multi_totals(sums, ntuple(c -> sv[c].value, Val(K)))
 end
 
 # ---------------------------------------------------------------- Q3_K
@@ -2628,8 +2783,8 @@ function _dot_q8k_multi_kernel!(
     ggml_type == GGML_TYPE_IQ1_M && return _dot_iq1m_multi!(out, w, woff, xqs, t0, v)
     ggml_type == GGML_TYPE_Q2_K && return _dot_q2k_multi!(out, w, woff, xqs, t0, v)
     ggml_type == GGML_TYPE_Q3_K && return _dot_q3k_multi!(out, w, woff, xqs, t0, v, d)
-    ggml_type == GGML_TYPE_Q4_K && return _dot_q45k_multi!(out, w, woff, xqs, t0, v, Val(false), d)
-    ggml_type == GGML_TYPE_Q5_K && return _dot_q45k_multi!(out, w, woff, xqs, t0, v, Val(true), d)
+    ggml_type == GGML_TYPE_Q4_K && return _dot_q45k_multi!(out, w, woff, xqs, t0, v, Val(false), dt)
+    ggml_type == GGML_TYPE_Q5_K && return _dot_q45k_multi!(out, w, woff, xqs, t0, v, Val(true), dt)
     ggml_type == GGML_TYPE_Q6_K && return _dot_q6k_multi!(out, w, woff, xqs, t0, v, d)
     ggml_type == GGML_TYPE_Q8_0 && return _dot_q80_multi!(out, w, woff, xqs, t0, v, dt)
     ggml_type == GGML_TYPE_Q4_0 && return _dot_q40_multi!(out, w, woff, xqs, t0, v, dt)
@@ -2750,6 +2905,8 @@ the kernels of the `_multi_dt_type` types each tile's d values as one load; with
 start one of the table's tiles and `ntile` be at most `_MULTI_TILE`.
 For the `_multi_pack_type` types, `dt` may be `_multi_packed(xqs)`: the d table plus
 the tiles' quants interleaved, so that a block reads every column from one pointer.
+For Q4_K and Q5_K, `dt` may be `_multi_q45k_tables(xqs)`: the d table plus the
+columns' bsums pair sums, so that a block's min term is one vector op.
 """
 function _dot_q8k_multi!(
     out::AbstractVector{Float32},

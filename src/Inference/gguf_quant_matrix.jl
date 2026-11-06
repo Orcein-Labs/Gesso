@@ -717,12 +717,15 @@ mutable struct _MultiScratch
     q::Vector{Int8}
     s::Vector{Float32}
     out::Vector{Float32}
+    m::Vector{Int16}
     xqs::Any        # the activation set the tables were built from
     dtab::Bool      # d holds its d table
     packed::Bool    # q and s hold its packed quants
+    mtab::Bool      # m holds its Q4_K / Q5_K mins table
 end
 
-_MultiScratch() = _MultiScratch(Float32[], Int8[], Float32[], Float32[], nothing, false, false)
+_MultiScratch() =
+    _MultiScratch(Float32[], Int8[], Float32[], Float32[], Int16[], nothing, false, false, false)
 
 const _MULTI_SCRATCH_POOL = _MultiScratch[]
 const _MULTI_SCRATCH_LOCK = ReentrantLock()
@@ -738,8 +741,9 @@ end
 
 function _multi_scratch_release(sc::_MultiScratch)
     sc.xqs = nothing
-    sc.dtab = sc.packed = false
-    sizeof(sc.d) + sizeof(sc.q) + sizeof(sc.s) + sizeof(sc.out) > _MULTI_SCRATCH_POOL_BYTES &&
+    sc.dtab = sc.packed = sc.mtab = false
+    sizeof(sc.d) + sizeof(sc.q) + sizeof(sc.s) + sizeof(sc.out) + sizeof(sc.m) >
+    _MULTI_SCRATCH_POOL_BYTES &&
         return
     lock(_MULTI_SCRATCH_LOCK) do
         length(_MULTI_SCRATCH_POOL) < _MULTI_SCRATCH_POOL_MAX && push!(_MULTI_SCRATCH_POOL, sc)
@@ -753,7 +757,7 @@ function _multi_tables!(sc::_MultiScratch, xqs, ggml_type::Int32, simd::Bool)
     (simd && _multi_dt_type(ggml_type)) || return nothing
     if sc.xqs !== xqs
         sc.xqs = xqs
-        sc.dtab = sc.packed = false
+        sc.dtab = sc.packed = sc.mtab = false
     end
     if _multi_pack_type(ggml_type)
         if !sc.packed
@@ -765,6 +769,13 @@ function _multi_tables!(sc::_MultiScratch, xqs, ggml_type::Int32, simd::Bool)
     if !sc.dtab
         _multi_d_table!(sc.d, xqs)
         sc.dtab = true
+    end
+    if ggml_type == GGML_TYPE_Q4_K || ggml_type == GGML_TYPE_Q5_K
+        if !sc.mtab
+            _multi_mins_table!(sc.m, xqs)
+            sc.mtab = true
+        end
+        return _MultiQ45K(sc.d, sc.m)
     end
     return sc.d
 end
@@ -784,8 +795,9 @@ function _quant_matmul_multi!(
     nc = _qgemv_nchunks(q.nrows)
     # The tiles of the K-quants, Q8_0, Q4_0, IQ4_NL, Q5_1 and IQ2_XS read their
     # columns' d values from one table; all but the K-quants also read their
-    # columns' quants interleaved, one pointer per tile.
-    dt = _multi_tables!(sc, xqs, q.ggml_type, simd)
+    # columns' quants interleaved, one pointer per tile, and Q4_K / Q5_K also
+    # read their columns' bsums pair sums from a mins table.
+    dt =_multi_tables!(sc, xqs, q.ggml_type, simd)
     length(sc.out) < nc * seq && resize!(sc.out, nc * seq)
     chunk = _PrefillChunk(
         dst, _quant_bytes(q), xqs, dt, sc.out, q.ggml_type, q.ne0, q.nrows, nc, simd,

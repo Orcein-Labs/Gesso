@@ -89,7 +89,8 @@ _mq_acts(rng, ne0::Int, n::Int, ggml_type::Int32=_MQ.GGML_TYPE_Q4_K) =
 # Checks every column of a tile of `ntile` activations starting at t0 against
 # the single-column kernel, for both simd modes, on the rows of w. Q4_K, Q5_K,
 # Q6_K, Q8_0, Q4_0, IQ4_NL and IQ2_XS tiles that start a d-table tile are also
-# checked through the table, and all but the K-quants through the packed table.
+# checked through the table, all but the K-quants through the packed table, and
+# Q4_K and Q5_K through the mins table.
 _mq_uses_table(ggml_type::Int32, t0::Int, ntile::Int) =
     _MQ._multi_dt_type(ggml_type) &&
     (t0 - 1) % _MQ._MULTI_TILE == 0 &&
@@ -104,6 +105,9 @@ function _mq_check_tiles(ggml_type::Int32, w, nrows::Int, rb::Int, xqs, t0::Int,
         ((true, nothing), (false, nothing), (true, dt))
     if _MQ._multi_pack_type(ggml_type) && dt !== nothing
         modes = (modes..., (true, _MQ._multi_packed(xqs)))
+    end
+    if ggml_type in (_MQ.GGML_TYPE_Q4_K, _MQ.GGML_TYPE_Q5_K) && dt !== nothing
+        modes = (modes..., (true, _MQ._multi_q45k_tables(xqs)))
     end
     for (simd, d) in modes, j in 1:nrows
         woff = (j - 1) * rb
@@ -404,6 +408,42 @@ end
     end
 end
 
+@testset "multi-column dot: the Q4_K / Q5_K mins table" begin
+    rng = Xoshiro(0x3175)
+    nb = 3
+    T = _MQ._MULTI_TILE
+    xqs = _mq_acts(rng, 256 * nb, 11, _MQ.GGML_TYPE_Q4_K)
+    # bsums at both ends, so the pair sums reach -4096 and 4064
+    xqs[2].bsums[1:16] .= Int16(-2048)
+    xqs[3].bsums[1:16] .= Int16(2032)
+    p = _MQ._multi_q45k_tables(xqs)
+    @test p.d == _MQ._multi_d_table(xqs)
+    @test length(p.m) == 64 * nb * cld(11, T)
+    ok = true
+    for t in 1:16, ib in 0:(nb-1), s in 0:7
+        i, c = divrem(t - 1, T)
+        v = p.m[64*(nb*i+ib)+16*(s>>1)+2c+(s&1)+1]
+        ok &=
+            t <= 11 ? v === xqs[t].bsums[16ib+2s+1] + xqs[t].bsums[16ib+2s+2] : v === Int16(0)
+    end
+    @test ok
+    @test p.m[3] === Int16(-4096) && p.m[5] === Int16(4064)
+    xps = map(_MQ._q6k_prep, xqs)
+    @test _MQ._multi_q45k_tables(xps).m == p.m
+    # a short mins table is refused
+    for ty in (_MQ.GGML_TYPE_Q4_K, _MQ.GGML_TYPE_Q5_K)
+        rb = _MQ._qrow_bytes(ty, 256 * nb)
+        w = _mq_random_rows(rng, ty, 2, nb)
+        for t0 in 1:T:11
+            @test _mq_check_tiles(ty, w, 2, rb, xqs, t0, min(T, 12 - t0)) == 0
+            @test _mq_check_tiles(ty, w, 2, rb, xps, t0, min(T, 12 - t0)) == 0
+        end
+        out = zeros(Float32, 11)
+        bad = _MQ._MultiQ45K(p.d, p.m[1:(end-1)])
+        @test_throws ErrorException _MQ._dot_q8k_multi!(out, ty, w, 0, xqs, 1, 8, true, bad)
+    end
+end
+
 @testset "multi-column dot: the packed IQ2_XS table" begin
     rng = Xoshiro(0x9ac4)
     nb = 3
@@ -565,6 +605,11 @@ end
             dt = _MQ._multi_d_table(xqs)
             _MQ._dot_q8k_multi!(out, ty, w, 0, xqs, 1, 4, true, dt)
             @test (@allocated _MQ._dot_q8k_multi!(out, ty, w, 0, xqs, 1, 4, true, dt)) == 0
+        end
+        if _mq_uses_table(ty, 1, 4) && ty in (_MQ.GGML_TYPE_Q4_K, _MQ.GGML_TYPE_Q5_K)
+            mt = _MQ._multi_q45k_tables(xqs)
+            _MQ._dot_q8k_multi!(out, ty, w, 0, xqs, 1, 4, true, mt)
+            @test (@allocated _MQ._dot_q8k_multi!(out, ty, w, 0, xqs, 1, 4, true, mt)) == 0
         end
     end
 end
