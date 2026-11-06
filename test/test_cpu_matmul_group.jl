@@ -368,3 +368,46 @@ end
         zeros(Float32, 4, 32, 64), zeros(Float32, 4, 32, 64),
         zeros(Float32, 1, 32, 64), zeros(Float32, 1, 32, 64), 5)
 end
+
+# Random Q8_0 rows: a finite Float16 d at the head of each 34-byte block.
+function _group_random_q80(rng, nrows::Int, ne0::Int)
+    ty = _GI.GGML_TYPE_Q8_0
+    rb = _GI._qrow_bytes(ty, ne0)
+    data = rand(rng, UInt8, nrows * rb)
+    for blk in 0:(nrows*div(rb, 34)-1)
+        bits = reinterpret(UInt16, Float16(0.005f0 + 0.05f0 * rand(rng, Float32)))
+        data[blk*34+1] = UInt8(bits & 0xff)
+        data[blk*34+2] = UInt8(bits >> 8)
+    end
+    return _GI.QuantMatrix(data, 0, ty, ne0, nrows, rb, Int64(32))
+end
+
+# Gemma4 prefill projections (Q/K/V, dense gate/up) quantize x once when every
+# weight takes the same activation; the 26B-A4B Q2_K_XL mixes a Q8_0 attn_k into
+# some layers, where the shared path declines. Either way each output keeps the
+# bits of its own _g4_gemm!.
+@testset "Gemma4 prefill projections share one quantized x" begin
+    rng = Xoshiro(20261105)
+    ne0, seq = 512, 37
+    x = randn(rng, Float32, seq, ne0)
+    q5, q6 = _GI.GGML_TYPE_Q5_K, _GI.GGML_TYPE_Q6_K
+    kq = (_group_random_kq(rng, q5, 48, ne0), _group_random_kq(rng, q6, 16, ne0), _group_random_kq(rng, q6, 16, ne0))
+    mixed = (_group_random_kq(rng, q5, 48, ne0), _group_random_q80(rng, 16, ne0), _group_random_kq(rng, q6, 16, ne0))
+    gu = (_group_random_kq(rng, q5, 40, ne0), _group_random_kq(rng, q5, 40, ne0))
+    zs(ws) = map(w -> zeros(Float32, seq, w.nrows), ws)
+    @test _GI._quant_matmul_shared!(zs(kq), x, kq)
+    @test !_GI._quant_matmul_shared!(zs(mixed), x, mixed)
+    refs = Dict{Any,Any}()
+    for ws in (kq, mixed, gu)
+        dsts = _GI._g4_gemms!(zs(ws), x, ws)
+        refs[ws] = dsts
+        for (d, w) in zip(dsts, ws)
+            ref = _GI._g4_gemm!(zeros(Float32, seq, w.nrows), x, w)
+            @test all(isfinite, ref)
+            @test _bits(d) == _bits(ref)
+        end
+    end
+    # negative control: the shared path over a perturbed x must not match
+    neg = _GI._g4_gemms!(zs(kq), x .* 1.01f0, kq)
+    @test all(_bits(a) != _bits(b) for (a, b) in zip(neg, refs[kq]))
+end

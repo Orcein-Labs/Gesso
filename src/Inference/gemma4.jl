@@ -170,12 +170,15 @@ function _g4_kv_write_row!(dst::Array{Float32,3}, src::AbstractMatrix{Float32}, 
     return dst
 end
 
-# Projections of one input. A decode row with every weight quantized goes
-# through one shared-activation dispatch, bit-identical to one _g4_gemm! each.
+# Projections of one input. With every weight quantized, x is quantized once and
+# shared: a shared gemv for a decode row, a shared multi-row matmul for prefill
+# when the weights agree on activation type. Bit-identical to one _g4_gemm! each.
 function _g4_gemms!(dsts::NTuple{N,AbstractMatrix}, x::AbstractMatrix, ws::NTuple{N,Any}) where {N}
     st = map(_g4_stor, ws)
     if size(x, 1) == 1 && all(w -> w isa QuantMatrix, st)
         _quant_gemv_shared!(dsts, x, st)
+    elseif all(w -> w isa QuantMatrix, st) && _quant_matmul_shared!(dsts, x, st)
+        # Prefill: one quantization of x serves every projection.
     else
         foreach((d, w) -> _g4_gemm!(d, x, w), dsts, ws)
     end
