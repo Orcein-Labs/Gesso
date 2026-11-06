@@ -177,6 +177,22 @@ function _window_matmul!(cpu, dst::AbstractMatrix, x::AbstractMatrix, w, wl, zer
     return dst
 end
 
+# `_window_matmul!` for several weights that read the same `x`. When every weight
+# is native quantized and quantizes `x` alike, `x` is quantized once and each
+# weight runs the same multi path `_window_matmul!` would run alone, so the
+# outputs match one `_window_matmul!` per weight bit for bit.
+function _window_matmul_shared!(cpu, dsts::Tuple, x::AbstractMatrix, ws::Tuple, wl, zeros_like)
+    qs = map(_window_quant, ws)
+    if length(ws) > 1 && all(q -> q !== nothing && _quant_native(q.ggml_type), qs) &&
+       _quant_matmul_shared!(dsts, x, qs)
+        return dsts
+    end
+    for i in eachindex(dsts)
+        _window_matmul!(cpu, dsts[i], x, ws[i], wl, zeros_like)
+    end
+    return dsts
+end
+
 # Runs `f(rows)` over 1:T, split across threads when there is more than one row.
 _window_split_rows!(f, T::Int) =
     Threads.nthreads() > 1 && T > 1 ? _cpu_split_rows!(f, T) : f(1:T)
@@ -412,8 +428,7 @@ function _window_gdn_block!(
     )
     @decode_sub :gdn_norm cpu _window_rmsnorm!(cpu, W.normed, hwin, bufs.hp, bufs.normed, bt.attn_rms, wl; eps)
     @decode_sub :gdn_proj cpu begin
-        _window_matmul!(cpu, W.mixed, W.normed, bt.wgdn_qkv, wl, zeros_like)
-        _window_matmul!(cpu, W.zc, W.normed, bt.wgdn_z, wl, zeros_like)
+        _window_matmul_shared!(cpu, (W.mixed, W.zc), W.normed, (bt.wgdn_qkv, bt.wgdn_z), wl, zeros_like)
     end
 
     @decode_sub :gdn_rows cpu _window_gdn_rows!(rec, W, conv_in, bt, spec, sc, bufs, cpu, wl, zeros_like, ksz)
@@ -473,10 +488,12 @@ function _window_attn_block!(
     gated = haskey(bt, :wattn_gate)
     @decode_sub :attn_proj cpu begin
         _window_rmsnorm!(cpu, W.normed, hwin, bufs.hp, bufs.normed, bt.attn_rms, wl; eps)
-        _window_matmul!(cpu, W.q, W.normed, bt.wq, wl, zeros_like)
-        _window_matmul!(cpu, W.k, W.normed, bt.wk, wl, zeros_like)
-        _window_matmul!(cpu, W.v, W.normed, bt.wv, wl, zeros_like)
-        gated && _window_matmul!(cpu, W.gate, W.normed, bt.wattn_gate, wl, zeros_like)
+        if gated
+            _window_matmul_shared!(cpu, (W.q, W.k, W.v, W.gate), W.normed,
+                (bt.wq, bt.wk, bt.wv, bt.wattn_gate), wl, zeros_like)
+        else
+            _window_matmul_shared!(cpu, (W.q, W.k, W.v), W.normed, (bt.wq, bt.wk, bt.wv), wl, zeros_like)
+        end
     end
 
     if cpu_scratch !== nothing && T > 1 && _window_attn_batch_ok(bt, W, bufs)
@@ -735,8 +752,7 @@ function _window_moe_ffn!(bt, hwin, subT, W, bufs, cpu, wl, zeros_like; eps)
             sg = zeros_like((T, ff))
             su = zeros_like((T, ff))
             sa = zeros_like((T, ff))
-            _window_matmul!(cpu, sg, x, bt.wshared_gate, wl, zeros_like)
-            _window_matmul!(cpu, su, x, bt.wshared_up, wl, zeros_like)
+            _window_matmul_shared!(cpu, (sg, su), x, (bt.wshared_gate, bt.wshared_up), wl, zeros_like)
             swiglu!(
                 cpu,
                 Activation(; shape=(T, ff), storage=sa),
@@ -776,8 +792,7 @@ function _window_dense_ffn!(bt, hwin, subT, W, bufs, cpu, wl, zeros_like; eps)
     _add_storage!(hwin, subT)
     _window_rmsnorm!(cpu, W.normed2, hwin, bufs.hp, bufs.normed2, bt.ffn_rms, wl; eps)
     @decode_sub :ffn_gateup cpu begin
-        _window_matmul!(cpu, W.ffn_gate, W.normed2, bt.wgate, wl, zeros_like)
-        _window_matmul!(cpu, W.ffn_up, W.normed2, bt.wup, wl, zeros_like)
+        _window_matmul_shared!(cpu, (W.ffn_gate, W.ffn_up), W.normed2, (bt.wgate, bt.wup), wl, zeros_like)
     end
     act = Activation(; shape=size(W.ffn_act), storage=W.ffn_act)
     gate = Activation(; shape=size(W.ffn_gate), storage=W.ffn_gate)

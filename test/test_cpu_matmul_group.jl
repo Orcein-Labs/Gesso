@@ -411,3 +411,38 @@ end
     neg = _GI._g4_gemms!(zs(kq), x .* 1.01f0, kq)
     @test all(_bits(a) != _bits(b) for (a, b) in zip(neg, refs[kq]))
 end
+
+# Qwen-style window prefill: projections of one normed x (GDN qkv/z, Q/K/V/gate,
+# FFN gate/up) quantize x once through _window_matmul_shared!, and each output
+# keeps the bits of its own _window_matmul!. A mixed group declines and runs
+# each weight alone.
+@testset "window prefill projections share one quantized x" begin
+    rng = Xoshiro(20261106)
+    ne0, seq = 512, 29
+    x = randn(rng, Float32, seq, ne0)
+    q4, q5, q6 = _GI.GGML_TYPE_Q4_K, _GI.GGML_TYPE_Q5_K, _GI.GGML_TYPE_Q6_K
+    groups = (
+        (_group_random_kq(rng, q4, 64, ne0), _group_random_kq(rng, q4, 32, ne0)),
+        (_group_random_kq(rng, q4, 48, ne0), _group_random_kq(rng, q5, 16, ne0),
+         _group_random_kq(rng, q6, 16, ne0), _group_random_kq(rng, q4, 48, ne0)),
+        (_group_random_kq(rng, q5, 40, ne0), _group_random_q80(rng, 16, ne0)),
+    )
+    zs(qs) = map(q -> zeros(Float32, seq, q.nrows), qs)
+    for qs in groups
+        ws = map(q -> (storage=q,), qs)
+        got = _GI._window_matmul_shared!(nothing, zs(qs), x, ws, nothing, nothing)
+        for (d, w) in zip(got, ws)
+            ref = _GI._window_matmul!(nothing, zeros(Float32, seq, w.storage.nrows), x, w, nothing, nothing)
+            @test all(isfinite, ref)
+            @test _bits(d) == _bits(ref)
+        end
+    end
+    # negative control: a perturbed x through the shared path must not match
+    qs = groups[2]
+    ws = map(q -> (storage=q,), qs)
+    neg = _GI._window_matmul_shared!(nothing, zs(qs), x .* 1.01f0, ws, nothing, nothing)
+    for (d, w) in zip(neg, ws)
+        ref = _GI._window_matmul!(nothing, zeros(Float32, seq, w.storage.nrows), x, w, nothing, nothing)
+        @test _bits(d) != _bits(ref)
+    end
+end
