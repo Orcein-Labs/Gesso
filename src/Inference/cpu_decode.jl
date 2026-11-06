@@ -964,6 +964,8 @@ function _attention_window_cpu!(
 ) where {P}
     T = size(q, 1)
     Kmax = base + T - 1
+    T >= _ATTN_WINDOW_BLOCK_MIN && return _attention_window_blocks_cpu!(
+        attn, q, kc, vc, n_heads, d_head, group, base, P, window)
     nc = min(T * n_heads, Threads.nthreads())
     nc > 1 && T * Kmax * d_head * n_heads < _ATTN_DECODE_POOL_MIN && (nc = 1)
     probs = Vector{P}(undef, nc * Kmax)
@@ -987,5 +989,99 @@ function _attention_window_cpu!(
     else
         f(1)
     end
+    return attn
+end
+
+# Windows of at least this many rows go through the row-block kernels of the
+# full prefill (`_attention_block_heads!`), which read V transposed so each
+# probability scales a contiguous run of outputs. Shorter windows (decode,
+# small drafts) keep the per-(row, head) loop: the transpose costs a pass over
+# the whole cache, which a few rows do not pay back.
+const _ATTN_WINDOW_BLOCK_MIN = 16
+
+# Chunk c takes row blocks c, c + nc, ... of `_ATTN_ROW_BLOCK` rows, every head,
+# with its own score and output buffers. Row t keeps cache rows up to
+# base + t - 1 = Kmax - T + t, which is `_attention_keys(t, T, Kmax, true,
+# window)`, so the block kernels see the same keys as `_AttnWindowChunk`, and
+# they run its arithmetic: scores from zero in eltype P, the Float64-total
+# softmax, outputs from zero adding each kept key in order.
+struct _AttnWindowBlockChunk{A, Q, KC, VT, S, SC, AC}
+    attn::A
+    q::Q
+    kc::KC
+    vt::VT
+    scale::S
+    s::SC
+    acc::AC
+    n_heads::Int
+    d_head::Int
+    group::Int
+    T::Int
+    Kmax::Int
+    window::Int
+    nc::Int
+end
+
+function (g::_AttnWindowBlockChunk)(c::Int)
+    B = _ATTN_ROW_BLOCK
+    P = eltype(eltype(g.s))
+    s = g.s[c]
+    acc = g.acc[c]
+    nfull = g.T ÷ B
+    for blk in c:g.nc:(nfull+g.T%B)
+        if blk > nfull
+            t = B * nfull + (blk - nfull)
+            for hh in 1:g.n_heads
+                _attention_row_head!(
+                    g.attn, g.q, g.kc, g.vt, view(s, :, 1), view(acc, :, 1),
+                    t, hh, cld(hh, g.group), g.d_head, g.T, g.Kmax, g.window, g.scale, P, P,
+                )
+            end
+        else
+            _attention_block_heads!(
+                g.attn, g.q, g.kc, g.vt, s, acc, (blk - 1) * B,
+                g.n_heads, g.group, g.d_head, g.T, g.Kmax, g.window, g.scale, P, P,
+            )
+        end
+    end
+    return nothing
+end
+
+# Chunk c transposes kv heads c, c + nc, ... of cache rows 1:K into `vt`.
+struct _VTransposeChunk{VT, VC}
+    vt::VT
+    vc::VC
+    K::Int
+    d_head::Int
+    nc::Int
+end
+
+function (g::_VTransposeChunk)(c::Int)
+    @inbounds for kh in c:g.nc:size(g.vt, 3), u in 1:g.K, j in 1:g.d_head
+        g.vt[j, u, kh] = g.vc[u, kh, j]
+    end
+    return nothing
+end
+
+function _attention_window_blocks_cpu!(
+    attn, q, kc, vc, n_heads::Int, d_head::Int, group::Int, base::Int, ::Type{P},
+    window::Int,
+) where {P}
+    T = size(q, 1)
+    Kmax = base + T - 1
+    n_kv = size(vc, 2)
+    vt = Array{eltype(vc)}(undef, d_head, Kmax, n_kv)
+    tv = _VTransposeChunk(vt, vc, Kmax, d_head, n_kv)
+    n_kv > 1 ? _pool_run_chunks!(tv, n_kv) : tv(1)
+    B = _ATTN_ROW_BLOCK
+    nc = min(cld(T, B), Threads.nthreads())
+    A = eltype(attn)
+    f = _AttnWindowBlockChunk(
+        attn, q, kc, vt, _attention_score_scale(d_head),
+        [Matrix{P}(undef, Kmax, B) for _ in 1:nc],
+        [Matrix{A}(undef, d_head, B) for _ in 1:nc],
+        n_heads, d_head, group, T, Kmax, window, nc,
+    )
+    nc > 1 ? _pool_run_chunks!(f, nc) : f(1)
     return attn
 end

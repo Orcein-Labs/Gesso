@@ -107,3 +107,31 @@ end
         end
     end
 end
+
+@testset "window row blocks equal decode one row at a time (bit-exact)" begin
+    rng = Xoshiro(20261107)
+    # T 15 stays on the per-row loop; 16 and up take the row blocks, with 0-3
+    # rows past the last full block. The cache has spare rows past Kmax.
+    for (n_heads, n_kv, d) in ((4, 4, 5), (4, 2, 13), (8, 2, 16)), base in (1, 6),
+        T in (15, 16, 17, 19, 34)
+
+        group = div(n_heads, n_kv)
+        Kmax = base + T - 1
+        kc = randn(rng, Float32, Kmax + 3, n_kv, d)
+        vc = randn(rng, Float32, Kmax + 3, n_kv, d)
+        q = randn(rng, Float32, T, n_heads, d) .* 3
+        for window in (0, 3, 20)
+            rows = fill(NaN32, T, n_heads, d)
+            _GI._attention_window_cpu!(rows, q, kc, vc, n_heads, d, group, base, Float32;
+                window)
+            ok = true
+            for t in 1:T
+                one = fill(NaN32, 1, n_heads, d)
+                _GI._attention_decode_cpu!(one, q[t:t, :, :], kc, vc, zeros(Float32, Kmax + 3),
+                    n_heads, d, group, base + t - 1; window)
+                ok &= _adec_bits(rows[t:t, :, :]) == _adec_bits(one)
+            end
+            @test ok
+        end
+    end
+end
