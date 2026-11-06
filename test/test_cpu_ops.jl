@@ -295,6 +295,42 @@ end
     @test err isa Gesso.GessoError && err.code == Gesso.ERR_NUMERICAL_INSTABILITY
 end
 
+# Every thread's scratch slot is filled with NaN between runs: the tiled
+# rmsnorm must overwrite scratch before reading it.
+@testset "f32 scratch slots reuse blocks and stay bit-exact over dirty memory" begin
+    slots = Gesso._CPU_F32_SLOTS
+    foreach(s -> (@atomic s.m = nothing), slots)
+    a = Gesso._cpu_f32_scratch(1000)
+    @test length(a) >= 1000
+    fill!(a, NaN32)
+    Gesso._cpu_f32_scratch_release!(a)
+    b = Gesso._cpu_f32_scratch(900)
+    @test b === a
+    c = Gesso._cpu_f32_scratch(900)   # slot is empty while b is out
+    @test c !== b
+    t = Gesso._cpu_f32_tile(b, 30, 30)
+    @test size(t) == (30, 30) && pointer(t) == pointer(b)
+    Gesso._cpu_f32_scratch_release!(b)
+    Gesso._cpu_f32_scratch_release!(Memory{Float32}(undef, 10))   # smaller: b kept
+    @test Gesso._cpu_f32_scratch(900) === b
+    big = Gesso._cpu_f32_scratch((Gesso._CPU_F32_SCRATCH_BYTES >> 2) + 1)
+    Gesso._cpu_f32_scratch_release!(big)
+    @test all(s -> (@atomic s.m) !== big, slots)
+    rng = Xoshiro(0x9001)
+    xs = randn(rng, Float32, 517, 2048)
+    ss = randn(rng, Float32, 2048)
+    ref = similar(xs)
+    Gesso._cpu_rmsnorm_rows!(ref, xs, reshape(ss, 1, :), 1e-6, 2048, CartesianIndices((517,)))
+    for _ in 1:3
+        foreach(slots) do s
+            m = @atomic s.m
+            m === nothing || fill!(m, NaN32)
+        end
+        got = Gesso._cpu_rmsnorm_storage!(similar(xs), xs, ss, 1e-6)
+        @test reinterpret(UInt32, got) == reinterpret(UInt32, ref)
+    end
+end
+
 # Qwen3.5-like per-head shapes: (T, heads, d_head) with T * heads * d_head past
 # the threading cut, plus a row count that leaves a partial 16-row tile. The
 # tiled rmsnorm, the shared RoPE table and the pooled head copies must equal the

@@ -178,15 +178,59 @@ const _CPU_LEAD_BLOCK = 64
 # vectorize. A partial tail (and decode's few rows) keeps the plain loop.
 const _CPU_NORM_TILE = 16
 
+# Float32 scratch that lives for one call, kept across calls. Prefill asks
+# for tiles once per thread per norm or matmul; fresh ones were ~120 MB of a
+# Qwen3.5-2B pp512's 327 MB of allocations. Each thread id has one slot that
+# holds at most one block of up to _CPU_F32_SCRATCH_BYTES. A call swaps the
+# block out of its slot and swaps it back on release, so no lock is taken:
+# a global locked pool cost ~5% of prefill wall time on 16 threads, because a
+# contended ReentrantLock parks the pool worker. The swap is atomic, so a task
+# that migrated threads, or two tasks sharing an id, can only miss the slot and
+# allocate; they never share a block. Scratch is overwritten before it is read,
+# so which block a call gets changes no value.
+mutable struct _CPUF32Slot
+    @atomic m::Union{Nothing,Memory{Float32}}
+end
+
+const _CPU_F32_SLOTS = [_CPUF32Slot(nothing) for _ in 1:256]
+const _CPU_F32_SCRATCH_BYTES = 1 << 20
+
+_cpu_f32_slot() = @inbounds _CPU_F32_SLOTS[mod1(Threads.threadid(), length(_CPU_F32_SLOTS))]
+
+function _cpu_f32_scratch(n::Int)
+    m = @atomicswap _cpu_f32_slot().m = nothing
+    m !== nothing && length(m) >= n && return m
+    return Memory{Float32}(undef, n)
+end
+
+function _cpu_f32_scratch_release!(m::Memory{Float32})
+    sizeof(m) > _CPU_F32_SCRATCH_BYTES && return nothing
+    slot = _cpu_f32_slot()
+    old = @atomicswap slot.m = m
+    # Keep the larger block if another call filled the slot meanwhile.
+    old !== nothing && length(old) > length(m) && @atomic slot.m = old
+    return nothing
+end
+
+# A rows x cols Matrix over the front of pooled scratch m.
+_cpu_f32_tile(m::Memory{Float32}, rows::Int, cols::Int) =
+    Base.wrap(Array, memoryref(m), (rows, cols))
+
 function _cpu_rmsnorm_lead!(D, X, ss, eps, d, rows)
     acc = Vector{Float64}(undef, _CPU_LEAD_BLOCK)
     lo = first(rows)
     if length(rows) >= _CPU_NORM_TILE
-        buf = Matrix{eltype(X)}(undef, _CPU_NORM_TILE, d)
+        if eltype(X) === Float32
+            m = _cpu_f32_scratch(_CPU_NORM_TILE * d)
+            buf = _cpu_f32_tile(m, _CPU_NORM_TILE, d)
+        else
+            m, buf = nothing, Matrix{eltype(X)}(undef, _CPU_NORM_TILE, d)
+        end
         while lo + _CPU_NORM_TILE - 1 <= last(rows)
             _cpu_rmsnorm_tile!(D, X, ss, eps, d, lo, buf, acc)
             lo += _CPU_NORM_TILE
         end
+        m === nothing || _cpu_f32_scratch_release!(m)
     end
     lo <= last(rows) || return nothing
     for lo in lo:_CPU_LEAD_BLOCK:last(rows)

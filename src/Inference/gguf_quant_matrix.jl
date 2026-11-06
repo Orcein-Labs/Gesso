@@ -609,6 +609,9 @@ struct _PrefillActMem
     bsums::Memory{Int16}
     xp::Memory{Int8}
     mo::Memory{Int16}
+    # Per-token wrappers over the fields, by (vector type, seq, ne0): built once
+    # per pooled buffer instead of five small allocations per token per matmul.
+    views::Dict{Tuple{DataType,Int,Int},Vector}
 end
 
 # Per-token stride, in elements, of the qs, xp and mo fields: an odd multiple
@@ -642,6 +645,7 @@ function _PrefillActMem(q80::Bool, seq::Int, ne0::Int, prep::Bool)
         Memory{Int16}(undef, n[3]),
         Memory{Int8}(undef, n[4]),
         Memory{Int16}(undef, n[5]),
+        Dict{Tuple{DataType,Int,Int},Vector}(),
     )
 end
 
@@ -831,7 +835,32 @@ function _prefill_quantize(
     mem::_PrefillActMem=_PrefillActMem(_q80_act_type(ggml_type), seq, ne0, prep),
 )
     x1 = _prefill_quantize_row(ggml_type, x, 1, Vector{Float32}(undef, ne0), prep)
-    return _prefill_quantize_rest!(fill(x1, seq), ggml_type, x, prep, mem)
+    xqs = _prefill_views!(mem, x1, seq, ne0)
+    xqs[1] = x1
+    return _prefill_quantize_rest!(xqs, ggml_type, x, prep, mem)
+end
+
+# The cached token vectors of mem for seq tokens of ne0 values, typed like x1.
+# Tokens 2:seq wrap mem's storage; token 1 is the caller's.
+function _prefill_views!(mem::_PrefillActMem, x1::X, seq::Int, ne0::Int) where {X}
+    key = (X, seq, ne0)
+    v = get(mem.views, key, nothing)
+    v === nothing || return v::Vector{X}
+    length(mem.views) >= 8 && empty!(mem.views)
+    xqs = Vector{X}(undef, seq)
+    xqs[1] = x1
+    for t in 2:seq
+        xqs[t] = _prefill_view(x1, mem, t, ne0)
+    end
+    mem.views[key] = xqs
+    return xqs
+end
+
+_prefill_view(::Q80Vec, m::_PrefillActMem, t::Int, ne0::Int) = _prefill_act(Q80Vec, m, t, ne0)
+_prefill_view(::Q8KVec, m::_PrefillActMem, t::Int, ne0::Int) = _prefill_act(Q8KVec, m, t, ne0)
+function _prefill_view(::Q6KPrepVec, m::_PrefillActMem, t::Int, ne0::Int)
+    y = _prefill_act(Q8KVec, m, t, ne0)
+    return Q6KPrepVec(y.d, y, _act_row(m.xp, t, ne0), _act_row(m.mo, t, ne0 >> 1))
 end
 
 function _prefill_quantize_row(
@@ -881,8 +910,8 @@ _prefill_act(::Type{Q8KVec}, m::_PrefillActMem, t::Int, ne0::Int) = Q8KVec(
     _act_row(m.qs, t, ne0),
     _act_slice(m.bsums, t, ne0 ÷ 16),
 )
-_prefill_prep(y::Q8KVec, m::_PrefillActMem, t::Int, ne0::Int) =
-    _q6k_prep!(Q6KPrepVec(y.d, y, _act_row(m.xp, t, ne0), _act_row(m.mo, t, ne0 >> 1)))
+_prefill_q(y::Q6KPrepVec) = y.q
+_prefill_q(y) = y
 _prefill_block_values(::Type{Q80Vec}) = 32
 _prefill_block_values(::Type{Q8KVec}) = QK_K
 _prefill_quantize_block!(y::Q80Vec, ib, buf, o) = _quantize_q8_0_block!(y, ib, buf, o)
@@ -903,12 +932,13 @@ function _prefill_quantize_tiles!(
 ) where {V}
     ne0 = size(x, 2)
     bv = _prefill_block_values(V)
-    buf = Matrix{Float32}(undef, bv, _PREFILL_QTILE)
+    m = _cpu_f32_scratch(bv * _PREFILL_QTILE)
+    buf = _cpu_f32_tile(m, bv, _PREFILL_QTILE)
     ys = Vector{V}(undef, _PREFILL_QTILE)
     for t0 in lo:_PREFILL_QTILE:hi
         n = min(_PREFILL_QTILE, hi - t0 + 1)
         for k in 1:n
-            ys[k] = _prefill_act(V, mem, t0 + k - 1, ne0)
+            ys[k] = _prefill_q(xqs[t0+k-1])
         end
         for ib in 1:(ne0÷bv)
             io = (ib - 1) * bv
@@ -919,11 +949,11 @@ function _prefill_quantize_tiles!(
                 _prefill_quantize_block!(ys[k], ib, buf, (k - 1) * bv)
             end
         end
-        for k in 1:n
-            t = t0 + k - 1
-            xqs[t] = prep ? _prefill_prep(ys[k], mem, t, ne0) : ys[k]
+        prep && for k in 1:n
+            _q6k_prep!(xqs[t0+k-1])
         end
     end
+    _cpu_f32_scratch_release!(m)
     return xqs
 end
 
