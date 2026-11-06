@@ -388,6 +388,7 @@ using Gesso: reference_prefill, reference_generate
     include("test_cpu_gdn_conv_decode.jl")
     include("test_cpu_sigmoid_mul.jl")
     include("test_cpu_exp.jl")
+    include("test_cpu_gdn_delta_slab.jl")
 
     # Shared-input quantized projections and the CPU seq = 1 GDN decode mixer,
     # each against its reference path.

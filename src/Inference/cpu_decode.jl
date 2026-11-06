@@ -406,12 +406,13 @@ end
 # reference recurrence: decay, kv_mem, delta, rank-1 update, and output. Each j
 # column is independent, so slabs need no synchronization.
 #
-# Heads go in blocks of `_GDN_HB` with the kv_mem and output sums held in
-# registers. A sum kept in memory cannot be, since `core` may alias the state as
-# far as the compiler knows, and each add then waits on the previous store. Every
-# head keeps the reference operation order, so the bits do not change. Pass 1 only
-# reads `src` and pass 2 reads each element before writing it, so `dst === src` is
-# safe.
+# Heads go in blocks of 16, then 8, 4 and 1, with the kv_mem and output sums held
+# in registers. A 16-head block keeps two vector chains in flight, where an
+# 8-head block waits on one add chain. A sum kept in memory cannot be, since
+# `core` may alias the state as far as the compiler knows, and each add then
+# waits on the previous store. Every head keeps the reference operation order, so
+# the bits do not change. Pass 1 only reads `src` and pass 2 reads each element
+# before writing it, so `dst === src` is safe.
 const _GDN_HB = 8
 
 function _gdn_delta_slab!(
@@ -432,7 +433,11 @@ function _gdn_delta_slab!(
         base = nv * dk * (j - 1)
         vb = nv * (j - 1)
         h0 = 0
-        while h0 + _GDN_HB <= nv
+        while h0 + 2 * _GDN_HB <= nv
+            _gdn_delta_heads!(dst, src, core, qn, kn, v, decay, beta, base, vb, h0, nv, dk, Val(2 * _GDN_HB))
+            h0 += 2 * _GDN_HB
+        end
+        if h0 + _GDN_HB <= nv
             _gdn_delta_heads!(dst, src, core, qn, kn, v, decay, beta, base, vb, h0, nv, dk, Val(_GDN_HB))
             h0 += _GDN_HB
         end
