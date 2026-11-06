@@ -348,9 +348,43 @@ end
 
 # Depthwise causal conv + SiLU for one token, then the conv-state shift.
 # Matches `_cpu_causal_conv1d_silu!` at seq = 1 (taps read the old state).
+#
+# Channels are independent and each keeps the serial expression, so above
+# `_GDN_CONV_POOL_MIN` channels the persistent pool runs contiguous channel
+# ranges with bit-identical results. The SiLU `exp` makes the serial loop cost
+# ~80 us per layer at 6144 channels.
+const _GDN_CONV_POOL_MIN = 1 << 11
+const _GDN_CONV_CHUNK_MIN = 256
+
+struct _GDNConvChunk{O, X, W, S}
+    out::O
+    x::X
+    weight::W
+    conv_state::S
+    ksz::Int
+    n::Int
+    nc::Int
+end
+
+function (f::_GDNConvChunk)(c::Int)
+    lo = div((c - 1) * f.n, f.nc) + 1
+    hi = div(c * f.n, f.nc)
+    _gdn_conv_decode_range!(f.out, f.x, f.weight, f.conv_state, f.ksz, lo, hi)
+    return nothing
+end
+
 function _gdn_conv_decode!(out, x, weight, conv_state, ksz::Int)
     channels = length(out)
-    @inbounds for c in 1:channels
+    if Threads.nthreads() > 1 && channels >= _GDN_CONV_POOL_MIN
+        nc = min(Threads.nthreads(), div(channels, _GDN_CONV_CHUNK_MIN))
+        _pool_run_chunks!(_GDNConvChunk(out, x, weight, conv_state, ksz, channels, nc), nc)
+        return out
+    end
+    return _gdn_conv_decode_range!(out, x, weight, conv_state, ksz, 1, channels)
+end
+
+function _gdn_conv_decode_range!(out, x, weight, conv_state, ksz::Int, lo::Int, hi::Int)
+    @inbounds for c in lo:hi
         acc = 0.0f0
         for p in 1:(ksz-1)
             acc += weight[c, 1, p] * conv_state[c, p]

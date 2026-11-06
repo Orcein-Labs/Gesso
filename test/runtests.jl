@@ -384,6 +384,7 @@ using Gesso: reference_prefill, reference_generate
     # The fused CPU attention (decode heads and the prefill window rows across
     # the pool) against the reference attention, bit for bit.
     include("test_cpu_attention_decode.jl")
+    include("test_cpu_gdn_conv_decode.jl")
 
     # Shared-input quantized projections and the CPU seq = 1 GDN decode mixer,
     # each against its reference path.
