@@ -27,6 +27,11 @@ Base.@kwdef mutable struct _Gemma4Scratch
     K::Matrix{Float32} = Matrix{Float32}(undef, 0, 0)
     V::Matrix{Float32} = Matrix{Float32}(undef, 0, 0)
     O::Matrix{Float32} = Matrix{Float32}(undef, 0, 0)
+    rope_c::Matrix{Float32} = Matrix{Float32}(undef, 0, 0)
+    rope_s::Matrix{Float32} = Matrix{Float32}(undef, 0, 0)
+    rope_glob_c::Matrix{Float32} = Matrix{Float32}(undef, 0, 0)
+    rope_glob_s::Matrix{Float32} = Matrix{Float32}(undef, 0, 0)
+    rope_keys::Vector{Any} = Any[nothing, nothing]  # (positions, n_rot, inv_freq) per slot
     attn_probs::Matrix{Float32} = Matrix{Float32}(undef, 0, 0)
     attn_tile::Matrix{Float32} = Matrix{Float32}(undef, 0, 0)
     attn_qtile::Matrix{Float32} = Matrix{Float32}(undef, 0, 0)
@@ -401,8 +406,8 @@ end
 # Rotates the head at column offset o down each column of the row block. A
 # matrix is (rows, cols), so walking a row instead strides a whole column per
 # element and a 32-row block of a 4096-wide Q spills L2.
-function _g4_rope_head!(A, c::Matrix{Float32}, s::Matrix{Float32}, o::Int, half::Int, rows::UnitRange{Int})
-    r0 = first(rows) - 1
+function _g4_rope_head!(A, c::Matrix{Float32}, s::Matrix{Float32}, o::Int, half::Int, rows::UnitRange{Int},
+                        r0::Int=first(rows) - 1)
     @inbounds for i in 1:half, t in rows
         k = t - r0
         x0 = A[t, o + i]
@@ -416,10 +421,43 @@ end
 # Per-head RMSNorm then NeoX RoPE in one pass, one head at a time so its columns
 # are still in cache when they rotate. Every element gets the arithmetic of
 # _g4_head_norm! followed by _apply_rope_neox!.
-_g4_norm_rope!(backend, A::AbstractMatrix{Float32}, nheads::Int, hd::Int, w::FrozenParameter, eps::Real, positions, n_rot::Int, inv_freq::Vector{Float64}) =
-    _g4_norm_rope!(backend, A, nheads, hd, w.storage, eps, positions, n_rot, inv_freq)
+_g4_norm_rope!(backend, A::AbstractMatrix{Float32}, nheads::Int, hd::Int, w::FrozenParameter, eps::Real, positions, n_rot::Int, inv_freq::Vector{Float64};
+               table=nothing) =
+    _g4_norm_rope!(backend, A, nheads, hd, w.storage, eps, positions, n_rot, inv_freq; table)
 
-function _g4_norm_rope!(backend, A::AbstractMatrix{Float32}, nheads::Int, hd::Int, w_vec, eps::Real, positions, n_rot::Int, inv_freq::Vector{Float64})
+# The cos/sin table of a whole pass, (row, i) for rows 1:length(positions), kept
+# in the scratch: Q and K of a layer and every layer of one rope kind share it.
+# Two slots, so the SWA and global layers do not evict each other. Each entry is
+# the per-chunk table's expression, so the bits match. Decode (one row) and
+# non-CPU backends get nothing and take their own paths.
+function _g4_pass_rope_table!(backend, s::_Gemma4Scratch, positions, n_rot::Int, inv_freq::Vector{Float64})
+    N = length(positions)
+    (N > 1 && backend_name(backend) === :cpu) || return nothing
+    for slot in 1:2
+        k = s.rope_keys[slot]
+        if k !== nothing && k[1] == positions && k[2] == n_rot && k[3] == inv_freq
+            return slot == 1 ? (s.rope_c, s.rope_s) : (s.rope_glob_c, s.rope_glob_s)
+        end
+    end
+    # an empty slot, else the slot of the same rope kind (new positions)
+    slot = s.rope_keys[1] === nothing ? 1 : s.rope_keys[2] === nothing ? 2 :
+           (s.rope_keys[1][3] == inv_freq ? 1 : 2)
+    half = n_rot ÷ 2
+    c = _g4_mat!(s, slot == 1 ? :rope_c : :rope_glob_c, N, half)
+    sn = _g4_mat!(s, slot == 1 ? :rope_s : :rope_glob_s, N, half)
+    _g4_rows!(N) do rows
+        @inbounds for i in 1:half, t in rows
+            theta = Float64(positions[t]) * inv_freq[i]
+            c[t, i] = Float32(cos(theta))
+            sn[t, i] = Float32(sin(theta))
+        end
+    end
+    s.rope_keys[slot] = (collect(positions), n_rot, copy(inv_freq))
+    return (c, sn)
+end
+
+function _g4_norm_rope!(backend, A::AbstractMatrix{Float32}, nheads::Int, hd::Int, w_vec, eps::Real, positions, n_rot::Int, inv_freq::Vector{Float64};
+                        table=nothing)
     backend_name(backend) === :cpu || throw(LoweringNotImplemented(:rope_freq_factors, backend_name(backend)))
     eps_f = Float32(eps)
     _g4_rows!(size(A, 1)) do rows
@@ -430,11 +468,13 @@ function _g4_norm_rope!(backend, A::AbstractMatrix{Float32}, nheads::Int, hd::In
             _g4_rope_row!(A, positions, nheads, hd, n_rot, inv_freq, first(rows))
             return nothing
         end
-        c, s = _g4_rope_table(positions, n_rot, inv_freq, rows)
+        # a whole-pass table (rows from 1) or this chunk's own
+        c, s, r0 = table === nothing ?
+            (_g4_rope_table(positions, n_rot, inv_freq, rows)..., first(rows) - 1) : (table..., 0)
         for h in 1:nheads
             o = (h - 1) * hd
             _g4_rmsnorm_block!(A, A, w_vec, eps_f, o, hd, rows)
-            _g4_rope_head!(A, c, s, o, n_rot ÷ 2, rows)
+            _g4_rope_head!(A, c, s, o, n_rot ÷ 2, rows, r0)
         end
         return nothing
     end
@@ -473,6 +513,12 @@ end
 function _gemma4_k_only_v!(backend, k)
     backend_name(backend) === :cpu || throw(LoweringNotImplemented(:k_only_global_attention, backend_name(backend)))
     return copy(k)
+end
+
+# The same into v, without the copy.
+function _gemma4_k_only_v!(backend, v, k)
+    backend_name(backend) === :cpu || throw(LoweringNotImplemented(:k_only_global_attention, backend_name(backend)))
+    return copyto!(v, k)
 end
 
 function _gemma4_layer_output_scale!(backend, out, scale_vec)
@@ -794,13 +840,14 @@ function _gemma4_prefill_block!(backend, h, bt, tensors, positions, wl, eps, zer
     if haskey(bt, :wv) && bt.wv !== nothing
         _g4_gemm!(V, xn, bt.wv)
     else
-        V .= _gemma4_k_only_v!(backend, K)
+        _gemma4_k_only_v!(backend, V, K)
     end
 
     # Q/K/V norms and RoPE
     n_rot = bt.rope_layer.rotary_dim == 0 ? hd : bt.rope_layer.rotary_dim
-    _g4_norm_rope!(backend, Q, nh, hd, bt.wq_norm, eps_f, positions, n_rot, bt.rope_layer.inv_freq)
-    _g4_norm_rope!(backend, K, nkv, hd, bt.wk_norm, eps_f, positions, n_rot, bt.rope_layer.inv_freq)
+    rt = _g4_pass_rope_table!(backend, scratch, positions, n_rot, bt.rope_layer.inv_freq)
+    _g4_norm_rope!(backend, Q, nh, hd, bt.wq_norm, eps_f, positions, n_rot, bt.rope_layer.inv_freq; table=rt)
+    _g4_norm_rope!(backend, K, nkv, hd, bt.wk_norm, eps_f, positions, n_rot, bt.rope_layer.inv_freq; table=rt)
     _gemma4_v_norm!(backend, V, eps_f; nheads=nkv, hd=hd)
 
     # Causal attention with scale 1.0 over this pass's own rows
@@ -856,7 +903,7 @@ function _gemma4_generate_block!(backend, hp, kc_layer, vc_layer, bt, tensors, s
                 _g4_gemms!((Q, K, V), xn, (bt.wq, bt.wk, bt.wv))
             else
                 _g4_gemms!((Q, K), xn, (bt.wq, bt.wk))
-                V .= _gemma4_k_only_v!(backend, K)
+                _gemma4_k_only_v!(backend, V, K)
             end
         end
 
@@ -864,8 +911,9 @@ function _gemma4_generate_block!(backend, hp, kc_layer, vc_layer, bt, tensors, s
         @decode_sub :attn_headnorm_rope nothing begin
             n_rot = bt.rope_layer.rotary_dim == 0 ? hd : bt.rope_layer.rotary_dim
             positions = (s0 - 1):(s1 - 1)
-            _g4_norm_rope!(backend, Q, nh, hd, bt.wq_norm, eps_f, positions, n_rot, bt.rope_layer.inv_freq)
-            _g4_norm_rope!(backend, K, nkv, hd, bt.wk_norm, eps_f, positions, n_rot, bt.rope_layer.inv_freq)
+            rt = _g4_pass_rope_table!(backend, scratch, positions, n_rot, bt.rope_layer.inv_freq)
+            _g4_norm_rope!(backend, Q, nh, hd, bt.wq_norm, eps_f, positions, n_rot, bt.rope_layer.inv_freq; table=rt)
+            _g4_norm_rope!(backend, K, nkv, hd, bt.wk_norm, eps_f, positions, n_rot, bt.rope_layer.inv_freq; table=rt)
             _gemma4_v_norm!(backend, V, eps_f; nheads=nkv, hd=hd)
         end
 

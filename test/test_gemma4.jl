@@ -398,6 +398,22 @@ end
         @test F != _gemma4_inf._g4_norm_rope!(Gesso.CPUBackend(), copy(X), nh, hd, wh, eps, positions .+ 1, n_rot, f_inv)
     end
 
+    # Pass-level RoPE tables: one scratch serves several passes (chunked
+    # prompt, prefill on a cache). Each lookup must equal a fresh table, so a
+    # slot keyed too loosely (stale positions, length or n_rot) shows here.
+    let s = _gemma4_inf._Gemma4Scratch(), cpu = Gesso.CPUBackend()
+        f_glob = [1.0e6^(-2(i - 1) / hd) for i in 1:(hd ÷ 4)]
+        fresh(p, nr, f) = map(copy, _gemma4_inf._g4_pass_rope_table!(cpu, _gemma4_inf._Gemma4Scratch(), p, nr, f))
+        for (p, nr, f) in ((positions, hd, inv_freq), (positions, hd ÷ 2, f_glob),
+                           (positions .+ N, hd, inv_freq), (positions .+ N, hd ÷ 2, f_glob),
+                           (positions[1:40] .+ 2N, hd, inv_freq), (positions .+ N, hd, inv_freq))
+            got = map(copy, _gemma4_inf._g4_pass_rope_table!(cpu, s, p, nr, f))
+            @test got == fresh(p, nr, f)
+            @test size(got[1]) == (length(p), nr ÷ 2)
+        end
+        @test _gemma4_inf._g4_pass_rope_table!(cpu, s, positions[1:1], hd, inv_freq) === nothing
+    end
+
     r = randn(rng, Float32, n_exp, nh * hd)
     scale = 0.5f0 .+ rand(rng, Float32, n_exp)
     experts = zeros(Int, n_used, N)
