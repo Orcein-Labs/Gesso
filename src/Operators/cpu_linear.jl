@@ -4,11 +4,11 @@
 # so the interpreter can compose them without a second operator vocabulary.
 
 function _cpu_silu(x::T) where {T <: AbstractFloat}
-    return x / (one(T) + exp(-x))
+    return x / (one(T) + _cpu_exp(-x))
 end
 
 function _cpu_sigmoid(x::T) where {T <: AbstractFloat}
-    return one(T) / (one(T) + exp(-x))
+    return one(T) / (one(T) + _cpu_exp(-x))
 end
 
 # erf and erfc in Float64 without a special-functions dependency (Gesso takes

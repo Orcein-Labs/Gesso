@@ -337,6 +337,36 @@ end
 _swiglu_exp(x::Float32) = Base.Math.exp_impl(x, Val(:ℯ))
 _swiglu_exp(x) = exp(x)
 
+# `exp_impl` for Float32 with its early returns and branches turned into
+# selects, so plain loops (no @simd) vectorize it too. Same operations in the
+# same order: on all 2^32 Float32 inputs it is bit-identical to `exp`. It reads
+# Base.Math internals; a Julia without them falls back to `exp`, and
+# test_cpu_exp.jl checks the bits on each version.
+if all(n -> isdefined(Base.Math, n), (:LogBINV, :LogBU, :LogBL, :expb_kernel, :SUBNORM_EXP, :MIN_EXP, :MAX_EXP))
+@inline function _cpu_exp(x::Float32)
+    M = Base.Math
+    b = Val(:ℯ)
+    N_float = round(x * M.LogBINV(b, Float32))
+    N = unsafe_trunc(Int32, N_float)
+    r = muladd(N_float, M.LogBU(b, Float32), x)
+    r = muladd(N_float, M.LogBL(b, Float32), r)
+    small = M.expb_kernel(b, r)
+    power = N + Int32(127)
+    sub = x <= -M.SUBNORM_EXP(b, Float32)
+    power = ifelse(sub, power + Int32(24), power)
+    small = ifelse(sub, small * Float32(0x1p-24), small)
+    top = N == Int32(128)
+    power = ifelse(top, power - Int32(1), power)
+    small = ifelse(top, small * 2.0f0, small)
+    y = small * reinterpret(Float32, power << Int32(23))
+    y = ifelse(x < M.MIN_EXP(b, Float32), 0.0f0, y)
+    return ifelse(x > M.MAX_EXP(b, Float32), Inf32, y)
+end
+else
+_cpu_exp(x::Float32) = exp(x)
+end
+_cpu_exp(x) = exp(x)
+
 function _cpu_swiglu_range!(dsts, gs, ups, r)
     @inbounds @simd for i in r
         g = gs[i]

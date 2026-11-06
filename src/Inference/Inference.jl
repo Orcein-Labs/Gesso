@@ -68,6 +68,7 @@ using ..Gesso:
     _cpu_split_rows!,
     _cpu_silu,
     _cpu_sigmoid,
+    _cpu_exp,
     _cpu_softplus,
     _cpu_router_logits!,
     _cpu_moe_topk_swiglu!
@@ -1341,7 +1342,9 @@ end
     )
     total = 0.0
     @inbounds for u in keys
-        s[u] = exp(s[u] - row_max)
+        s[u] = _cpu_exp(s[u] - row_max)
+    end
+    @inbounds for u in keys
         total += s[u]
     end
     @inbounds for u in keys

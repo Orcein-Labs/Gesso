@@ -188,7 +188,10 @@ end
 # a rolling state. Tap p of row t reads x_{t-ksz+p}: window row t-ksz+p when that
 # is at least 1, otherwise column t-1+p of the pre-window state. The products and
 # the sum run in `_gdn_conv_decode!`'s order, so the output is decode's bits.
+# Rows past the first ksz-1 read only window rows, so they take a branch-free
+# pass for the sums and a second pass for the SiLU; both vectorize.
 function _gdn_conv_window_row!(out, mixed::Matrix{Float32}, conv_in, weight, t::Int, ksz::Int)
+    t >= ksz && return _gdn_conv_window_row_inner!(out, mixed, weight, t, ksz)
     @inbounds for c in eachindex(out)
         acc = 0.0f0
         for p in 1:(ksz-1)
@@ -197,7 +200,25 @@ function _gdn_conv_window_row!(out, mixed::Matrix{Float32}, conv_in, weight, t::
             acc += weight[c, 1, p] * xs
         end
         acc += weight[c, 1, ksz] * mixed[c, t]
-        out[c] = acc / (1.0f0 + exp(-acc))
+        out[c] = acc / (1.0f0 + _cpu_exp(-acc))
+    end
+    return out
+end
+
+function _gdn_conv_window_row_inner!(out, mixed::Matrix{Float32}, weight, t::Int, ksz::Int)
+    s0 = t - ksz
+    @inbounds for c in eachindex(out)
+        out[c] = 0.0f0
+    end
+    @inbounds for p in 1:ksz
+        s = s0 + p
+        for c in eachindex(out)
+            out[c] += weight[c, 1, p] * mixed[c, s]
+        end
+    end
+    @inbounds for c in eachindex(out)
+        acc = out[c]
+        out[c] = acc / (1.0f0 + _cpu_exp(-acc))
     end
     return out
 end

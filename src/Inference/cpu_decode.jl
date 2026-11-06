@@ -391,7 +391,7 @@ function _gdn_conv_decode_range!(out, x, weight, conv_state, ksz::Int, lo::Int, 
         end
         xc = x[c]
         acc += weight[c, 1, ksz] * xc
-        out[c] = acc / (1.0f0 + exp(-acc))
+        out[c] = acc / (1.0f0 + _cpu_exp(-acc))
         for p in 1:(ksz-2)
             conv_state[c, p] = conv_state[c, p+1]
         end
@@ -701,7 +701,7 @@ function _gdn_gnorm_merge!(
         for j in 1:dv
             cv = core[hh+nv*(j-1)]
             zj = zv[(hh-1)*dv+j]
-            merged[(hh-1)*dv+j] = (cv / r * scale_norm[j]) * (zj / (1.0f0 + exp(-zj)))
+            merged[(hh-1)*dv+j] = (cv / r * scale_norm[j]) * (zj / (1.0f0 + _cpu_exp(-zj)))
         end
     end
     return merged
@@ -871,7 +871,9 @@ function _attention_row_head!(attn, q, row::Int, kc, vc, probs, off::Int, scale,
         )
         total = 0.0
         for u in lo:K
-            probs[off+u] = exp(probs[off+u] - row_max)
+            probs[off+u] = _cpu_exp(probs[off+u] - row_max)
+        end
+        for u in lo:K
             total += probs[off+u]
         end
         for u in lo:K
