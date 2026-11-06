@@ -91,21 +91,19 @@ end
 
 # Rows (the leading axis) are independent, so prefill-sized arrays split
 # contiguous row ranges across threads; decode-sized ones keep the plain,
-# allocation-free loop. A task's exception is rethrown as itself, so callers
-# see the same error either way.
+# allocation-free loop. The pool rethrows a chunk's exception as itself, so
+# callers see the same error either way.
 _cpu_rows_threaded(xs, rows::Int) =
     xs isa Array && Threads.nthreads() > 1 && rows > 1 && length(xs) >= 1 << 18
 
+# The row ranges run on the shared CPU pool, not Threads.@spawn. After a pool
+# matmul the workers spin on their threads, so spawned tasks mostly ran on the
+# caller alone until the spin ended (Qwen3.5-2B pp512 on 16 threads: prefill
+# 2.334 -> 2.175 s, same ids). The ranges are the same either way.
 function _cpu_split_rows!(f, rows::Int)
     nc = min(Threads.nthreads(), rows)
-    try
-        @sync for c in 1:nc
-            lo = div((c - 1) * rows, nc) + 1
-            hi = div(c * rows, nc)
-            Threads.@spawn f(($lo):($hi))
-        end
-    catch e
-        _cpu_rethrow_task_error(e)
+    Runtime.pool_run!(nc) do c
+        f((div((c - 1) * rows, nc) + 1):div(c * rows, nc))
     end
     return nothing
 end
