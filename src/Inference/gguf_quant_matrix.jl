@@ -234,6 +234,110 @@ function _quant_matmul!(dst::AbstractMatrix, x::AbstractMatrix, q::QuantMatrix)
     return dst
 end
 
+# Decode projections that read the same input row (Q/K/V, gate/up). The row is
+# quantized once per activation format and every output row of every matrix
+# runs in one pool dispatch. Each row is _qgemv_q8k_rows!'s dot with alpha 1 and
+# beta 0, so the outputs match one _quant_matmul! call per matrix bit for bit.
+# The activation buffers share _QUANT_GEMV_BUSY with _quant_matmul!.
+mutable struct _FusedGemvScratch
+    xf::Vector{Float32}
+    xk::Q8KVec
+    x0::Q80Vec
+end
+const _FUSED_GEMV_SCRATCH = _FusedGemvScratch(Float32[], Q8KVec(0), Q80Vec(0))
+
+function _fused_act_resize!(s::_FusedGemvScratch, ne0::Int)
+    resize!(s.xf, ne0)
+    nk = div(ne0, QK_K)
+    resize!(s.xk.d, nk); resize!(s.xk.qs, QK_K * nk); resize!(s.xk.bsums, (QK_K ÷ 16) * nk)
+    n0 = div(ne0, 32)
+    resize!(s.x0.d, n0); resize!(s.x0.qs, 32 * n0)
+    return s
+end
+
+struct _FusedGemvChunk{N}
+    dsts::NTuple{N,Matrix{Float32}}
+    qs::NTuple{N,QuantMatrix}
+    xk::Q8KVec
+    x0::Q80Vec
+    total::Int
+    nc::Int
+    simd::Bool
+end
+
+@inline function _fused_gemv_rows!(d::Matrix{Float32}, q::QuantMatrix, xq, j0::Int, j1::Int, simd::Bool)
+    t = q.ggml_type
+    rb = _qrow_bytes(t, q.ne0)
+    @inbounds for j in j0:j1
+        d[j] = 1.0f0 * _dot_q8k(t, q.data, q.offset0 + (j - 1) * rb, xq, simd) + 0.0f0
+    end
+    return nothing
+end
+
+function (g::_FusedGemvChunk{N})(c::Int) where {N}
+    r0 = div((c - 1) * g.total, g.nc) + 1
+    r1 = div(c * g.total, g.nc)
+    base = 0
+    for m in 1:N
+        q = g.qs[m]
+        a = max(r0, base + 1) - base
+        b = min(r1, base + q.nrows) - base
+        if a <= b
+            if _q80_act_type(q.ggml_type)
+                _fused_gemv_rows!(g.dsts[m], q, g.x0, a, b, g.simd)
+            else
+                _fused_gemv_rows!(g.dsts[m], q, g.xk, a, b, g.simd)
+            end
+        end
+        base += q.nrows
+    end
+    return nothing
+end
+
+_fused_gemv_ok(dst, x, q) =
+    q isa QuantMatrix && dst isa Matrix{Float32} && size(x, 1) == 1 && size(dst) == (1, q.nrows) &&
+    q.ne0 == size(x, 2) && _quant_native(q.ggml_type) && _quant_q8k_native(q.ggml_type) &&
+    q.ne0 % _q8k_block_values(q.ggml_type) == 0
+
+"""
+    _quant_gemv_shared!(dsts::NTuple{N}, x, qs::NTuple{N}) -> dsts
+
+`dsts[m] = x * qs[m]'` for a one-row `x`, every matrix in one dispatch. Falls
+back to one `_quant_matmul!` per matrix for anything else.
+"""
+function _quant_gemv_shared!(dsts::NTuple{N,Any}, x::AbstractMatrix, qs::NTuple{N,Any}) where {N}
+    fused = all(m -> _fused_gemv_ok(dsts[m], x, qs[m]), 1:N)
+    owned = fused && Threads.atomic_cas!(_QUANT_GEMV_BUSY, 0, 1) == 0
+    if !owned
+        for m in 1:N
+            _quant_matmul!(dsts[m], x, qs[m])
+        end
+        return dsts
+    end
+    try
+        ne0 = size(x, 2)
+        s = _fused_act_resize!(_FUSED_GEMV_SCRATCH, ne0)
+        @inbounds for i in 1:ne0
+            s.xf[i] = Float32(x[1, i])
+        end
+        k80 = any(m -> _q80_act_type(qs[m].ggml_type), 1:N)
+        kk = any(m -> !_q80_act_type(qs[m].ggml_type), 1:N)
+        k80 && quantize_q8_0!(s.x0, s.xf)
+        kk && quantize_q8_K!(s.xk, s.xf)
+        total = sum(m -> qs[m].nrows, 1:N)
+        nc = _qgemv_nchunks(total)
+        g = _FusedGemvChunk{N}(
+            ntuple(m -> dsts[m]::Matrix{Float32}, Val(N)),
+            ntuple(m -> qs[m]::QuantMatrix, Val(N)),
+            s.xk, s.x0, total, nc, q8k_simd_enabled(),
+        )
+        _run_row_chunks!(g, nc, total * ne0)
+    finally
+        Threads.atomic_xchg!(_QUANT_GEMV_BUSY, 0)
+    end
+    return dsts
+end
+
 # Rows r0:r0+nr-1 of `q`, dequantized into the first nr columns of W. Each row
 # decodes on its own, so splitting the rows over tasks gives the same values
 # as one serial pass.

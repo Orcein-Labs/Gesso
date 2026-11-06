@@ -2001,10 +2001,14 @@ function _reference_generate(
         kv_like = fresh ? zeros_like((0, 0, 0)) : nothing
         layer_nkv(bt) = haskey(bt, :n_kv_heads_layer) ? bt.n_kv_heads_layer : n_kv_heads
         layer_hd(bt) = haskey(bt, :d_head_layer) ? bt.d_head_layer : d_head
-        function kv_cache(bt)
+        function kv_cache(bt, kind::Symbol)
             rows = kv_rows(bt)
             nkv = layer_nkv(bt)
             hd = layer_hd(bt)
+            # Gemma 4 on the CPU decodes from tiled K / blocked V caches
+            if on_cpu && kv_fmt === :f32 && rows > 0 && haskey(bt, :gemma4_layer) && hd % 32 == 0 && _G4_KV_TILED[]
+                return kind === :k ? G4KeyTiles(rows, nkv, hd) : G4ValBlocks(rows, nkv, hd)
+            end
             (kv_fmt === :f32 || rows == 0) && return zeros_like((rows, nkv, hd))
             # storage rows padded to a multiple of 4: the CUDA decode reads 4
             # consecutive rows per load and needs every column 4-row aligned.
@@ -2021,10 +2025,10 @@ function _reference_generate(
                 2 * attn * cld(st.ctx, 4) * 4 * n_kv_heads * _kv_head_bytes(d_head, kv_fmt),
             )
             st.kc = [
-                Activation(; shape=(kv_rows(bt), layer_nkv(bt), layer_hd(bt)), storage=kv_cache(bt)) for bt in tensors.blocks
+                Activation(; shape=(kv_rows(bt), layer_nkv(bt), layer_hd(bt)), storage=kv_cache(bt, :k)) for bt in tensors.blocks
             ]
             st.vc = [
-                Activation(; shape=(kv_rows(bt), layer_nkv(bt), layer_hd(bt)), storage=kv_cache(bt)) for bt in tensors.blocks
+                Activation(; shape=(kv_rows(bt), layer_nkv(bt), layer_hd(bt)), storage=kv_cache(bt, :v)) for bt in tensors.blocks
             ]
             # the newest hidden row: the head reads it and each decode step
             # overwrites it in place (Activation fields are immutable, §CIX;
@@ -3243,6 +3247,7 @@ include("gguf_quant_matrix.jl")    # quantized dense 2-D weights (QuantMatrix) +
 include("gguf_dequant.jl")         # native F32 dequant for every ggml type Gesso reads
 include("moe_host.jl")              # batched Q8_K top-k SwiGLU for host-resident expert slabs
 include("gemma4_moe_host.jl")       # batched top-k GELU experts for Gemma 4 host slabs
+include("gemma4_kv_layout.jl")      # tiled K / blocked V caches for Gemma 4 CPU decode
 include("gemma4_attn_tile.jl")      # eight-row SIMD attention tiles for Gemma 4 prefill
 include("cpu_decode.jl")           # CPU seq = 1 GDN decode: preallocated F32 mixer
 include("sampling.jl")             # opt-in temperature/top-p sampler for reference_generate

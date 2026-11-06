@@ -846,7 +846,7 @@ end
     return _kq_unvec8(v)
 end
 
-@noinline function _q80_sumi_avx2(
+@inline function _q80_sumi_avx2(
     w::AbstractVector{UInt8},
     b::Int,
     x::Q80Vec,
@@ -861,7 +861,7 @@ end
     )
 end
 
-@noinline function _q40_sumi_avx2(
+@inline function _q40_sumi_avx2(
     w::AbstractVector{UInt8},
     b::Int,
     x::Q80Vec,
@@ -876,7 +876,7 @@ end
     )
 end
 
-@noinline function _iq4nl_sumi_avx2(
+@inline function _iq4nl_sumi_avx2(
     w::AbstractVector{UInt8},
     b::Int,
     x::Q80Vec,
@@ -891,7 +891,7 @@ end
     )
 end
 
-@noinline function _q51_sumi_avx2(
+@inline function _q51_sumi_avx2(
     w::AbstractVector{UInt8},
     b::Int,
     x::Q80Vec,
@@ -1020,7 +1020,7 @@ const _KQ_IR_GEN_Q51 = let io = IOBuffer()
     String(take!(io))
 end
 
-@noinline function _q80_sumi_gen(w::AbstractVector{UInt8}, b::Int, x::Q80Vec, ib::Int)::Int32
+@inline function _q80_sumi_gen(w::AbstractVector{UInt8}, b::Int, x::Q80Vec, ib::Int)::Int32
     return GC.@preserve w x @simd_llvmcall(
         (_KQ_IR_GEN_Q80, "entry"),
         Int32,
@@ -1030,7 +1030,7 @@ end
     )
 end
 
-@noinline function _q40_sumi_gen(w::AbstractVector{UInt8}, b::Int, x::Q80Vec, ib::Int)::Int32
+@inline function _q40_sumi_gen(w::AbstractVector{UInt8}, b::Int, x::Q80Vec, ib::Int)::Int32
     return GC.@preserve w x @simd_llvmcall(
         (_KQ_IR_GEN_Q40, "entry"),
         Int32,
@@ -1040,7 +1040,7 @@ end
     )
 end
 
-@noinline function _iq4nl_sumi_gen(w::AbstractVector{UInt8}, b::Int, x::Q80Vec, ib::Int)::Int32
+@inline function _iq4nl_sumi_gen(w::AbstractVector{UInt8}, b::Int, x::Q80Vec, ib::Int)::Int32
     return GC.@preserve w x @simd_llvmcall(
         (_KQ_IR_GEN_IQ4NL, "entry"),
         Int32,
@@ -1050,7 +1050,7 @@ end
     )
 end
 
-@noinline function _q51_sumi_gen(w::AbstractVector{UInt8}, b::Int, x::Q80Vec, ib::Int)::NTuple{2, Int32}
+@inline function _q51_sumi_gen(w::AbstractVector{UInt8}, b::Int, x::Q80Vec, ib::Int)::NTuple{2, Int32}
     v = GC.@preserve w x @simd_llvmcall(
         (_KQ_IR_GEN_Q51, "entry"),
         NTuple{2, VecElement{Int32}},

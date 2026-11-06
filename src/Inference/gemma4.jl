@@ -100,6 +100,21 @@ end
 # each column of the row block; every row still sums its squares in column
 # order, as a loop over one row would.
 function _g4_rmsnorm_block!(Y, X, w_vec, eps_f::Float32, o::Int, n::Int, rows::UnitRange{Int})
+    # One row (decode): the same sums in the same order, with the accumulator
+    # in a register instead of an array slot the stores could alias.
+    if length(rows) == 1
+        t = first(rows)
+        s = 0.0f0
+        @inbounds for i in 1:n
+            s += X[t, o + i] * X[t, o + i]
+        end
+        r = 1.0f0 / sqrt(s / n + eps_f)
+        @inbounds for i in 1:n
+            wi = w_vec === nothing ? 1.0f0 : Float32(w_vec[i])
+            Y[t, o + i] = X[t, o + i] * r * wi
+        end
+        return Y
+    end
     r0 = first(rows) - 1
     ss = zeros(Float32, length(rows))
     @inbounds begin
@@ -139,6 +154,32 @@ function _g4_gemm!(dst::AbstractMatrix, x::AbstractMatrix, w)
         LinearAlgebra.mul!(dst, x, transpose(w_stor))
     end
     return dst
+end
+
+_g4_stor(w) = w isa Union{ProjectionWeight, FrozenParameter, ExpertWeight} ? w.storage : w
+
+# Decode KV append: cache row s of (seq, nkv, hd) takes the one-row K (1, nkv*hd),
+# head h at columns (h-1)*hd+1 : h*hd. The same copy _kv_write_rows! does through
+# a PermutedDimsArray view, as a plain loop.
+function _g4_kv_write_row!(dst::Array{Float32,3}, src::AbstractMatrix{Float32}, s::Int, nkv::Int, hd::Int)
+    size(src, 1) == 1 && size(src, 2) == nkv * hd || throw(DimensionMismatch("kv row $(size(src)) vs $nkv x $hd"))
+    1 <= s <= size(dst, 1) && size(dst, 2) == nkv && size(dst, 3) == hd || throw(BoundsError(dst, (s, nkv, hd)))
+    @inbounds for d in 1:hd, h in 1:nkv
+        dst[s, h, d] = src[1, (h - 1) * hd + d]
+    end
+    return dst
+end
+
+# Projections of one input. A decode row with every weight quantized goes
+# through one shared-activation dispatch, bit-identical to one _g4_gemm! each.
+function _g4_gemms!(dsts::NTuple{N,AbstractMatrix}, x::AbstractMatrix, ws::NTuple{N,Any}) where {N}
+    st = map(_g4_stor, ws)
+    if size(x, 1) == 1 && all(w -> w isa QuantMatrix, st)
+        _quant_gemv_shared!(dsts, x, st)
+    else
+        foreach((d, w) -> _g4_gemm!(d, x, w), dsts, ws)
+    end
+    return dsts
 end
 
 function _g4_expert_matrix(s::GgufQuantSlice, e::Int)
@@ -209,6 +250,13 @@ function _g4_attend!(s::_Gemma4Scratch, O::AbstractMatrix{Float32}, Q::AbstractM
             s.attn_qtile = Matrix{Float32}(undef, 8 * hd, nh)
         end
     end
+    if N == 1 && kc isa G4KeyTiles && vc isa G4ValBlocks
+        a = (win > 0 ? max(1, s0 - win + 1) : 1) - koff
+        if size(s.attn_probs, 1) < rows || size(s.attn_probs, 2) != nh
+            s.attn_probs = Matrix{Float32}(undef, max(rows, 2 * size(s.attn_probs, 1)), nh)
+        end
+        return _g4_attend_decode!(O, Q, kc, vc, s.attn_probs, a, rows, nh, nkv, hd)
+    end
     probs = s.attn_probs
     ptile = s.attn_tile
     qtile = s.attn_qtile
@@ -227,7 +275,8 @@ function _g4_attend!(s::_Gemma4Scratch, O::AbstractMatrix{Float32}, Q::AbstractM
     return O
 end
 
-# The tile path reads K and V through raw pointers: dim 1 must be contiguous.
+# The tile path reads K and V through raw pointers at _g4_off: a plain cache
+# needs dim 1 contiguous. The decode layouts in gemma4_kv_layout.jl also qualify.
 _g4_tile_cache(x::Array{Float32, 3}) = true
 _g4_tile_cache(x::PermutedDimsArray{Float32, 3, <:Any, <:Any, Array{Float32, 3}}) = stride(x, 1) == 1
 _g4_tile_cache(x) = false
@@ -424,12 +473,52 @@ function _g4_router_logits8!(L::Matrix{Float32}, r::Matrix{Float32}, xt::Matrix{
     return L
 end
 
+# One token's logits with a vector lane per expert, for decode. Each lane runs
+# _g4_router_logits!'s mul-then-add chain in i, so the two agree bit for bit.
+# A 16-expert block reads a whole cache line of r per i, and the blocks are
+# split over the pool: the scalar loop read half a line per i on one thread.
+function _g4_router_logits_vec!(logits::StridedVector{Float32}, r::Matrix{Float32}, rin::Matrix{Float32}, t::Int)
+    n_expert, E = size(r)
+    N = size(rin, 1)
+    nb = n_expert ÷ 16
+    nc = min(Threads.nthreads(), nb)
+    GC.@preserve logits r rin begin
+        pr = pointer(r)
+        px = pointer(rin) + 4 * (t - 1)
+        pl = pointer(logits)
+        block = b -> begin
+            eb = 16 * (b - 1)
+            a1 = _v8splat(0.0f0)
+            a2 = _v8splat(0.0f0)
+            @inbounds for i in 0:(E - 1)
+                x = _v8splat(unsafe_load(px + 4 * N * i))
+                p = pr + 4 * (i * n_expert + eb)
+                a1 = _v8muladd(a1, _v8load(p), x)
+                a2 = _v8muladd(a2, _v8load(p + 32), x)
+            end
+            _v8store(pl + 4 * eb, a1)
+            _v8store(pl + 4 * (eb + 8), a2)
+        end
+        if nc <= 1
+            foreach(block, 1:nb)
+        else
+            _pool_run_chunks!(nc) do c
+                foreach(block, (div((c - 1) * nb, nc) + 1):div(c * nb, nc))
+            end
+        end
+    end
+    return logits
+end
+
 # Router softmax and top-k for token t. Fills probs and the first n_used
 # entries of order, and returns the renormalisation denominator.
 function _g4_route_token!(logits, probs, order, rin::Matrix{Float32}, t::Int, r_stor, n_used::Int)
     n_expert = length(logits)
     if r_stor isa QuantMatrix
         _quant_matmul!(reshape(logits, 1, n_expert), view(rin, t:t, :), r_stor)
+    elseif r_stor isa Matrix{Float32} && logits isa StridedVector{Float32} && stride(logits, 1) == 1 &&
+           n_expert % 16 == 0 && size(r_stor, 1) == n_expert
+        _g4_router_logits_vec!(logits, r_stor, rin, t)
     else
         _g4_router_logits!(logits, r_stor, rin, t)
     end
@@ -511,29 +600,36 @@ function _gemma4_parallel_moe_ffn!(backend, attn, bt, eps::Real; scratch::_Gemma
 
     # 1. Dense FFN (reuse hoisted N x E and N x n_ff buffers)
     xf = _g4_mat!(scratch, :xf, N, E)
-    _g4_rmsnorm_rows!(xf, X, bt.ffn_rms, eps_f)
     n_ff = bt.wgate.shape[1]
     gate = _g4_mat!(scratch, :gate, N, n_ff)
     up = _g4_mat!(scratch, :up, N, n_ff)
-    _g4_gemm!(gate, xf, bt.wgate)
-    _g4_gemm!(up, xf, bt.wup)
-    _g4_elems!(length(gate)) do r
-        @inbounds for i in r
-            gate[i] = _g4_gelu(gate[i]) * up[i]
-        end
-    end
     mlp = _g4_mat!(scratch, :mlp, N, E)
-    _g4_gemm!(mlp, gate, bt.wdown)
-    _g4_rmsnorm_rows!(mlp, mlp, bt.ffn_post_rms_1, eps_f)
+    @decode_stage :dense_ffn nothing begin
+        _g4_rmsnorm_rows!(xf, X, bt.ffn_rms, eps_f)
+        @decode_sub :ffn_gateup nothing begin
+            _g4_gemms!((gate, up), xf, (bt.wgate, bt.wup))
+        end
+        @decode_sub :ffn_act nothing begin
+            _g4_elems!(length(gate)) do r
+                @inbounds for i in r
+                    gate[i] = _g4_gelu(gate[i]) * up[i]
+                end
+            end
+        end
+        @decode_sub :ffn_down nothing _g4_gemm!(mlp, gate, bt.wdown)
+        _g4_rmsnorm_rows!(mlp, mlp, bt.ffn_post_rms_1, eps_f)
+    end
 
     # 2. Routed MoE (reuse hoisted N x E buffers)
     inv_sqrt_e = 1.0f0 / sqrt(Float32(E))
     rin = _g4_mat!(scratch, :rin, N, E)
-    _g4_rmsnorm_rows!(rin, X, nothing, eps_f)
-    r_scale = bt.wrouter_scale isa FrozenParameter ? bt.wrouter_scale.storage : bt.wrouter_scale
-    _g4_router_input!(rin, inv_sqrt_e, r_scale)
     x2 = _g4_mat!(scratch, :x2, N, E)
-    _g4_rmsnorm_rows!(x2, X, bt.ffn_pre_rms_2, eps_f)
+    @decode_stage :norm nothing begin
+        _g4_rmsnorm_rows!(rin, X, nothing, eps_f)
+        r_scale = bt.wrouter_scale isa FrozenParameter ? bt.wrouter_scale.storage : bt.wrouter_scale
+        _g4_router_input!(rin, inv_sqrt_e, r_scale)
+        _g4_rmsnorm_rows!(x2, X, bt.ffn_pre_rms_2, eps_f)
+    end
 
     r_stor = bt.wrouter.storage
     n_expert = r_stor isa QuantMatrix ? r_stor.nrows : size(r_stor, 1)
@@ -564,10 +660,10 @@ function _gemma4_parallel_moe_ffn!(backend, attn, bt, eps::Real; scratch::_Gemma
         end
     end
     for t in 1:(routed ? 0 : N)
-        denom = _g4_route_token!(logits, probs, order, rin, t, r_stor, n_used)
+        denom = @decode_stage :moe_router nothing _g4_route_token!(logits, probs, order, rin, t, r_stor, n_used)
         if batched
-            _g4_moe_token_batched!(moe, t, x2, scratch.order, probs, denom, down_scale, n_used,
-                                   gu_stor, dn_stor, moe_s)
+            @decode_stage :moe_host nothing _g4_moe_token_batched!(moe, t, x2, scratch.order, probs, denom,
+                                   down_scale, n_used, gu_stor, dn_stor, moe_s)
             continue
         end
         x2_row = view(x2, t:t, :)
@@ -587,11 +683,13 @@ function _gemma4_parallel_moe_ffn!(backend, attn, bt, eps::Real; scratch::_Gemma
             end
         end
     end
-    _g4_rmsnorm_rows!(moe, moe, bt.ffn_post_rms_2, eps_f)
+    @decode_stage :norm nothing begin
+        _g4_rmsnorm_rows!(moe, moe, bt.ffn_post_rms_2, eps_f)
 
-    # 3. Sum dense and moe in place into mlp, then post_ffw_norm
-    _g4_add!(mlp, mlp, moe)
-    _g4_rmsnorm_rows!(mlp, mlp, bt.ffn_post_rms, eps_f)
+        # 3. Sum dense and moe in place into mlp, then post_ffw_norm
+        _g4_add!(mlp, mlp, moe)
+        _g4_rmsnorm_rows!(mlp, mlp, bt.ffn_post_rms, eps_f)
+    end
     return mlp
 end
 
@@ -672,53 +770,72 @@ function _gemma4_generate_block!(backend, hp, kc_layer, vc_layer, bt, tensors, s
 
     # Attention pre-norm
     xn = _g4_mat!(scratch, :xn, N, E)
-    _g4_rmsnorm_rows!(xn, X, bt.attn_rms, eps_f)
+    @decode_stage :norm nothing _g4_rmsnorm_rows!(xn, X, bt.attn_rms, eps_f)
 
-    # Q, K, V projections
     Q = _g4_mat!(scratch, :Q, N, qdim)
-    _g4_gemm!(Q, xn, bt.wq)
     K = _g4_mat!(scratch, :K, N, kvdim)
-    _g4_gemm!(K, xn, bt.wk)
     V = _g4_mat!(scratch, :V, N, kvdim)
-    if haskey(bt, :wv) && bt.wv !== nothing
-        _g4_gemm!(V, xn, bt.wv)
-    else
-        V .= _gemma4_k_only_v!(backend, K)
-    end
-
-    # Q/K/V norms and RoPE
-    _g4_head_norm!(Q, nh, hd, bt.wq_norm, eps_f)
-    _g4_head_norm!(K, nkv, hd, bt.wk_norm, eps_f)
-    _gemma4_v_norm!(backend, V, eps_f; nheads=nkv, hd=hd)
-
-    n_rot = bt.rope_layer.rotary_dim == 0 ? hd : bt.rope_layer.rotary_dim
-    positions = (s0 - 1):(s1 - 1)
-    _apply_rope_neox!(backend, Q, positions, nh, hd, n_rot, bt.rope_layer.inv_freq)
-    _apply_rope_neox!(backend, K, positions, nkv, hd, n_rot, bt.rope_layer.inv_freq)
-
-    # Write K and V into per-layer KV cache for rows s0:s1. A quantized cache
-    # codes whole blocks, so the rows go through _kv_write_rows!.
-    _kv_write_rows!(kc_layer.storage, PermutedDimsArray(reshape(K, N, hd, nkv), (1, 3, 2)), s0)
-    _kv_write_rows!(vc_layer.storage, PermutedDimsArray(reshape(V, N, hd, nkv), (1, 3, 2)), s0)
-
-    # Attend over keys in 1:s1 with scale 1.0 and the sliding-window mask
     O = _g4_mat!(scratch, :O, N, qdim)
-    _g4_attend!(scratch, O, Q, kc_layer.storage, vc_layer.storage, s0, 0, win, nh, nkv, hd)
-
-    # Post attention norm & residual
     A = _g4_mat!(scratch, :A, N, E)
-    _g4_gemm!(A, O, bt.wo)
-    _g4_rmsnorm_rows!(A, A, bt.attn_post_rms, eps_f)
     attn_out = _g4_mat!(scratch, :attn_out, N, E)
-    _g4_add!(attn_out, A, X)
+    @decode_stage :attn_mixer nothing begin
+        # Q, K, V projections
+        @decode_sub :attn_proj nothing begin
+            if haskey(bt, :wv) && bt.wv !== nothing
+                _g4_gemms!((Q, K, V), xn, (bt.wq, bt.wk, bt.wv))
+            else
+                _g4_gemms!((Q, K), xn, (bt.wq, bt.wk))
+                V .= _gemma4_k_only_v!(backend, K)
+            end
+        end
+
+        # Q/K/V norms and RoPE
+        @decode_sub :attn_headnorm_rope nothing begin
+            _g4_head_norm!(Q, nh, hd, bt.wq_norm, eps_f)
+            _g4_head_norm!(K, nkv, hd, bt.wk_norm, eps_f)
+            _gemma4_v_norm!(backend, V, eps_f; nheads=nkv, hd=hd)
+
+            n_rot = bt.rope_layer.rotary_dim == 0 ? hd : bt.rope_layer.rotary_dim
+            positions = (s0 - 1):(s1 - 1)
+            _apply_rope_neox!(backend, Q, positions, nh, hd, n_rot, bt.rope_layer.inv_freq)
+            _apply_rope_neox!(backend, K, positions, nkv, hd, n_rot, bt.rope_layer.inv_freq)
+        end
+
+        # Write K and V into per-layer KV cache for rows s0:s1. A quantized cache
+        # codes whole blocks, so the rows go through _kv_write_rows!.
+        @decode_sub :attn_kv_append nothing begin
+            kst, vst = kc_layer.storage, vc_layer.storage
+            if kst isa G4KeyTiles && vst isa G4ValBlocks
+                _g4_kv_write!(kst, K, s0, nkv, hd)
+                _g4_kv_write!(vst, V, s0, nkv, hd)
+            elseif N == 1 && kst isa Array{Float32,3} && vst isa Array{Float32,3}
+                _g4_kv_write_row!(kst, K, s0, nkv, hd)
+                _g4_kv_write_row!(vst, V, s0, nkv, hd)
+            else
+                _kv_write_rows!(kst, PermutedDimsArray(reshape(K, N, hd, nkv), (1, 3, 2)), s0)
+                _kv_write_rows!(vst, PermutedDimsArray(reshape(V, N, hd, nkv), (1, 3, 2)), s0)
+            end
+        end
+
+        # Attend over keys in 1:s1 with scale 1.0 and the sliding-window mask
+        @decode_sub :attn_core nothing _g4_attend!(scratch, O, Q, kc_layer.storage, vc_layer.storage,
+                                                   s0, 0, win, nh, nkv, hd)
+
+        # Post attention norm & residual
+        @decode_sub :attn_outproj nothing _g4_gemm!(A, O, bt.wo)
+        _g4_rmsnorm_rows!(A, A, bt.attn_post_rms, eps_f)
+        _g4_add!(attn_out, A, X)
+    end
 
     # Parallel MoE FFN & optional layer output scale
     cur = _gemma4_parallel_moe_ffn!(backend, attn_out, bt, eps_f; scratch=scratch)
-    _g4_add!(cur, cur, attn_out)
-    if haskey(bt, :layer_output_scale) && bt.layer_output_scale !== nothing
-        _gemma4_layer_output_scale!(backend, cur, bt.layer_output_scale.storage)
+    @decode_stage :norm nothing begin
+        _g4_add!(cur, cur, attn_out)
+        if haskey(bt, :layer_output_scale) && bt.layer_output_scale !== nothing
+            _gemma4_layer_output_scale!(backend, cur, bt.layer_output_scale.storage)
+        end
+        X .= cur
     end
-    X .= cur
     return hp
 end
 

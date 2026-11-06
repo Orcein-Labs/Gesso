@@ -472,6 +472,84 @@ end
     @test O == by_rows(Q, kv, kv, 1, 0, 0, nh, nkv, hd)
 end
 
+@testset "Gemma4: tiled K and blocked V caches match the plain cache bit for bit" begin
+    inf = _gemma4_inf
+    rng = MersenneTwister(1105)
+    function filled(rows, nkv, hd)
+        K = randn(rng, Float32, rows, nkv * hd)
+        V = randn(rng, Float32, rows, nkv * hd)
+        kp = zeros(Float32, rows, nkv, hd); vp = zeros(Float32, rows, nkv, hd)
+        inf._kv_write_rows!(kp, PermutedDimsArray(reshape(K, rows, hd, nkv), (1, 3, 2)), 1)
+        inf._kv_write_rows!(vp, PermutedDimsArray(reshape(V, rows, hd, nkv), (1, 3, 2)), 1)
+        kt = inf.G4KeyTiles(rows, nkv, hd); vb = inf.G4ValBlocks(rows, nkv, hd)
+        # write in two pieces so row0 > 1 and a split inside a tile are covered
+        cut = max(1, rows ÷ 2 - 3)
+        inf._g4_kv_write!(kt, K[1:cut, :], 1, nkv, hd); inf._g4_kv_write!(vb, V[1:cut, :], 1, nkv, hd)
+        cut < rows && (inf._g4_kv_write!(kt, K[(cut + 1):rows, :], cut + 1, nkv, hd);
+                       inf._g4_kv_write!(vb, V[(cut + 1):rows, :], cut + 1, nkv, hd))
+        return kp, vp, kt, vb
+    end
+    attend(Q, kc, vc, s0, win, nh, nkv, hd) =
+        inf._g4_attend!(inf._Gemma4Scratch(), zeros(Float32, size(Q, 1), nh * hd), Q, kc, vc, s0, 0, win, nh, nkv, hd)
+
+    # (rows, N, win, nh, nkv, hd): N = 1 is decode, N > 1 with rows > N is
+    # prefill on top of a cache; nh = 9 over nkv = 3 is an odd GQA ratio.
+    cases = ((1, 1, 0, 4, 2, 32), (13, 1, 0, 4, 2, 64), (300, 1, 0, 4, 2, 32), (300, 1, 40, 4, 2, 32),
+             (77, 1, 0, 9, 3, 64), (40, 13, 0, 4, 2, 32), (90, 21, 16, 4, 1, 64), (9, 9, 0, 4, 2, 32))
+    saved = inf._G4_SPLIT_MIN_KEYS[]
+    try
+        for split in (1, saved, 10^9), (rows, N, win, nh, nkv, hd) in cases
+            inf._G4_SPLIT_MIN_KEYS[] = split
+            kp, vp, kt, vb = filled(rows, nkv, hd)
+            @test kt == kp && vb == vp
+            Q = 0.05f0 .* randn(rng, Float32, N, nh * hd)
+            s0 = rows - N + 1
+            O = attend(Q, kt, vb, s0, win, nh, nkv, hd)
+            @test O == attend(Q, kp, vp, s0, win, nh, nkv, hd)
+            # negative controls: a changed value, and (with more than one key,
+            # so softmax weights can move) a changed key, must move the output
+            vb2 = inf.G4ValBlocks(rows, nkv, hd); copyto!(vb2, vb)
+            vb2[rows, 1, 1] += 1.0f0
+            @test attend(Q, kt, vb2, s0, win, nh, nkv, hd) != O
+            if rows > 1
+                kt[rows, 1, 1] += 1.0f0
+                @test attend(Q, kt, vb, s0, win, nh, nkv, hd) != O
+            end
+        end
+    finally
+        inf._G4_SPLIT_MIN_KEYS[] = saved
+    end
+
+    # copies keep the layout and the values
+    kp, vp, kt, vb = filled(37, 2, 32)
+    kt2 = inf.G4KeyTiles(37, 2, 32); vb2 = inf.G4ValBlocks(37, 2, 32)
+    copyto!(kt2, kt); copyto!(vb2, vb)
+    @test kt2 == kp && vb2 == vp && Array(kt2) == kp && Array(vb2) == vp
+    @test_throws DimensionMismatch copyto!(inf.G4KeyTiles(36, 2, 32), kt)
+
+    # end to end: the 32-wide toy allocates tiled caches and must produce the
+    # same logits as the plain cache
+    spec = inf.spec_from_gguf_kv(_gemma4_toy_kv_wide())
+    model, tensors = _gemma4_bind(spec, _gemma4_toy(spec))
+    function gen(tiled)
+        old = inf._G4_KV_TILED[]
+        inf._G4_KV_TILED[] = tiled
+        rows = Matrix{Float32}[]
+        try
+            ids = Gesso.reference_generate(model, tensors, [3, 7, 1, 12, 5, 9, 2, 4, 8, 6, 11];
+                max_new_tokens=6, eos_ids=(), eps=spec.rms_norm_eps,
+                on_rows=(pos, M) -> push!(rows, Float32.(Array(M))))
+            return ids, rows
+        finally
+            inf._G4_KV_TILED[] = old
+        end
+    end
+    ids_t, rows_t = gen(true)
+    ids_p, rows_p = gen(false)
+    @test ids_t == ids_p
+    @test rows_t == rows_p
+end
+
 @testset "Gemma4: fallback experts grouped by token match the token loop" begin
     # Q4_1 has no native kernel, so every expert matmul dequantizes. Grouped
     # prefill runs one GEMM per expert; the token loop runs one row per slot.
