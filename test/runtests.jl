@@ -61,6 +61,7 @@ using Gesso: reference_prefill, reference_generate
     include("test_verify_window.jl")
     include("test_verify_window_batch.jl")
     include("test_verify_window_head.jl")
+    include("test_verify_window_commit.jl")
     include("test_ctx_checkpoints.jl")
     include("test_on_hidden.jl")
     include("test_mtp_draft.jl")

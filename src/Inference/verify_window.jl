@@ -320,7 +320,8 @@ function _window_gdn_block!(
     sc,
     eps,
     cache=nothing,
-    bi::Int=0,
+    bi::Int=0;
+    shared=nothing,
 )
     T = size(hwin, 1)
     sc === nothing && error(
@@ -334,20 +335,31 @@ function _window_gdn_block!(
     value_dim = nv * dv
     epsf = Float32(eps)
     ksz = spec.mixer.conv_kernel_dim
-    cols = _window_reuse!(cache, (:gdn, bi), (conv_dim, value_dim, nv, dk, dv, T)) do
-        (
-            zeros(Float32, conv_dim, T),
-            zeros(Float32, value_dim, T),
-            zeros(Float32, nv * dk, T),
-            zeros(Float32, nv * dk, T),
-            zeros(Float32, nv * dv, T),
-            zeros(Float32, nv, T),
-            zeros(Float32, nv, T),
-            zeros(Float32, nv * dv, T),
-        )
+    ckey = (conv_dim, value_dim, nv, dk, dv, T)
+    make_cols() = (
+        zeros(Float32, conv_dim, T),
+        zeros(Float32, value_dim, T),
+        zeros(Float32, nv * dk, T),
+        zeros(Float32, nv * dk, T),
+        zeros(Float32, nv * dv, T),
+        zeros(Float32, nv, T),
+        zeros(Float32, nv, T),
+        zeros(Float32, nv * dv, T),
+    )
+    # A committing window (prompt prefill) takes each block's state as soon as the
+    # block ends, so its records are dead by the next block and every block of
+    # the window shares one set. Each block writes every record column before
+    # reading it, so a shared set needs no zeroing.
+    cols = if shared === nothing
+        _window_reuse!(make_cols, cache, (:gdn, bi), ckey)
+    else
+        hit = get(shared, :gdn_cols, nothing)
+        hit !== nothing && hit[1] == ckey ? hit[2] : (shared[:gdn_cols] = (ckey, make_cols()))[2]
     end
     # the state this block's last commit displaced, if it can take the new state
-    spare = cache === nothing ? nothing : pop!(cache, (:spare, bi), nothing)
+    spare =
+        shared !== nothing ? pop!(shared, :gdn_spare, nothing) :
+        cache === nothing ? nothing : pop!(cache, (:spare, bi), nothing)
     rec_out =
         spare isa Array{Float32, 3} && size(spare) == size(rec_in) && spare !== rec_in ?
         fill!(spare, 0.0f0) : zeros(Float32, size(rec_in))
@@ -416,6 +428,7 @@ function _window_attn_block!(
     theta,
     inv_freq,
     rotary_dim::Int=0,
+    shared=nothing,
 )
     T = size(hwin, 1)
     gated = haskey(bt, :wattn_gate)
@@ -449,6 +462,7 @@ function _window_attn_block!(
             theta,
             inv_freq,
             rotary_dim,
+            shared,
         )
         @decode_sub :attn_outproj cpu _window_matmul!(cpu, W.sub, W.attn_merged, bt.wo, wl, zeros_like)
         return W.sub
@@ -518,16 +532,17 @@ function _window_attn_rows_cpu!(
     theta,
     inv_freq,
     rotary_dim::Int=0,
+    shared=nothing,
 )
     T = size(W.q, 1)
     gated = haskey(bt, :wattn_gate)
     head_gated = haskey(bt, :wattn_head_gate)
-    Qw = similar(bufs.qh.storage, T, n_heads, d_head)
-    Kw = similar(bufs.kh.storage, T, n_kv_heads, d_head)
-    Vw = similar(bufs.vh.storage, T, n_kv_heads, d_head)
-    Aw = similar(bufs.attn.storage, T, n_heads, d_head)
+    Qw = _window_shared(bufs.qh.storage, shared, :attn_q, (T, n_heads, d_head))
+    Kw = _window_shared(bufs.kh.storage, shared, :attn_k, (T, n_kv_heads, d_head))
+    Vw = _window_shared(bufs.vh.storage, shared, :attn_v, (T, n_kv_heads, d_head))
+    Aw = _window_shared(bufs.attn.storage, shared, :attn_out, (T, n_heads, d_head))
     if head_gated
-        GH = similar(bufs.gate_head.storage, T, n_heads)
+        GH = _window_shared(bufs.gate_head.storage, shared, :attn_gh, (T, n_heads))
         if _head_gate_host(GH) && _head_gate_host(W.normed) &&
            _head_gate_host(bt.wattn_head_gate.storage)
             _head_gate_proj!(GH, W.normed, bt.wattn_head_gate.storage)
@@ -582,6 +597,18 @@ function _window_attn_rows_cpu!(
     gated && _sigmoid_mul!(cpu, M, M, W.gate)
     head_gated && _head_gate_mul!(cpu, M, GH, d_head)
     return M
+end
+
+# An uninitialized array like `similar(like, dims)`, kept in `shared[slot]` so
+# the blocks of one window reuse it. Its users overwrite all of it.
+function _window_shared(like, shared, slot::Symbol, dims::Dims)
+    shared === nothing && return similar(like, dims)
+    key = (typeof(like), dims)
+    hit = get(shared, slot, nothing)
+    hit !== nothing && hit[1] == key && return hit[2]
+    a = similar(like, dims)
+    shared[slot] = (key, a)
+    return a
 end
 
 # The batched rows run in the window's element type end to end. Decode moves
@@ -747,7 +774,11 @@ end
 # Row t writes its KV row at base+t-1 and attends over rows 1 .. base+t-1 only.
 # Nothing in `gdn_conv` or `gdn_rec` changes: the window works on copies, and
 # `_commit_window!` decides what survives. With `head=false` the window skips the
-# logits, which is how a prompt prefill uses it.
+# logits, which is how a prompt prefill uses it. With `commit=true` every row is
+# accepted up front (a prompt prefill): each GDN block's conv and recurrent state
+# is committed as soon as the block ends, exactly as `_commit_window!` with m = T
+# would, so the blocks share one set of record buffers; the window then keeps no
+# records and `_commit_window!` only takes the last hidden row.
 function _decode_window!(
     model,
     tensors,
@@ -771,6 +802,7 @@ function _decode_window!(
     rotary_dim::Int=0,
     head::Bool=true,
     taps::AbstractVector{Int}=Int[],
+    commit::Bool=false,
 )
     T = length(toks)
     T >= 1 || error("verify window: empty window")
@@ -829,6 +861,9 @@ function _decode_window!(
         )
     end
     recs = Vector{Any}(nothing, length(model.blocks))
+    # per-window buffers the blocks hand to each other (attention row arrays, and
+    # with `commit` the GDN records); they die with the window
+    shared = Dict{Symbol, Any}()
     for (bi, blk) in enumerate(model.blocks)
         bt = tensors.blocks[bi]
         if _block_mixer(bt) === :linear_attention
@@ -846,8 +881,18 @@ function _decode_window!(
                 cpu_scratch,
                 eps,
                 cache,
-                bi,
+                bi;
+                shared=commit ? shared : nothing,
             )
+            if commit
+                rec = recs[bi]
+                gdn_conv[bi] .= _gdn_conv_rebuild(gdn_conv[bi], rec.mixed, T)
+                # the displaced state is dead (checkpoints copy), so the next
+                # block writes its state there
+                shared[:gdn_spare] = gdn_rec[bi]
+                gdn_rec[bi] = rec.rec_out
+                recs[bi] = nothing
+            end
             subT = W.sub
         else
             subT = @decode_stage :attn_mixer cpu _window_attn_block!(
@@ -872,6 +917,7 @@ function _decode_window!(
                 theta,
                 inv_freq,
                 rotary_dim,
+                shared,
             )
         end
         _window_ffn_block!(bt, hwin, subT, W, bufs, cpu, wl, zeros_like; eps)

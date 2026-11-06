@@ -2131,6 +2131,7 @@ function _reference_generate(
                     rotary_dim,
                     head=false,
                     taps,
+                    commit=true,
                 )
                 _commit_window!(win, n, gdn_conv, gdn_rec, h)
                 on_rows === nothing ||
