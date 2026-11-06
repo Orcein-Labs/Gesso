@@ -36,10 +36,16 @@ Base.@kwdef mutable struct _Gemma4Scratch
     experts::Any = nothing  # _G4MoeScratch, built on first batched decode
 end
 
+# A scratch matrix of size (m, n). A new shape reuses the old backing memory
+# when it is large enough: the attention scratch flips between the SWA and the
+# global head size every layer, and fresh matrices there were a third of a
+# Gemma4 pp512's allocated bytes. Callers overwrite the contents.
 @inline function _g4_mat!(s::_Gemma4Scratch, field::Symbol, m::Int, n::Int)
     M = getfield(s, field)
     if size(M) != (m, n)
-        M = Matrix{Float32}(undef, m, n)
+        mem = M.ref.mem
+        M = length(mem) >= m * n ? Base.wrap(Array, memoryref(mem), (m, n)) :
+            Matrix{Float32}(undef, m, n)
         setfield!(s, field, M)
     end
     return M

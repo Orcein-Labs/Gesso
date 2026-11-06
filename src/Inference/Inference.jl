@@ -2060,6 +2060,7 @@ function _reference_generate(
         end
         kc, vc, h = st.kc, st.vc, st.h
         g4_scratch = _Gemma4Scratch()
+        all_g4 = all(bt -> haskey(bt, :gemma4_layer), tensors.blocks)
         gdn_conv, gdn_rec, gdn_scratch, cpu_scratch =
             st.gdn_conv, st.gdn_rec, st.gdn_scratch, st.cpu_scratch
         kdim = n_kv_heads * d_head
@@ -2145,30 +2146,33 @@ function _reference_generate(
             K = s1                                   # keys: every cached row so far
             positions = collect((s0-1):(s1-1))
             tmp = pass_tmp
-            normed = Activation(; shape=(n, dim), storage=tmp((n, dim)))
-            q = Activation(; shape=(n, qdim), storage=tmp((n, qdim)))
-            gate_attn = Activation(; shape=(n, qdim), storage=tmp((n, qdim)))
-            gate_head = Activation(; shape=(n, n_heads), storage=tmp((n, n_heads)))
-            k = Activation(; shape=(n, kdim), storage=tmp((n, kdim)))
-            v = Activation(; shape=(n, kdim), storage=tmp((n, kdim)))
-            qh = Activation(; shape=(n, n_heads, d_head), storage=tmp((n, n_heads, d_head)))
+            # Gemma4 blocks keep their own scratch and touch only hp: when every
+            # block is one, the generic buffers get no rows (~160 MB a pp512).
+            nr = all_g4 ? 0 : n
+            normed = Activation(; shape=(nr, dim), storage=tmp((nr, dim)))
+            q = Activation(; shape=(nr, qdim), storage=tmp((nr, qdim)))
+            gate_attn = Activation(; shape=(nr, qdim), storage=tmp((nr, qdim)))
+            gate_head = Activation(; shape=(nr, n_heads), storage=tmp((nr, n_heads)))
+            k = Activation(; shape=(nr, kdim), storage=tmp((nr, kdim)))
+            v = Activation(; shape=(nr, kdim), storage=tmp((nr, kdim)))
+            qh = Activation(; shape=(nr, n_heads, d_head), storage=tmp((nr, n_heads, d_head)))
             kh = Activation(;
-                shape=(n, n_kv_heads, d_head),
-                storage=tmp((n, n_kv_heads, d_head)),
+                shape=(nr, n_kv_heads, d_head),
+                storage=tmp((nr, n_kv_heads, d_head)),
             )
             vh = Activation(;
-                shape=(n, n_kv_heads, d_head),
-                storage=tmp((n, n_kv_heads, d_head)),
+                shape=(nr, n_kv_heads, d_head),
+                storage=tmp((nr, n_kv_heads, d_head)),
             )
             attn =
-                Activation(; shape=(n, n_heads, d_head), storage=tmp((n, n_heads, d_head)))
-            merged = Activation(; shape=(n, qdim), storage=tmp((n, qdim)))
-            sub = Activation(; shape=(n, dim), storage=tmp((n, dim)))
-            normed2 = Activation(; shape=(n, dim), storage=tmp((n, dim)))
-            gate = Activation(; shape=(n, hidden_ffn), storage=tmp((n, hidden_ffn)))
-            up = Activation(; shape=(n, hidden_ffn), storage=tmp((n, hidden_ffn)))
-            act = Activation(; shape=(n, hidden_ffn), storage=tmp((n, hidden_ffn)))
-            down = Activation(; shape=(n, dim), storage=tmp((n, dim)))
+                Activation(; shape=(nr, n_heads, d_head), storage=tmp((nr, n_heads, d_head)))
+            merged = Activation(; shape=(nr, qdim), storage=tmp((nr, qdim)))
+            sub = Activation(; shape=(nr, dim), storage=tmp((nr, dim)))
+            normed2 = Activation(; shape=(nr, dim), storage=tmp((nr, dim)))
+            gate = Activation(; shape=(nr, hidden_ffn), storage=tmp((nr, hidden_ffn)))
+            up = Activation(; shape=(nr, hidden_ffn), storage=tmp((nr, hidden_ffn)))
+            act = Activation(; shape=(nr, hidden_ffn), storage=tmp((nr, hidden_ffn)))
+            down = Activation(; shape=(nr, dim), storage=tmp((nr, dim)))
             # (n, K) score buffers, made on the first layer that needs them:
             # each query row masks the keys after its own position, the
             # softmax's K - L offset

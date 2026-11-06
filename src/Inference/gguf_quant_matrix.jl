@@ -691,15 +691,87 @@ function _quant_matmul_multi!(dst::AbstractMatrix, x::AbstractMatrix, q::QuantMa
     # weight row.
     prep = simd && _q6k_prep_type(q.ggml_type)
     mem = _prefill_act_acquire(_q80_act_type(q.ggml_type), seq, q.ne0, prep)
+    sc = _multi_scratch_acquire()
     try
-        _quant_matmul_multi!(dst, x, q, _prefill_quantize(q.ggml_type, x, seq, q.ne0, prep, mem))
+        xqs = _prefill_quantize(q.ggml_type, x, seq, q.ne0, prep, mem)
+        _quant_matmul_multi!(dst, x, q, xqs, sc)
     finally
+        _multi_scratch_release(sc)
         _prefill_act_release(mem)
     end
     return dst
 end
 
-function _quant_matmul_multi!(dst::AbstractMatrix, x::AbstractMatrix, q::QuantMatrix, xqs)
+# Scratch of the multi path that outlives one call only: the d table and packed
+# quants of one quantized activation set, and the chunks' output rows. The
+# tables depend on the activations alone, so the weights of one
+# _quant_matmul_shared! build them once. Fresh tables per matmul were ~50 MB of
+# a Gemma4 pp512's 1.09 GB of allocations, the chunk rows another 110 MB, and
+# the collections they caused took ~7% of its wall time.
+mutable struct _MultiScratch
+    d::Vector{Float32}
+    q::Vector{Int8}
+    s::Vector{Float32}
+    out::Vector{Float32}
+    xqs::Any        # the activation set the tables were built from
+    dtab::Bool      # d holds its d table
+    packed::Bool    # q and s hold its packed quants
+end
+
+_MultiScratch() = _MultiScratch(Float32[], Int8[], Float32[], Float32[], nothing, false, false)
+
+const _MULTI_SCRATCH_POOL = _MultiScratch[]
+const _MULTI_SCRATCH_LOCK = ReentrantLock()
+const _MULTI_SCRATCH_POOL_MAX = 4
+const _MULTI_SCRATCH_POOL_BYTES = 64 << 20
+
+function _multi_scratch_acquire()
+    sc = lock(_MULTI_SCRATCH_LOCK) do
+        isempty(_MULTI_SCRATCH_POOL) ? nothing : pop!(_MULTI_SCRATCH_POOL)
+    end
+    return sc === nothing ? _MultiScratch() : sc
+end
+
+function _multi_scratch_release(sc::_MultiScratch)
+    sc.xqs = nothing
+    sc.dtab = sc.packed = false
+    sizeof(sc.d) + sizeof(sc.q) + sizeof(sc.s) + sizeof(sc.out) > _MULTI_SCRATCH_POOL_BYTES &&
+        return
+    lock(_MULTI_SCRATCH_LOCK) do
+        length(_MULTI_SCRATCH_POOL) < _MULTI_SCRATCH_POOL_MAX && push!(_MULTI_SCRATCH_POOL, sc)
+    end
+    return
+end
+
+# The table a weight type's tiles read for xqs (see _quant_matmul_multi!),
+# built into sc on first use for that xqs.
+function _multi_tables!(sc::_MultiScratch, xqs, ggml_type::Int32, simd::Bool)
+    (simd && _multi_dt_type(ggml_type)) || return nothing
+    if sc.xqs !== xqs
+        sc.xqs = xqs
+        sc.dtab = sc.packed = false
+    end
+    if _multi_pack_type(ggml_type)
+        if !sc.packed
+            _multi_packed!(sc.d, sc.q, xqs, sc.s)
+            sc.dtab = sc.packed = true
+        end
+        return _MultiPacked(sc.d, sc.q, sc.s)
+    end
+    if !sc.dtab
+        _multi_d_table!(sc.d, xqs)
+        sc.dtab = true
+    end
+    return sc.d
+end
+
+function _quant_matmul_multi!(
+    dst::AbstractMatrix,
+    x::AbstractMatrix,
+    q::QuantMatrix,
+    xqs,
+    sc::_MultiScratch=_MultiScratch(),
+)
     seq = size(x, 1)
     simd = q8k_simd_enabled()
     # Ticketed chunks as in the decode GEMV: one chunk per thread waits on the
@@ -709,11 +781,11 @@ function _quant_matmul_multi!(dst::AbstractMatrix, x::AbstractMatrix, q::QuantMa
     # The tiles of the K-quants, Q8_0, Q4_0, IQ4_NL, Q5_1 and IQ2_XS read their
     # columns' d values from one table; all but the K-quants also read their
     # columns' quants interleaved, one pointer per tile.
-    dt =
-        !(simd && _multi_dt_type(q.ggml_type)) ? nothing :
-        _multi_pack_type(q.ggml_type) ? _multi_packed(xqs) : _multi_d_table(xqs)
-    chunk =
-        _PrefillChunk(dst, _quant_bytes(q), xqs, dt, q.ggml_type, q.ne0, q.nrows, nc, simd)
+    dt = _multi_tables!(sc, xqs, q.ggml_type, simd)
+    length(sc.out) < nc * seq && resize!(sc.out, nc * seq)
+    chunk = _PrefillChunk(
+        dst, _quant_bytes(q), xqs, dt, sc.out, q.ggml_type, q.ne0, q.nrows, nc, simd,
+    )
     _run_row_chunks!(chunk, nc, q.nrows * q.ne0 * seq)
     return dst
 end
@@ -735,12 +807,14 @@ function _quant_matmul_shared!(dsts::Tuple, x::AbstractMatrix, qs::Tuple)
         size(dsts[i]) == (seq, q.nrows) || return false
     end
     mem = _prefill_act_acquire(q80, seq, ne0, prep)
+    sc = _multi_scratch_acquire()
     try
         xqs = _prefill_quantize(t1, x, seq, ne0, prep, mem)
         for i in eachindex(qs)
-            _quant_matmul_multi!(dsts[i], x, qs[i], xqs)
+            _quant_matmul_multi!(dsts[i], x, qs[i], xqs, sc)
         end
     finally
+        _multi_scratch_release(sc)
         _prefill_act_release(mem)
     end
     return true
@@ -872,6 +946,7 @@ struct _PrefillChunk{
     bytes::B
     xqs::X
     dt::T
+    out::Vector{Float32}  # nc rows of seq, one per chunk
     ggml_type::Int32
     ne0::Int
     nrows::Int
@@ -884,7 +959,7 @@ function (p::_PrefillChunk)(c::Int)
     j1 = div(c * p.nrows, p.nc)
     rb = _qrow_bytes(p.ggml_type, p.ne0)
     seq = length(p.xqs)
-    buf = Vector{Float32}(undef, seq)
+    buf = view(p.out, ((c-1)*seq+1):(c*seq))
     @inbounds for b0 in j0:_MULTI_ROW_BLOCK:j1
         b1 = min(b0 + _MULTI_ROW_BLOCK - 1, j1)
         t0 = 1
