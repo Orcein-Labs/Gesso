@@ -1060,13 +1060,21 @@ end
 # every 32-value chunk in pair order, and `xb` is xp biased by 128 (the bytes
 # xp + 128 as unsigned, i.e. xp with the sign bit flipped), which the Q6_K
 # kernel reads. `d` is `q.d` and `q` the source, which the per-column fallback
-# reads.
+# reads. `mo` holds each 32-value chunk's 16 offset words 32 * (xp[2m-1] + xp[2m])
+# at the chunk's byte offset in `xp`, for the K = 1 decode kernel, where the
+# biased form's per-row weight correction is not shared across tokens. Prefill
+# views leave it empty (the multi tiles read only `xb`).
 struct Q6KPrepVec
     d::Vector{Float32}
     q::Q8KVec
     xp::Vector{Int8}
     xb::Vector{Int8}
+    mo::Vector{Int16}
 end
+
+Q6KPrepVec(d, q, xp, xb) = Q6KPrepVec(d, q, xp, xb, Int16[])
+
+_q6k_has_mo(x::Q6KPrepVec) = length(x.mo) == length(x.xp) >> 1
 
 Base.length(x::Q6KPrepVec) = length(x.q)
 
@@ -1084,18 +1092,31 @@ const _Q6K_SRC =
 
 function _q6k_prep(x::Q8KVec)
     n = length(x.qs)
-    return _q6k_prep!(Q6KPrepVec(x.d, x, Vector{Int8}(undef, n), Vector{Int8}(undef, n)))
+    return _q6k_prep!(
+        Q6KPrepVec(x.d, x, Vector{Int8}(undef, n), Vector{Int8}(undef, n), Vector{Int16}(undef, n >> 1)),
+    )
 end
 
-# Refills p.xp and p.xb from p.q, for a column reused across batches.
+# Refills p.xp, p.xb and (when present) p.mo from p.q, for a column reused
+# across batches.
 function _q6k_prep!(p::Q6KPrepVec)
-    qs, xp, xb = p.q.qs, p.xp, p.xb
+    qs, xp, xb, mo = p.q.qs, p.xp, p.xb, p.mo
+    hasmo = _q6k_has_mo(p)
+    # Separate passes: the gather, then mo, then xb as one flat xor. Fusing the
+    # three into one loop stopped LLVM vectorizing it and made the prep 3x slower,
+    # which a single-token decode pays on every matmul.
     @inbounds for o in 0:32:(length(qs)-1)
         for k in 1:32
-            v = qs[o+_Q6K_SRC[k]+1]
-            xp[o+k] = v
-            xb[o+k] = v ⊻ typemin(Int8)
+            xp[o+k] = qs[o+_Q6K_SRC[k]+1]
         end
+        if hasmo
+            for m in 1:16
+                mo[o>>1+m] = Int16(32) * (Int16(xp[o+2m-1]) + Int16(xp[o+2m]))
+            end
+        end
+    end
+    @inbounds @simd for i in 1:length(qs)
+        xb[i] = xp[i] ⊻ typemin(Int8)
     end
     return p
 end
@@ -1273,6 +1294,97 @@ end
         sums = _q6k_prep_multi_step(pointer(w, b + 1), pq, sums, d)
     end
     return _multi_totals(sums, ntuple(_ -> 0.0f0, Val(K)))
+end
+
+# The K = 1 decode form (the pre-ACTBIAS kernel): unsigned weights against the
+# signed column, minus the column's offset words `mo`, so each half-tile costs one
+# vpmaddubsw and one vpmaddwd instead of the biased form's two of each (whose
+# weight correction a K = 1 call cannot share). The integer lanes are the same
+# exact sums, so the row has the same bits.
+function _kq_ir_q6k_mo_k1()
+    io = IOBuffer()
+    print(
+        io,
+        "declare <8 x i32> @llvm.x86.avx2.permd(<8 x i32>, <8 x i32>)\n",
+        "declare <32 x i8> @llvm.x86.avx2.pshuf.b(<32 x i8>, <32 x i8>)\n",
+        "declare <16 x i16> @llvm.x86.avx2.pmadd.ub.sw(<32 x i8>, <32 x i8>)\n",
+        "declare <8 x i32> @llvm.x86.avx2.pmadd.wd(<16 x i16>, <16 x i16>)\n",
+        "define <8 x float> @entry(ptr %w, ptr %q0, ptr %m0, <8 x float> %s, <8 x float> %d) #0 {\n",
+        "  %scbp = getelementptr i8, ptr %w, i64 192\n",
+        "  %scb = load <16 x i8>, ptr %scbp, align 1\n",
+        "  %scw = sext <16 x i8> %scb to <16 x i16>\n",
+    )
+    acc = ["zeroinitializer"]
+    for h in 0:1
+        _kq_ld(io, "qh$h", "w", 128 + 32 * h)
+        for t in 0:3
+            ht = "$(h)$t"
+            i = 8 * h + 2 * t
+            _kq_ld(io, "ql$ht", "w", 64 * h + 32 * (t & 1))
+            if t < 2
+                print(io, "  %nb$ht = and <32 x i8> %ql$ht, splat (i8 15)\n")
+            else
+                print(
+                    io,
+                    "  %nh$ht = lshr <32 x i8> %ql$ht, splat (i8 4)\n",
+                    "  %nb$ht = and <32 x i8> %nh$ht, splat (i8 15)\n",
+                )
+            end
+            print(
+                io,
+                "  %hs$ht = lshr <32 x i8> %qh$h, splat (i8 $(2t))\n",
+                "  %hm$ht = and <32 x i8> %hs$ht, splat (i8 3)\n",
+                "  %hb$ht = shl <32 x i8> %hm$ht, splat (i8 4)\n",
+                "  %uv$ht = or <32 x i8> %nb$ht, %hb$ht\n",
+            )
+            _q6k_pair_order(io, "up$ht", "uv$ht")
+            print(
+                io,
+                "  %sw$ht = shufflevector <16 x i16> %scw, <16 x i16> poison, <16 x i32> <",
+                join(("i32 $(isodd(k) ? i + 1 : i)" for k in 0:15), ", "),
+                ">\n",
+            )
+            off = 128 * h + 32 * t
+            _kq_ld(io, "xp0.$ht", "q0", off)
+            print(
+                io,
+                "  %mp0.$ht = getelementptr i8, ptr %m0, i64 $off\n",
+                "  %mo0.$ht = load <16 x i16>, ptr %mp0.$ht, align 1\n",
+                "  %mu0.$ht = call <16 x i16> @llvm.x86.avx2.pmadd.ub.sw(<32 x i8> %up$ht, <32 x i8> %xp0.$ht)\n",
+                "  %mf0.$ht = sub <16 x i16> %mu0.$ht, %mo0.$ht\n",
+                "  %ms0.$ht = call <8 x i32> @llvm.x86.avx2.pmadd.wd(<16 x i16> %mf0.$ht, <16 x i16> %sw$ht)\n",
+                "  %A0.$ht = add <8 x i32> $(acc[1]), %ms0.$ht\n",
+            )
+            acc[1] = "%A0.$ht"
+        end
+    end
+    _kq_multi_lanes_ret(io, acc, 1)
+    return String(take!(io))
+end
+
+const _Q6K_V1 = NTuple{8, VecElement{Float32}}
+@eval @inline _q6k_mo_step(pw::Ptr{UInt8}, pq::Ptr{Int8}, pm::Ptr{Int8}, s::_Q6K_V1, d::_Q6K_V1) =
+    @x86_llvmcall(
+        ($(_kq_ir_q6k_mo_k1()), "entry"),
+        _Q6K_V1,
+        Tuple{Ptr{UInt8}, Ptr{Int8}, Ptr{Int8}, _Q6K_V1, _Q6K_V1},
+        pw,
+        pq,
+        pm,
+        s,
+        d,
+    )
+
+# The K = 1 total of the row at woff through _q6k_mo_step.
+@inline function _q6k_mo_row(w::AbstractVector{UInt8}, woff::Int, xv::Tuple{Q6KPrepVec}, px::Ptr{Int8}, pm::Ptr{Int8}, nb::Int)
+    sums = ntuple(_ -> VecElement(0.0f0), Val(8))
+    @inbounds for ib in 0:(nb-1)
+        b = woff + ib * 210
+        dw = _kq_f16(w, b + 208)
+        d = _multi_q6k_scales(_multi_tile_d(nothing, xv, 0, ib, dw))
+        sums = _q6k_mo_step(pointer(w, b + 1), px + ib * QK_K, pm + ib * QK_K, sums, d)
+    end
+    return _multi_totals(sums, (0.0f0,))
 end
 
 # ------------------------------------------------------- Q6_K decoded row blocks
@@ -3237,11 +3349,29 @@ end
 
 @noinline function _rows_q6k_k1!(dst, w, base, rb, x::Q6KPrepVec, j0, j1)
     nb = length(x.d)
+    _q6k_has_mo(x) && _q6k_mo_enabled() && return _rows_q6k_k1_mo!(dst, w, base, rb, x, j0, j1)
     GC.@preserve w x begin
         xv = (x,)
         px = (pointer(x.xb),)
         @inbounds for j in j0:j1
             tot = _q6k_prep_multi_row(w, base + (j - 1) * rb, xv, px, nb, nothing, 0)
+            dst[1, j] = 1.0f0 * tot[1].value + 0.0f0
+        end
+    end
+    return dst
+end
+
+# GESSO_Q6K_K1_MO=0 sends K = 1 rows to the biased kernel (for A/B; same bits).
+_q6k_mo_enabled() = get(ENV, "GESSO_Q6K_K1_MO", "1") != "0"
+
+@noinline function _rows_q6k_k1_mo!(dst, w, base, rb, x::Q6KPrepVec, j0, j1)
+    nb = length(x.d)
+    GC.@preserve w x begin
+        xv = (x,)
+        px = pointer(x.xp)
+        pm = Ptr{Int8}(pointer(x.mo))
+        @inbounds for j in j0:j1
+            tot = _q6k_mo_row(w, base + (j - 1) * rb, xv, px, pm, nb)
             dst[1, j] = 1.0f0 * tot[1].value + 0.0f0
         end
     end

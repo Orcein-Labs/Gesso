@@ -302,6 +302,69 @@ end
     end
 end
 
+# Decode (K = 1) Q6_K rows take the offset-word (mo) kernel when the prep has
+# mo. It must give the biased kernel's bits and _dot_q8k's bits, on random and
+# integer-extreme rows; a prep without mo (the prefill view) and
+# GESSO_Q6K_K1_MO=0 take the biased kernel; a corrupted mo must change the bits.
+@testset "K = 1 Q6_K mo kernel matches the biased kernel" begin
+    if _GI.q8k_simd_enabled()
+        rng = Xoshiro(20261107)
+        ty = _GI.GGML_TYPE_Q6_K
+        bsz = _GI._ggml_traits(ty).type_size
+        for ne0 in (256, 768, 2816), xkind in (:randn, :extreme)
+            nb = div(ne0, _GI.QK_K)
+            rb = _GI._qrow_bytes(ty, ne0)
+            n = 37
+            x = xkind === :randn ? randn(rng, Float32, ne0) :
+                rand(rng, (-1000.0f0, 1000.0f0), ne0)
+            p = _GI._q6k_prep(_GI.Q8KVec(nb))
+            _GI.quantize_q8_K!(p.q, x)
+            _GI._q6k_prep!(p)
+            @test _GI._q6k_has_mo(p)
+            p0 = _GI.Q6KPrepVec(p.d, p.q, p.xp, p.xb)
+            @test !_GI._q6k_has_mo(p0)
+            w = _group_random_kq(rng, ty, n, ne0)
+            # integer extremes: rows 3-5 all-ones / all-zero / mixed quants,
+            # scales -128 / 127, d = 1.0
+            for (r, qb, sc) in ((3, 0xff, 0x80), (4, 0x00, 0x7f), (5, 0x0f, 0x80))
+                for blk in 0:(nb-1)
+                    o = (r - 1) * rb + blk * bsz
+                    w.data[o+1:o+192] .= qb == 0x0f ? rand(rng, (0x00, 0xff), 192) : qb
+                    w.data[o+193:o+208] .= sc
+                    w.data[o+209] = 0x00
+                    w.data[o+210] = 0x3c
+                end
+            end
+            ref = fill(NaN32, 1, n)
+            _GI._dot_q8k_rows_k1!(ref, ty, w.data, w.offset0, rb, p0, 1, n)
+            for j in 1:n
+                @test ref[1, j] == _GI._dot_q8k(ty, w.data, w.offset0 + (j - 1) * rb, p.q, true)
+            end
+            got = fill(NaN32, 1, n)
+            _GI._dot_q8k_rows_k1!(got, ty, w.data, w.offset0, rb, p, 2, 20)
+            _GI._dot_q8k_rows_k1!(got, ty, w.data, w.offset0, rb, p, 21, n - 1)
+            @test isnan(got[1, 1]) && isnan(got[1, n])
+            @test _bits(got[1, 2:(n-1)]) == _bits(ref[1, 2:(n-1)])
+            off = fill(NaN32, 1, n)
+            withenv("GESSO_Q6K_K1_MO" => "0") do
+                _GI._dot_q8k_rows_k1!(off, ty, w.data, w.offset0, rb, p, 1, n)
+            end
+            @test _bits(off) == _bits(ref)
+            # refill: a stale mo is rewritten by _q6k_prep!
+            fill!(p.mo, Int16(0))
+            _GI._q6k_prep!(p)
+            all1 = fill(NaN32, 1, n)
+            _GI._dot_q8k_rows_k1!(all1, ty, w.data, w.offset0, rb, p, 1, n)
+            @test _bits(all1) == _bits(ref)
+            # negative control: one corrupted offset word must change the bits
+            p.mo[1] += Int16(32)
+            bad = fill(NaN32, 1, n)
+            _GI._dot_q8k_rows_k1!(bad, ty, w.data, w.offset0, rb, p, 1, n)
+            @test _bits(bad) != _bits(ref)
+        end
+    end
+end
+
 @testset "decode FFN activation on the pool matches the serial loop" begin
     rng = Xoshiro(20261101)
     cpu = _GI.CPUBackend()
