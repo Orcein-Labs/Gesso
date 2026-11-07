@@ -3355,6 +3355,7 @@ include("gemma4_moe_host.jl")       # batched top-k GELU experts for Gemma 4 hos
 include("gemma4_kv_layout.jl")      # tiled K / blocked V caches for Gemma 4 CPU decode
 include("gemma4_attn_tile.jl")      # eight-row SIMD attention tiles for Gemma 4 prefill
 include("cpu_decode.jl")           # CPU seq = 1 GDN decode: preallocated F32 mixer
+include("cpu_attn_decode.jl")      # Float32 decode attention: SIMD tiles, kv-head groups
 include("sampling.jl")             # opt-in temperature/top-p sampler for reference_generate
 include("verify_window.jl")        # speculative verify window: layer-major rows, fused GDN, commit
 include("mtp_draft.jl")           # MTP (nextn) draft head over the target's hidden rows
