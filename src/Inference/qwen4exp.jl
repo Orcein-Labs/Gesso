@@ -165,7 +165,10 @@ function _q4x_mm(W::QuantMatrix, x::AbstractMatrix)
     return y
 end
 
-_q4x_mm(m::Qwen4expModel, x::AbstractMatrix, name::String) = _q4x_mm(_q4x_w(m, name), x)
+# The tensor cache is Dict{String, Any}; the assert gives callers a concrete type
+# so their loops compile without dynamic dispatch.
+_q4x_mm(m::Qwen4expModel, x::AbstractMatrix, name::String) =
+    _q4x_mm(_q4x_w(m, name), x)::Matrix{Float32}
 
 # Rows of an embedding table for 0-based ids, (length(ids), width).
 _q4x_rows(W::AbstractMatrix, ids) = Matrix{Float32}(W[ids .+ 1, :])
@@ -284,7 +287,7 @@ function _q4x_ple_embed(m::Qwen4expModel, st::Qwen4expState, tokens::Vector{Int}
     toks = vcat(st.ple_tokens, tokens)
     T = length(tokens)
     rows = _q4x_ple_rows(cfg, toks, T)
-    buf = _q4x_rows(_q4x_w(m, "per_layer_token_embd.weight"), rows)
+    buf = _q4x_rows(_q4x_w(m, "per_layer_token_embd.weight"), rows)::Matrix{Float32}
     nh = length(rows) ÷ T
     d = size(buf, 2)
     out = Matrix{Float32}(undef, T, nh * d)
@@ -374,14 +377,17 @@ function _q4x_gdn(m::Qwen4expModel, st::Qwen4expState, il::Int, x, taps)
     craw = _q4x_causal_conv!(hist, qkv, _q4x_w(m, p * "ssm_conv1d.weight"), k, 1)
     c = _q4x_silu.(craw)
     nq = nk * dk
-    q = permutedims(reshape(c[:, 1:nq], T, dk, nk), (1, 3, 2))
-    kk = permutedims(reshape(c[:, nq+1:2nq], T, dk, nk), (1, 3, 2))
-    v = permutedims(reshape(c[:, 2nq+1:end], T, dv, nv), (1, 3, 2))
-    o = zeros(Float64, T, nv, dv)
+    # Views, not copies: the kernel widens q, k, v and beta to Float64 per
+    # element, so the values match the old Float64 copies. g stays Float64
+    # because the kernel takes exp(g) in g's own type.
+    q = PermutedDimsArray(reshape(view(c, :, 1:nq), T, dk, nk), (1, 3, 2))
+    kk = PermutedDimsArray(reshape(view(c, :, nq+1:2nq), T, dk, nk), (1, 3, 2))
+    v = PermutedDimsArray(reshape(view(c, :, 2nq+1:size(c, 2)), T, dv, nv), (1, 3, 2))
+    o = zeros(Float64, T, dv, nv)
     state = get!(() -> zeros(Float64, nv, dk, dv), st.ssm, il)
-    _cpu_gated_delta_rule!(o, Float64.(q), Float64.(kk), Float64.(v), Float64.(g),
-        Float64.(beta), state; l2norm=true, v_head_tiled=true)
-    of = Float32.(reshape(permutedims(o, (1, 3, 2)), T, nv * dv))
+    _cpu_gated_delta_rule!(PermutedDimsArray(o, (1, 3, 2)), q, kk, v, Float64.(g),
+        beta, state; l2norm=true, v_head_tiled=true)
+    of = Float32.(reshape(o, T, nv * dv))
     fo = _q4x_group_rms(of, dv, _q4x_w(m, p * "ssm_norm.weight"), cfg.eps) .* _q4x_sigm.(z)
     out = _q4x_mm(m, fo, p * "ssm_out.weight")
     if taps !== nothing
@@ -521,7 +527,7 @@ function qwen4exp_forward!(m::Qwen4expModel, st::Qwen4expState, tokens::Abstract
         error("qwen4exp_forward!: context $(st.pos + T) exceeds the QSA top_k $(cfg.qsa_top_k); " *
               "the sparse-attention indexer is not implemented")
     end
-    e = _q4x_rows(_q4x_w(m, "token_embd.weight"), toks)
+    e = _q4x_rows(_q4x_w(m, "token_embd.weight"), toks)::Matrix{Float32}
     res = repeat(e, 1, cfg.n_hc)
     pemb = isempty(cfg.ple_layers) ? nothing : _q4x_ple_embed(m, st, toks)
     for il in 0:(n_layers-1)
