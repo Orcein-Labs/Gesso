@@ -152,6 +152,19 @@ function _qgemv_f32!(
     return y
 end
 
+# Four columns at a time, each with its own accumulator fed the same terms in
+# the same order as the one-column loop (bit-identical y); the four add chains
+# overlap instead of one chain waiting on its own latency.
+@inline function _iq2xs_term(q, boff::Int, ib32::Int, l::Int, d::Float32)
+    sc = _ld_u8(q, boff + 66 + ib32)
+    db = l < 2 ? d * (0.5f0 + Float32(sc & 0x0f)) * 0.25f0 : d * (0.5f0 + Float32(sc >> 4)) * 0.25f0
+    qv = _ld_u16(q, boff + 2 + (4 * ib32 + l) * 2)
+    return db, IQ2XS_GRID[(qv&0x01ff)+0x0001], KSIGNS_IQ2XS[(qv>>9)+0x0001]
+end
+
+@inline _iq2xs_lane(db, grid64, signs, t) =
+    db * Float32((grid64 >> (8 * t)) & 0xff) * ((signs & KMASK_IQ2XS[t+1]) != 0x00 ? -1.0f0 : 1.0f0)
+
 function _qgemv_iq2_xs!(
     y::AbstractVector{Float32},
     x::AbstractVector{Float32},
@@ -163,32 +176,53 @@ function _qgemv_iq2_xs!(
 )
     nb = div(ne0, QK_K)
     bsz = 74
-    @inbounds for j in 1:ne1
+    cs = nb * bsz
+    j = 1
+    @inbounds while j + 3 <= ne1
+        a1 = a2 = a3 = a4 = zero(Float32)
+        c1 = (j - 1) * cs
+        for ib in 0:(nb-1)
+            o1 = c1 + ib * bsz
+            o2, o3, o4 = o1 + cs, o1 + 2cs, o1 + 3cs
+            d1, d2, d3, d4 = _ld_f16(q, o1), _ld_f16(q, o2), _ld_f16(q, o3), _ld_f16(q, o4)
+            xoff = ib * QK_K
+            for ib32 in 0:7, l in 0:3
+                b1, g1, s1 = _iq2xs_term(q, o1, ib32, l, d1)
+                b2, g2, s2 = _iq2xs_term(q, o2, ib32, l, d2)
+                b3, g3, s3 = _iq2xs_term(q, o3, ib32, l, d3)
+                b4, g4, s4 = _iq2xs_term(q, o4, ib32, l, d4)
+                base = xoff + ib32 * 32 + l * 8
+                for t in 0:7
+                    xv = x[base+t+1]
+                    a1 += _iq2xs_lane(b1, g1, s1, t) * xv
+                    a2 += _iq2xs_lane(b2, g2, s2, t) * xv
+                    a3 += _iq2xs_lane(b3, g3, s3, t) * xv
+                    a4 += _iq2xs_lane(b4, g4, s4, t) * xv
+                end
+            end
+        end
+        y[j] = alpha * a1 + (beta == 0.0f0 ? 0.0f0 : beta * y[j])
+        y[j+1] = alpha * a2 + (beta == 0.0f0 ? 0.0f0 : beta * y[j+1])
+        y[j+2] = alpha * a3 + (beta == 0.0f0 ? 0.0f0 : beta * y[j+2])
+        y[j+3] = alpha * a4 + (beta == 0.0f0 ? 0.0f0 : beta * y[j+3])
+        j += 4
+    end
+    @inbounds for jj in j:ne1
         acc = zero(Float32)
-        col = (j - 1) * nb * bsz
+        col = (jj - 1) * cs
         for ib in 0:(nb-1)
             boff = col + ib * bsz
             d = _ld_f16(q, boff)
             xoff = ib * QK_K
-            for ib32 in 0:7
-                sc = _ld_u8(q, boff + 66 + ib32)
-                db0 = d * (0.5f0 + Float32(sc & 0x0f)) * 0.25f0
-                db1 = d * (0.5f0 + Float32(sc >> 4)) * 0.25f0
-                for l in 0:3
-                    qv = _ld_u16(q, boff + 2 + (4 * ib32 + l) * 2)
-                    grid64 = IQ2XS_GRID[(qv&0x01ff)+0x0001]
-                    signs = KSIGNS_IQ2XS[(qv>>9)+0x0001]
-                    db = l < 2 ? db0 : db1
-                    base = xoff + ib32 * 32 + l * 8
-                    for t in 0:7
-                        g = Float32((grid64 >> (8 * t)) & 0xff)
-                        sng = (signs & KMASK_IQ2XS[t+1]) != 0x00 ? -1.0f0 : 1.0f0
-                        acc += db * g * sng * x[base+t+1]
-                    end
+            for ib32 in 0:7, l in 0:3
+                db, grid64, signs = _iq2xs_term(q, boff, ib32, l, d)
+                base = xoff + ib32 * 32 + l * 8
+                for t in 0:7
+                    acc += _iq2xs_lane(db, grid64, signs, t) * x[base+t+1]
                 end
             end
         end
-        y[j] = alpha * acc + (beta == 0.0f0 ? 0.0f0 : beta * y[j])
+        y[jj] = alpha * acc + (beta == 0.0f0 ? 0.0f0 : beta * y[jj])
     end
     return y
 end
@@ -345,6 +379,10 @@ end
 
 # Q2_0: element t of a 64-value block is the 2-bit code (qs[t>>2] >> 2(t&3)) & 3,
 # valued (code - 1) * d.
+# Four columns at a time: each column keeps its own accumulator and adds the
+# same terms in the same t order as the one-column loop, so y is bit-identical.
+# The four independent add chains overlap where the single chain stalled on
+# its own latency.
 function _qgemv_q2_0!(
     y::AbstractVector{Float32},
     x::AbstractVector{Float32},
@@ -356,9 +394,40 @@ function _qgemv_q2_0!(
 )
     nb = div(ne0, 64)
     bsz = 18
-    @inbounds for j in 1:ne1
+    cs = nb * bsz
+    j = 1
+    @inbounds while j + 3 <= ne1
+        a1 = a2 = a3 = a4 = zero(Float32)
+        c1 = (j - 1) * cs
+        for ib in 0:(nb-1)
+            o1 = c1 + ib * bsz
+            o2, o3, o4 = o1 + cs, o1 + 2cs, o1 + 3cs
+            d1, d2, d3, d4 = _ld_f16(q, o1), _ld_f16(q, o2), _ld_f16(q, o3), _ld_f16(q, o4)
+            xoff = ib * 64
+            for b in 0:15
+                q1 = Int(_ld_u8(q, o1 + 2 + b))
+                q2 = Int(_ld_u8(q, o2 + 2 + b))
+                q3 = Int(_ld_u8(q, o3 + 2 + b))
+                q4 = Int(_ld_u8(q, o4 + 2 + b))
+                for r in 0:3
+                    xv = x[xoff+4b+r+1]
+                    sh = 2r
+                    a1 += d1 * Float32(((q1 >> sh) & 0x3) - 1) * xv
+                    a2 += d2 * Float32(((q2 >> sh) & 0x3) - 1) * xv
+                    a3 += d3 * Float32(((q3 >> sh) & 0x3) - 1) * xv
+                    a4 += d4 * Float32(((q4 >> sh) & 0x3) - 1) * xv
+                end
+            end
+        end
+        y[j] = alpha * a1 + (beta == 0.0f0 ? 0.0f0 : beta * y[j])
+        y[j+1] = alpha * a2 + (beta == 0.0f0 ? 0.0f0 : beta * y[j+1])
+        y[j+2] = alpha * a3 + (beta == 0.0f0 ? 0.0f0 : beta * y[j+2])
+        y[j+3] = alpha * a4 + (beta == 0.0f0 ? 0.0f0 : beta * y[j+3])
+        j += 4
+    end
+    @inbounds for jj in j:ne1
         acc = zero(Float32)
-        col = (j - 1) * nb * bsz
+        col = (jj - 1) * cs
         for ib in 0:(nb-1)
             boff = col + ib * bsz
             d = _ld_f16(q, boff)
@@ -369,7 +438,7 @@ function _qgemv_q2_0!(
                 acc += d * Float32(code - 1) * x[xoff+t+1]
             end
         end
-        y[j] = alpha * acc + (beta == 0.0f0 ? 0.0f0 : beta * y[j])
+        y[jj] = alpha * acc + (beta == 0.0f0 ? 0.0f0 : beta * y[jj])
     end
     return y
 end

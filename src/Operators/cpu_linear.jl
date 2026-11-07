@@ -153,50 +153,94 @@ function _cpu_gated_delta_rule!(
     group = div(nv, nk)
     size(state) == (nv, dk, dv) ||
         error("gated_delta_rule: state $(size(state)) ≠ ($nv, $dk, $dv)")
-    qn = Array{Float64}(undef, seq, nv, dk)
-    kn = Array{Float64}(undef, seq, nv, dk)
-    for t in 1:seq, h in 1:nk, ghead in 0:(group-1)
-        hh = v_head_tiled ? (ghead * nk + h) : ((h - 1) * group + ghead + 1)
-        for d in 1:dk
-            qn[t, hh, d] = q[t, h, d]
-            kn[t, hh, d] = k[t, h, d]
-        end
-    end
-    if l2norm
-        _cpu_l2norm!(qn, 3)
-        _cpu_l2norm!(kn, 3)
-    end
-    scale = 1.0 / sqrt(Float64(dk))
-    for t in 1:seq, hh in 1:nv, d in 1:dk
-        qn[t, hh, d] *= scale
-    end
-    for t in 1:seq
-        for hh in 1:nv
-            decay = exp(g[t, hh])
-            for i in 1:dk, j in 1:dv
-                state[hh, i, j] *= decay
-            end
-            bt = beta[t, hh]
-            for j in 1:dv
-                kv_mem = 0.0
-                for i in 1:dk
-                    kv_mem += state[hh, i, j] * kn[t, hh, i]
-                end
-                delta = (v[t, hh, j] - kv_mem) * bt
-                for i in 1:dk
-                    state[hh, i, j] += kn[t, hh, i] * delta
-                end
-            end
-            for j in 1:dv
-                acc = 0.0
-                for i in 1:dk
-                    acc += state[hh, i, j] * qn[t, hh, i]
-                end
-                out[t, hh, j] = acc
-            end
-        end
+    heads! = hs -> _cpu_gdn_heads!(out, q, k, v, g, beta, state, hs, nk, group,
+        l2norm, v_head_tiled)
+    if Threads.nthreads() > 1 && nv > 1 && seq * nv * dk * dv >= 1 << 16
+        _cpu_split_rows!(heads!, nv)
+    else
+        heads!(1:nv)
     end
     return out
+end
+
+# Value heads `hs` of the recurrence. Heads never interact, so a range runs on
+# its own thread. Each head's state is copied into a (dv, dk) block (state[hh,
+# i, j] -> S[j, i]) so the sums over i walk contiguous memory and vectorize
+# across j. Every value is formed by the same expressions in the same order as
+# the plain triple loop (each kv_mem[j] and out[j] still sums i = 1..dk left to
+# right), so the result is bit-identical; only the memory order changed.
+function _cpu_gdn_heads!(out, q, k, v, g, beta, state, hs::UnitRange{Int}, nk::Int,
+    group::Int, l2norm::Bool, v_head_tiled::Bool)
+    seq, dk = size(q, 1), size(q, 3)
+    dv = size(v, 3)
+    S = Matrix{eltype(state)}(undef, dv, dk)
+    qv = Vector{Float64}(undef, dk)
+    kv = Vector{Float64}(undef, dk)
+    mem = Vector{Float64}(undef, dv)
+    delta = Vector{promote_type(eltype(v), Float64, eltype(beta))}(undef, dv)
+    acc = Vector{Float64}(undef, dv)
+    scale = 1.0 / sqrt(Float64(dk))
+    @inbounds for hh in hs
+        h = v_head_tiled ? mod1(hh, nk) : div(hh - 1, group) + 1
+        for i in 1:dk, j in 1:dv
+            S[j, i] = state[hh, i, j]
+        end
+        for t in 1:seq
+            for d in 1:dk
+                qv[d] = q[t, h, d]
+                kv[d] = k[t, h, d]
+            end
+            if l2norm
+                _cpu_l2norm_vec!(qv)
+                _cpu_l2norm_vec!(kv)
+            end
+            for d in 1:dk
+                qv[d] *= scale
+            end
+            decay = exp(g[t, hh])
+            bt = beta[t, hh]
+            fill!(mem, 0.0)
+            for i in 1:dk
+                ki = kv[i]
+                for j in 1:dv
+                    S[j, i] *= decay
+                    mem[j] += S[j, i] * ki
+                end
+            end
+            for j in 1:dv
+                delta[j] = (v[t, hh, j] - mem[j]) * bt
+            end
+            fill!(acc, 0.0)
+            for i in 1:dk
+                ki, qi = kv[i], qv[i]
+                for j in 1:dv
+                    S[j, i] += ki * delta[j]
+                    acc[j] += S[j, i] * qi
+                end
+            end
+            for j in 1:dv
+                out[t, hh, j] = acc[j]
+            end
+        end
+        for i in 1:dk, j in 1:dv
+            state[hh, i, j] = S[j, i]
+        end
+    end
+    return nothing
+end
+
+# `_cpu_l2norm!` on one Float64 vector: the same left-fold sum of squares,
+# eps and reciprocal multiply.
+@inline function _cpu_l2norm_vec!(x::Vector{Float64}, eps::Float64=1e-6)
+    acc = 0.0
+    @inbounds for d in eachindex(x)
+        acc += abs2(x[d])
+    end
+    inv = 1.0 / sqrt(acc + eps)
+    @inbounds for d in eachindex(x)
+        x[d] *= inv
+    end
+    return x
 end
 
 # Router logits for token t; returns their max. The router is (n_exp, h)

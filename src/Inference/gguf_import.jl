@@ -1335,83 +1335,143 @@ function _cpu_moe_topk_swiglu_gguf!(
             order,
         )
     end
-    # One scratch set per chunk of expert slots, indexed by chunk and not by
-    # threadid(): a chunk is one @threads iteration, so no two tasks share a set.
-    nchunk = min(Threads.nthreads(), n_used)
-    gaccs = [Vector{Float32}(undef, ff) for _ in 1:nchunk]
-    uaccs = [Vector{Float32}(undef, ff) for _ in 1:nchunk]
-    hacts = [Vector{Float32}(undef, ff) for _ in 1:nchunk]
-    xbufs = [Vector{Float32}(undef, h) for _ in 1:nchunk]
-    ybufs = [zeros(Float32, h) for _ in 1:n_used]
-    for t in 1:seq
-        xrow = @view x[t, :]
-        m = _cpu_router_logits!(logits, x, t, router)
-        s = zero(T)
-        for e in 1:n_exp
-            v = exp(logits[e] - m)
-            logits[e] = v
-            s += v
+    return _cpu_moe_gguf_pieces!(y, x, router, gate_s, up_s, down_s, n_used, h, ff)
+end
+
+# Fallback for slabs without a batched kernel (float-activation types such as
+# IQ2_XS and Q2_0, or ff not a multiple of 256). Tokens go in blocks; each
+# block is routed, then gate/up and down are split into (token, expert slot,
+# row range) pieces handed out by the pool. Every output element comes from
+# one kernel call over its own rows with the single-call summation order, and
+# each token adds its expert slots in k order, so y matches the per-expert
+# loop bit for bit for any thread count. Decode (one token, n_used experts)
+# was bound by n_used whole-expert tasks on nthreads workers; splitting rows
+# keeps every worker busy.
+const _MOE_TOKEN_BLOCK = 16
+
+_moe_piece_rows(r::Int, rows::Int, nc::Int) = (div(r * rows, nc) + 1, div((r + 1) * rows, nc))
+
+function _moe_row_chunks(npieces::Int, rows::Int)
+    nth = Threads.nthreads()
+    nth == 1 && return 1
+    return clamp(cld(4 * nth, npieces), 1, max(1, div(rows, 32)))
+end
+
+function _moe_run_pieces!(f, n::Int)
+    if Threads.nthreads() == 1 || n == 1
+        for p in 1:n
+            f(p)
         end
-        invs = one(T) / s
-        for e in 1:n_exp
-            logits[e] *= invs
-            order[e] = e
-        end
-        sort!(order; by=e -> (-logits[e], e))
-        wsum = zero(T)
-        for k in 1:n_used
-            wsum += logits[order[k]]
-        end
-        wsum > 0 || continue
-        invw = one(T) / wsum
-        yrow = @view y[t, :]
-        fill!(yrow, zero(T))
-        if nchunk == 1
-            xf = xbufs[1]
-            @inbounds for i in 1:h
-                xf[i] = Float32(xrow[i])
+        return nothing
+    end
+    return _run_row_chunks!(f, n, 0)
+end
+
+function _cpu_moe_gguf_pieces!(y, x, router, gate_s, up_s, down_s, n_used::Int, h::Int, ff::Int)
+    T = eltype(y)
+    seq = size(x, 1)
+    n_exp = size(router, 1)
+    tb = min(seq, _MOE_TOKEN_BLOCK)
+    nslot = tb * n_used
+    sel = Matrix{Int}(undef, n_used, tb)
+    wts = Matrix{Float32}(undef, n_used, tb)
+    live = Vector{Bool}(undef, tb)
+    xf = Matrix{Float32}(undef, h, tb)
+    logits = Matrix{T}(undef, n_exp, tb)
+    order = Matrix{Int}(undef, n_exp, tb)
+    G = Matrix{Float32}(undef, ff, nslot)
+    U = Matrix{Float32}(undef, ff, nslot)
+    A = Matrix{Float32}(undef, ff, nslot)
+    Y = Matrix{Float32}(undef, h, nslot)
+    gt, ut, dt = gate_s.ggml_type, up_s.ggml_type, down_s.ggml_type
+    grb, urb, drb = _qrow_bytes(gt, h), _qrow_bytes(ut, h), _qrow_bytes(dt, ff)
+    for t0 in 1:tb:seq
+        nt = min(tb, seq - t0 + 1)
+        _moe_run_pieces!(nt) do i
+            t = t0 + i - 1
+            lg = view(logits, :, i)
+            od = view(order, :, i)
+            m = _cpu_router_logits!(lg, x, t, router)
+            s = zero(T)
+            for e in 1:n_exp
+                v = exp(lg[e] - m)
+                lg[e] = v
+                s += v
             end
+            invs = one(T) / s
+            for e in 1:n_exp
+                lg[e] *= invs
+                od[e] = e
+            end
+            sort!(od; by=e -> (-lg[e], e))
+            wsum = zero(T)
             for k in 1:n_used
-                e = order[k]
-                w = Float32(logits[e] * invw)
-                _qgemv_expert!(gaccs[1], xf, gate_s, e)
-                _qgemv_expert!(uaccs[1], xf, up_s, e)
-                @inbounds for j in 1:ff
-                    hacts[1][j] = _cpu_silu(gaccs[1][j]) * uaccs[1][j]
-                end
-                _qgemv_expert!(ybufs[k], hacts[1], down_s, e; alpha=w, beta=0.0f0)
-                @inbounds for i in 1:h
-                    yrow[i] += ybufs[k][i]
-                end
+                wsum += lg[od[k]]
             end
-        else
-            xf0 = xbufs[1]
-            @inbounds for i in 1:h
-                xf0[i] = Float32(xrow[i])
+            live[i] = wsum > 0
+            invw = one(T) / wsum
+            @inbounds for k in 1:n_used
+                sel[k, i] = od[k]
+                wts[k, i] = Float32(lg[od[k]] * invw)
             end
-            # Chunk c owns scratch set c and the expert slots k = c, c+nchunk, ...
-            # Each slot is written by exactly one chunk, and the sum below runs in
-            # k order, so the result does not depend on scheduling. Scratch is
-            # per chunk, not per threadid(), so it needs no :static pinning and
-            # the loop may run nested or from concurrent tasks.
-            Threads.@threads for c in 1:nchunk
-                xft = xbufs[c]
-                c == 1 || copyto!(xft, xf0)
-                for k in c:nchunk:n_used
-                    e = order[k]
-                    w = Float32(logits[e] * invw)
-                    _qgemv_expert!(gaccs[c], xft, gate_s, e)
-                    _qgemv_expert!(uaccs[c], xft, up_s, e)
-                    @inbounds for j in 1:ff
-                        hacts[c][j] = _cpu_silu(gaccs[c][j]) * uaccs[c][j]
-                    end
-                    fill!(ybufs[k], 0)
-                    _qgemv_expert!(ybufs[k], hacts[c], down_s, e; alpha=w, beta=0.0f0)
-                end
+            @inbounds for j in 1:h
+                xf[j, i] = Float32(x[t, j])
             end
+        end
+        np = nt * n_used
+        rca = _moe_row_chunks(np, ff)
+        _moe_run_pieces!(np * rca) do p
+            sl, r = divrem(p - 1, rca)
+            i, k = divrem(sl, n_used)
+            i += 1
+            k += 1
+            sl += 1
+            live[i] || return nothing
+            e = sel[k, i]
+            j0, j1 = _moe_piece_rows(r, ff, rca)
+            j0 <= j1 || return nothing
+            nr = j1 - j0 + 1
+            xs = view(xf, :, i)
+            gq = _quant_expert_bytes(gate_s, e)
+            uq = _quant_expert_bytes(up_s, e)
+            _qgemv_bytes!(view(G, j0:j1, sl), xs, view(gq, ((j0-1)*grb+1):(j1*grb)), gt, h, nr, 1.0f0, 0.0f0)
+            _qgemv_bytes!(view(U, j0:j1, sl), xs, view(uq, ((j0-1)*urb+1):(j1*urb)), ut, h, nr, 1.0f0, 0.0f0)
+            @inbounds for j in j0:j1
+                A[j, sl] = _cpu_silu(G[j, sl]) * U[j, sl]
+            end
+            return nothing
+        end
+        rcb = _moe_row_chunks(np, h)
+        _moe_run_pieces!(np * rcb) do p
+            sl, r = divrem(p - 1, rcb)
+            i, k = divrem(sl, n_used)
+            i += 1
+            k += 1
+            sl += 1
+            live[i] || return nothing
+            e = sel[k, i]
+            j0, j1 = _moe_piece_rows(r, h, rcb)
+            j0 <= j1 || return nothing
+            dq = _quant_expert_bytes(down_s, e)
+            _qgemv_bytes!(
+                view(Y, j0:j1, sl),
+                view(A, :, sl),
+                view(dq, ((j0-1)*drb+1):(j1*drb)),
+                dt,
+                ff,
+                j1 - j0 + 1,
+                wts[k, i],
+                0.0f0,
+            )
+            return nothing
+        end
+        @inbounds for i in 1:nt
+            live[i] || continue
+            t = t0 + i - 1
             for k in 1:n_used
-                @inbounds for i in 1:h
-                    yrow[i] += ybufs[k][i]
+                sl = (i - 1) * n_used + k
+                for j in 1:h
+                    y[t, j] += Y[j, sl]
                 end
             end
         end
