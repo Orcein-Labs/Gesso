@@ -517,6 +517,135 @@ end
     @test (@allocated _MQ._dot_iq2xs_decoded_row!(o23, u, w, rb, xqs, 23, p)) == 0
 end
 
+@testset "multi-column dot: Q6_K decoded row blocks" begin
+    # Rows at u = 0 and 63 with scales at -128 and 127, plus random rows, decoded
+    # in blocks and run against activations at -128 and 127: every value bit-equal
+    # to _dot_q8k, with and without the d table, for every tile size.
+    _MQ._multi_kernels_ok() || return
+    rng = Xoshiro(0x6dec)
+    nb = 2
+    ty = _MQ.GGML_TYPE_Q6_K
+    bsz = _MQ._iq_block_bytes(ty)
+    rb = _MQ._qrow_bytes(ty, 256 * nb)
+    w = _mq_random_rows(rng, ty, 5, nb)
+    for (r, fillb) in enumerate((0xff, 0x00))
+        row = fill(fillb, rb)
+        for blk in 0:(nb-1)
+            o = blk * bsz
+            for k in 1:16
+                row[o+192+k] = isodd(k + r) ? 0x80 : 0x7f
+            end
+            row[o+209] = 0x00
+            row[o+210] = 0x3c
+        end
+        append!(w, row)
+    end
+    nrows = div(length(w), rb)
+    xqs = _mq_acts(rng, 256 * nb, 17, ty)
+    for (c, v) in ((1, Int8(-128)), (2, Int8(127)))
+        xqs[c].qs .= v
+        xqs[c].d .= 1.0f0
+        for i in eachindex(xqs[c].bsums)
+            xqs[c].bsums[i] = sum(Int16, @view xqs[c].qs[(16(i-1)+1):(16i)])
+        end
+    end
+    xps = map(_MQ._q6k_prep, xqs)
+    ref = [_MQ._dot_q8k(ty, w, (j - 1) * rb, xps[t], true) for t in 1:17, j in 1:nrows]
+    m = Memory{UInt8}(undef, nrows * nb * (_MQ._Q6K_DEC_BYTES + 4))
+    buf = zeros(Float32, 17)
+    dtab = _MQ._multi_d_table(xps)
+    bad = 0
+    for (j0, j1) in ((1, nrows), (2, 4), (nrows, nrows)), dt in (nothing, dtab)
+        _MQ._q6k_decode_rows!(m, w, 0, rb, nb, j0, j1)
+        n = j1 - j0 + 1
+        starts = dt === nothing ? (1, 2) : (1, 9)
+        for t0 in starts, K in 1:min(8, 17 - t0 + 1)
+            dst = fill(NaN32, 17, nrows)
+            _MQ._q6k_dec_tile!(dst, buf, m, n, nb, j0, xps, t0, K, dt)
+            for j in j0:j1, t in t0:(t0+K-1)
+                bad += reinterpret(UInt32, dst[t, j]) != reinterpret(UInt32, ref[t, j] + 0.0f0)
+            end
+        end
+    end
+    @test bad == 0
+    @test_throws ErrorException _MQ._q6k_decode_rows!(Memory{UInt8}(undef, 8), w, 0, rb, nb, 1, 2)
+    @test_throws ErrorException _MQ._q6k_decode_rows!(m, w, 0, rb + 1, nb, 1, 2)
+    @test_throws ErrorException _MQ._q6k_dec_tile!(zeros(Float32, 17, nrows), buf, m, 1, nb, 1, xps, 1, 9, nothing)
+    # The decoded and the undecoded prefill give the same bits.
+    q = _MQ.QuantMatrix(w, 0, ty, 256 * nb, nrows, rb, Int64(256))
+    x = randn(rng, Float32, 19, 256 * nb)
+    a = zeros(Float32, 19, nrows)
+    b = zeros(Float32, 19, nrows)
+    saved = _MQ._PREFILL_MULTI[]
+    try
+        _MQ._PREFILL_MULTI[] = Int8(1)
+        withenv(() -> _MQ._quant_matmul!(a, x, q), "GESSO_Q6K_DECODE" => "1")
+        withenv(() -> _MQ._quant_matmul!(b, x, q), "GESSO_Q6K_DECODE" => "0")
+    finally
+        _MQ._PREFILL_MULTI[] = saved
+    end
+    @test all(reinterpret.(UInt32, a) .== reinterpret.(UInt32, b))
+    @test _MQ._q6k_dec_rows(56) * 56 * (_MQ._Q6K_DEC_BYTES + 4) <= _MQ._Q6K_DEC_BLOCK_BYTES
+    @test _MQ._q6k_dec_rows(1) == 32
+end
+
+@testset "multi-column dot: Q4_K and Q5_K row blocks" begin
+    # _q45k_rows_tile! over row ranges and every tile size, plain and prepped
+    # columns, with no table, the d table and the d + mins tables: every value
+    # bit-equal to _dot_q8k. Then the prefill with it on and off.
+    _MQ._multi_kernels_ok() || return
+    rng = Xoshiro(0x45b0)
+    for ty in (_MQ.GGML_TYPE_Q4_K, _MQ.GGML_TYPE_Q5_K)
+        nb = 2
+        q5 = Val(ty == _MQ.GGML_TYPE_Q5_K)
+        rb = _MQ._qrow_bytes(ty, 256 * nb)
+        w = _mq_random_rows(rng, ty, 7, nb)
+        nrows = div(length(w), rb)
+        xqs = _mq_acts(rng, 256 * nb, 17, ty)
+        xqs[1].qs .= Int8(-128)
+        xqs[2].qs .= Int8(127)
+        for c in 1:2, i in eachindex(xqs[c].bsums)
+            xqs[c].bsums[i] = sum(Int16, @view xqs[c].qs[(16(i-1)+1):(16i)])
+        end
+        bad = 0
+        for cols in (xqs, map(_MQ._q6k_prep, xqs))
+            ref = [_MQ._dot_q8k(ty, w, (j - 1) * rb, cols[t], true) for t in 1:17, j in 1:nrows]
+            for dt in (nothing, _MQ._multi_d_table(cols), _MQ._multi_q45k_tables(cols))
+                starts = dt === nothing ? (1, 2) : (1, 9)
+                for (b0, b1) in ((1, nrows), (2, 4), (nrows, nrows)), t0 in starts
+                    for K in 1:min(8, 17 - t0 + 1)
+                        dst = fill(NaN32, 17, nrows)
+                        _MQ._q45k_rows_tile!(dst, w, 0, rb, b0, b1, cols, t0, K, q5, dt)
+                        for j in 1:nrows, t in 1:17
+                            want = b0 <= j <= b1 && t0 <= t < t0 + K ? ref[t, j] + 0.0f0 : NaN32
+                            bad += reinterpret(UInt32, dst[t, j]) != reinterpret(UInt32, want)
+                        end
+                    end
+                end
+            end
+        end
+        @test bad == 0
+        @test_throws ErrorException _MQ._q45k_rows_tile!(zeros(Float32, 17, nrows), w, 0, rb + 1, 1, 2, xqs, 1, 8, q5, nothing)
+        @test_throws BoundsError _MQ._q45k_rows_tile!(zeros(Float32, 17, nrows), w, 0, rb, 1, nrows + 1, xqs, 1, 8, q5, nothing)
+        @test_throws ErrorException _MQ._q45k_rows_tile!(zeros(Float32, 17, nrows + 1), w, 0, rb, 1, nrows + 1, xqs, 1, 8, q5, nothing)
+        @test_throws ErrorException _MQ._q45k_rows_tile!(zeros(Float32, 17, nrows), w, 0, rb, 1, 2, xqs, 1, 9, q5, nothing)
+        @test_throws ErrorException _MQ._q45k_rows_tile!(zeros(Float32, 17, nrows), w, 0, rb, 1, 2, xqs, 2, 8, q5, _MQ._multi_d_table(xqs))
+        q = _MQ.QuantMatrix(w, 0, ty, 256 * nb, nrows, rb, Int64(256))
+        x = randn(rng, Float32, 19, 256 * nb)
+        a = zeros(Float32, 19, nrows)
+        b = zeros(Float32, 19, nrows)
+        saved = _MQ._PREFILL_MULTI[]
+        try
+            _MQ._PREFILL_MULTI[] = Int8(1)
+            withenv(() -> _MQ._quant_matmul!(a, x, q), "GESSO_Q45K_ROWS" => "1")
+            withenv(() -> _MQ._quant_matmul!(b, x, q), "GESSO_Q45K_ROWS" => "0")
+        finally
+            _MQ._PREFILL_MULTI[] = saved
+        end
+        @test all(reinterpret.(UInt32, a) .== reinterpret.(UInt32, b))
+    end
+end
+
 @testset "multi-column dot: the packed Q8_0-family tables" begin
     rng = Xoshiro(0x51b0)
     T = _MQ._MULTI_TILE
