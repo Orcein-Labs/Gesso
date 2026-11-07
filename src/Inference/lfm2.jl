@@ -189,18 +189,34 @@ function _sandwich_post!(cpu, x, bt, slot::Symbol, wl, eps, zeros_like)
     return x
 end
 
-function _short_convolution_block!(cpu, h, normed, sub, bt, wl, eps, zeros_like; state=nothing)
+function _short_convolution_block!(cpu, h, normed, sub, bt, wl, eps, zeros_like; state=nothing, xq=nothing)
     seq, dim = size(h.storage)
     width = size(bt.wshort_conv.storage, 2)
     hist = state === nothing ? zeros_like((dim, width - 1)) : state
     size(hist) == (dim, width - 1) || error("short convolution: invalid history shape")
     rmsnorm!(cpu, normed, h, bt.attn_rms, wl; eps)
     bcx = Activation(; shape=(seq, 3dim), storage=zeros_like((seq, 3dim)))
-    @decode_sub :conv_in cpu matmul!(cpu, bcx, normed, bt.wshort_in, wl)
+    @decode_sub :conv_in cpu _conv_proj!(cpu, bcx, normed, bt.wshort_in, wl, xq)
     mixed = Activation(; shape=(seq, dim), storage=zeros_like((seq, dim)))
     @decode_sub :conv_mix cpu _short_conv_mix!(cpu, mixed.storage, bcx.storage, bt.wshort_conv.storage, hist)
-    @decode_sub :conv_out cpu matmul!(cpu, sub, mixed, bt.wshort_out, wl)
+    @decode_sub :conv_out cpu _conv_proj!(cpu, sub, mixed, bt.wshort_out, wl, xq)
     return sub
+end
+
+# One projection of the conv block. A decode row (seq = 1) with the decode
+# scratch's Q8_K column `xq` (`_decode_xq`) takes `_dec_matmul_group!`, the
+# route the attention and FFN projections use: K-quant weights then run the
+# prepped multi-row kernel, which is bit-equal to the per-row `_dot_q8k` that
+# `matmul!` runs on the same Q8_K quantization. Prefill, the reference path and
+# weights without a Q8_K kernel keep `matmul!`.
+function _conv_proj!(cpu, dst, x, w, wl, xq)
+    if xq !== nothing && size(x.storage, 1) == 1 && w.storage isa QuantMatrix &&
+       _quant_q8k_kind(w.storage) && w.storage.ne0 == length(xq) &&
+       dst.storage isa Matrix{Float32}
+        _dec_matmul_group!(cpu, (dst,), xq, x, (w,), wl)
+        return dst
+    end
+    return matmul!(cpu, dst, x, w, wl)
 end
 
 # The gated short convolution between the two projections. bcx holds B, C and X

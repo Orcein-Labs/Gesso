@@ -3237,7 +3237,7 @@ function _decode_step!(
         end
         if _block_mixer(bt) === :short_convolution
             _short_convolution_block!(cpu, hp, bufs.normed, bufs.sub, bt, wl, eps, zeros_like;
-                state=gdn_conv === nothing ? nothing : gdn_conv[bi])
+                state=gdn_conv === nothing ? nothing : gdn_conv[bi], xq=_decode_xq(cpu_scratch, Val(:xq_dim)))
         elseif _block_mixer(bt) === :linear_attention
             t0 = time_ns()
             @decode_stage :gdn_mixer cpu _hybrid_linear_block!(
