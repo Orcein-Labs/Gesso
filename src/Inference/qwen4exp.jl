@@ -228,8 +228,8 @@ end
 """
     Qwen4expState(cfg)
 
-Decode state: the position, per-GDN-layer conv history and delta state,
-per-attention-layer K/V (post-norm, post-RoPE), the last `ngram - 1` tokens
+Decode state: the position, per-GDN-layer conv history and delta state
+(stored `(dv, dk, nv)`, head-contiguous), per-attention-layer K/V (post-norm, post-RoPE), the last `ngram - 1` tokens
 for the PLE hash (EOS at the start) and the PLE conv history.
 """
 mutable struct Qwen4expState
@@ -384,9 +384,13 @@ function _q4x_gdn(m::Qwen4expModel, st::Qwen4expState, il::Int, x, taps)
     kk = PermutedDimsArray(reshape(view(c, :, nq+1:2nq), T, dk, nk), (1, 3, 2))
     v = PermutedDimsArray(reshape(view(c, :, 2nq+1:size(c, 2)), T, dv, nv), (1, 3, 2))
     o = zeros(Float64, T, dv, nv)
-    state = get!(() -> zeros(Float64, nv, dk, dv), st.ssm, il)
+    # The delta state is stored (dv, dk, nv) so each value head is one
+    # contiguous block; the kernel sees it as (nv, dk, dv) through the view.
+    # Held (nv, dk, dv) directly, a head's values sit nv apart and the head
+    # threads share cache lines (4.3 ms against 0.85 ms per layer on decode).
+    raw = get!(() -> zeros(Float64, dv, dk, nv), st.ssm, il)
     _cpu_gated_delta_rule!(PermutedDimsArray(o, (1, 3, 2)), q, kk, v, Float64.(g),
-        beta, state; l2norm=true, v_head_tiled=true)
+        beta, PermutedDimsArray(raw, (3, 2, 1)); l2norm=true, v_head_tiled=true)
     of = Float32.(reshape(o, T, nv * dv))
     fo = _q4x_group_rms(of, dv, _q4x_w(m, p * "ssm_norm.weight"), cfg.eps) .* _q4x_sigm.(z)
     out = _q4x_mm(m, fo, p * "ssm_out.weight")
