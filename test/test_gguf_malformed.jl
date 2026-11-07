@@ -108,6 +108,22 @@ end
         rm(path)
     end
 
+    @testset "a metadata-only shard without trailing padding parses" begin
+        # gguf-split writes shard 1 as kv only, ending right after the last
+        # value; the aligned data start then lies past the end of the file.
+        meta = _mg_bytes(; tensors=[])
+        k = findlast(!=(0x00), meta)
+        unpadded = meta[1:k]
+        @test length(unpadded) % 32 != 0
+        for b in (meta, unpadded)
+            path = _mg_file(b)
+            hdr = _mg_inf.gguf_header(path)
+            @test isempty(hdr.tensors)
+            @test hdr.kv["general.name"] == "after the skipped keys"
+            rm(path)
+        end
+    end
+
     @testset "truncated at $n of $(length(good)) bytes" for n in
         (0, 3, 16, 23, 40, 60, length(good) ÷ 2, length(good) - 34, length(good) - 1)
         if n < 4

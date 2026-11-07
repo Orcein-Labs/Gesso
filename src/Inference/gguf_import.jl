@@ -507,7 +507,9 @@ end
 
 function _check_tensor_extents(path::AbstractString, hdr)
     len = length(hdr.data)
-    hdr.data_start <= len ||
+    # A metadata-only file (the first shard of a gguf-split model) has no data
+    # section, and writers may omit the alignment padding after the header.
+    isempty(hdr.tensors) || hdr.data_start <= len ||
         throw(_malformed_gguf(path, "the tensor data would start at byte $(hdr.data_start) of $len"))
     for info in hdr.tensors
         name = info.name
