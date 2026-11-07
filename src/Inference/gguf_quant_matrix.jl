@@ -1031,14 +1031,30 @@ function (p::_PrefillChunk)(c::Int)
 end
 
 function _quant_embedding_rows!(dst::AbstractMatrix, q::QuantMatrix, tokens)
+    toks = tokens isa AbstractVector ? tokens : collect(tokens)
+    n = length(toks)
+    # Each row dequantizes on its own, so a prompt's rows split across the pool
+    # with the same values.
+    nc = n >= 16 && Threads.nthreads() > 1 ? min(Threads.nthreads(), cld(n, 8)) : 1
+    if nc == 1
+        _quant_embedding_range!(dst, q, toks, 1:n)
+    else
+        _pool_run_chunks!(nc) do c
+            _quant_embedding_range!(dst, q, toks, (div((c - 1) * n, nc) + 1):div(c * n, nc))
+        end
+    end
+    return dst
+end
+
+function _quant_embedding_range!(dst::AbstractMatrix, q::QuantMatrix, toks, ts)
     rb = q.row_bytes
-    for (t, tok) in enumerate(tokens)
-        buf = _dequant_f32(q.data, q.offset0 + Int(tok) * rb, q.ggml_type, q.ne0)
+    for t in ts
+        buf = _dequant_f32(q.data, q.offset0 + Int(toks[t]) * rb, q.ggml_type, q.ne0)
         @inbounds for i in 1:q.ne0
             dst[t, i] = buf[i]
         end
     end
-    return dst
+    return nothing
 end
 
 # ---------------------------------------------------------------- shared input

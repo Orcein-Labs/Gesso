@@ -1621,9 +1621,31 @@ function _zeros_like_factory(backend, tensors)
     s = _first_array_storage(tensors)
     if s !== nothing
         T = eltype(s)
-        return (dims::Tuple{Vararg{Int}}) -> fill!(similar(s, T, dims), zero(T))
+        return (dims::Tuple{Vararg{Int}}) -> _fill_zero!(similar(s, T, dims))
     end
     return _fallback_zeros_factory(backend)
+end
+
+# Element-wise work over a large host array goes across the CPU pool in
+# contiguous linear ranges. Each element's value is the same whichever thread
+# writes it. A window prefill's buffers are T rows wide (512 x 6144 on the
+# Qwen3.5-2B FFN), and one thread zeroing them, page faults included, was
+# about a third of the prefill's single-thread time.
+const _POOL_ELEMWISE_MIN = 1 << 18
+
+_pool_elemwise_chunks(n::Int) =
+    n >= _POOL_ELEMWISE_MIN && Threads.nthreads() > 1 ?
+    min(Threads.nthreads(), cld(n, 1 << 16)) : 1
+
+_fill_zero!(x::AbstractArray) = fill!(x, zero(eltype(x)))
+function _fill_zero!(x::Array{T}) where {T}
+    n = length(x)
+    nc = _pool_elemwise_chunks(n)
+    nc == 1 && return fill!(x, zero(T))
+    _pool_run_chunks!(nc) do c
+        fill!(view(x, (div((c - 1) * n, nc) + 1):div(c * n, nc)), zero(T))
+    end
+    return x
 end
 
 # Returns `x`'s memory now instead of at its finalizer. Host arrays leave it to
@@ -1819,6 +1841,19 @@ _repeat_heads!(dst::Activation, src::Activation, group::Int, K::Int) =
 
 _add_storage!(dst_storage::AbstractArray, src_storage::AbstractArray) =
     (@views dst_storage .+= src_storage)
+
+# The window prefill's residual adds are T x dim; same sums, split by range.
+function _add_storage!(dst::Array{Float32, N}, src::Array{Float32, N}) where {N}
+    n = length(dst)
+    nc = size(dst) == size(src) ? _pool_elemwise_chunks(n) : 1
+    nc == 1 && return (@views dst .+= src)
+    _pool_run_chunks!(nc) do c
+        @inbounds @simd for i in (div((c - 1) * n, nc) + 1):div(c * n, nc)
+            dst[i] += src[i]
+        end
+    end
+    return dst
+end
 
 _scale_storage!(dst_storage::AbstractArray, s) = (@views dst_storage ./= s)
 

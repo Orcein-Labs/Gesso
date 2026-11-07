@@ -395,6 +395,7 @@ using Gesso: reference_prefill, reference_generate
     # each against its reference path.
     include("test_cpu_matmul_group.jl")
     include("test_cpu_decode.jl")
+    include("test_pool_elemwise.jl")
 
     @testset "package loads" begin
         @test Gesso.Log isa Module
