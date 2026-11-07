@@ -275,3 +275,57 @@ end
         PPI._PREFILL_PROFILE[] = saved
     end
 end
+
+@testset "LFM: channel-major conv mix and batched router logits match the token-major loops bit for bit" begin
+    # Token-major reference: the loop order the conv mix used before it went channel-major.
+    function conv_ref!(mixed, bcx, w, hist)
+        seq, dim = size(mixed)
+        width = size(w, 2)
+        for t in 1:seq, c in 1:dim
+            bx = bcx[t, c] * bcx[t, 2dim+c]
+            y = zero(eltype(mixed))
+            for p in 1:(width-1)
+                y += hist[c, p] * w[c, p]
+            end
+            y += bx * w[c, width]
+            mixed[t, c] = bcx[t, dim+c] * y
+            for p in 1:(width-2)
+                hist[c, p] = hist[c, p+1]
+            end
+            hist[c, width-1] = bx
+        end
+        return mixed
+    end
+    rng = MersenneTwister(0x1f5)
+    cpu = Gesso.CPUBackend()
+    for (seq, dim, width) in ((1, 200, 3), (37, 200, 3), (64, 333, 4), (5, 64, 2))
+        bcx = randn(rng, Float32, seq, 3dim)
+        w = randn(rng, Float32, dim, width)
+        h0 = randn(rng, Float32, dim, width - 1)
+        ref, href = zeros(Float32, seq, dim), copy(h0)
+        conv_ref!(ref, bcx, w, href)
+        got, hgot = zeros(Float32, seq, dim), copy(h0)
+        _lfm_inf._short_conv_mix!(cpu, got, bcx, w, hgot)
+        @test got == ref
+        @test hgot == href
+        # Red control: one changed input in the last channel must reach the output.
+        bad = copy(bcx); bad[seq, dim] += 1.0f0
+        got2, h2 = zeros(Float32, seq, dim), copy(h0)
+        _lfm_inf._short_conv_mix!(cpu, got2, bad, w, h2)
+        @test got2 != ref
+    end
+    for (seq, ne, h) in ((2, 32, 96), (37, 32, 200), (100, 8, 64))
+        x = randn(rng, Float32, seq, h)
+        router = randn(rng, Float32, ne, h)
+        L = _lfm_inf._router_logits_all(x, router, Float32)
+        lg = zeros(Float32, ne)
+        ok = true
+        for t in 1:seq
+            m = _lfm_inf._cpu_router_logits!(lg, x, t, router)
+            ok &= view(L, :, t) == lg && maximum(view(L, :, t)) == m
+        end
+        @test ok
+        xb = copy(x); xb[seq, h] += 1.0f0
+        @test _lfm_inf._router_logits_all(xb, router, Float32)[:, seq] != L[:, seq]
+    end
+end

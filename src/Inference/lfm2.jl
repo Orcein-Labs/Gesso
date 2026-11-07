@@ -205,13 +205,40 @@ end
 
 # The gated short convolution between the two projections. bcx holds B, C and X
 # side by side; hist holds the last width-1 B*X values per channel and is
-# advanced in place.
+# advanced in place. Channels are independent, so each channel walks its own
+# tokens in order (bcx is column-major, so that reads it contiguously) and a
+# prompt splits the channels across threads. Every output keeps the same
+# operations in the same order as the token-major loop, so results are
+# bit-identical to it.
 function _short_conv_mix!(backend, mixed, bcx, w, hist)
     backend_name(backend) === :cpu || throw(LoweringNotImplemented(:short_convolution, backend_name(backend)))
     seq, dim = size(mixed)
+    if seq > 1 && Threads.nthreads() > 1
+        nc = min(Threads.nthreads(), cld(dim, 64))
+        _run_row_chunks!(_ShortConvChunk(mixed, bcx, w, hist, cld(dim, nc), dim), nc, seq * dim)
+    else
+        _short_conv_cols!(mixed, bcx, w, hist, 1, dim)
+    end
+    return mixed
+end
+
+struct _ShortConvChunk{M,B,W,H}
+    mixed::M
+    bcx::B
+    w::W
+    hist::H
+    per::Int
+    dim::Int
+end
+
+(g::_ShortConvChunk)(k::Int) = _short_conv_cols!(g.mixed, g.bcx, g.w, g.hist,
+    (k - 1) * g.per + 1, min(k * g.per, g.dim))
+
+function _short_conv_cols!(mixed, bcx, w, hist, c0::Int, c1::Int)
+    seq, dim = size(mixed)
     width = size(w, 2)
     # GGUF taps run oldest to newest; the current B*X is the final tap.
-    @inbounds for t in 1:seq, c in 1:dim
+    @inbounds for c in c0:c1, t in 1:seq
         bx = bcx[t, c] * bcx[t, 2dim+c]
         y = zero(eltype(mixed))
         for p in 1:(width-1)
@@ -224,7 +251,7 @@ function _short_conv_mix!(backend, mixed, bcx, w, hist)
         end
         hist[c, width-1] = bx
     end
-    return mixed
+    return nothing
 end
 
 function _selected_expert_mul!(dst, bank, e, x)
@@ -246,13 +273,13 @@ function _biased_moe_ffn!(cpu, down, normed, bt)
     logits = Vector{T}(undef, ne)
     probs = similar(logits)
     order = collect(1:ne)
-    xr, g, u, a, out = Vector{T}(undef, dim), Vector{T}(undef, ff), Vector{T}(undef, ff), Vector{T}(undef, ff), Vector{T}(undef, dim)
     bias = haskey(bt, :wrouter_bias) ? bt.wrouter_bias.storage : zeros(T, ne)
     gate_s, up_s, down_s = bt.wexp_gate.storage, bt.wexp_up.storage, bt.wexp_down.storage
     if T === Float32 && gate_s isa GgufQuantSlice && up_s isa GgufQuantSlice && down_s isa GgufQuantSlice &&
        _moe_host_batchable(gate_s, up_s, down_s, dim, ff)
         return _biased_moe_batched!(down, x, router, bias, bt, logits, probs, order, gate_s, up_s, down_s)
     end
+    xr, g, u, a, out = Vector{T}(undef, dim), Vector{T}(undef, ff), Vector{T}(undef, ff), Vector{T}(undef, ff), Vector{T}(undef, dim)
     fill!(y, zero(T))
     for t in axes(x, 1)
         m = _cpu_router_logits!(logits, x, t, router)
@@ -280,6 +307,49 @@ function _biased_moe_ffn!(cpu, down, normed, bt)
     return down
 end
 
+# Router logits for every token of a prompt, (n_exp, seq). Each logit sums
+# over i in order exactly as _cpu_router_logits! does, so the values are
+# bit-identical; walking t inside i reads the column-major x contiguously
+# instead of one strided row per token, and threads split the tokens.
+function _router_logits_all(x, router, ::Type{T}) where {T}
+    seq = size(x, 1)
+    L = zeros(T, size(router, 1), seq)
+    nc = min(Threads.nthreads(), cld(seq, 16))
+    _run_row_chunks!(_RouterLogitsChunk(L, x, router, cld(seq, nc), seq), nc, seq * size(router, 1) * size(router, 2))
+    return L
+end
+
+struct _RouterLogitsChunk{LT,X,R}
+    L::LT
+    x::X
+    router::R
+    per::Int
+    seq::Int
+end
+
+function (g::_RouterLogitsChunk)(k::Int)
+    t0, t1 = (k - 1) * g.per + 1, min(k * g.per, g.seq)
+    L, x, router = g.L, g.x, g.router
+    T = eltype(L)
+    n_exp, h = size(router)
+    @inbounds for i in 1:h, t in t0:t1
+        xi = T(x[t, i])
+        @simd for e in 1:n_exp
+            L[e, t] += xi * router[e, i]
+        end
+    end
+    return nothing
+end
+
+# y[1, :] .= v behind a call boundary: `down.storage` is not concretely typed
+# where it is read, so the store loop inline would box every element.
+function _store_row1!(y::AbstractMatrix, v::AbstractVector)
+    @inbounds for i in eachindex(v)
+        y[1, i] = v[i]
+    end
+    return y
+end
+
 # K-quant banks route every token first, then run the shared host MoE: the
 # batched Q8_K kernels for one token, the grouped multi-row tiles for a prompt.
 function _biased_moe_batched!(down, x, router, bias, bt, logits, probs, order, gate_s, up_s, down_s)
@@ -288,8 +358,16 @@ function _biased_moe_batched!(down, x, router, bias, bt, logits, probs, order, g
     n_used = bt.n_expert_used
     experts = Matrix{Int}(undef, n_used, seq)
     wts = Matrix{Float32}(undef, n_used, seq)
+    L = seq > 1 ? _router_logits_all(x, router, eltype(logits)) : nothing
     @decode_sub :moe_route nothing for t in 1:seq
-        m = _cpu_router_logits!(logits, x, t, router)
+        if L === nothing
+            m = _cpu_router_logits!(logits, x, t, router)
+        else
+            @inbounds for e in eachindex(logits)
+                logits[e] = L[e, t]
+            end
+            m = maximum(logits)
+        end
         if bt.router_gating === :sigmoid
             probs .= _cpu_sigmoid.(logits)
         else
@@ -312,9 +390,7 @@ function _biased_moe_batched!(down, x, router, bias, bt, logits, probs, order, g
                 xf[i] = x[1, i]
             end
             _moe_host_experts_auto!(yrow, xf, view(experts, :, 1), view(wts, :, 1), n_used, gate_s, up_s, down_s)
-            @inbounds for i in 1:dim
-                y[1, i] = yrow[i]
-            end
+            _store_row1!(y, yrow)
         else
             X = x isa Matrix{Float32} ? x : Matrix{Float32}(x)
             Y = y isa Matrix{Float32} ? y : Matrix{Float32}(undef, seq, dim)
