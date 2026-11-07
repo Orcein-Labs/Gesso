@@ -850,7 +850,17 @@ function _ffn_block!(
     xq_ff=nothing,
 )
     if haskey(bt, :wrouter)
-        return _moe_ffn!(cpu, down, normed2, bt, wl, zeros_like)
+        return _moe_ffn!(
+            cpu,
+            down,
+            normed2,
+            bt,
+            wl,
+            zeros_like;
+            xq_in,
+            xq_ff,
+            ffn_bufs=xq_in === nothing ? nothing : (gate, up, act),
+        )
     end
     @decode_stage :dense_ffn cpu begin
         @decode_sub :ffn_gateup cpu begin
@@ -869,7 +879,20 @@ function _ffn_block!(
     return down
 end
 
-function _moe_ffn!(cpu, down, normed2, bt, wl, zeros_like)
+# `xq_in` / `xq_ff` and `ffn_bufs` (the decode scratch's FFN gate, up and act
+# rows) come from the CPU decode scratch; the shared expert reuses them. Prefill
+# and device backends pass nothing and keep the per-weight route.
+function _moe_ffn!(
+    cpu,
+    down,
+    normed2,
+    bt,
+    wl,
+    zeros_like;
+    xq_in=nothing,
+    xq_ff=nothing,
+    ffn_bufs=nothing,
+)
     if haskey(bt, :wrouter_bias) || (haskey(bt, :router_gating) && bt.router_gating === :sigmoid)
         # Device backends time this call themselves, around their host fallback.
         backend_name(cpu) === :cpu || return _biased_moe_ffn!(cpu, down, normed2, bt)
@@ -882,7 +905,9 @@ function _moe_ffn!(cpu, down, normed2, bt, wl, zeros_like)
     shared = haskey(bt, :wshared_gate)
     sd = shared ? Activation(; shape=size(x), storage=zeros_like(size(x))) : nothing
     shared_ffn =
-        shared ? _shared_expert_thunk(cpu, sd, normed2, bt, wl, zeros_like) : nothing
+        shared ?
+        _shared_expert_thunk(cpu, sd, normed2, bt, wl, zeros_like; xq_in, xq_ff, ffn_bufs) :
+        nothing
     _moe_topk_swiglu!(
         cpu,
         y,
@@ -909,9 +934,47 @@ end
 # The shared expert reads only `normed2` and writes only `sd`, so it is handed
 # to `_moe_topk_swiglu!` as `overlap` and queued wherever it hides best behind
 # the routed experts.
-function _shared_expert_thunk(cpu, sd, normed2, bt, wl, zeros_like)
+#
+# At decode on the CPU, the thunk takes the dense FFN's route: gate and up as
+# one group over the prepped Q8_K residual column `xq_in`, the pooled
+# activation, and down over `xq_ff`. The per-weight `matmul!` quantizes the
+# same row to Q8_K for every weight, so one shared quantization gives the same
+# bits (`_dec_matmul_group!`), and `_dec_ffn_act!` is the same scalar swiglu.
+# `ffn_bufs` (gate, up, act) are reused when they have the shared width; the
+# dense FFN that owns them does not run in a MoE layer. A weight or width the
+# group does not take falls back inside `_dec_matmul_group!`.
+function _shared_expert_thunk(
+    cpu,
+    sd,
+    normed2,
+    bt,
+    wl,
+    zeros_like;
+    xq_in=nothing,
+    xq_ff=nothing,
+    ffn_bufs=nothing,
+)
     seq = size(normed2.storage, 1)
     ff = size(bt.wshared_gate.storage, 1)
+    if xq_in !== nothing && ffn_bufs !== nothing &&
+       all(b -> size(b.storage) == (seq, ff), ffn_bufs)
+        # Distinct names: the fallback closure below assigns `sg`/`su`/`sa`, and
+        # sharing those names would make Julia box them for both closures.
+        bg, bu, ba = ffn_bufs
+        return () -> @decode_stage :shared_expert cpu begin
+            _dec_matmul_group!(
+                cpu,
+                (bg, bu),
+                xq_in,
+                normed2,
+                (bt.wshared_gate, bt.wshared_up),
+                wl,
+            )
+            _dec_ffn_act!(cpu, ba, bg, bu, false, wl)
+            _dec_matmul_group!(cpu, (sd,), xq_ff, ba, (bt.wshared_down,), wl)
+            nothing
+        end
+    end
     return () -> @decode_stage :shared_expert cpu begin
         sg = Activation(; shape=(seq, ff), storage=zeros_like((seq, ff)))
         su = Activation(; shape=(seq, ff), storage=zeros_like((seq, ff)))

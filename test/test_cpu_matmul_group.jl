@@ -509,3 +509,60 @@ end
         @test _bits(d) != _bits(ref)
     end
 end
+
+# The MoE shared expert at decode takes the dense FFN's route (gate and up as
+# one group over the prepped residual column, down over the prepped FFN
+# column) in the decode scratch's FFN rows. Its output must keep the bits of
+# the per-weight route that prefill and the device backends still take.
+@testset "shared expert decode route: bit-identical to the per-weight route" begin
+    rng = Xoshiro(20261107)
+    dim, ff = 2048, 512
+    wl = Gesso.Semantics.DecodeWorkload()
+    zl = sz -> zeros(Float32, sz)
+    pw(w) = Gesso.ProjectionWeight((w.nrows, w.ne0), w)
+    bt = (;
+        wshared_gate=pw(_group_random_kq(rng, _GI.GGML_TYPE_Q5_K, ff, dim)),
+        wshared_up=pw(_group_random_kq(rng, _GI.GGML_TYPE_Q5_K, ff, dim)),
+        wshared_down=pw(_group_random_kq(rng, _GI.GGML_TYPE_Q6_K, dim, ff)),
+    )
+    act(n) = Gesso.Activation(; shape=(1, n), storage=fill(NaN32, 1, n))
+    xq_in = _GI._q6k_prep(_GI.Q8KVec(div(dim, _GI.QK_K)))
+    xq_ff = _GI._q6k_prep(_GI.Q8KVec(div(ff, _GI.QK_K)))
+    cpu = _GI.CPUBackend()
+    for trial in 1:3
+        # These random rows put |gate| near 1e3 for a unit-scale x, where
+        # silu and gelu agree to more digits than Q8_K keeps of the act row;
+        # at this scale gate is O(1) and the activation shows in the output.
+        x = Gesso.Activation(;
+            shape=(1, dim), storage=1f-3 .* randn(rng, Float32, 1, dim),
+        )
+        ref = Gesso.Activation(; shape=(1, dim), storage=zeros(Float32, 1, dim))
+        _GI._shared_expert_thunk(cpu, ref, x, bt, wl, zl)()
+        @test all(isfinite, ref.storage)
+        sd = Gesso.Activation(; shape=(1, dim), storage=zeros(Float32, 1, dim))
+        bufs = (act(ff), act(ff), act(ff))
+        _GI._shared_expert_thunk(
+            cpu, sd, x, bt, wl, zl; xq_in, xq_ff, ffn_bufs=bufs,
+        )()
+        @test _bits(sd.storage) == _bits(ref.storage)
+        # each scratch row holds the per-weight route's gate, up and swiglu
+        g = Gesso.Activation(; shape=(1, ff), storage=zeros(Float32, 1, ff))
+        u = Gesso.Activation(; shape=(1, ff), storage=zeros(Float32, 1, ff))
+        a = Gesso.Activation(; shape=(1, ff), storage=zeros(Float32, 1, ff))
+        _GI.matmul!(cpu, g, x, bt.wshared_gate, wl)
+        _GI.matmul!(cpu, u, x, bt.wshared_up, wl)
+        _GI.swiglu!(cpu, a, g, u, wl)
+        @test maximum(abs, g.storage) < 100
+        @test _bits(bufs[1].storage) == _bits(g.storage)
+        @test _bits(bufs[2].storage) == _bits(u.storage)
+        @test _bits(bufs[3].storage) == _bits(a.storage)
+        # rows of another width are not used, and the result is unchanged
+        wide = (act(ff + 256), act(ff + 256), act(ff + 256))
+        sw = Gesso.Activation(; shape=(1, dim), storage=zeros(Float32, 1, dim))
+        _GI._shared_expert_thunk(
+            cpu, sw, x, bt, wl, zl; xq_in, xq_ff, ffn_bufs=wide,
+        )()
+        @test _bits(sw.storage) == _bits(ref.storage)
+        @test all(b -> all(isnan, b.storage), wide)
+    end
+end
