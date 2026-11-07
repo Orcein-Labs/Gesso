@@ -1127,7 +1127,7 @@ end
 # kernel (quant_cpu_simd.jl, _simd_type_ok) or the scalar reference.
 _multi_kernels_ok()::Bool = Sys.ARCH === :x86_64
 
-# The types whose multi kernel reads prepped columns: Q6_K uses xb; Q3_K,
+# The types whose multi kernel reads prepped columns: Q6_K and Q3_K use xb;
 # Q4_K and Q5_K use xp.
 _q6k_prep_type(t::Int32) =
     _multi_kernels_ok() &&
@@ -2161,6 +2161,16 @@ end
 # exact and each lane equals _q3k_ints_simd's. The pair order and the 2-bit /
 # high-bit extraction are bytewise, so the qs and hmask loads are reordered
 # once per block and shared by the K columns.
+#
+# A prepped column instead reads xb = x + 128 (unsigned, already in pair
+# order) against the signed weights, so a column's chunk is one vpmaddubsw with
+# no psign. Each pair is then (x + 128) . w, at most 2 * 255 * 4, and exceeds
+# x . w by 128 * (w0 + w1): the column-free vpmaddubsw of 128 against w. That
+# correction goes through the same vpmaddwd with the scales once per chunk for
+# all K columns and comes off each column's i32 lanes once per block. Integer
+# sums are exact, so each lane still equals _q3k_ints_simd's. With one column
+# the shared correction saves nothing and adds two ops per chunk, so K = 1
+# keeps the psign route on the prepped xp.
 
 function _kq_ir_q3k_multi(K::Int, prep::Bool)
     io = IOBuffer()
@@ -2181,6 +2191,8 @@ function _kq_ir_q3k_multi(K::Int, prep::Bool)
         _q6k_pair_order(io, "qp$h", "qr$h")
     end
     acc = ["zeroinitializer" for _ in 0:(K-1)]
+    corr = "zeroinitializer"
+    xb = prep && K >= 2
     for h in 0:1, t in 0:3
         ht = "$(h)$t"
         c4 = 4 * h + t
@@ -2198,27 +2210,58 @@ function _kq_ir_q3k_multi(K::Int, prep::Bool)
             join(("i32 $(isodd(k) ? i + 1 : i)" for k in 0:15), ", "),
             ">\n",
         )
+        if xb
+            print(
+                io,
+                "  %cr$ht = call <16 x i16> @llvm.x86.avx2.pmadd.ub.sw(<32 x i8> splat (i8 -128), <32 x i8> %ws$ht)\n",
+                "  %co$ht = call <8 x i32> @llvm.x86.avx2.pmadd.wd(<16 x i16> %cr$ht, <16 x i16> %sw$ht)\n",
+                "  %C$ht = add <8 x i32> $corr, %co$ht\n",
+            )
+            corr = "%C$ht"
+        end
         for c in 0:(K-1)
-            if prep
-                _kq_ld(io, "xp$c.$ht", "q$c", 32 * c4)
+            if xb
+                _kq_ld(io, "xb$c.$ht", "q$c", 32 * c4)
+                print(
+                    io,
+                    "  %mf$c.$ht = call <16 x i16> @llvm.x86.avx2.pmadd.ub.sw(<32 x i8> %xb$c.$ht, <32 x i8> %ws$ht)\n",
+                )
             else
-                _kq_ld(io, "x$c.$ht", "q$c", 32 * c4)
-                _q6k_pair_order(io, "xp$c.$ht", "x$c.$ht")
+                if prep
+                    _kq_ld(io, "xp$c.$ht", "q$c", 32 * c4)
+                else
+                    _kq_ld(io, "x$c.$ht", "q$c", 32 * c4)
+                    _q6k_pair_order(io, "xp$c.$ht", "x$c.$ht")
+                end
+                print(
+                    io,
+                    "  %ax$c.$ht = call <32 x i8> @llvm.x86.avx2.psign.b(<32 x i8> %xp$c.$ht, <32 x i8> %xp$c.$ht)\n",
+                    "  %sg$c.$ht = call <32 x i8> @llvm.x86.avx2.psign.b(<32 x i8> %ws$ht, <32 x i8> %xp$c.$ht)\n",
+                    "  %mf$c.$ht = call <16 x i16> @llvm.x86.avx2.pmadd.ub.sw(<32 x i8> %ax$c.$ht, <32 x i8> %sg$c.$ht)\n",
+                )
             end
             print(
                 io,
-                "  %ax$c.$ht = call <32 x i8> @llvm.x86.avx2.psign.b(<32 x i8> %xp$c.$ht, <32 x i8> %xp$c.$ht)\n",
-                "  %sg$c.$ht = call <32 x i8> @llvm.x86.avx2.psign.b(<32 x i8> %ws$ht, <32 x i8> %xp$c.$ht)\n",
-                "  %mf$c.$ht = call <16 x i16> @llvm.x86.avx2.pmadd.ub.sw(<32 x i8> %ax$c.$ht, <32 x i8> %sg$c.$ht)\n",
                 "  %ms$c.$ht = call <8 x i32> @llvm.x86.avx2.pmadd.wd(<16 x i16> %mf$c.$ht, <16 x i16> %sw$ht)\n",
                 "  %A$c.$ht = add <8 x i32> $(acc[c + 1]), %ms$c.$ht\n",
             )
             acc[c+1] = "%A$c.$ht"
         end
     end
+    if xb
+        for c in 0:(K-1)
+            print(io, "  %Z$c = sub <8 x i32> $(acc[c + 1]), $corr\n")
+            acc[c+1] = "%Z$c"
+        end
+    end
     _kq_multi_lanes_ret(io, acc, K)
     return String(take!(io))
 end
+
+# The column pointer the Q3_K kernel reads: the raw qs, or a prepped column's
+# xb (xp when the kernel has one column, see _kq_ir_q3k_multi).
+@inline _q3k_xptr(x::Q8KVec, ::Val) = pointer(x.qs)
+@inline _q3k_xptr(x::Q6KPrepVec, ::Val{K}) where {K} = K == 1 ? pointer(x.xp) : pointer(x.xb)
 
 for K in 1:8, prep in (false, true)
     qs = [:(pq[$c]) for c in 1:K]
@@ -2261,7 +2304,7 @@ end
     prep = Val(T === Q6KPrepVec)
     GC.@preserve w xqs begin
         xv = ntuple(c -> xqs[t0+c-1], Val(K))
-        px = ntuple(c -> _q45k_xptr(xv[c], 0), Val(K))
+        px = ntuple(c -> _q3k_xptr(xv[c], Val(K)), Val(K))
         tot = _q3k_multi_row(w, woff, xv, px, nb, dt, i0, prep)
         for c in 1:K
             out[t0+c-1] = tot[c].value
@@ -3338,7 +3381,7 @@ end
     nb = length(x.d)
     GC.@preserve w x begin
         xv = (x,)
-        px = (_q45k_xptr(x, 0),)
+        px = (_q3k_xptr(x, Val(1)),)
         @inbounds for j in j0:j1
             tot = _q3k_multi_row(w, base + (j - 1) * rb, xv, px, nb, nothing, 0, Val(true))
             dst[1, j] = 1.0f0 * tot[1].value + 0.0f0
