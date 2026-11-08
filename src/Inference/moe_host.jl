@@ -84,6 +84,43 @@ function _moe_host_batchable(
            down_s.ne1 == h
 end
 
+# Prefill also takes the 32-value block types. `_moe_host_prefill!` gives them a
+# Q8_0 activation, as the Gemma 4 host route does, so a row only has to be a
+# whole number of weight blocks and of activation blocks. The decode scratch
+# is Q8_K only, so decode keeps `_moe_host_batchable`.
+# Values per weight block, as `_qrow_bytes` counts them.
+_moe_weight_block_values(t::Int32) = t == GGML_TYPE_Q2_0 ? 64 : _q8k_block_values(t)
+
+# The types `_qgemv_bytes!` dots against float x rather than a Q8 quantization of
+# it. The per-token route keeps them, so the batched prefill skips them to make
+# the same dots: a Q8 activation for these moves the logits (rel_rms ~0.06 on
+# Flash-Next, whose IQ2_XS and IQ4_NL layers changed).
+_qgemv_float_act_type(t::Int32) =
+    t in (GGML_TYPE_IQ2_XS, GGML_TYPE_IQ3_XXS, GGML_TYPE_IQ4_XS, GGML_TYPE_IQ4_NL, GGML_TYPE_Q5_1)
+
+_moe_prefill_row_ok(t::Int32, n::Int) =
+    _quant_q8k_native(t) && !_qgemv_float_act_type(t) &&
+    n % _q8k_block_values(t) == 0 && n % _moe_weight_block_values(t) == 0
+
+function _moe_host_prefill_ok(
+    gate_s::GgufQuantSlice,
+    up_s::GgufQuantSlice,
+    down_s::GgufQuantSlice,
+    h::Int,
+    ff::Int,
+)
+    return _moe_prefill_row_ok(gate_s.ggml_type, h) &&
+           _moe_prefill_row_ok(up_s.ggml_type, h) &&
+           _moe_prefill_row_ok(down_s.ggml_type, ff) &&
+           _q80_act_type(gate_s.ggml_type) == _q80_act_type(up_s.ggml_type) &&
+           gate_s.ne0 == h &&
+           gate_s.ne1 == ff &&
+           up_s.ne0 == h &&
+           up_s.ne1 == ff &&
+           down_s.ne0 == ff &&
+           down_s.ne1 == h
+end
+
 _moe_host_nchunks(total::Int) = _qgemv_nchunks(total)
 
 """
@@ -755,7 +792,7 @@ end
 Top-k SwiGLU for `seq` tokens on the host. `X` and `Y` are `seq x h`;
 `experts` and `weights` are `n_used x seq` as `_moe_route_row!` fills them;
 tokens with `live[t] == false` get a zero row. Callers check
-`_moe_host_batchable` first. A non-empty `cpu` (length `n_exp`) limits the sum
+`_moe_host_prefill_ok` (or `_moe_host_batchable`) first. A non-empty `cpu` (length `n_exp`) limits the sum
 to the experts it marks, so `Y` holds the host's partial sum and the GPU adds
 the rest.
 """
@@ -772,8 +809,8 @@ function _moe_host_prefill!(
     cpu::Vector{Bool}=Bool[],
 )
     simd = q8k_simd_enabled()
-    XT = _moe_act_type(simd, gate_s.ggml_type, up_s.ggml_type)
-    HT = _moe_act_type(simd, down_s.ggml_type)
+    XT = _q80_act_type(gate_s.ggml_type) ? Q80Vec : _moe_act_type(simd, gate_s.ggml_type, up_s.ggml_type)
+    HT = _q80_act_type(down_s.ggml_type) ? Q80Vec : _moe_act_type(simd, down_s.ggml_type)
     s = _moe_prefill_scratch(size(X, 2), gate_s.ne1, size(X, 1), size(experts, 1), n_exp, XT, HT)
     return _moe_prefill_run!(s, Y, X, experts, weights, live, n_exp, gate_s, up_s, 0, down_s, _cpu_silu, cpu)
 end

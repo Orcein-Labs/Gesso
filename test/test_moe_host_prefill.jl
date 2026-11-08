@@ -185,3 +185,98 @@ end
         @test all(iszero, Ynone)
     end
 end
+
+# Slab bytes sized by the weight block (Q2_0 packs 64 values in 18 bytes, which
+# `_mke_qblock` does not know), with finite f16 scales at d and dmin.
+function _mhp_random_bytes(rng, ty::Int32, nexp::Int, nrows::Int, ne0::Int)
+    bsz = _MKE._iq_block_bytes(ty)
+    nb = div(ne0, _MKE._moe_weight_block_values(ty))
+    w = rand(rng, UInt8, nexp * nrows * nb * bsz)
+    for blk in 0:(nexp*nrows*nb-1)
+        for off in (_MKE._q8k_d_offset(ty), _MKE._q8k_dmin_offset(ty))
+            off < 0 && continue
+            bits = reinterpret(UInt16, Float16(0.005f0 + 0.05f0 * rand(rng, Float32)))
+            w[blk*bsz+off+1] = UInt8(bits & 0xff)
+            w[blk*bsz+off+2] = UInt8(bits >> 8)
+        end
+    end
+    return w
+end
+
+_mhp_slice(w, ty::Int32, nexp::Int, ne0::Int, ne1::Int) = Gesso.GgufQuantSlice(
+    w, 0, ty, nexp, ne0, ne1, ne1 * _MKE._qrow_bytes(ty, ne0), Int64(_MKE._moe_weight_block_values(ty)))
+
+# Flash-Next's expert slabs: IQ2_XXS gate/up over h, Q2_0 down over ff = 640.
+# The Q2_0 down takes a Q8_0 activation and ff is not a multiple of 256, so the
+# decode kernels refuse it and prefill used to fall to the token-block pieces
+# path. The grouped prefill must make the same dots in the same order.
+#   * seq > 1 through the public entry equals the pieces path bit for bit, with
+#     the multi-column kernels on and off
+#   * seq == 1 still takes the pieces path (the decode scratch is Q8_K only)
+#   * red control: the down slab replaced must change the output
+@testset "grouped MoE prefill: IQ2_XXS gate/up, Q2_0 down, ff=640" begin
+    rng = Xoshiro(45)
+    h, ff, nexp, nused = 512, 640, 6, 3
+    tg, td = _MKE.GGML_TYPE_IQ2_XXS, _MKE.GGML_TYPE_Q2_0
+    gate_s = _mhp_slice(_mhp_random_bytes(rng, tg, nexp, ff, h), tg, nexp, h, ff)
+    up_s = _mhp_slice(_mhp_random_bytes(rng, tg, nexp, ff, h), tg, nexp, h, ff)
+    wd = _mhp_random_bytes(rng, td, nexp, h, ff)
+    down_s = _mhp_slice(wd, td, nexp, ff, h)
+    @test !_MKE._moe_host_batchable(gate_s, up_s, down_s, h, ff)
+    @test _MKE._moe_host_prefill_ok(gate_s, up_s, down_s, h, ff)
+    router = randn(rng, Float32, nexp, h)
+    pieces(x, dn) = _MKE._cpu_moe_gguf_pieces!(zeros(Float32, size(x)), x, router, gate_s, up_s, dn, nused, h, ff)
+    entry(x, dn) = _MKE._cpu_moe_topk_swiglu_gguf!(zeros(Float32, size(x)), x, router, gate_s, up_s, dn, nused)
+    saved = _MKE._PREFILL_MULTI[]
+    try
+        for seq in (37, 16, 17, 2, 1), multi in (Int8(1), Int8(0))
+            _MKE._PREFILL_MULTI[] = multi
+            X = randn(rng, Float32, seq, h)
+            Yref = pieces(X, down_s)
+            Y = entry(X, down_s)
+            println("moe prefill IQ2_XXS/Q2_0 ff=640 seq=", seq, " multi=", multi,
+                " bitwise=", Y == Yref, " max_abs=", maximum(abs.(Y .- Yref)))
+            @test all(isfinite, Y)
+            @test Y == Yref
+        end
+    finally
+        _MKE._PREFILL_MULTI[] = saved
+    end
+
+    X = randn(rng, Float32, 37, h)
+    Y = entry(X, down_s)
+    wbad = copy(wd)
+    bpe = down_s.bytes_per_expert
+    wbad[1:nexp*bpe] .= _mhp_random_bytes(Xoshiro(9), td, nexp, h, ff)
+    Ybad = entry(X, _mhp_slice(wbad, td, nexp, ff, h))
+    ctrl = _mhb_relrms(Ybad, Y)
+    println("moe prefill IQ2_XXS/Q2_0 ff=640 red_control_replaced_down_rel_rms=", ctrl)
+    @test ctrl > 1.0e-2
+end
+
+# Flash-Next's other layer mixes: IQ2_XS gate/up over Q2_0 down, and IQ2_XXS
+# gate/up over IQ4_NL down. `_qgemv_bytes!` dots IQ2_XS and IQ4_NL against float
+# x, so the grouped prefill must refuse these slabs; a Q8 activation for them
+# moved Flash-Next's logits by rel_rms 0.06. The entry must equal the pieces
+# path bit for bit at every seq.
+@testset "grouped MoE prefill refuses float-activation types" begin
+    rng = Xoshiro(46)
+    h, ff, nexp, nused = 512, 640, 6, 3
+    for (tg, td) in ((_MKE.GGML_TYPE_IQ2_XS, _MKE.GGML_TYPE_Q2_0),
+                     (_MKE.GGML_TYPE_IQ2_XXS, _MKE.GGML_TYPE_IQ4_NL))
+        gate_s = _mhp_slice(_mhp_random_bytes(rng, tg, nexp, ff, h), tg, nexp, h, ff)
+        up_s = _mhp_slice(_mhp_random_bytes(rng, tg, nexp, ff, h), tg, nexp, h, ff)
+        down_s = _mhp_slice(_mhp_random_bytes(rng, td, nexp, h, ff), td, nexp, ff, h)
+        @test !_MKE._moe_host_batchable(gate_s, up_s, down_s, h, ff)
+        @test !_MKE._moe_host_prefill_ok(gate_s, up_s, down_s, h, ff)
+        router = randn(rng, Float32, nexp, h)
+        for seq in (37, 2, 1)
+            X = randn(rng, Float32, seq, h)
+            Yref = _MKE._cpu_moe_gguf_pieces!(zeros(Float32, seq, h), X, router, gate_s, up_s, down_s, nused, h, ff)
+            Y = _MKE._cpu_moe_topk_swiglu_gguf!(zeros(Float32, seq, h), X, router, gate_s, up_s, down_s, nused)
+            println("moe prefill float-act gt=", tg, " dt=", td, " seq=", seq, " bitwise=", Y == Yref)
+            @test all(isfinite, Y)
+            @test Y == Yref
+        end
+    end
+end

@@ -1318,11 +1318,18 @@ function _cpu_moe_topk_swiglu_gguf!(
     # They make the same _dot_q8k calls and sum in k order, so the result is
     # bit-identical to the per-expert loop below. On the GSQ 35B the loop
     # below was about half of CPU decode, and Lava's host experts run here too.
+    # Prefill also groups tokens by expert for slabs only the grouped prefill
+    # takes (a 32-value block down such as Flash-Next's Q2_0, or ff not a
+    # multiple of 256). `_moe_host_prefill_ok` refuses the types the pieces path
+    # dots against float x, and the pieces path quantizes every other activation
+    # the same way per call, so both make the same dots; grouping streams each expert's
+    # rows once per batch instead of once per token that picked it.
     if T === Float32 &&
        gate_s isa GgufQuantSlice &&
        up_s isa GgufQuantSlice &&
        down_s isa GgufQuantSlice &&
-       _moe_host_batchable(gate_s, up_s, down_s, h, ff)
+       (_moe_host_batchable(gate_s, up_s, down_s, h, ff) ||
+        (seq > 1 && _moe_host_prefill_ok(gate_s, up_s, down_s, h, ff)))
         return _cpu_moe_topk_swiglu_batched!(
             y,
             x,
@@ -1338,8 +1345,10 @@ function _cpu_moe_topk_swiglu_gguf!(
     return _cpu_moe_gguf_pieces!(y, x, router, gate_s, up_s, down_s, n_used, h, ff)
 end
 
-# Fallback for slabs without a batched kernel (float-activation types such as
-# IQ2_XS and Q2_0, or ff not a multiple of 256). Tokens go in blocks; each
+# Fallback for slabs the batched route does not take: decode (one token) on a
+# slab only the grouped prefill takes (a 32- or 64-value block down such as
+# Q2_0, or ff not a multiple of 256), and any slab neither route takes. Tokens
+# go in blocks; each
 # block is routed, then gate/up and down are split into (token, expert slot,
 # row range) pieces handed out by the pool. Every output element comes from
 # one kernel call over its own rows with the single-call summation order, and
