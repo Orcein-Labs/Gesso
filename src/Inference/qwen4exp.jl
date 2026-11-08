@@ -115,7 +115,12 @@ struct Qwen4expModel
     cfg::Qwen4expConfig
     index::Dict{String, Tuple{Any, GgufTensorInfo}}
     cache::Dict{String, Any}
+    # 1 while a call holds the reused scratch buffers (see _q4x_buf)
+    scratch_busy::Threads.Atomic{Int}
 end
+
+Qwen4expModel(cfg::Qwen4expConfig, index::Dict{String, Tuple{Any, GgufTensorInfo}}, cache::Dict{String, Any}) =
+    Qwen4expModel(cfg, index, cache, Threads.Atomic{Int}(0))
 
 Qwen4expModel(cfg::Qwen4expConfig, tensors::AbstractDict) =
     Qwen4expModel(cfg, Dict{String, Tuple{Any, GgufTensorInfo}}(), Dict{String, Any}(tensors))
@@ -228,6 +233,33 @@ end
 _q4x_mm(m::Qwen4expModel, x::AbstractMatrix, name::String) =
     _q4x_mm(_q4x_w(m, name), x)::Matrix{Float32}
 
+# x (T, in) into a caller buffer y (T, out). Every quant kernel writes each dst
+# element once (no accumulate), so y needs no zeroing and the bits match
+# _q4x_mm. Other weight types go through _q4x_mm and copy.
+function _q4x_mm!(y::Matrix{Float32}, m::Qwen4expModel, x::Matrix{Float32}, name::String)
+    W = _q4x_w(m, name)
+    W isa QuantMatrix || return copyto!(y, _q4x_mm(W, x)::Matrix{Float32})
+    _quant_half(W.ggml_type) ? _half_matmul!(y, x, W) : _quant_matmul!(y, x, W)
+    return y
+end
+
+_q4x_rows_out(m::Qwen4expModel, name::String) = _q4x_rows_out(_q4x_w(m, name))
+_q4x_rows_out(W::QuantMatrix) = W.nrows
+_q4x_rows_out(W::AbstractMatrix) = size(W, 1)
+
+# A (T, n) Float32 scratch matrix kept on the model under `slot`, for values
+# that never leave the call that fills them. A new shape replaces the buffer.
+# A call that did not win m.scratch_busy (own = false) gets a fresh matrix, so
+# two forwards on one model never share a buffer.
+function _q4x_buf(m::Qwen4expModel, slot::String, T::Int, n::Int, own::Bool)
+    own || return Matrix{Float32}(undef, T, n)
+    b = get(m.cache, slot, nothing)
+    b isa Matrix{Float32} && size(b) == (T, n) && return b
+    b = Matrix{Float32}(undef, T, n)
+    m.cache[slot] = b
+    return b
+end
+
 # Rows of an embedding table for 0-based ids, (length(ids), width).
 _q4x_rows(W::AbstractMatrix, ids) = Matrix{Float32}(W[ids .+ 1, :])
 
@@ -267,11 +299,14 @@ end
 # same loop as a serial pass, so the bits do not depend on the split. A gate z
 # (same shape as x) multiplies each normed value by sigmoid(z), the same
 # Float32 product as `group_rms(...) .* sigm.(z)` without the two extra passes.
-function _q4x_group_rms(x::AbstractMatrix, n::Int, w, eps::Float64, z=nothing)
+_q4x_group_rms(x::AbstractMatrix, n::Int, w, eps::Float64, z=nothing) =
+    _q4x_group_rms!(Matrix{Float32}(undef, size(x)), x, n, w, eps, z)
+
+function _q4x_group_rms!(y::Matrix{Float32}, x::AbstractMatrix, n::Int, w, eps::Float64, z=nothing)
     T, F = size(x)
+    size(y) == (T, F) || error("qwen4exp: rms out $(size(y)) ≠ $((T, F))")
     z === nothing || size(z) == (T, F) ||
         error("qwen4exp: rms gate $(size(z)) ≠ $((T, F))")
-    y = Matrix{Float32}(undef, T, F)
     wo = length(w) == n ? 0 : n
     _q4x_par_ranges(T, _q4x_nchunks(T, T * F)) do t0, t1
         _q4x_group_rms_rows!(y, x, n, w, wo, eps, t0, t1, z)
@@ -448,12 +483,26 @@ end
 
 # Hyper-connection read: (mixed (T, n_embd), inject (T, n_hc) or nothing).
 function _q4x_hc_mix(m::Qwen4expModel, x, pre::String; inject::Bool=true)
+    own = Threads.atomic_cas!(m.scratch_busy, 0, 1) == 0
+    try
+        return _q4x_hc_mix(m, x, pre, inject, own)
+    finally
+        own && Threads.atomic_xchg!(m.scratch_busy, 0)
+    end
+end
+
+function _q4x_hc_mix(m::Qwen4expModel, x, pre::String, inject::Bool, own::Bool)
     cfg = m.cfg
     NE, HC = cfg.n_embd, cfg.n_hc
-    xn = _q4x_group_rms(x, NE, _q4x_w(m, pre * "_norm.weight"), cfg.eps)
-    lo = _q4x_silu.(_q4x_mm(m, xn, pre * "_down.weight") ./ HC)
-    gate = _q4x_mm(m, lo, pre * "_up.weight")
     T = size(x, 1)
+    # xn, lo and gate never leave this call, so they live in reused buffers
+    # (a fresh 20 MB matrix costs more in page faults and GC than the math).
+    xn = _q4x_group_rms!(_q4x_buf(m, "scratch:hc_xn", T, size(x, 2), own), x, NE,
+        _q4x_w(m, pre * "_norm.weight"), cfg.eps)
+    dn, up = pre * "_down.weight", pre * "_up.weight"
+    lo = _q4x_mm!(_q4x_buf(m, "scratch:hc_lo", T, _q4x_rows_out(m, dn), own), m, xn, dn)
+    lo .= _q4x_silu.(lo ./ HC)
+    gate = _q4x_mm!(_q4x_buf(m, "scratch:hc_gate", T, _q4x_rows_out(m, up), own), m, lo, up)
     # Stream s of a (T, n_hc * n_embd) matrix is the contiguous span
     # (s * T * NE) .+ (1:T * NE), so the mix runs over linear indices.
     TN = T * NE
