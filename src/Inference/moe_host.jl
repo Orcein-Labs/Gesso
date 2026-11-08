@@ -355,6 +355,7 @@ mutable struct MoePrefillScratch{X, H}
     hg::Vector{H}               # hq of each entry of `pairs`
     cbuf::Vector{Vector{Float32}}  # per chunk, one row's dots over an expert's pairs
     cdec::Vector{Vector{UInt8}}    # per chunk, one decoded IQ2_XS row
+    cwb::Vector{Vector{Float32}}   # per chunk, a block of rows decoded to Float32
     edt::Vector{Vector{Float32}}   # per expert, the d table of its pairs
     eqt::Vector{Vector{Int8}}      # per expert, the packed quants of its pairs
     est::Vector{Vector{Float32}}   # per expert, the s table of its pairs (Q8_0 activations)
@@ -376,6 +377,7 @@ MoePrefillScratch{X, H}() where {X, H} = MoePrefillScratch{X, H}(
     H[],
     Vector{Float32}[],
     Vector{UInt8}[],
+    Vector{Float32}[],
     Vector{Float32}[],
     Vector{Int8}[],
     Vector{Float32}[],
@@ -445,6 +447,7 @@ function _moe_prefill_scratch(
             Vector{Float32}[],
             Vector{UInt8}[],
             Vector{Float32}[],
+            Vector{Float32}[],
             Vector{Int8}[],
             Vector{Float32}[],
         )
@@ -502,15 +505,17 @@ function _moe_prefill_group!(
     return s
 end
 
-# Chunk c's row buffer. Two chunks can split one expert's rows, so a buffer
-# shared by expert would race.
-function _moe_prefill_bufs!(s::MoePrefillScratch, nc::Int, n::Int)
+# Chunk c's row buffer, and with `wlen` > 0 its float decode buffer. Two
+# chunks can split one expert's rows, so a buffer shared by expert would race.
+function _moe_prefill_bufs!(s::MoePrefillScratch, nc::Int, n::Int, wlen::Int=0)
     while length(s.cbuf) < nc
         push!(s.cbuf, Float32[])
         push!(s.cdec, UInt8[])
+        push!(s.cwb, Float32[])
     end
     for c in 1:nc
         length(s.cbuf[c]) < n && resize!(s.cbuf[c], n)
+        length(s.cwb[c]) < wlen && resize!(s.cwb[c], wlen)
     end
     return s
 end
@@ -661,6 +666,100 @@ function _moe_float_row_multi!(buf::Vector{Float32}, t::Int32, w, woff::Int, P::
     return buf
 end
 
+# IQ2_XS lanes as Float32 tables: grid byte t of grid entry g, and the sign of
+# lane t under sign pattern s. db * grid * sign then equals `_iq2xs_lane`.
+const _IQ2XS_GRIDF = vec(Float32[Float32((IQ2XS_GRID[g+1] >> (8 * t)) & 0xff) for t in 0:7, g in 0:511])
+const _IQ2XS_SGNF = vec(Float32[(KSIGNS_IQ2XS[s+1] & KMASK_IQ2XS[t+1]) != 0x00 ? -1.0f0 : 1.0f0 for t in 0:7, s in 0:127])
+
+# Decodes the IQ2_XS row at `woff` (nb super-blocks) into wb[o+1 : o+nb*QK_K],
+# each weight equal to the `_iq2xs_lane` term `_qgemv_iq2_xs!` multiplies.
+function _moe_float_decode_iq2xs!(wb::Vector{Float32}, o::Int, w, woff::Int, nb::Int)
+    @inbounds for ib in 0:(nb-1)
+        boff = woff + ib * 74
+        d = _ld_f16(w, boff)
+        for ib32 in 0:7
+            sc = _ld_u8(w, boff + 66 + ib32)
+            for l in 0:3
+                db = l < 2 ? d * (0.5f0 + Float32(sc & 0x0f)) * 0.25f0 : d * (0.5f0 + Float32(sc >> 4)) * 0.25f0
+                qv = _ld_u16(w, boff + 2 + (4 * ib32 + l) * 2)
+                go = Int(qv & 0x01ff) * 8
+                so = Int(qv >> 9) * 8
+                base = o + ib * QK_K + ib32 * 32 + l * 8
+                # @inbounds does not reach into the closure, so it is repeated there.
+                ws = ntuple(t -> @inbounds((db * _IQ2XS_GRIDF[go+t]) * _IQ2XS_SGNF[so+t]), Val(8))
+                for t in 1:8
+                    wb[base+t] = ws[t]
+                end
+            end
+        end
+    end
+    return wb
+end
+
+@inline _mf_acc_rows(a, wb, i::Int, len::Int, x, ::Val{R}) where {R} =
+    ntuple(r -> _mf_acc(a[r], @inbounds(wb[(r-1)*len+i+1]), x), Val(R))
+
+# R decoded rows (wb, row r at (r-1)*len) against columns c0+1 .. c0+8 of P.
+# Each accumulator takes w * x in increasing x index, the order of the
+# one-column kernel, so every dot is bit-identical to `_moe_float_row_multi!`.
+function _moe_float_micro(wb::Vector{Float32}, len::Int, P::Vector{Float32}, np::Int, c0::Int, ::Val{R}) where {R}
+    a = ntuple(_ -> ntuple(_ -> 0.0f0, Val(_MOE_FLOAT_TILE)), Val(R))
+    @inbounds for i in 0:(len-1)
+        a = _mf_acc_rows(a, wb, i, len, _mf_load(P, i * np + c0), Val(R))
+    end
+    return a
+end
+
+# R IQ2_XS rows from `woff` (stride rb) against the n columns of P, into
+# ob[(r - 1) * n + i]: each row is decoded once, then reused by every tile.
+function _moe_float_block_iq2xs!(
+    ob::Vector{Float32}, wb::Vector{Float32}, w, woff::Int, rb::Int,
+    P::Vector{Float32}, n::Int, len::Int, ::Val{R}, ob0::Int=0,
+) where {R}
+    np = _moe_float_npad(n)
+    nb = div(len, QK_K)
+    for r in 0:(R-1)
+        _moe_float_decode_iq2xs!(wb, r * len, w, woff + r * rb, nb)
+    end
+    @inbounds for c0 in 0:_MOE_FLOAT_TILE:(n-1)
+        a = _moe_float_micro(wb, len, P, np, c0, Val(R))
+        m = min(_MOE_FLOAT_TILE, n - c0)
+        for r in 1:R, i in 1:m
+            ob[ob0+(r-1)*n+c0+i] = a[r][i]
+        end
+    end
+    return ob
+end
+
+# Rows per decode block of the IQ2_XS float kernel.
+const _MOE_FLOAT_ROWS = 8
+
+# nr IQ2_XS rows from `woff` (stride rb) against P's n columns into
+# ob[(r - 1) * n + i], in blocks of 8, then 4, 2 and 1 rows.
+function _moe_float_rows_iq2xs!(
+    ob::Vector{Float32}, wb::Vector{Float32}, w, woff::Int, rb::Int, nr::Int,
+    P::Vector{Float32}, n::Int, len::Int,
+)
+    r = 0
+    while r < nr
+        k = nr - r
+        if k >= 8
+            _moe_float_block_iq2xs!(ob, wb, w, woff + r * rb, rb, P, n, len, Val(8), r * n)
+            r += 8
+        elseif k >= 4
+            _moe_float_block_iq2xs!(ob, wb, w, woff + r * rb, rb, P, n, len, Val(4), r * n)
+            r += 4
+        elseif k >= 2
+            _moe_float_block_iq2xs!(ob, wb, w, woff + r * rb, rb, P, n, len, Val(2), r * n)
+            r += 2
+        else
+            _moe_float_block_iq2xs!(ob, wb, w, woff + r * rb, rb, P, n, len, Val(1), r * n)
+            r += 1
+        end
+    end
+    return ob
+end
+
 function _moe_prefill_pack!(s::MoePrefillScratch, cols::AbstractVector, n_exp::Int)
     while length(s.edt) < n_exp
         push!(s.edt, Float32[])
@@ -763,6 +862,10 @@ function (g::_MoePrefillGateUp)(c::Int)
             t = sl.ggml_type
             rb = _qrow_bytes(t, sl.ne0)
             off0 = _quant_expert_off0(sl, e)
+            if g.floatx && t == GGML_TYPE_IQ2_XS
+                _moe_float_gu_iq2xs!(s, buf, s.cwb[c], sl, t, col, lo, hi, off0 + (row0 + lo - 1) * rb, rb, e, p0, n)
+                continue
+            end
             @inbounds for jj in lo:hi
                 woff = off0 + (row0 + jj - 1) * rb
                 if g.floatx || g.multi
@@ -783,6 +886,34 @@ function (g::_MoePrefillGateUp)(c::Int)
                 end
             end
         end
+    end
+    return nothing
+end
+
+# Gate/up rows lo:hi of expert e in decode blocks: ob holds _MOE_FLOAT_ROWS
+# rows of n dots, written out with the per-pair path's expression.
+function _moe_float_gu_iq2xs!(s, ob, wb, sl, t, col, lo, hi, woff, rb, e, p0, n)
+    jj = lo
+    @inbounds while jj <= hi
+        nr = min(_MOE_FLOAT_ROWS, hi - jj + 1)
+        _moe_float_rows_iq2xs!(ob, wb, sl.data, woff + (jj - lo) * rb, rb, nr, s.edt[e], n, s.h)
+        for r in 1:nr, i in 1:n
+            s.gu[jj+r-1, col, s.pairs[p0+i-1]] = 1.0f0 * ob[(r-1)*n+i] + 0.0f0
+        end
+        jj += nr
+    end
+    return nothing
+end
+
+function _moe_float_dn_iq2xs!(s, ob, wb, sl, r0, r1, woff, rb, e, p0, n)
+    jj = r0
+    @inbounds while jj <= r1
+        nr = min(_MOE_FLOAT_ROWS, r1 - jj + 1)
+        _moe_float_rows_iq2xs!(ob, wb, sl.data, woff + (jj - r0) * rb, rb, nr, s.edt[e], n, s.ff)
+        for r in 1:nr, i in 1:n
+            s.dn[jj+r-1, s.pairs[p0+i-1]] = 1.0f0 * ob[(r-1)*n+i] + 0.0f0
+        end
+        jj += nr
     end
     return nothing
 end
@@ -832,6 +963,10 @@ function (g::_MoePrefillDown)(c::Int)
         hv = view(s.hg, p0:p1)
         dt = g.packed ? _moe_prefill_table(s, e) : nothing
         off0 = _quant_expert_off0(sl, e)
+        if g.floatx && t == GGML_TYPE_IQ2_XS
+            _moe_float_dn_iq2xs!(s, buf, s.cwb[c], sl, r0, r1, off0 + (r0 - 1) * rb, rb, e, p0, n)
+            return nothing
+        end
         @inbounds for jj in r0:r1
             woff = off0 + (jj - 1) * rb
             if g.floatx || g.multi
@@ -971,7 +1106,9 @@ function _moe_prefill_run!(
         hf = eltype(s.hg) === Vector{Float32}
         multi = _prefill_multi_enabled()
         cnc = _MOE_CHUNKS_PER_THREAD * nt
-        (multi || xf || hf) && _moe_prefill_bufs!(s, cnc, maximum(s.cnt))
+        (multi || xf || hf) && _moe_prefill_bufs!(
+            s, cnc, _MOE_FLOAT_ROWS * maximum(s.cnt),
+            xf || hf ? _MOE_FLOAT_ROWS * max(h, ff) : 0)
         packed =
             !xf && multi && _moe_prefill_dt(gate_s.ggml_type, simd) &&
             _moe_prefill_dt(up_s.ggml_type, simd)
