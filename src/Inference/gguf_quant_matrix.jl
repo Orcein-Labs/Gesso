@@ -401,9 +401,16 @@ function _half_matmul!(dst::AbstractMatrix, x::AbstractMatrix, q::QuantMatrix)
         end
         return dst
     end
-    xf = Matrix{Float32}(x)
+    # no copy unless dst shares memory with x (the chunks below write dst while reading xf)
+    xf = (x isa Matrix{Float32} && !Base.mightalias(dst, x)) ? x : Matrix{Float32}(x)
     nc = max(1, _QUANT_FALLBACK_CHUNK_ELEMS ÷ q.ne0)
     W = Matrix{Float32}(undef, q.ne0, min(nc, q.nrows))
+    if nc >= q.nrows && dst isa Matrix{Float32} && size(dst) == (seq, q.nrows)
+        # one chunk: the GEMM writes dst directly, same call shape as below
+        _half_widen_rows!(W, q, 1, q.nrows, v)
+        mul!(dst, xf, W)
+        return dst
+    end
     out = Matrix{Float32}(undef, seq, min(nc, q.nrows))
     r0 = 1
     while r0 <= q.nrows
