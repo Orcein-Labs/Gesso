@@ -244,13 +244,38 @@ _q4x_sigm(x) = 1 / (1 + exp(-x))
 _q4x_silu(x) = x / (1 + exp(-x))
 _q4x_softplus(x) = x > 20 ? x : log1p(exp(x))
 
+# Chunks for an elementwise pass over `work` elements split along a dimension of
+# length n: one below 64k elements (decode shapes stay on the calling thread).
+_q4x_nchunks(n::Int, work::Int) = work < 65536 ? 1 : clamp(Threads.nthreads(), 1, n)
+
+# Runs f(lo, hi) over 1:n split into nc contiguous ranges on the GEMV pool.
+function _q4x_par_ranges(f, n::Int, nc::Int)
+    nc <= 1 && return f(1, n)
+    _pool_run_chunks!(nc) do c
+        lo = div((c - 1) * n, nc) + 1
+        hi = div(c * n, nc)
+        hi >= lo && f(lo, hi)
+        return nothing
+    end
+    return nothing
+end
+
 # RMS norm over contiguous groups of n columns. w has n entries (shared) or one
-# per column.
+# per column. Token rows split across the pool; each (group, token) runs the
+# same loop as a serial pass, so the bits do not depend on the split.
 function _q4x_group_rms(x::AbstractMatrix, n::Int, w, eps::Float64)
     T, F = size(x)
     y = Matrix{Float32}(undef, T, F)
     wo = length(w) == n ? 0 : n
-    @inbounds for g in 0:(F÷n-1), t in 1:T
+    _q4x_par_ranges(T, _q4x_nchunks(T, T * F)) do t0, t1
+        _q4x_group_rms_rows!(y, x, n, w, wo, eps, t0, t1)
+    end
+    return y
+end
+
+function _q4x_group_rms_rows!(y::Matrix{Float32}, x::AbstractMatrix, n::Int, w, wo::Int, eps::Float64, t0::Int, t1::Int)
+    F = size(x, 2)
+    @inbounds for g in 0:(F÷n-1), t in t0:t1
         acc = 0.0
         @simd for i in 1:n
             acc += Float64(x[t, g*n+i])^2
@@ -261,7 +286,7 @@ function _q4x_group_rms(x::AbstractMatrix, n::Int, w, eps::Float64)
             y[t, g*n+i] = Float32(x[t, g*n+i] * r) * w[o+i]
         end
     end
-    return y
+    return nothing
 end
 
 # Depthwise causal conv over [hist; x]; w is ggml [k, C] flat. hist holds the
@@ -398,33 +423,61 @@ function _q4x_hc_mix(m::Qwen4expModel, x, pre::String; inject::Bool=true)
     T = size(x, 1)
     # Stream s of a (T, n_hc * n_embd) matrix is the contiguous span
     # (s * T * NE) .+ (1:T * NE), so the mix runs over linear indices.
-    @inbounds for j in eachindex(gate)
-        gate[j] = _q4x_sigm(gate[j])
-    end
     TN = T * NE
     mixed = zeros(Float32, T, NE)
-    @inbounds for s in 0:(HC-1)
-        o = TN * s
-        @simd for k in 1:TN
-            mixed[k] += xn[o+k] * gate[o+k]
-        end
-    end
-    @inbounds @simd for k in 1:TN
-        mixed[k] /= HC
+    # Each k sums its streams in s order, so splitting k keeps the bits.
+    _q4x_par_ranges(TN, _q4x_nchunks(TN, TN * HC)) do k0, k1
+        _q4x_hc_mix_range!(mixed, xn, gate, TN, HC, k0, k1)
     end
     return mixed, inject ? _q4x_mm(m, xn, pre * "_inject.weight") : nothing
 end
 
-function _q4x_hc_combine(cfg::Qwen4expConfig, res, out, inj)
-    NE, HC = cfg.n_embd, cfg.n_hc
-    y = copy(res)
-    @inbounds for s in 0:(HC-1), t in 1:size(res, 1)
-        w = 2 * _q4x_sigm(inj[t, s+1] / HC)
-        for i in 1:NE
-            y[t, i+NE*s] += out[t, i] * w
+function _q4x_hc_mix_range!(mixed::Matrix{Float32}, xn::Matrix{Float32}, gate::Matrix{Float32}, TN::Int, HC::Int, k0::Int, k1::Int)
+    @inbounds for s in 0:(HC-1)
+        o = TN * s
+        for k in k0:k1
+            gate[o+k] = _q4x_sigm(gate[o+k])
         end
     end
+    @inbounds for s in 0:(HC-1)
+        o = TN * s
+        @simd for k in k0:k1
+            mixed[k] += xn[o+k] * gate[o+k]
+        end
+    end
+    @inbounds @simd for k in k0:k1
+        mixed[k] /= HC
+    end
+    return nothing
+end
+
+# Stream s gets res + out * w with w = 2 sigm(inj[t, s] / n_hc). Columns split
+# across the pool and each column runs down the tokens contiguously; every
+# element is one add of one product, so the split does not change the bits.
+function _q4x_hc_combine(cfg::Qwen4expConfig, res, out, inj)
+    NE, HC = cfg.n_embd, cfg.n_hc
+    T = size(res, 1)
+    y = similar(res)
+    wv = Matrix{Float32}(undef, T, HC)
+    @inbounds for s in 1:HC, t in 1:T
+        wv[t, s] = 2 * _q4x_sigm(inj[t, s] / HC)
+    end
+    F = NE * HC
+    _q4x_par_ranges(F, _q4x_nchunks(F, T * F)) do c0, c1
+        _q4x_hc_combine_cols!(y, res, out, wv, NE, T, c0, c1)
+    end
     return y
+end
+
+function _q4x_hc_combine_cols!(y::AbstractMatrix, res::AbstractMatrix, out::AbstractMatrix, wv::Matrix{Float32}, NE::Int, T::Int, c0::Int, c1::Int)
+    @inbounds for c in c0:c1
+        s = (c - 1) ÷ NE
+        i = c - NE * s
+        for t in 1:T
+            y[t, c] = res[t, c] + out[t, i] * wv[t, s+1]
+        end
+    end
+    return nothing
 end
 
 function _q4x_gdn(m::Qwen4expModel, st::Qwen4expState, il::Int, x, taps)
