@@ -345,18 +345,29 @@ end
 _q4x_causal_conv!(hist::Matrix{Float32}, x::AbstractMatrix, w, k::Int, dil::Int) =
     _q4x_causal_conv_impl!(hist, x, w, k, dil, nothing)
 
-function _q4x_causal_conv_silu!(hist::Matrix{Float32}, x::AbstractMatrix, w, k::Int, dil::Int)
-    s = Matrix{Float32}(undef, size(x))
-    y = _q4x_causal_conv_impl!(hist, x, w, k, dil, s)
+# y, s and xx (the [hist; x] rows) may be caller buffers; every element of
+# each is written before it is read.
+function _q4x_causal_conv_silu!(hist::Matrix{Float32}, x::AbstractMatrix, w, k::Int, dil::Int,
+                                y=nothing, s=nothing, xx=nothing)
+    s === nothing && (s = Matrix{Float32}(undef, size(x)))
+    y = _q4x_causal_conv_impl!(hist, x, w, k, dil, s, y, xx)
     return y, s
 end
 
-function _q4x_causal_conv_impl!(hist::Matrix{Float32}, x::AbstractMatrix, w, k::Int, dil::Int, s)
+function _q4x_causal_conv_impl!(hist::Matrix{Float32}, x::AbstractMatrix, w, k::Int, dil::Int, s,
+                                y=nothing, xx=nothing)
     H = size(hist, 1)
     H == (k - 1) * dil || error("qwen4exp: conv history has $H rows, needs $((k - 1) * dil)")
     T, C = size(x)
-    xx = vcat(hist, x)
-    y = Matrix{Float32}(undef, T, C)
+    if xx === nothing
+        xx = vcat(hist, x)
+    else
+        size(xx) == (H + T, C) || error("qwen4exp: conv buffer is $(size(xx)), needs $((H + T, C))")
+        copyto!(view(xx, 1:H, :), hist)
+        copyto!(view(xx, H+1:H+T, :), x)
+    end
+    y === nothing && (y = Matrix{Float32}(undef, T, C))
+    size(y) == (T, C) || error("qwen4exp: conv output is $(size(y)), needs $((T, C))")
     _q4x_par_ranges(C, _q4x_nchunks(C, T * C)) do c0, c1
         _q4x_causal_conv_cols!(y, s, xx, w, k, dil, H, T, c0, c1)
     end
@@ -563,19 +574,37 @@ function _q4x_hc_combine_cols!(y::AbstractMatrix, res::AbstractMatrix, out::Abst
 end
 
 function _q4x_gdn(m::Qwen4expModel, st::Qwen4expState, il::Int, x, taps)
+    # Taps keep references to the intermediates, so a tapped call never uses
+    # the shared scratch buffers.
+    own = taps === nothing && Threads.atomic_cas!(m.scratch_busy, 0, 1) == 0
+    try
+        return _q4x_gdn(m, st, il, x, taps, own)
+    finally
+        own && Threads.atomic_xchg!(m.scratch_busy, 0)
+    end
+end
+
+function _q4x_gdn(m::Qwen4expModel, st::Qwen4expState, il::Int, x, taps, own::Bool)
     cfg = m.cfg
     p = "blk.$il."
     T = size(x, 1)
     nk, dk, nv, dv = cfg.ssm_nk, cfg.ssm_dk, cfg.ssm_nv, cfg.ssm_dv
-    qkv = _q4x_mm(m, x, p * "attn_qkv.weight")
-    z = _q4x_mm(m, x, p * "attn_gate.weight")
+    xf = x isa Matrix{Float32} ? x : Matrix{Float32}(x)
+    # qkv, z, the conv buffers, o and fo never leave this call (taps aside),
+    # so they live in reused buffers; out is returned and stays fresh.
+    nqkv = _q4x_rows_out(m, p * "attn_qkv.weight")
+    qkv = _q4x_mm!(_q4x_buf(m, "scratch:gdn_qkv", T, nqkv, own), m, xf, p * "attn_qkv.weight")
+    z = _q4x_mm!(_q4x_buf(m, "scratch:gdn_z", T, _q4x_rows_out(m, p * "attn_gate.weight"), own),
+        m, xf, p * "attn_gate.weight")
     beta = _q4x_sigm.(_q4x_mm(m, x, p * "ssm_beta.weight"))
     alpha = _q4x_mm(m, x, p * "ssm_alpha.weight")
     sp = _q4x_softplus.(alpha .+ transpose(_q4x_w(m, p * "ssm_dt.bias")))
     g = sp .* transpose(_q4x_w(m, p * "ssm_a"))
     k = cfg.conv_kernel
     hist = get!(() -> zeros(Float32, k - 1, size(qkv, 2)), st.conv, il)
-    craw, c = _q4x_causal_conv_silu!(hist, qkv, _q4x_w(m, p * "ssm_conv1d.weight"), k, 1)
+    craw, c = _q4x_causal_conv_silu!(hist, qkv, _q4x_w(m, p * "ssm_conv1d.weight"), k, 1,
+        _q4x_buf(m, "scratch:gdn_craw", T, nqkv, own), _q4x_buf(m, "scratch:gdn_c", T, nqkv, own),
+        _q4x_buf(m, "scratch:gdn_xx", size(hist, 1) + T, nqkv, own))
     nq = nk * dk
     # Views, not copies: the kernel widens q, k, v and beta to Float64 per
     # element, so the values match the old Float64 copies. g stays Float64
@@ -585,7 +614,8 @@ function _q4x_gdn(m::Qwen4expModel, st::Qwen4expState, il::Int, x, taps)
     v = PermutedDimsArray(reshape(view(c, :, 2nq+1:size(c, 2)), T, dv, nv), (1, 3, 2))
     # The kernel only stores into out, so a Float32 out rounds each value once,
     # the same as Float32.(o) on a Float64 buffer, without the buffer.
-    o = Array{Float32}(undef, T, dv, nv)
+    of = _q4x_buf(m, "scratch:gdn_o", T, nv * dv, own)
+    o = reshape(of, T, dv, nv)
     # The delta state is stored (dv, dk, nv) so each value head is one
     # contiguous block; the kernel sees it as (nv, dk, dv) through the view.
     # Held (nv, dk, dv) directly, a head's values sit nv apart and the head
@@ -593,8 +623,8 @@ function _q4x_gdn(m::Qwen4expModel, st::Qwen4expState, il::Int, x, taps)
     raw = get!(() -> zeros(Float64, dv, dk, nv), st.ssm, il)
     _cpu_gated_delta_rule!(PermutedDimsArray(o, (1, 3, 2)), q, kk, v, Float64.(g),
         beta, PermutedDimsArray(raw, (3, 2, 1)); l2norm=true, v_head_tiled=true)
-    of = reshape(o, T, nv * dv)
-    fo = _q4x_group_rms(of, dv, _q4x_w(m, p * "ssm_norm.weight"), cfg.eps, z)
+    fo = _q4x_group_rms!(_q4x_buf(m, "scratch:gdn_fo", T, nv * dv, own), of, dv,
+        _q4x_w(m, p * "ssm_norm.weight"), cfg.eps, z)
     out = _q4x_mm(m, fo, p * "ssm_out.weight")
     if taps !== nothing
         for (n, a) in (("linear_attn_qkv_mixed", qkv), ("z", z), ("beta_sigmoid", beta),
