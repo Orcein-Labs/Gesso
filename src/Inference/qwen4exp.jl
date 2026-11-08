@@ -659,6 +659,41 @@ function _q4x_rope!(x::Matrix{Float32}, cfg::Qwen4expConfig, nh::Int, p0::Int)
     return x
 end
 
+# Causal softmax over the score rows of every head, in place. S is (T, L, NH)
+# raw q*k' products; flat rows r0:r1 index (t, h) as r = (h - 1) * T + t. Each
+# score is scaled first (the same rounding as `(q * k') .* scale`), and row t
+# sees keys 1:p0+t. Rows are independent, so splitting them across the pool
+# keeps every row's sum in the same order. Masked keys are set to zero without
+# an exp: they added 0f0 to z before, which never changed it.
+function _q4x_causal_softmax_rows!(S::Array{Float32,3}, scale::Float32, p0::Int,
+                                   r0::Int, r1::Int)
+    T, L = size(S, 1), size(S, 2)
+    @inbounds for r in r0:r1
+        h = (r - 1) ÷ T + 1
+        t = r - (h - 1) * T
+        lim = p0 + t
+        mx = -Inf32
+        for u in 1:lim
+            sc = S[t, u, h] * scale
+            S[t, u, h] = sc
+            mx = max(mx, sc)
+        end
+        z = 0f0
+        for u in 1:lim
+            e = exp(S[t, u, h] - mx)
+            S[t, u, h] = e
+            z += e
+        end
+        for u in lim+1:L
+            S[t, u, h] = 0f0
+        end
+        for u in 1:lim
+            S[t, u, h] /= z
+        end
+    end
+    return nothing
+end
+
 function _q4x_attn(m::Qwen4expModel, st::Qwen4expState, il::Int, x, taps)
     cfg = m.cfg
     p = "blk.$il."
@@ -687,26 +722,22 @@ function _q4x_attn(m::Qwen4expModel, st::Qwen4expState, il::Int, x, taps)
     o = Matrix{Float32}(undef, T, NH * HD)
     scale = Float32(1 / sqrt(HD))
     grp = NH ÷ NKV
+    # All heads' scores first, then one pooled softmax, then all PV products:
+    # two hand-offs between BLAS threads and the pool per layer instead of two
+    # per head.
+    S = Array{Float32}(undef, T, L, NH)
     for h in 0:(NH-1)
         kc = (h ÷ grp) * HD+1:(h ÷ grp + 1) * HD
-        S = (@view(q[:, h*HD+1:(h+1)*HD]) * transpose(@view K[:, kc])) .* scale
-        @inbounds for t in 1:T
-            lim = p0 + t
-            mx = -Inf32
-            for u in 1:lim
-                mx = max(mx, S[t, u])
-            end
-            z = 0f0
-            for u in 1:L
-                e = u <= lim ? exp(S[t, u] - mx) : 0f0
-                S[t, u] = e
-                z += e
-            end
-            for u in 1:lim
-                S[t, u] /= z
-            end
-        end
-        o[:, h*HD+1:(h+1)*HD] = S * @view V[:, kc]
+        LinearAlgebra.mul!(@view(S[:, :, h+1]), @view(q[:, h*HD+1:(h+1)*HD]),
+                           transpose(@view K[:, kc]))
+    end
+    _q4x_par_ranges(NH * T, _q4x_nchunks(NH * T, NH * T * L)) do r0, r1
+        _q4x_causal_softmax_rows!(S, scale, p0, r0, r1)
+    end
+    for h in 0:(NH-1)
+        kc = (h ÷ grp) * HD+1:(h ÷ grp + 1) * HD
+        LinearAlgebra.mul!(@view(o[:, h*HD+1:(h+1)*HD]), @view(S[:, :, h+1]),
+                           @view(V[:, kc]))
     end
     og = o .* _q4x_sigm.(gt)
     out = _q4x_mm(m, og, p * "attn_output.weight")
