@@ -547,10 +547,12 @@ end
 # Stream s gets res + out * w with w = 2 sigm(inj[t, s] / n_hc). Columns split
 # across the pool and each column runs down the tokens contiguously; every
 # element is one add of one product, so the split does not change the bits.
-function _q4x_hc_combine(cfg::Qwen4expConfig, res, out, inj)
+_q4x_hc_combine(cfg::Qwen4expConfig, res, out, inj) = _q4x_hc_combine!(similar(res), cfg, res, out, inj)
+
+# y may be res itself: each element reads only its own res entry.
+function _q4x_hc_combine!(y::AbstractMatrix, cfg::Qwen4expConfig, res, out, inj)
     NE, HC = cfg.n_embd, cfg.n_hc
     T = size(res, 1)
-    y = similar(res)
     wv = Matrix{Float32}(undef, T, HC)
     @inbounds for s in 1:HC, t in 1:T
         wv[t, s] = 2 * _q4x_sigm(inj[t, s] / HC)
@@ -773,6 +775,13 @@ function _q4x_ffn(m::Qwen4expModel, il::Int, x, taps)
     return out
 end
 
+# The forward's residual is its own (repeat, then fresh per PLE layer), so it is
+# updated in place, which saves a (T, n_hc * n_embd) matrix per half-block.
+# Taps keep a reference to every residual, so a tapped run keeps fresh ones.
+_q4x_hc_comb(cfg::Qwen4expConfig, res::Matrix{Float32}, out, inj, ::Nothing) =
+    _q4x_hc_combine!(res, cfg, res, out, inj)
+_q4x_hc_comb(cfg::Qwen4expConfig, res, out, inj, taps) = _q4x_hc_combine(cfg, res, out, inj)
+
 """
     qwen4exp_forward!(m, st, tokens; n_layers=m.cfg.n_layer, taps=nothing) -> residual
 
@@ -802,11 +811,11 @@ function qwen4exp_forward!(m::Qwen4expModel, st::Qwen4expState, tokens::Abstract
         cur, inj = _q4x_hc_mix(m, res, "blk.$il.hc_attn")
         _q4x_tap!(taps, "hc_mixed-$il", cur)
         cur = cfg.attn_layer[il+1] ? _q4x_attn(m, st, il, cur, taps) : _q4x_gdn(m, st, il, cur, taps)
-        res = _q4x_hc_combine(cfg, res, cur, inj)
+        res = _q4x_hc_comb(cfg, res, cur, inj, taps)
         _q4x_tap!(taps, "hc_combine-$il", res)
         cur, inj = _q4x_hc_mix(m, res, "blk.$il.hc_ffn")
         cur = _q4x_ffn(m, il, cur, taps)
-        res = _q4x_hc_combine(cfg, res, cur, inj)
+        res = _q4x_hc_comb(cfg, res, cur, inj, taps)
         _q4x_tap!(taps, "l_last-$il", res)
     end
     st.pos += T
