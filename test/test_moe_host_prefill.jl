@@ -259,16 +259,16 @@ end
 # x, so the grouped prefill must refuse these slabs; a Q8 activation for them
 # moved Flash-Next's logits by rel_rms 0.06. The entry must equal the pieces
 # path bit for bit at every seq.
-@testset "grouped MoE prefill refuses float-activation types" begin
+@testset "grouped MoE prefill float-activation types match pieces" begin
     rng = Xoshiro(46)
     h, ff, nexp, nused = 512, 640, 6, 3
     for (tg, td) in ((_MKE.GGML_TYPE_IQ2_XS, _MKE.GGML_TYPE_Q2_0),
-                     (_MKE.GGML_TYPE_IQ2_XXS, _MKE.GGML_TYPE_IQ4_NL))
+                     (_MKE.GGML_TYPE_IQ2_XXS, _MKE.GGML_TYPE_IQ4_NL),
+                     (_MKE.GGML_TYPE_IQ2_XS, _MKE.GGML_TYPE_IQ4_NL))
         gate_s = _mhp_slice(_mhp_random_bytes(rng, tg, nexp, ff, h), tg, nexp, h, ff)
         up_s = _mhp_slice(_mhp_random_bytes(rng, tg, nexp, ff, h), tg, nexp, h, ff)
         down_s = _mhp_slice(_mhp_random_bytes(rng, td, nexp, h, ff), td, nexp, ff, h)
-        @test !_MKE._moe_host_batchable(gate_s, up_s, down_s, h, ff)
-        @test !_MKE._moe_host_prefill_ok(gate_s, up_s, down_s, h, ff)
+        @test _MKE._moe_host_prefill_ok(gate_s, up_s, down_s, h, ff)
         router = randn(rng, Float32, nexp, h)
         for seq in (37, 2, 1)
             X = randn(rng, Float32, seq, h)
@@ -279,4 +279,9 @@ end
             @test Y == Yref
         end
     end
+    # Gate and up must take the same activation kind.
+    gate_s = _mhp_slice(_mhp_random_bytes(rng, _MKE.GGML_TYPE_IQ2_XS, nexp, ff, h), _MKE.GGML_TYPE_IQ2_XS, nexp, h, ff)
+    up_s = _mhp_slice(_mhp_random_bytes(rng, _MKE.GGML_TYPE_IQ2_XXS, nexp, ff, h), _MKE.GGML_TYPE_IQ2_XXS, nexp, h, ff)
+    down_s = _mhp_slice(_mhp_random_bytes(rng, _MKE.GGML_TYPE_Q2_0, nexp, h, ff), _MKE.GGML_TYPE_Q2_0, nexp, ff, h)
+    @test !_MKE._moe_host_prefill_ok(gate_s, up_s, down_s, h, ff)
 end

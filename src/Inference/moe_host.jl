@@ -98,9 +98,15 @@ _moe_weight_block_values(t::Int32) = t == GGML_TYPE_Q2_0 ? 64 : _q8k_block_value
 _qgemv_float_act_type(t::Int32) =
     t in (GGML_TYPE_IQ2_XS, GGML_TYPE_IQ3_XXS, GGML_TYPE_IQ4_XS, GGML_TYPE_IQ4_NL, GGML_TYPE_Q5_1)
 
+# The float-x types the grouped prefill has a kernel for (`_moe_float_row_multi!`),
+# making the same float dots as `_qgemv_bytes!`.
+_moe_float_row_ok(t::Int32, n::Int) =
+    (t == GGML_TYPE_IQ2_XS && n % QK_K == 0) || (t == GGML_TYPE_IQ4_NL && n % 32 == 0)
+
 _moe_prefill_row_ok(t::Int32, n::Int) =
     _quant_q8k_native(t) && !_qgemv_float_act_type(t) &&
-    n % _q8k_block_values(t) == 0 && n % _moe_weight_block_values(t) == 0
+    n % _q8k_block_values(t) == 0 && n % _moe_weight_block_values(t) == 0 ||
+    _moe_float_row_ok(t, n)
 
 function _moe_host_prefill_ok(
     gate_s::GgufQuantSlice,
@@ -113,6 +119,7 @@ function _moe_host_prefill_ok(
            _moe_prefill_row_ok(up_s.ggml_type, h) &&
            _moe_prefill_row_ok(down_s.ggml_type, ff) &&
            _q80_act_type(gate_s.ggml_type) == _q80_act_type(up_s.ggml_type) &&
+           _qgemv_float_act_type(gate_s.ggml_type) == _qgemv_float_act_type(up_s.ggml_type) &&
            gate_s.ne0 == h &&
            gate_s.ne1 == ff &&
            up_s.ne0 == h &&
@@ -385,6 +392,21 @@ _quantize_act!(y::Q8KVec, x) = quantize_q8_K!(y, x)
 _quantize_act!(y::Q80Vec, x) = quantize_q8_0!(y, x)
 _quantize_act!(y::Q6KPrepVec, x) = (quantize_q8_K!(y.q, x); _q6k_prep!(y))
 
+# Float activations, for the weight types `_qgemv_bytes!` dots against float x.
+_act_vec(::Type{Vector{Float32}}, n::Int) = Vector{Float32}(undef, n)
+_quantize_act!(y::Vector{Float32}, x) = copyto!(y, x)
+
+_act_len(x::Vector{Float32}) = length(x)
+_act_len(x) = length(x.qs)
+
+# The activation block for weights of types `ts` (gate and up share one).
+# `floatx` is true only for slabs `_moe_host_batchable` refuses: those match the
+# pieces path, which dots float-x types against float x. Batchable slabs match
+# the batched Q8_K route, so they keep its activations whatever their type.
+_moe_prefill_act(floatx::Bool, simd::Bool, ts::Int32...) =
+    floatx && _qgemv_float_act_type(ts[1]) ? Vector{Float32} :
+    _q80_act_type(ts[1]) ? Q80Vec : _moe_act_type(simd, ts...)
+
 # The Q8_K activation vector for weights of types `ts`. The K-quant tiles read
 # pair-ordered columns, so prepping each token once spares every row of every
 # expert the reorder; a mix of types keeps plain Q8_K.
@@ -548,9 +570,95 @@ function (g::_MoePrefillPack)(c::Int)
         w0 <= s.cost[a] < w1 || continue
         e = s.active[a]
         p0 = s.start[e]
-        _multi_packed!(s.edt[e], s.eqt[e], view(g.cols, p0:(p0+s.cnt[e]-1)), s.est[e])
+        _moe_pack_expert!(s, e, view(g.cols, p0:(p0+s.cnt[e]-1)))
     end
     return nothing
+end
+
+_moe_pack_expert!(s::MoePrefillScratch, e::Int, cols) =
+    _multi_packed!(s.edt[e], s.eqt[e], cols, s.est[e])
+_moe_pack_expert!(s::MoePrefillScratch, e::Int, cols::AbstractVector{Vector{Float32}}) =
+    _moe_float_pack!(s.edt[e], cols)
+
+# Float columns per tile of `_moe_float_row_multi!`.
+const _MOE_FLOAT_TILE = 8
+
+_moe_float_npad(n::Int) = cld(n, _MOE_FLOAT_TILE) * _MOE_FLOAT_TILE
+
+# An expert's float columns, transposed so one x index of every column is
+# contiguous: P[(i - 1) * np + c] = cols[c][i], np = n padded to the tile with
+# zero columns.
+function _moe_float_pack!(P::Vector{Float32}, cols::AbstractVector{Vector{Float32}})
+    n = length(cols)
+    len = length(cols[1])
+    np = _moe_float_npad(n)
+    length(P) < np * len && resize!(P, np * len)
+    @inbounds for c in 1:np
+        if c <= n
+            x = cols[c]
+            for i in 1:len
+                P[(i-1)*np+c] = x[i]
+            end
+        else
+            for i in 1:len
+                P[(i-1)*np+c] = 0.0f0
+            end
+        end
+    end
+    return P
+end
+
+@inline _mf_load(P, o::Int) = ntuple(i -> @inbounds(P[o+i]), Val(_MOE_FLOAT_TILE))
+# acc + w * x per column: the `acc += w * x` of the one-column kernels.
+@inline _mf_acc(a, w::Float32, x) = ntuple(i -> a[i] + w * x[i], Val(_MOE_FLOAT_TILE))
+
+# One IQ2_XS row against columns c0+1 .. c0+8, each fed the terms of
+# `_qgemv_iq2_xs!` in its order.
+function _moe_float_tile_iq2xs(w, woff::Int, P::Vector{Float32}, np::Int, c0::Int, nb::Int)
+    a = ntuple(_ -> 0.0f0, Val(_MOE_FLOAT_TILE))
+    @inbounds for ib in 0:(nb-1)
+        boff = woff + ib * 74
+        d = _ld_f16(w, boff)
+        for ib32 in 0:7, l in 0:3
+            db, g, sg = _iq2xs_term(w, boff, ib32, l, d)
+            base = ib * QK_K + ib32 * 32 + l * 8
+            for t in 0:7
+                a = _mf_acc(a, _iq2xs_lane(db, g, sg, t), _mf_load(P, (base + t) * np + c0))
+            end
+        end
+    end
+    return a
+end
+
+# One IQ4_NL row against columns c0+1 .. c0+8, in the order of `_qgemv_iq4_nl!`.
+function _moe_float_tile_iq4nl(w, woff::Int, P::Vector{Float32}, np::Int, c0::Int, nb::Int)
+    a = ntuple(_ -> 0.0f0, Val(_MOE_FLOAT_TILE))
+    @inbounds for ib in 0:(nb-1)
+        boff = woff + ib * 18
+        d = _ld_f16(w, boff)
+        xoff = ib * 32
+        for t in 0:15
+            qs = _ld_u8(w, boff + 2 + t)
+            a = _mf_acc(a, d * Float32(KVALUES_IQ4NL[(qs&0x0f)+0x01]), _mf_load(P, (xoff + t) * np + c0))
+            a = _mf_acc(a, d * Float32(KVALUES_IQ4NL[(qs>>4)+0x01]), _mf_load(P, (xoff + t + 16) * np + c0))
+        end
+    end
+    return a
+end
+
+# Raw float dots of the weight row at `woff` (length `len`) with the n columns
+# packed in P, into buf[1:n]. Each weight term is decoded once per tile.
+function _moe_float_row_multi!(buf::Vector{Float32}, t::Int32, w, woff::Int, P::Vector{Float32}, n::Int, len::Int)
+    np = _moe_float_npad(n)
+    t == GGML_TYPE_IQ2_XS || t == GGML_TYPE_IQ4_NL || error("moe float prefill: no kernel for type $t")
+    @inbounds for c0 in 0:_MOE_FLOAT_TILE:(n-1)
+        a = t == GGML_TYPE_IQ2_XS ? _moe_float_tile_iq2xs(w, woff, P, np, c0, div(len, QK_K)) :
+            _moe_float_tile_iq4nl(w, woff, P, np, c0, div(len, 32))
+        for i in 1:min(_MOE_FLOAT_TILE, n - c0)
+            buf[c0+i] = a[i]
+        end
+    end
+    return buf
 end
 
 function _moe_prefill_pack!(s::MoePrefillScratch, cols::AbstractVector, n_exp::Int)
@@ -561,7 +669,7 @@ function _moe_prefill_pack!(s::MoePrefillScratch, cols::AbstractVector, n_exp::I
     end
     np = _moe_prefill_cost!(s, 1)
     nc = clamp(_MOE_CHUNKS_PER_THREAD * Threads.nthreads(), 1, length(s.active))
-    _run_row_chunks!(_MoePrefillPack(s, cols, nc), nc, np * length(cols[1].qs))
+    _run_row_chunks!(_MoePrefillPack(s, cols, nc), nc, np * _act_len(cols[1]))
     return s
 end
 
@@ -633,12 +741,13 @@ struct _MoePrefillGateUp{S <: MoePrefillScratch}
     simd::Bool
     multi::Bool
     packed::Bool
+    floatx::Bool
 end
 
 function (g::_MoePrefillGateUp)(c::Int)
     s = g.s
     ff = s.ff
-    buf = g.multi ? s.cbuf[c] : Float32[]
+    buf = g.multi || g.floatx ? s.cbuf[c] : Float32[]
     u = g.multi ? s.cdec[c] : nothing
     _moe_prefill_pieces(s, 2ff, g.nc, c) do e, r0, r1
         p0 = s.start[e]
@@ -656,8 +765,12 @@ function (g::_MoePrefillGateUp)(c::Int)
             off0 = _quant_expert_off0(sl, e)
             @inbounds for jj in lo:hi
                 woff = off0 + (row0 + jj - 1) * rb
-                if g.multi
-                    _moe_prefill_row_multi!(buf, t, sl.data, woff, xv, n, g.simd, dt, u)
+                if g.floatx || g.multi
+                    if g.floatx
+                        _moe_float_row_multi!(buf, t, sl.data, woff, s.edt[e], n, s.h)
+                    else
+                        _moe_prefill_row_multi!(buf, t, sl.data, woff, xv, n, g.simd, dt, u)
+                    end
                     for i in 1:n
                         # Same expression as the per-pair path, so -0.0 becomes +0.0 identically.
                         s.gu[jj, col, s.pairs[p0+i-1]] = 1.0f0 * buf[i] + 0.0f0
@@ -703,6 +816,7 @@ struct _MoePrefillDown{S <: MoePrefillScratch}
     simd::Bool
     multi::Bool
     packed::Bool
+    floatx::Bool
 end
 
 function (g::_MoePrefillDown)(c::Int)
@@ -710,7 +824,7 @@ function (g::_MoePrefillDown)(c::Int)
     sl = g.down
     t = sl.ggml_type
     rb = _qrow_bytes(t, sl.ne0)
-    buf = g.multi ? s.cbuf[c] : Float32[]
+    buf = g.multi || g.floatx ? s.cbuf[c] : Float32[]
     _moe_prefill_pieces(s, s.h, g.nc, c) do e, r0, r1
         p0 = s.start[e]
         n = s.cnt[e]
@@ -720,8 +834,12 @@ function (g::_MoePrefillDown)(c::Int)
         off0 = _quant_expert_off0(sl, e)
         @inbounds for jj in r0:r1
             woff = off0 + (jj - 1) * rb
-            if g.multi
-                _moe_prefill_row_multi!(buf, t, sl.data, woff, hv, n, g.simd, dt)
+            if g.floatx || g.multi
+                if g.floatx
+                    _moe_float_row_multi!(buf, t, sl.data, woff, s.edt[e], n, s.ff)
+                else
+                    _moe_prefill_row_multi!(buf, t, sl.data, woff, hv, n, g.simd, dt)
+                end
                 for i in 1:n
                     s.dn[jj, s.pairs[p0+i-1]] = 1.0f0 * buf[i] + 0.0f0
                 end
@@ -809,8 +927,9 @@ function _moe_host_prefill!(
     cpu::Vector{Bool}=Bool[],
 )
     simd = q8k_simd_enabled()
-    XT = _q80_act_type(gate_s.ggml_type) ? Q80Vec : _moe_act_type(simd, gate_s.ggml_type, up_s.ggml_type)
-    HT = _q80_act_type(down_s.ggml_type) ? Q80Vec : _moe_act_type(simd, down_s.ggml_type)
+    floatx = !_moe_host_batchable(gate_s, up_s, down_s, size(X, 2), gate_s.ne1)
+    XT = _moe_prefill_act(floatx, simd, gate_s.ggml_type, up_s.ggml_type)
+    HT = _moe_prefill_act(floatx, simd, down_s.ggml_type)
     s = _moe_prefill_scratch(size(X, 2), gate_s.ne1, size(X, 1), size(experts, 1), n_exp, XT, HT)
     return _moe_prefill_run!(s, Y, X, experts, weights, live, n_exp, gate_s, up_s, 0, down_s, _cpu_silu, cpu)
 end
@@ -846,24 +965,28 @@ function _moe_prefill_run!(
     _moe_prefill_group!(s, experts, live, seq, n_used, n_exp, cpu)
     np = s.start[n_exp+1] - 1
     if np > 0
+        # Float activations always take the tiled float kernel over the
+        # expert's packed columns.
+        xf = eltype(s.xg) === Vector{Float32}
+        hf = eltype(s.hg) === Vector{Float32}
         multi = _prefill_multi_enabled()
         cnc = _MOE_CHUNKS_PER_THREAD * nt
-        multi && _moe_prefill_bufs!(s, cnc, maximum(s.cnt))
+        (multi || xf || hf) && _moe_prefill_bufs!(s, cnc, maximum(s.cnt))
         packed =
-            multi && _moe_prefill_dt(gate_s.ggml_type, simd) &&
+            !xf && multi && _moe_prefill_dt(gate_s.ggml_type, simd) &&
             _moe_prefill_dt(up_s.ggml_type, simd)
-        packed && _moe_prefill_pack!(s, s.xg, n_exp)
+        (packed || xf) && _moe_prefill_pack!(s, s.xg, n_exp)
         tot = _moe_prefill_cost!(s, 2ff)
         nc = clamp(cnc, 1, tot)
         _run_row_chunks!(
-            _MoePrefillGateUp(s, gate_s, up_s, up_row0, nc, simd, multi, packed), nc, tot * h)
+            _MoePrefillGateUp(s, gate_s, up_s, up_row0, nc, simd, multi, packed, xf), nc, tot * h)
         snc = clamp(nt, 1, np)
         _run_row_chunks!(_MoePrefillGlu(s, act, np, snc), snc, np * ff)
-        packed = multi && _moe_prefill_dt(down_s.ggml_type, simd)
-        packed && _moe_prefill_pack!(s, s.hg, n_exp)
+        packed = !hf && multi && _moe_prefill_dt(down_s.ggml_type, simd)
+        (packed || hf) && _moe_prefill_pack!(s, s.hg, n_exp)
         tot = _moe_prefill_cost!(s, h)
         nc = clamp(cnc, 1, tot)
-        _run_row_chunks!(_MoePrefillDown(s, down_s, nc, simd, multi, packed), nc, tot * ff)
+        _run_row_chunks!(_MoePrefillDown(s, down_s, nc, simd, multi, packed, hf), nc, tot * ff)
     end
     _moe_prefill_bufs!(s, tnc, h * _MOE_COMBINE_TILE)
     _run_row_chunks!(

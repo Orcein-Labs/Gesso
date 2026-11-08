@@ -1320,10 +1320,11 @@ function _cpu_moe_topk_swiglu_gguf!(
     # below was about half of CPU decode, and Lava's host experts run here too.
     # Prefill also groups tokens by expert for slabs only the grouped prefill
     # takes (a 32-value block down such as Flash-Next's Q2_0, or ff not a
-    # multiple of 256). `_moe_host_prefill_ok` refuses the types the pieces path
-    # dots against float x, and the pieces path quantizes every other activation
-    # the same way per call, so both make the same dots; grouping streams each expert's
-    # rows once per batch instead of once per token that picked it.
+    # multiple of 256). Types the pieces path dots against float x take float
+    # columns there too (IQ2_XS and IQ4_NL have a kernel; the rest are refused),
+    # and every other activation is quantized the same way per call, so both make
+    # the same dots; grouping streams each expert's rows once per batch instead of
+    # once per token that picked it.
     if T === Float32 &&
        gate_s isa GgufQuantSlice &&
        up_s isa GgufQuantSlice &&
