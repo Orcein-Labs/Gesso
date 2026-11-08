@@ -165,7 +165,8 @@ function _q4x_mm(W::AbstractMatrix, x::AbstractMatrix)
     size(W, 1) <= _Q4X_SMALL_ROWS && x isa Matrix{Float32} &&
         (W isa Matrix{Float32} || W isa Transpose{Float32, Matrix{Float32}}) &&
         return _q4x_small_mm(W, x)
-    return Matrix{Float32}(x * transpose(W))
+    # convert is a no-op on the Matrix{Float32} BLAS result; Matrix{Float32}(...) copied it.
+    return convert(Matrix{Float32}, x * transpose(W))
 end
 
 # A handful of output rows: a serial loop reads W and each x column once, with
@@ -216,7 +217,8 @@ end
 
 function _q4x_mm(W::QuantMatrix, x::AbstractMatrix)
     y = zeros(Float32, size(x, 1), W.nrows)
-    xf = Matrix{Float32}(x)
+    # The kernels only read x, so a Float32 matrix goes in as is.
+    xf = x isa Matrix{Float32} ? x : Matrix{Float32}(x)
     _quant_half(W.ggml_type) ? _half_matmul!(y, xf, W) : _quant_matmul!(y, xf, W)
     return y
 end
@@ -641,7 +643,7 @@ function _q4x_ffn(m::Qwen4expModel, il::Int, x, taps)
     cfg = m.cfg
     p = "blk.$il."
     router = _q4x_w(m, p * "ffn_gate_inp.weight")
-    xf = Matrix{Float32}(x)
+    xf = x isa Matrix{Float32} ? x : Matrix{Float32}(x)
     moe = zeros(Float32, size(xf)...)
     _q4x_moe!(moe, xf, router, _q4x_w(m, p * "ffn_gate_exps.weight"),
         _q4x_w(m, p * "ffn_up_exps.weight"), _q4x_w(m, p * "ffn_down_exps.weight"), cfg.n_used)
