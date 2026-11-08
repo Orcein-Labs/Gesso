@@ -2738,6 +2738,135 @@ end
     return out
 end
 
+# ---------------------------------------------------------------- Q2_0
+
+# One Q2_0 block (64 values, two Q8_0 activation blocks) for all K columns
+# from a packed table. The 2-bit codes are unpacked once and shared by the K
+# columns; each column's two integer sums are the exact ones of
+# _q20_sumi_avx2, and the float combine is _dot_q2_0_q8_0's:
+# s + dw * (Float32(s0) * d0 + Float32(s1) * d1). %qb is the tile's packed
+# chunk 2ib (chunk 2ib + 1 sits 32T bytes on), %dp its d-table row for Q8_0
+# block 2ib (block 2ib + 1 sits T floats on).
+function _kq_ir_q20_multi(K::Int)
+    T = _MULTI_TILE
+    io = IOBuffer()
+    print(
+        io,
+        "declare <16 x i16> @llvm.x86.avx2.pmadd.ub.sw(<32 x i8>, <32 x i8>)\n",
+        "declare <8 x i32> @llvm.x86.avx2.pmadd.wd(<16 x i16>, <16 x i16>)\n",
+        "declare <8 x i32> @llvm.x86.avx2.phadd.d(<8 x i32>, <8 x i32>)\n",
+        "define <$K x float> @entry(ptr %w, ptr %qb, <$K x float> %s, ptr %dp) #0 {\n",
+        "  %wp = getelementptr i8, ptr %w, i64 2\n",
+        "  %wb = load <16 x i8>, ptr %wp, align 1\n",
+        "  %c0 = and <16 x i8> %wb, splat (i8 3)\n",
+        "  %h1 = lshr <16 x i8> %wb, splat (i8 2)\n",
+        "  %c1 = and <16 x i8> %h1, splat (i8 3)\n",
+        "  %h2 = lshr <16 x i8> %wb, splat (i8 4)\n",
+        "  %c2 = and <16 x i8> %h2, splat (i8 3)\n",
+        "  %c3 = lshr <16 x i8> %wb, splat (i8 6)\n",
+        "  %c01 = shufflevector <16 x i8> %c0, <16 x i8> %c1, <32 x i32> <$(_kq_idx(0, 32))>\n",
+        "  %c23 = shufflevector <16 x i8> %c2, <16 x i8> %c3, <32 x i32> <$(_kq_idx(0, 32))>\n",
+        "  %w0 = shufflevector <32 x i8> %c01, <32 x i8> %c23, <32 x i32> <$_Q20_IDX0>\n",
+        "  %w1 = shufflevector <32 x i8> %c01, <32 x i8> %c23, <32 x i32> <$_Q20_IDX1>\n",
+    )
+    for k in 0:1
+        sub = IOBuffer()
+        for c in 0:(K-1)
+            _kq_ld(sub, "x$c", "qb", 32 * (T * k + c))
+            print(
+                sub,
+                "  %u$c = call <16 x i16> @llvm.x86.avx2.pmadd.ub.sw(<32 x i8> %w$k, <32 x i8> %x$c)\n",
+                "  %v$c = call <16 x i16> @llvm.x86.avx2.pmadd.ub.sw(<32 x i8> splat (i8 1), <32 x i8> %x$c)\n",
+                "  %e$c = sub <16 x i16> %u$c, %v$c\n",
+                "  %p$c = call <8 x i32> @llvm.x86.avx2.pmadd.wd(<16 x i16> %e$c, <16 x i16> splat (i16 1))\n",
+            )
+        end
+        _kq_ir_tile_sums(sub, K)
+        # Suffix this half's names so the two halves share one function body;
+        # %qb and the codes %w0/%w1 come from outside the half and keep theirs.
+        print(io, replace(String(take!(sub)), r"%(?!(?:qb|w0|w1)\b)([A-Za-z][A-Za-z0-9_.]*)" => SubstitutionString("%\\1.k$k")))
+    end
+    print(
+        io,
+        "  %d1p = getelementptr i8, ptr %dp, i64 $(4 * T)\n",
+        "  %d0 = load <$K x float>, ptr %dp, align 4\n",
+        "  %d1 = load <$K x float>, ptr %d1p, align 4\n",
+        "  %f0 = sitofp <$K x i32> %tk.k0 to <$K x float>\n",
+        "  %f1 = sitofp <$K x i32> %tk.k1 to <$K x float>\n",
+        "  %m0 = fmul <$K x float> %f0, %d0\n",
+        "  %m1 = fmul <$K x float> %f1, %d1\n",
+        "  %a = fadd <$K x float> %m0, %m1\n",
+        "  %dh = load half, ptr %w, align 1\n",
+        "  %dwf = fpext half %dh to float\n",
+        "  %dw1 = insertelement <$K x float> poison, float %dwf, i64 0\n",
+        "  %dw = shufflevector <$K x float> %dw1, <$K x float> poison, <$K x i32> zeroinitializer\n",
+        "  %t = fmul <$K x float> %dw, %a\n",
+        "  %fs = fadd <$K x float> %s, %t\n",
+        "  ret <$K x float> %fs\n}\n",
+        _KQ_ATTRS,
+    )
+    return String(take!(io))
+end
+
+for K in 1:8
+    V = NTuple{K, VecElement{Float32}}
+    @eval @inline _q20_multi_step(pw::Ptr{UInt8}, qb::Ptr{Int8}, s::$V, dp::Ptr{Float32}) = @x86_llvmcall(
+        ($(_kq_ir_q20_multi(K)), "entry"),
+        $V,
+        Tuple{Ptr{UInt8}, Ptr{Int8}, $V, Ptr{Float32}},
+        pw,
+        qb,
+        s,
+        dp,
+    )
+end
+
+# Q2_0 tile from a packed table; without one, the per-column dot.
+@noinline function _dot_q20_multi!(
+    out::AbstractVector{Float32},
+    w::AbstractVector{UInt8},
+    woff::Int,
+    xqs,
+    t0::Int,
+    ::Val{K},
+    p=nothing,
+) where {K}
+    if !(p isa _MultiPacked)
+        @inbounds for c in 1:K
+            out[t0+c-1] = _dot_q2_0_q8_0(w, woff, xqs[t0+c-1], true)
+        end
+        return out
+    end
+    nx = length(xqs[t0].d)
+    iseven(nx) || throw(DimensionMismatch("Q2_0 multi: $nx Q8_0 blocks is not a whole number of 64-value blocks"))
+    nb = nx >> 1
+    _q8k_check_row(w, woff, 18 * nb)
+    _multi_check(xqs, t0, K, nx)
+    nb == 0 && return _multi_zero!(out, t0, K)
+    i0 = _multi_d_base(p.d, t0, K, nx)
+    q0 = _multi_q_base(p, t0, K, nx, 32)
+    dt = p.d
+    qt = p.q
+    GC.@preserve w dt qt begin
+        pw0 = pointer(w, woff + 1)
+        pq0 = pointer(qt, q0 + 1)
+        pd0 = pointer(dt, i0 + 1)
+        sumf = ntuple(_ -> VecElement(0.0f0), Val(K))
+        for ib in 0:(nb-1)
+            sumf = _q20_multi_step(
+                pw0 + 18 * ib,
+                pq0 + 64 * _MULTI_TILE * ib,
+                sumf,
+                pd0 + 8 * _MULTI_TILE * ib,
+            )
+        end
+        @inbounds for c in 1:K
+            out[t0+c-1] = sumf[c].value
+        end
+    end
+    return out
+end
+
 # ---------------------------------------------------------------- dispatch
 
 # True for the types with a multi-column kernel (x86_64 only, see
@@ -2760,6 +2889,7 @@ _q8k_multi_type(t::Int32) =
     t == GGML_TYPE_Q6_K ||
     t == GGML_TYPE_Q8_0 ||
     t == GGML_TYPE_Q4_0 ||
+    t == GGML_TYPE_Q2_0 ||
     t == GGML_TYPE_IQ4_NL ||
     t == GGML_TYPE_Q5_1)
 
@@ -2791,6 +2921,7 @@ function _dot_q8k_multi_kernel!(
     ggml_type == GGML_TYPE_IQ4_NL &&
         return _dot_q80_multi!(out, w, woff, xqs, t0, v, dt, Val(true))
     ggml_type == GGML_TYPE_Q5_1 && return _dot_q51_multi!(out, w, woff, xqs, t0, v, dt)
+    ggml_type == GGML_TYPE_Q2_0 && return _dot_q20_multi!(out, w, woff, xqs, t0, v, dt)
     return _dot_iq4_xs_multi!(out, w, woff, xqs, t0, v)
 end
 

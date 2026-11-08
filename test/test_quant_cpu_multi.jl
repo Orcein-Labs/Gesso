@@ -10,6 +10,7 @@
 #     mins at 0 and 63, activations at -128 and 127), plain and prepped
 #   * Q3_K at the integer extremes (u = 0 and 7, scales at -32 and 31,
 #     activations at -128 and 127), plain and prepped
+#   * Q2_0 rows through the packed tile kernel, bit-equal to _dot_q8k
 #   * Q8_0, Q4_0 and IQ4_NL at the integer extremes (weight bytes 0x00 and 0xff,
 #     activations at -128 and 127), with and without a d table
 #   * IQ2_XS at the integer extremes (grid 511 and 0, every sign set or none,
@@ -52,6 +53,7 @@ const _MQ_TYPES = (
     ("Q4_0", _MQ.GGML_TYPE_Q4_0),
     ("IQ4_NL", _MQ.GGML_TYPE_IQ4_NL),
     ("Q5_1", _MQ.GGML_TYPE_Q5_1),
+    ("Q2_0", _MQ.GGML_TYPE_Q2_0),
 )
 
 # Random valid rows: arbitrary bytes everywhere, with finite small f16 scales at
@@ -520,7 +522,7 @@ end
 @testset "multi-column dot: the packed Q8_0-family tables" begin
     rng = Xoshiro(0x51b0)
     T = _MQ._MULTI_TILE
-    for ty in (_MQ.GGML_TYPE_Q8_0, _MQ.GGML_TYPE_Q4_0, _MQ.GGML_TYPE_IQ4_NL)
+    for ty in (_MQ.GGML_TYPE_Q8_0, _MQ.GGML_TYPE_Q4_0, _MQ.GGML_TYPE_IQ4_NL, _MQ.GGML_TYPE_Q2_0)
         rb = _MQ._qrow_bytes(ty, 512)
         w = _mq_random_rows(rng, ty, 2, 2)
         xqs = _mq_acts(rng, 512, 11, ty)
@@ -593,6 +595,7 @@ end
         _MQ.GGML_TYPE_Q4_0,
         _MQ.GGML_TYPE_IQ4_NL,
         _MQ.GGML_TYPE_Q5_1,
+        _MQ.GGML_TYPE_Q2_0,
     )
         rb = _MQ._qrow_bytes(ty, ne0)
         w = _mq_random_rows(rng, ty, 1, nb)
