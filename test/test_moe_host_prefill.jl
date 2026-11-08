@@ -9,6 +9,8 @@
 #     any chunk count, including more chunks than rows
 #   * dead tokens (zero router mass) get a zero row
 #   * scratch regrowth: a short batch after a long one reuses the larger buffers
+#   * activation-type switches (Q8 vs float x between layers) keep gu/dn and
+#     stay bit-identical, including after an h/ff change and a longer batch
 #   * red control: one token's weights permuted must change that row and only it
 
 using Random: Xoshiro, randperm
@@ -284,4 +286,48 @@ end
     up_s = _mhp_slice(_mhp_random_bytes(rng, _MKE.GGML_TYPE_IQ2_XXS, nexp, ff, h), _MKE.GGML_TYPE_IQ2_XXS, nexp, h, ff)
     down_s = _mhp_slice(_mhp_random_bytes(rng, _MKE.GGML_TYPE_Q2_0, nexp, h, ff), _MKE.GGML_TYPE_Q2_0, nexp, ff, h)
     @test !_MKE._moe_host_prefill_ok(gate_s, up_s, down_s, h, ff)
+end
+
+# Flash-Next alternates Q8-activation and float-activation slabs from layer to
+# layer, so the scratch switches activation types on every layer. The switch
+# must keep the type-free buffers (gu, dn) instead of reallocating the batch,
+# stay bit-identical to the pieces path, and keep its capacity right when h/ff
+# change and a longer batch follows.
+@testset "grouped MoE prefill scratch across activation types" begin
+    rng = Xoshiro(47)
+    h, nexp, nused = 512, 6, 3
+    function slab(tg, td, ff)
+        g = _mhp_slice(_mhp_random_bytes(rng, tg, nexp, ff, h), tg, nexp, h, ff)
+        u = _mhp_slice(_mhp_random_bytes(rng, tg, nexp, ff, h), tg, nexp, h, ff)
+        d = _mhp_slice(_mhp_random_bytes(rng, td, nexp, h, ff), td, nexp, ff, h)
+        return (g, u, d, randn(rng, Float32, nexp, h), ff)
+    end
+    q8 = slab(_MKE.GGML_TYPE_IQ2_XXS, _MKE.GGML_TYPE_Q2_0, 640)
+    fx = slab(_MKE.GGML_TYPE_IQ2_XS, _MKE.GGML_TYPE_Q2_0, 640)
+    q8s = slab(_MKE.GGML_TYPE_IQ2_XXS, _MKE.GGML_TYPE_Q2_0, 512)
+    function run(sl, seq)
+        g, u, d, router, ff = sl
+        X = randn(rng, Float32, seq, h)
+        Yref = _MKE._cpu_moe_gguf_pieces!(zeros(Float32, seq, h), X, router, g, u, d, nused, h, ff)
+        Y = _MKE._cpu_moe_topk_swiglu_gguf!(zeros(Float32, seq, h), X, router, g, u, d, nused)
+        return Y == Yref
+    end
+    @test run(q8, 37)
+    gu = _MKE._MOE_PREFILL_SCRATCH[].gu
+    @test run(fx, 37)
+    s = _MKE._MOE_PREFILL_SCRATCH[]
+    @test eltype(s.xq) === Vector{Float32}
+    @test s.gu === gu
+    @test run(q8, 37)
+    @test _MKE._MOE_PREFILL_SCRATCH[].gu === gu
+    # A smaller ff, then the first slab again with a longer batch than any before.
+    for (sl, seq) in ((q8s, 20), (fx, 20), (q8, 90), (fx, 90), (q8s, 90), (q8, 5))
+        ok = run(sl, seq)
+        println("moe prefill scratch ff=", sl[5], " seq=", seq, " bitwise=", ok)
+        @test ok
+        s = _MKE._MOE_PREFILL_SCRATCH[]
+        @test size(s.gu, 3) >= seq * nused
+        @test length(s.hq) >= size(s.gu, 3) && size(s.dn, 2) >= size(s.gu, 3)
+        @test length(s.pairs) >= size(s.gu, 3) && length(s.xg) >= size(s.gu, 3)
+    end
 end

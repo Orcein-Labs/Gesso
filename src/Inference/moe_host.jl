@@ -415,6 +415,21 @@ _moe_prefill_act(floatx::Bool, simd::Bool, ts::Int32...) =
 _moe_act_type(simd::Bool, ts::Int32...) =
     simd && _prefill_multi_enabled() && all(_q6k_prep_type, ts) ? Q6KPrepVec : Q8KVec
 
+# Activation vectors per (type, length) for `_moe_prefill_scratch`. Grow-only;
+# each entry holds at least as many vectors as the largest batch seen.
+const _MOE_ACT_POOL = Dict{Tuple{DataType, Int}, Vector}()
+const _MOE_ACT_POOL_LOCK = ReentrantLock()
+
+function _moe_act_pool!(::Type{T}, n::Int, count::Int) where {T}
+    v = lock(_MOE_ACT_POOL_LOCK) do
+        get!(() -> T[], _MOE_ACT_POOL, (T, n))
+    end::Vector{T}
+    while length(v) < count
+        push!(v, _act_vec(T, n))
+    end
+    return v
+end
+
 function _moe_prefill_scratch(
     h::Int,
     ff::Int,
@@ -427,29 +442,36 @@ function _moe_prefill_scratch(
     s = _MOE_PREFILL_SCRATCH[]
     np = seq * n_used
     same = s isa MoePrefillScratch{X, H} && s.h == h && s.ff == ff
-    if !same || length(s.hq) < np || length(s.xq) < seq
-        ntok = same ? max(seq, length(s.xq)) : seq
-        cap = same ? max(np, length(s.hq)) : np
+    # gu sets the pair capacity: hq, dn, pairs, xg and hg are at least as long.
+    if !same || size(s.gu, 3) < np || length(s.xq) < seq
+        # A model whose layers mix weight types switches X and H between layers.
+        # The type-free buffers carry over and the activation vectors come from a
+        # per-type pool, so a switch does not reallocate the whole batch.
+        dims = s.h == h && s.ff == ff
+        cap = max(np, dims ? size(s.gu, 3) : 0)
+        gu = dims && size(s.gu, 3) >= cap ? s.gu : zeros(Float32, ff, 2, cap)
+        dn = dims && size(s.dn, 2) >= cap ? s.dn : zeros(Float32, h, cap)
+        pairs = length(s.pairs) >= cap ? s.pairs : Vector{Int}(undef, cap)
         s = MoePrefillScratch{X, H}(
             h,
             ff,
-            [_act_vec(X, h) for _ in 1:ntok],
-            [_act_vec(H, ff) for _ in 1:cap],
-            zeros(Float32, ff, 2, cap),
-            zeros(Float32, h, cap),
-            Int[],
-            Int[],
-            Vector{Int}(undef, cap),
-            Int[],
-            Int[],
+            _moe_act_pool!(X, h, seq),
+            _moe_act_pool!(H, ff, cap),
+            gu,
+            dn,
+            s.cnt,
+            s.start,
+            pairs,
+            s.active,
+            s.cost,
             Vector{X}(undef, cap),
             Vector{H}(undef, cap),
-            Vector{Float32}[],
-            Vector{UInt8}[],
-            Vector{Float32}[],
-            Vector{Float32}[],
-            Vector{Int8}[],
-            Vector{Float32}[],
+            s.cbuf,
+            s.cdec,
+            s.cwb,
+            s.edt,
+            s.eqt,
+            s.est,
         )
         _MOE_PREFILL_SCRATCH[] = s
     end
