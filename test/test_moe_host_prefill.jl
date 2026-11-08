@@ -208,7 +208,8 @@ end
 _mhp_slice(w, ty::Int32, nexp::Int, ne0::Int, ne1::Int) = Gesso.GgufQuantSlice(
     w, 0, ty, nexp, ne0, ne1, ne1 * _MKE._qrow_bytes(ty, ne0), Int64(_MKE._moe_weight_block_values(ty)))
 
-# Flash-Next's expert slabs: IQ2_XXS gate/up over h, Q2_0 down over ff = 640.
+# Flash-Next's expert slabs: IQ2_XXS or IQ2_S gate/up over h, Q2_0 down over
+# ff = 640.
 # The Q2_0 down takes a Q8_0 activation and ff is not a multiple of 256, so the
 # decode kernels refuse it and prefill used to fall to the token-block pieces
 # path. The grouped prefill must make the same dots in the same order.
@@ -216,10 +217,13 @@ _mhp_slice(w, ty::Int32, nexp::Int, ne0::Int, ne1::Int) = Gesso.GgufQuantSlice(
 #     the multi-column kernels on and off
 #   * seq == 1 still takes the pieces path (the decode scratch is Q8_K only)
 #   * red control: the down slab replaced must change the output
-@testset "grouped MoE prefill: IQ2_XXS gate/up, Q2_0 down, ff=640" begin
+# seq 37 over 6 experts with 3 used gives experts more than 8 columns, so the
+# IQ2 rows take the decoded-once path.
+@testset "grouped MoE prefill: IQ2_XXS/IQ2_S gate/up, Q2_0 down, ff=640" begin
+  for tg in (_MKE.GGML_TYPE_IQ2_XXS, _MKE.GGML_TYPE_IQ2_S)
     rng = Xoshiro(45)
     h, ff, nexp, nused = 512, 640, 6, 3
-    tg, td = _MKE.GGML_TYPE_IQ2_XXS, _MKE.GGML_TYPE_Q2_0
+    td = _MKE.GGML_TYPE_Q2_0
     gate_s = _mhp_slice(_mhp_random_bytes(rng, tg, nexp, ff, h), tg, nexp, h, ff)
     up_s = _mhp_slice(_mhp_random_bytes(rng, tg, nexp, ff, h), tg, nexp, h, ff)
     wd = _mhp_random_bytes(rng, td, nexp, h, ff)
@@ -236,7 +240,7 @@ _mhp_slice(w, ty::Int32, nexp::Int, ne0::Int, ne1::Int) = Gesso.GgufQuantSlice(
             X = randn(rng, Float32, seq, h)
             Yref = pieces(X, down_s)
             Y = entry(X, down_s)
-            println("moe prefill IQ2_XXS/Q2_0 ff=640 seq=", seq, " multi=", multi,
+            println("moe prefill gt=", tg, " Q2_0 ff=640 seq=", seq, " multi=", multi,
                 " bitwise=", Y == Yref, " max_abs=", maximum(abs.(Y .- Yref)))
             @test all(isfinite, Y)
             @test Y == Yref
@@ -252,8 +256,9 @@ _mhp_slice(w, ty::Int32, nexp::Int, ne0::Int, ne1::Int) = Gesso.GgufQuantSlice(
     wbad[1:nexp*bpe] .= _mhp_random_bytes(Xoshiro(9), td, nexp, h, ff)
     Ybad = entry(X, _mhp_slice(wbad, td, nexp, ff, h))
     ctrl = _mhb_relrms(Ybad, Y)
-    println("moe prefill IQ2_XXS/Q2_0 ff=640 red_control_replaced_down_rel_rms=", ctrl)
+    println("moe prefill gt=", tg, " Q2_0 ff=640 red_control_replaced_down_rel_rms=", ctrl)
     @test ctrl > 1.0e-2
+  end
 end
 
 # Flash-Next's other layer mixes: IQ2_XS gate/up over Q2_0 down, and IQ2_XXS

@@ -2370,32 +2370,38 @@ end
 end
 
 # The packed tile above looks up every sub-block's grid, signs and scales again
-# for each 8-column tile: about half its uops, repeated ~9 times per row at an
-# expert's typical 65 columns. A row with several tiles is instead decoded once
-# into a buffer that stays in L1 (8 * 96 bytes per block: 32 grid bytes, 32 sign
-# bytes, the 16 x i16 multiplier, then nb dw floats at the end) and every tile
-# runs over that. The integer steps and the float order are the packed tile's,
-# so the sums are bitwise the same.
-const _IQ2XS_DEC_SUB = 96
+# for each 8-column tile: about half its uops, repeated once per tile of a row.
+# A row with several tiles is instead decoded once into a buffer that stays in
+# L1 (8 * 96 bytes per block: 32 grid bytes, 32 sign bytes, the 16 x i16
+# multiplier, then nb dw floats at the end) and every tile runs over that.
+# IQ2_XS, IQ2_XXS and IQ2_S decode to the same layout. The integer sums are
+# exact (pmaddubsw stays below 2 * 43 * 128) and the float steps are the
+# multi tiles' (sumf + dw * dx * isum, then 0.125), so the results are bitwise
+# the same as _dot_q8k.
+const _IQ2_DEC_SUB = 96
 
-_iq2xs_decoded_bytes(nb::Int) = (8 * _IQ2XS_DEC_SUB + 4) * nb
+_iq2_decoded_bytes(nb::Int) = (8 * _IQ2_DEC_SUB + 4) * nb
+
+# The types with a decoded-row path.
+_iq2_decoded_type(t::Int32) =
+    t == GGML_TYPE_IQ2_XS || t == GGML_TYPE_IQ2_XXS || t == GGML_TYPE_IQ2_S
 
 function _iq2xs_decode_row!(u::Vector{UInt8}, w::AbstractVector{UInt8}, woff::Int, nb::Int)
     _q8k_check_row(w, woff, 74 * nb)
-    length(u) >= _iq2xs_decoded_bytes(nb) || resize!(u, _iq2xs_decoded_bytes(nb))
+    length(u) >= _iq2_decoded_bytes(nb) || resize!(u, _iq2_decoded_bytes(nb))
     grid = IQ2XS_GRID
     sgn = _IQ_SIGN8_TAB
     ls = _IQ2XS_LS_TAB
     GC.@preserve u w grid sgn ls begin
         pu = pointer(u)
-        pdw = Ptr{Float32}(pu + 8 * _IQ2XS_DEC_SUB * nb)
+        pdw = Ptr{Float32}(pu + 8 * _IQ2_DEC_SUB * nb)
         pw = pointer(w, woff + 1)
         pl = Ptr{UInt8}(pointer(ls))
         @inbounds for ib in 0:(nb-1)
             b = pw + 74 * ib
             unsafe_store!(pdw, _iq_f16_at(b), ib + 1)
             for k in 0:7
-                o = pu + _IQ2XS_DEC_SUB * (8ib + k)
+                o = pu + _IQ2_DEC_SUB * (8ib + k)
                 for l in 0:3
                     q = unsafe_load(Ptr{UInt16}(b + 2 + 8k + 2l))
                     unsafe_store!(Ptr{UInt64}(o + 8l), grid[(q&0x01ff)+1])
@@ -2409,7 +2415,69 @@ function _iq2xs_decode_row!(u::Vector{UInt8}, w::AbstractVector{UInt8}, woff::In
     return u
 end
 
-function _kq_ir_iq2xs_decoded(K::Int)
+# IQ2_XXS, 66-byte blocks: per sub-block one u64 of four grid bytes, four 7-bit
+# sign indices and the scale nibble (both halves share ls, so entry 17 * nibble).
+function _iq2xxs_decode_row!(u::Vector{UInt8}, w::AbstractVector{UInt8}, woff::Int, nb::Int)
+    _q8k_check_row(w, woff, 66 * nb)
+    length(u) >= _iq2_decoded_bytes(nb) || resize!(u, _iq2_decoded_bytes(nb))
+    grid = IQ2XXS_GRID
+    sgn = _IQ_SIGN8_TAB
+    ls = _IQ2XS_LS_TAB
+    GC.@preserve u w grid sgn ls begin
+        pu = pointer(u)
+        pdw = Ptr{Float32}(pu + 8 * _IQ2_DEC_SUB * nb)
+        pw = pointer(w, woff + 1)
+        pl = Ptr{UInt8}(pointer(ls))
+        @inbounds for ib in 0:(nb-1)
+            b = pw + 66 * ib
+            unsafe_store!(pdw, _iq_f16_at(b), ib + 1)
+            for k in 0:7
+                o = pu + _IQ2_DEC_SUB * (8ib + k)
+                qw = ltoh(unsafe_load(Ptr{UInt64}(b + 2 + 8k)))
+                for l in 0:3
+                    unsafe_store!(Ptr{UInt64}(o + 8l), grid[Int((qw >> (8l)) & 0xff)+1])
+                    unsafe_store!(Ptr{UInt64}(o + 32 + 8l), sgn[Int((qw >> (32 + 7l)) & 0x7f)+1])
+                end
+                Base.unsafe_copyto!(o + 64, pl + ((17 * Int((qw >> 60) & 0xf)) << 5), 32)
+            end
+        end
+    end
+    return u
+end
+
+# IQ2_S, 82-byte blocks: grid low bytes at 2, sign bytes at 34, grid high bits
+# at 66, scale bytes at 74 (low nibble the first 16 values, as _IQ2XS_LS_TAB).
+function _iq2s_decode_row!(u::Vector{UInt8}, w::AbstractVector{UInt8}, woff::Int, nb::Int)
+    _q8k_check_row(w, woff, 82 * nb)
+    length(u) >= _iq2_decoded_bytes(nb) || resize!(u, _iq2_decoded_bytes(nb))
+    grid = IQ2S_GRID
+    sgn = _IQ_SIGN8_FULL_TAB
+    ls = _IQ2XS_LS_TAB
+    GC.@preserve u w grid sgn ls begin
+        pu = pointer(u)
+        pdw = Ptr{Float32}(pu + 8 * _IQ2_DEC_SUB * nb)
+        pw = pointer(w, woff + 1)
+        pl = Ptr{UInt8}(pointer(ls))
+        @inbounds for ib in 0:(nb-1)
+            b = pw + 82 * ib
+            unsafe_store!(pdw, _iq_f16_at(b), ib + 1)
+            for k in 0:7
+                o = pu + _IQ2_DEC_SUB * (8ib + k)
+                qh = Int(unsafe_load(b + 66 + k))
+                for l in 0:3
+                    gi = Int(unsafe_load(b + 2 + 4k + l)) | ((qh << (8 - 2l)) & 0x300)
+                    unsafe_store!(Ptr{UInt64}(o + 8l), grid[gi+1])
+                    unsafe_store!(Ptr{UInt64}(o + 32 + 8l), sgn[Int(unsafe_load(b + 34 + 4k + l))+1])
+                end
+                sc = unsafe_load(b + 74 + k)
+                Base.unsafe_copyto!(o + 64, pl + (Int(sc) << 5), 32)
+            end
+        end
+    end
+    return u
+end
+
+function _kq_ir_iq2_decoded(K::Int)
     io = IOBuffer()
     print(
         io,
@@ -2428,7 +2496,7 @@ function _kq_ir_iq2xs_decoded(K::Int)
     end
     print(
         io,
-        "  %uo = mul i64 %k, $_IQ2XS_DEC_SUB\n",
+        "  %uo = mul i64 %k, $_IQ2_DEC_SUB\n",
         "  %gp = getelementptr i8, ptr %u, i64 %uo\n",
         "  %gv = load <32 x i8>, ptr %gp, align 1\n",
         "  %sp = getelementptr i8, ptr %gp, i64 32\n",
@@ -2472,14 +2540,14 @@ end
 
 for K in 1:8
     V = NTuple{K, VecElement{Float32}}
-    @eval @inline _iq2xs_decoded_step(
+    @eval @inline _iq2_decoded_step(
         u::Ptr{UInt8},
         qb::Ptr{Int8},
         s::$V,
         dp::Ptr{Float32},
         dwf::Float32,
     ) = @x86_llvmcall(
-        ($(_kq_ir_iq2xs_decoded(K)), "entry"),
+        ($(_kq_ir_iq2_decoded(K)), "entry"),
         $V,
         Tuple{Ptr{UInt8}, Ptr{Int8}, $V, Ptr{Float32}, Float32},
         u,
@@ -2490,7 +2558,7 @@ for K in 1:8
     )
 end
 
-@noinline function _dot_iq2xs_decoded!(
+@noinline function _dot_iq2_decoded!(
     out::AbstractVector{Float32},
     u::Vector{UInt8},
     xqs,
@@ -2501,20 +2569,20 @@ end
     nb = length(xqs[t0].d)
     _multi_check(xqs, t0, K, nb)
     nb == 0 && return _multi_zero!(out, t0, K)
-    length(u) >= _iq2xs_decoded_bytes(nb) || error("iq2_xs decoded: buffer too short")
+    length(u) >= _iq2_decoded_bytes(nb) || error("iq2 decoded: buffer too short")
     i0 = _multi_d_base(p.d, t0, K, nb)
     q0 = _multi_q_base(p, t0, K, nb, QK_K)
     dt = p.d
     qt = p.q
     GC.@preserve u dt qt begin
         pu = pointer(u)
-        pdw = Ptr{Float32}(pu + 8 * _IQ2XS_DEC_SUB * nb)
+        pdw = Ptr{Float32}(pu + 8 * _IQ2_DEC_SUB * nb)
         pq = pointer(qt, q0 + 1)
         pd = pointer(dt, i0 + 1)
         s = ntuple(_ -> VecElement(0.0f0), Val(K))
         @inbounds for ib in 0:(nb-1)
-            s = _iq2xs_decoded_step(
-                pu + 8 * _IQ2XS_DEC_SUB * ib,
+            s = _iq2_decoded_step(
+                pu + 8 * _IQ2_DEC_SUB * ib,
                 pq + QK_K * _MULTI_TILE * ib,
                 s,
                 pd + 4 * _MULTI_TILE * ib,
@@ -2528,32 +2596,38 @@ end
     return out
 end
 
-# Columns 1:n of one IQ2_XS row, decoded once into u, tiles of _MULTI_TILE.
-function _dot_iq2xs_decoded_row!(
+# Columns 1:n of one IQ2_XS, IQ2_XXS or IQ2_S row of type t, decoded once into
+# u, tiles of _MULTI_TILE.
+function _dot_iq2_decoded_row!(
     out::AbstractVector{Float32},
     u::Vector{UInt8},
+    t::Int32,
     w::AbstractVector{UInt8},
     woff::Int,
     xqs,
     n::Int,
     p::_MultiPacked,
 )
-    n <= length(xqs) || error("iq2_xs decoded: $n columns exceed $(length(xqs))")
+    n <= length(xqs) || error("iq2 decoded: $n columns exceed $(length(xqs))")
     n == 0 && return out
-    _iq2xs_decode_row!(u, w, woff, length(xqs[1].d))
+    nb = length(xqs[1].d)
+    t == GGML_TYPE_IQ2_XS ? _iq2xs_decode_row!(u, w, woff, nb) :
+    t == GGML_TYPE_IQ2_XXS ? _iq2xxs_decode_row!(u, w, woff, nb) :
+    t == GGML_TYPE_IQ2_S ? _iq2s_decode_row!(u, w, woff, nb) :
+    error("iq2 decoded: type $t has no decoded row")
     t0 = 1
     while t0 <= n
         K = min(_MULTI_TILE, n - t0 + 1)
         if K == _MULTI_TILE
-            _dot_iq2xs_decoded!(out, u, xqs, t0, Val(_MULTI_TILE), p)
+            _dot_iq2_decoded!(out, u, xqs, t0, Val(_MULTI_TILE), p)
         else
-            K == 1 && _dot_iq2xs_decoded!(out, u, xqs, t0, Val(1), p)
-            K == 2 && _dot_iq2xs_decoded!(out, u, xqs, t0, Val(2), p)
-            K == 3 && _dot_iq2xs_decoded!(out, u, xqs, t0, Val(3), p)
-            K == 4 && _dot_iq2xs_decoded!(out, u, xqs, t0, Val(4), p)
-            K == 5 && _dot_iq2xs_decoded!(out, u, xqs, t0, Val(5), p)
-            K == 6 && _dot_iq2xs_decoded!(out, u, xqs, t0, Val(6), p)
-            K == 7 && _dot_iq2xs_decoded!(out, u, xqs, t0, Val(7), p)
+            K == 1 && _dot_iq2_decoded!(out, u, xqs, t0, Val(1), p)
+            K == 2 && _dot_iq2_decoded!(out, u, xqs, t0, Val(2), p)
+            K == 3 && _dot_iq2_decoded!(out, u, xqs, t0, Val(3), p)
+            K == 4 && _dot_iq2_decoded!(out, u, xqs, t0, Val(4), p)
+            K == 5 && _dot_iq2_decoded!(out, u, xqs, t0, Val(5), p)
+            K == 6 && _dot_iq2_decoded!(out, u, xqs, t0, Val(6), p)
+            K == 7 && _dot_iq2_decoded!(out, u, xqs, t0, Val(7), p)
         end
         t0 += K
     end

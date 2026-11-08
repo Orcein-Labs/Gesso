@@ -354,7 +354,7 @@ mutable struct MoePrefillScratch{X, H}
     xg::Vector{X}               # xq of each entry of `pairs`, so one expert's tokens are contiguous
     hg::Vector{H}               # hq of each entry of `pairs`
     cbuf::Vector{Vector{Float32}}  # per chunk, one row's dots over an expert's pairs
-    cdec::Vector{Vector{UInt8}}    # per chunk, one decoded IQ2_XS row
+    cdec::Vector{Vector{UInt8}}    # per chunk, one decoded IQ2 row
     cwb::Vector{Vector{Float32}}   # per chunk, a block of rows decoded to Float32
     edt::Vector{Vector{Float32}}   # per expert, the d table of its pairs
     eqt::Vector{Vector{Int8}}      # per expert, the packed quants of its pairs
@@ -548,7 +548,8 @@ end
 const _MOE_CHUNKS_PER_THREAD = 4
 
 # Raw dots of the weight row at `woff` with xv[1:n], tiled, into buf[1:n]. An
-# IQ2_XS row with a packed table and more than one tile decodes once into u.
+# IQ2_XS, IQ2_XXS or IQ2_S row with a packed table and more than one tile
+# decodes once into u.
 @inline function _moe_prefill_row_multi!(
     buf::Vector{Float32},
     t::Int32,
@@ -560,8 +561,8 @@ const _MOE_CHUNKS_PER_THREAD = 4
     dt=nothing,
     u::Union{Nothing, Vector{UInt8}}=nothing,
 )
-    u !== nothing && dt isa _MultiPacked && t == GGML_TYPE_IQ2_XS && n > _MULTI_TILE &&
-        return _dot_iq2xs_decoded_row!(buf, u, w, woff, xv, n, dt)
+    u !== nothing && dt isa _MultiPacked && _iq2_decoded_type(t) && n > _MULTI_TILE &&
+        return _dot_iq2_decoded_row!(buf, u, t, w, woff, xv, n, dt)
     i0 = 1
     while i0 <= n
         K = min(_MULTI_TILE, n - i0 + 1)
@@ -572,9 +573,12 @@ const _MOE_CHUNKS_PER_THREAD = 4
 end
 
 # The types whose tiles take a packed table, built once per expert piece: the
-# f16-d block types and IQ2_XS. The K-quant tiles read prepped columns instead,
-# which the scratch holds when `_moe_act_type` picks Q6KPrepVec.
-_moe_prefill_dt(t::Int32, simd::Bool) = simd && _multi_pack_type(t)
+# f16-d block types and the IQ2 types with a decoded-row path (IQ2_XXS and
+# IQ2_S tiles of 8 or fewer columns ignore the table). The K-quant tiles read
+# prepped columns instead, which the scratch holds when `_moe_act_type` picks
+# Q6KPrepVec.
+_moe_prefill_dt(t::Int32, simd::Bool) =
+    simd && (_multi_pack_type(t) || (_multi_kernels_ok() && _iq2_decoded_type(t)))
 
 # Expert e's packed table, as `_MoePrefillPack` last built it.
 _moe_prefill_table(s::MoePrefillScratch, e::Int) = _MultiPacked(s.edt[e], s.eqt[e], s.est[e])
