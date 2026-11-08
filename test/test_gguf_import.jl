@@ -237,6 +237,28 @@ end
     end
 end
 
+# The float-activation MoE path computes router logits as expert-row pieces over
+# a token block. Any split must reproduce `_cpu_router_logits!` bit for bit, or
+# near-tied experts can route differently.
+@testset "GGUF MoE block router matches per-token logits bit for bit" begin
+    seq, h, n_exp = 5, 40, 64
+    rng = GessoTestHelpers.deterministic_rng(23)
+    x = randn(rng, Float32, seq, h)
+    router = randn(rng, Float32, n_exp, h)
+    ref = zeros(Float32, n_exp, seq)
+    for t in 1:seq
+        Gesso.Inference._cpu_router_logits!(view(ref, :, t), x, t, router)
+    end
+    for nc in (1, 3, 4, 7, 16), (t0, nt) in ((1, seq), (2, 3))
+        L = fill(NaN32, n_exp, nt)
+        for r in 0:(nc-1)
+            e0, e1 = Gesso.Inference._moe_piece_rows(r, n_exp, nc)
+            Gesso.Inference._moe_router_rows!(L, x, t0, nt, router, e0, e1)
+        end
+        @test reinterpret(UInt32, L) == reinterpret(UInt32, ref[:, t0:(t0+nt-1)])
+    end
+end
+
 @testset "load_gguf 35B (opt-in)" begin
     if get(ENV, "GESSO_LOAD_35B", "") != "1"
         @test_skip "set GESSO_LOAD_35B=1 to materialize non-expert F32 (~9 GiB)"

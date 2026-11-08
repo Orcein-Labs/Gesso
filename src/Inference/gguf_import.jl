@@ -1349,6 +1349,22 @@ end
 # keeps every worker busy.
 const _MOE_TOKEN_BLOCK = 16
 
+# Router logits rows e0:e1 for tokens t0 .. t0+nt-1 into logits[:, 1:nt]. Every
+# logit sums over i in order with the ops of `_cpu_router_logits!`.
+function _moe_router_rows!(logits::AbstractMatrix{T}, x, t0::Int, nt::Int, router, e0::Int, e1::Int) where {T}
+    h = size(router, 2)
+    @inbounds for j in 1:nt, e in e0:e1
+        logits[e, j] = zero(T)
+    end
+    @inbounds for i in 1:h, j in 1:nt
+        xi = T(x[t0 + j - 1, i])
+        @simd for e in e0:e1
+            logits[e, j] += xi * router[e, i]
+        end
+    end
+    return nothing
+end
+
 _moe_piece_rows(r::Int, rows::Int, nc::Int) = (div(r * rows, nc) + 1, div((r + 1) * rows, nc))
 
 function _moe_row_chunks(npieces::Int, rows::Int)
@@ -1385,13 +1401,22 @@ function _cpu_moe_gguf_pieces!(y, x, router, gate_s, up_s, down_s, n_used::Int, 
     Y = Matrix{Float32}(undef, h, nslot)
     gt, ut, dt = gate_s.ggml_type, up_s.ggml_type, down_s.ggml_type
     grb, urb, drb = _qrow_bytes(gt, h), _qrow_bytes(ut, h), _qrow_bytes(dt, ff)
+    # Router logits split by expert rows over the whole token block: one pass
+    # over the router serves every token, and decode (one token) no longer
+    # streams it on a single thread. Each logit still sums over i in order with
+    # the ops of `_cpu_router_logits!`, so the routing is bit-identical.
+    rcr = Threads.nthreads() == 1 ? 1 : clamp(2 * Threads.nthreads(), 1, max(1, div(n_exp, 16)))
     for t0 in 1:tb:seq
         nt = min(tb, seq - t0 + 1)
+        _moe_run_pieces!(rcr) do r
+            e0, e1 = _moe_piece_rows(r - 1, n_exp, rcr)
+            _moe_router_rows!(logits, x, t0, nt, router, e0, e1)
+        end
         _moe_run_pieces!(nt) do i
             t = t0 + i - 1
             lg = view(logits, :, i)
             od = view(order, :, i)
-            m = _cpu_router_logits!(lg, x, t, router)
+            m = maximum(lg)
             s = zero(T)
             for e in 1:n_exp
                 v = exp(lg[e] - m)
