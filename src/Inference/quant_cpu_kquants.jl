@@ -40,6 +40,8 @@
 #   Q5_1 (24 B)   d@0, m@2 (Float16), qh u32@4, qs[16]@8: value j is
 #                 (qs[j] & 15) | bit j of qh << 4 and value j + 16 is
 #                 (qs[j] >> 4) | bit j + 16 of qh << 4; weight = value * d + m
+#   Q2_0 (18 B)   d@0 (Float16), qs[16]@2, 64 values: value t is
+#                 ((qs[t >> 2] >> 2(t & 3)) & 3) - 1
 
 const _KQ_D_OFFSET = Dict{Int32, Int}(
     GGML_TYPE_Q2_K => 80,
@@ -51,6 +53,7 @@ const _KQ_D_OFFSET = Dict{Int32, Int}(
     GGML_TYPE_Q4_0 => 0,
     GGML_TYPE_IQ4_NL => 0,
     GGML_TYPE_Q5_1 => 0,
+    GGML_TYPE_Q2_0 => 0,
 )
 
 # Byte offset of the Float16 super-scale d inside a block (test and bench
@@ -1305,6 +1308,163 @@ function _dot_q5_1_q8_0(w::AbstractVector{UInt8}, woff::Int, x::Q80Vec, simd::Bo
     return sumf
 end
 
+# ------------------------------------------------------------- Q2_0 x Q8_0
+#
+# Q2_0 (18 B, 64 values): d@0 (Float16), qs[16]@2. Value t is
+# ((qs[t >> 2] >> 2(t & 3)) & 3) - 1, times d. One Q2_0 block spans two Q8_0
+# activation blocks. Each kernel returns the two exact integer sums
+# s_k = sum over t in block k of (code - 1) * xq, so the SIMD and scalar forms
+# agree bit for bit and share the float combine in _dot_q2_0_q8_0. This is new
+# code. ggml's generic Q2_0 kernel uses a different float order, so results
+# match the F32 dequant dot to rounding, not bit for bit.
+#
+# Codes: c_r = (qs >> 2r) & 3 on all 16 bytes, concatenated to lane 16r + j
+# (value 4j + r). A constant shuffle puts each 32-value half in value order.
+
+const _Q20_IDX0 = join(("i32 $(16 * (t & 3) + (t >> 2))" for t in 0:31), ", ")
+const _Q20_IDX1 = join(("i32 $(16 * (t & 3) + 8 + (t >> 2))" for t in 0:31), ", ")
+
+_kq_q20_codes(io::IOBuffer) = print(
+    io,
+    "  %wp = getelementptr i8, ptr %w, i64 2\n",
+    "  %wb = load <16 x i8>, ptr %wp, align 1\n",
+    "  %c0 = and <16 x i8> %wb, splat (i8 3)\n",
+    "  %h1 = lshr <16 x i8> %wb, splat (i8 2)\n",
+    "  %c1 = and <16 x i8> %h1, splat (i8 3)\n",
+    "  %h2 = lshr <16 x i8> %wb, splat (i8 4)\n",
+    "  %c2 = and <16 x i8> %h2, splat (i8 3)\n",
+    "  %c3 = lshr <16 x i8> %wb, splat (i8 6)\n",
+    "  %c01 = shufflevector <16 x i8> %c0, <16 x i8> %c1, <32 x i32> <$(_kq_idx(0, 32))>\n",
+    "  %c23 = shufflevector <16 x i8> %c2, <16 x i8> %c3, <32 x i32> <$(_kq_idx(0, 32))>\n",
+    "  %w0 = shufflevector <32 x i8> %c01, <32 x i8> %c23, <32 x i32> <$_Q20_IDX0>\n",
+    "  %w1 = shufflevector <32 x i8> %c01, <32 x i8> %c23, <32 x i32> <$_Q20_IDX1>\n",
+    "  %q1p = getelementptr i8, ptr %q, i64 32\n",
+    "  %q0 = load <32 x i8>, ptr %q, align 1\n",
+    "  %q1 = load <32 x i8>, ptr %q1p, align 1\n",
+)
+
+# vpmaddubsw pair sums: codes are at most 3, so |code * xq| pairs stay within
+# 2 * 3 * 128 and the pair sums of the 1 * xq term within 256; neither
+# saturates, and their difference fits int16.
+const _KQ_IR_Q20 = let io = IOBuffer()
+    print(
+        io,
+        "declare <16 x i16> @llvm.x86.avx2.pmadd.ub.sw(<32 x i8>, <32 x i8>)\n",
+        "declare <8 x i32> @llvm.x86.avx2.pmadd.wd(<16 x i16>, <16 x i16>)\n",
+        "declare i32 @llvm.vector.reduce.add.v8i32(<8 x i32>)\n",
+        "define <2 x i32> @entry(ptr %w, ptr %q) #0 {\n",
+    )
+    _kq_q20_codes(io)
+    for k in 0:1
+        print(
+            io,
+            "  %u$k = call <16 x i16> @llvm.x86.avx2.pmadd.ub.sw(<32 x i8> %w$k, <32 x i8> %q$k)\n",
+            "  %x$k = call <16 x i16> @llvm.x86.avx2.pmadd.ub.sw(<32 x i8> splat (i8 1), <32 x i8> %q$k)\n",
+            "  %d$k = sub <16 x i16> %u$k, %x$k\n",
+            "  %p$k = call <8 x i32> @llvm.x86.avx2.pmadd.wd(<16 x i16> %d$k, <16 x i16> splat (i16 1))\n",
+            "  %s$k = call i32 @llvm.vector.reduce.add.v8i32(<8 x i32> %p$k)\n",
+        )
+    end
+    print(
+        io,
+        "  %r0 = insertelement <2 x i32> poison, i32 %s0, i64 0\n",
+        "  %r = insertelement <2 x i32> %r0, i32 %s1, i64 1\n",
+        "  ret <2 x i32> %r\n}\n",
+        _KQ_ATTRS,
+    )
+    String(take!(io))
+end
+
+const _KQ_IR_GEN_Q20 = let io = IOBuffer()
+    print(
+        io,
+        "declare i32 @llvm.vector.reduce.add.v32i32(<32 x i32>)\n",
+        "define <2 x i32> @entry(ptr %w, ptr %q) #0 {\n",
+    )
+    _kq_q20_codes(io)
+    for k in 0:1
+        print(
+            io,
+            "  %z$k = zext <32 x i8> %w$k to <32 x i32>\n",
+            "  %v$k = sub <32 x i32> %z$k, splat (i32 1)\n",
+            "  %e$k = sext <32 x i8> %q$k to <32 x i32>\n",
+            "  %m$k = mul <32 x i32> %v$k, %e$k\n",
+            "  %s$k = call i32 @llvm.vector.reduce.add.v32i32(<32 x i32> %m$k)\n",
+        )
+    end
+    print(
+        io,
+        "  %r0 = insertelement <2 x i32> poison, i32 %s0, i64 0\n",
+        "  %r = insertelement <2 x i32> %r0, i32 %s1, i64 1\n",
+        "  ret <2 x i32> %r\n}\n",
+        _KQ_ATTRS,
+    )
+    String(take!(io))
+end
+
+# ib is the Q2_0 block index; its activations are Q8_0 blocks 2ib and 2ib + 1.
+@inline function _q20_sumi_avx2(w::AbstractVector{UInt8}, b::Int, x::Q80Vec, ib::Int)::NTuple{2, Int32}
+    v = GC.@preserve w x @x86_llvmcall(
+        (_KQ_IR_Q20, "entry"),
+        NTuple{2, VecElement{Int32}},
+        Tuple{Ptr{UInt8}, Ptr{Int8}},
+        pointer(w, b + 1),
+        pointer(x.qs, 64 * ib + 1),
+    )
+    return (v[1].value, v[2].value)
+end
+
+@inline function _q20_sumi_gen(w::AbstractVector{UInt8}, b::Int, x::Q80Vec, ib::Int)::NTuple{2, Int32}
+    v = GC.@preserve w x @simd_llvmcall(
+        (_KQ_IR_GEN_Q20, "entry"),
+        NTuple{2, VecElement{Int32}},
+        Tuple{Ptr{UInt8}, Ptr{Int8}},
+        pointer(w, b + 1),
+        pointer(x.qs, 64 * ib + 1),
+    )
+    return (v[1].value, v[2].value)
+end
+
+@inline function _q20_sumi_simd(w::AbstractVector{UInt8}, b::Int, x::Q80Vec, ib::Int)::NTuple{2, Int32}
+    @static if Sys.ARCH === :x86_64
+        return _q20_sumi_avx2(w, b, x, ib)
+    else
+        return _q20_sumi_gen(w, b, x, ib)
+    end
+end
+
+@inline function _q20_sumi_ref(w::AbstractVector{UInt8}, b::Int, x::Q80Vec, ib::Int)::NTuple{2, Int32}
+    s0 = Int32(0)
+    s1 = Int32(0)
+    qo = 64 * ib
+    for t in 0:63
+        c = Int32((_kq_u8(w, b + 2 + (t >> 2)) >> (2 * (t & 3))) & 0x03) - Int32(1)
+        p = c * Int32(x.qs[qo+t+1])
+        if t < 32
+            s0 += p
+        else
+            s1 += p
+        end
+    end
+    return (s0, s1)
+end
+
+function _dot_q2_0_q8_0(w::AbstractVector{UInt8}, woff::Int, x::Q80Vec, simd::Bool)::Float32
+    nx = length(x.d)
+    iseven(nx) || throw(DimensionMismatch("Q2_0 dot: $nx Q8_0 blocks is not a whole number of 64-value blocks"))
+    nb = nx >> 1
+    nbytes = 18 * nb
+    woff >= 0 && woff + nbytes <= length(w) || throw(BoundsError(w, (woff+1):(woff+nbytes)))
+    length(x.qs) >= 64 * nb || throw(DimensionMismatch("activation vector does not hold $nx blocks"))
+    sumf = 0.0f0
+    @inbounds for ib in 0:(nb-1)
+        b = woff + ib * 18
+        s0, s1 = simd ? _q20_sumi_simd(w, b, x, ib) : _q20_sumi_ref(w, b, x, ib)
+        sumf += _kq_f16(w, b) * (Float32(s0) * x.d[2ib+1] + Float32(s1) * x.d[2ib+2])
+    end
+    return sumf
+end
+
 # ------------------------------------------------------------- F32 dequant
 #
 # Ports of dequantize_row_* from ggml-quants.c, one row of ne0 values starting
@@ -1377,6 +1537,17 @@ function _kq_dequant_row!(
                 q = _kq_u8(w, b + 2 + j)
                 out[32*ib+j+1] = d * Float32(KVALUES_IQ4NL[(q&0x0f)+1])
                 out[32*ib+j+17] = d * Float32(KVALUES_IQ4NL[(q>>4)+1])
+            end
+        end
+        return out
+    elseif ggml_type == GGML_TYPE_Q2_0
+        nb = div(ne0, 64)
+        for ib in 0:(nb-1)
+            b = woff + ib * 18
+            d = _kq_f16(w, b)
+            for t in 0:63
+                c = (Int32(_kq_u8(w, b + 2 + (t >> 2))) >> (2 * (t & 3))) & Int32(3)
+                out[64*ib+t+1] = d * Float32(c - Int32(1))
             end
         end
         return out
@@ -1490,7 +1661,7 @@ end
 # rather than Q8_K, so a shared Q8_K input cannot serve them.
 _q80_act_type(ggml_type::Int32) =
     ggml_type == GGML_TYPE_Q8_0 || ggml_type == GGML_TYPE_Q4_0 || ggml_type == GGML_TYPE_IQ4_NL ||
-    ggml_type == GGML_TYPE_Q5_1
+    ggml_type == GGML_TYPE_Q5_1 || ggml_type == GGML_TYPE_Q2_0
 
 # Activation block size and quantizer for a weight type.
 _q8k_block_values(ggml_type::Int32) = _q80_act_type(ggml_type) ? 32 : QK_K
@@ -1520,6 +1691,7 @@ _kq_supported(ggml_type::Int32) = ggml_type in (
     GGML_TYPE_Q4_0,
     GGML_TYPE_IQ4_NL,
     GGML_TYPE_Q5_1,
+    GGML_TYPE_Q2_0,
 )
 
 # Called from _dot_q8k in quant_cpu_simd.jl.
@@ -1544,6 +1716,8 @@ _kq_supported(ggml_type::Int32) = ggml_type in (
         return _dot_iq4_nl_q8_0(w, woff, x, simd)
     elseif ggml_type == GGML_TYPE_Q5_1
         return _dot_q5_1_q8_0(w, woff, x, simd)
+    elseif ggml_type == GGML_TYPE_Q2_0
+        return _dot_q2_0_q8_0(w, woff, x, simd)
     elseif ggml_type == GGML_TYPE_Q3_K
         return _dot_q3k_q8k(w, woff, x, simd)
     elseif ggml_type == GGML_TYPE_Q2_K

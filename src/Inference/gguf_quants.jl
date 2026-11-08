@@ -467,8 +467,6 @@ function _qgemv_bytes!(
         return _qgemv_iq4_nl!(y, x, q, ne0, ne1, alpha, beta)
     elseif ggml_type == GGML_TYPE_Q5_1
         return _qgemv_q5_1!(y, x, q, ne0, ne1, alpha, beta)
-    elseif ggml_type == GGML_TYPE_Q2_0
-        return _qgemv_q2_0!(y, x, q, ne0, ne1, alpha, beta)
     elseif _q8k_supported_type(ggml_type)
         # K-quants, Q8_0 and the IQ2_XXS / IQ2_S / IQ3_S / IQ1_S / IQ1_M formats: the native
         # integer kernels against a Q8_K (Q8_0) quantization of x. Single

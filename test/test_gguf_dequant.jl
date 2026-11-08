@@ -79,8 +79,15 @@ end
         x = randn(rng, Float32, ne0)
         y = zeros(Float32, ne1)
         _DQ._qgemv_bytes!(y, x, data, ty, ne0, ne1, 1.0f0, 0.0f0)
+        # Q2_0 runs the integer kernel on Q8_0 activations: compare against the
+        # same rounded activations.
+        xr = x
+        if ty == _DQ.GGML_TYPE_Q2_0
+            xq = _DQ.quantize_q8_0!(_DQ.Q80Vec(div(ne0, 32)), x)
+            xr = Float32[xq.d[(i-1)÷32+1] * Float32(xq.qs[i]) for i in eachindex(x)]
+        end
         @testset "type $ty" begin
-            @test y ≈ W * x rtol = 1e-4
+            @test y ≈ W * xr rtol = 1e-4
         end
     end
 end

@@ -58,17 +58,29 @@ end
 # The IQ2_XXS/IQ2_S/IQ3_S CPU kernels run on Q8_K activations, so a unit-vector
 # product is not an exact dequant for them; their F32 reference row dequant is.
 const _FN_IQS = (_FN.GGML_TYPE_IQ2_XXS, _FN.GGML_TYPE_IQ2_S, _FN.GGML_TYPE_IQ3_S)
+# Q2_0 runs on Q8_0 activations (integer kernel), so it uses its F32 row dequant too.
+const _FN_Q80 = (_FN.GGML_TYPE_Q2_0,)
 
 function _fn_dequant(data::Vector{UInt8}, ty::Int32, nrows::Int, ne0::Int)
-    ty in _FN_IQS || return _fn_gesso_dequant(data, ty, nrows, ne0)
+    (ty in _FN_IQS || ty in _FN_Q80) || return _fn_gesso_dequant(data, ty, nrows, ne0)
     rb = _FN._qrow_bytes(ty, ne0)
     W = zeros(Float32, nrows, ne0)
     row = Vector{Float32}(undef, ne0)
     for j in 1:nrows
-        _FN._iqs_dequant_row!(row, data, (j - 1) * rb, ty, ne0)
+        if ty in _FN_Q80
+            _FN._kq_dequant_row!(row, data, (j - 1) * rb, ty, ne0)
+        else
+            _FN._iqs_dequant_row!(row, data, (j - 1) * rb, ty, ne0)
+        end
         W[j, :] = row
     end
     return W
+end
+
+# Activations rounded through Q8_0 exactly as the CPU kernel quantizes them.
+function _fn_q80_round(x::Vector{Float32})
+    xq = _FN.quantize_q8_0!(_FN.Q80Vec(div(length(x), 32)), x)
+    return Float32[xq.d[(i-1)÷32+1] * Float32(xq.qs[i]) for i in eachindex(x)]
 end
 
 function _fn_matrix(data::Vector{UInt8}, ty::Int32, nrows::Int, ne0::Int, blck::Int)
@@ -139,7 +151,7 @@ end
         _FN._qgemv_bytes!(y, x, data, ty, ne0, nrows, 1.0f0, 0.0f0)
         # The IQ2/IQ3 CPU kernels quantize activations to Q8_K, so their
         # reference uses the same rounded activations; the F32 gap is reported.
-        xr = ty in _FN_IQS ? _fn_q8k_round(x) : x
+        xr = ty in _FN_IQS ? _fn_q8k_round(x) : ty in _FN_Q80 ? _fn_q80_round(x) : x
         ref = Float64.(W) * Float64.(xr)
         rel = _fn_relerr(y, ref)
         rel_f32 = _fn_relerr(y, Float64.(W) * Float64.(x))

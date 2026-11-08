@@ -30,9 +30,12 @@ const _KQTYPES = (
     ("Q4_0", _KQ.GGML_TYPE_Q4_0),
     ("IQ4_NL", _KQ.GGML_TYPE_IQ4_NL),
     ("Q5_1", _KQ.GGML_TYPE_Q5_1),
+    ("Q2_0", _KQ.GGML_TYPE_Q2_0),
 )
 
-_kq_nvals(ty::Int32) = _KQ._q80_act_type(ty) ? 32 : _KQ.QK_K
+# Values per weight block: Q2_0 blocks hold 64 (two Q8_0 activation blocks).
+_kq_nvals(ty::Int32) =
+    ty == _KQ.GGML_TYPE_Q2_0 ? 64 : _KQ._q80_act_type(ty) ? 32 : _KQ.QK_K
 
 function _kq_put_f16!(w::Vector{UInt8}, off0::Int, v::Float32)
     bits = reinterpret(UInt16, Float16(v))
@@ -161,6 +164,7 @@ end
     else
         rng = Xoshiro(22)
         for (name, ty) in _KQTYPES
+            ty == _KQ.GGML_TYPE_Q2_0 && continue  # not a ggml type; checked against _dq_q2_0! below
             nb = 3
             ne0 = _kq_nvals(ty) * nb
             W = _kq_random_rows(rng, ty, 2, nb)
@@ -243,6 +247,31 @@ end
                 a = _KQ._dot_q8k(ty, W, 0, xq, true)
                 @test reinterpret(UInt32, r) == reinterpret(UInt32, a)
             end
+        end
+    end
+end
+
+@testset "Q2_0: dequant matches _dq_q2_0!, integer dot tracks the float kernel" begin
+    rng = Xoshiro(23)
+    ty = _KQ.GGML_TYPE_Q2_0
+    for nb in (1, 3, 40)
+        ne0 = 64 * nb
+        W = _kq_random_rows(rng, ty, 3, nb)
+        rb = _KQ._qrow_bytes(ty, ne0)
+        @test rb == 18 * nb
+        x = randn(rng, Float32, ne0)
+        xq = _KQ._q8k_quantize_act(ty, x)
+        for j in 1:3
+            mine = Vector{Float32}(undef, ne0)
+            _KQ._kq_dequant_row!(mine, W, (j - 1) * rb, ty, ne0)
+            ref = Vector{Float32}(undef, ne0)
+            _KQ._dq_q2_0!(ref, W, (j - 1) * rb, ne0)
+            @test reinterpret.(UInt32, mine) == reinterpret.(UInt32, ref)
+            # against the F32-activation dot: the gap is the Q8_0 activation error
+            f = sum(Float64.(ref) .* Float64.(x))
+            mag = sum(abs.(Float64.(ref) .* Float64.(x)))
+            got = _KQ._dot_q8k(ty, W, (j - 1) * rb, xq, true)
+            @test abs(Float64(got) - f) <= 0.02 * mag + 1.0e-6
         end
     end
 end
@@ -400,6 +429,7 @@ function _kq_ggml_generic_sym(ty::Int32)
         _KQ.GGML_TYPE_IQ4_NL => :ggml_vec_dot_iq4_nl_q8_0_generic,
         _KQ.GGML_TYPE_Q5_1 => :ggml_vec_dot_q5_1_q8_1_generic,
     )
+    haskey(names, ty) || return C_NULL
     _KQ._ensure_ggml!()
     hcpu = _KQ._GGML_LIBS[][2]
     hcpu == C_NULL && return C_NULL
