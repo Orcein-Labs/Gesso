@@ -148,6 +148,11 @@ function _q4x_load(m::Qwen4expModel, name::String)
         return _dequant_f32(h.data, Int(h.data_start) + Int(t.offset), t.ggml_type, prod(t.dims))
     end
     nd == 3 && return _expert_slice(h, t)
+    # The hyper-connection inject weights are (n_hc, n_embd * n_hc): too few
+    # rows for the quant GEMV to pay off, so they widen to F32 (exact for BF16),
+    # stored input-major so each output row is one contiguous run.
+    endswith(name, "_inject.weight") &&
+        return transpose(Matrix{Float32}(permutedims(_gguf_array(h, t))))
     (t.ggml_type == GGML_TYPE_F32 || endswith(name, "ffn_gate_inp.weight")) &&
         return _gguf_array(h, t)
     return _quant_matrix(h, t)
@@ -156,7 +161,58 @@ end
 _q4x_w(m::Qwen4expModel, name::String) = get!(() -> _q4x_load(m, name), m.cache, name)
 
 # x (T, in) -> (T, out)
-_q4x_mm(W::AbstractMatrix, x::AbstractMatrix) = Matrix{Float32}(x * transpose(W))
+function _q4x_mm(W::AbstractMatrix, x::AbstractMatrix)
+    size(W, 1) <= _Q4X_SMALL_ROWS && x isa Matrix{Float32} &&
+        (W isa Matrix{Float32} || W isa Transpose{Float32, Matrix{Float32}}) &&
+        return _q4x_small_mm(W, x)
+    return Matrix{Float32}(x * transpose(W))
+end
+
+# A handful of output rows: a serial loop reads W and each x column once, with
+# no BLAS call (its threads fight the GEMV pool's spinning workers).
+const _Q4X_SMALL_ROWS = 8
+
+function _q4x_small_mm(W::Matrix{Float32}, x::Matrix{Float32})
+    nout, nin = size(W)
+    T = size(x, 1)
+    size(x, 2) == nin || error("qwen4exp: x has $(size(x, 2)) features, weight has $nin")
+    y = zeros(Float32, T, nout)
+    @inbounds for i in 1:nin, o in 1:nout
+        w = W[o, i]
+        @simd for t in 1:T
+            y[t, o] = muladd(x[t, i], w, y[t, o])
+        end
+    end
+    return y
+end
+
+# Input-major weights: one token is a contiguous dot per output row; more
+# tokens walk W once and keep the token loop contiguous.
+function _q4x_small_mm(W::Transpose{Float32, Matrix{Float32}}, x::Matrix{Float32})
+    Wt = parent(W)
+    nin, nout = size(Wt)
+    T = size(x, 1)
+    size(x, 2) == nin || error("qwen4exp: x has $(size(x, 2)) features, weight has $nin")
+    if T == 1
+        y = Matrix{Float32}(undef, 1, nout)
+        @inbounds for o in 1:nout
+            acc = 0f0
+            @simd for i in 1:nin
+                acc = muladd(x[i], Wt[i, o], acc)
+            end
+            y[1, o] = acc
+        end
+        return y
+    end
+    y = zeros(Float32, T, nout)
+    @inbounds for o in 1:nout, i in 1:nin
+        w = Wt[i, o]
+        @simd for t in 1:T
+            y[t, o] = muladd(x[t, i], w, y[t, o])
+        end
+    end
+    return y
+end
 
 function _q4x_mm(W::QuantMatrix, x::AbstractMatrix)
     y = zeros(Float32, size(x, 1), W.nrows)
@@ -193,14 +249,16 @@ _q4x_softplus(x) = x > 20 ? x : log1p(exp(x))
 function _q4x_group_rms(x::AbstractMatrix, n::Int, w, eps::Float64)
     T, F = size(x)
     y = Matrix{Float32}(undef, T, F)
+    wo = length(w) == n ? 0 : n
     @inbounds for g in 0:(F÷n-1), t in 1:T
         acc = 0.0
-        for i in 1:n
+        @simd for i in 1:n
             acc += Float64(x[t, g*n+i])^2
         end
         r = 1 / sqrt(acc / n + eps)
-        for i in 1:n
-            y[t, g*n+i] = Float32(x[t, g*n+i] * r) * w[length(w) == n ? i : g*n+i]
+        o = g * wo
+        @simd for i in 1:n
+            y[t, g*n+i] = Float32(x[t, g*n+i] * r) * w[o+i]
         end
     end
     return y
@@ -338,13 +396,21 @@ function _q4x_hc_mix(m::Qwen4expModel, x, pre::String; inject::Bool=true)
     lo = _q4x_silu.(_q4x_mm(m, xn, pre * "_down.weight") ./ HC)
     gate = _q4x_mm(m, lo, pre * "_up.weight")
     T = size(x, 1)
-    mixed = Matrix{Float32}(undef, T, NE)
-    @inbounds for i in 1:NE, t in 1:T
-        acc = 0f0
-        for s in 0:(HC-1)
-            acc += xn[t, i+NE*s] * _q4x_sigm(gate[t, i+NE*s])
+    # Stream s of a (T, n_hc * n_embd) matrix is the contiguous span
+    # (s * T * NE) .+ (1:T * NE), so the mix runs over linear indices.
+    @inbounds for j in eachindex(gate)
+        gate[j] = _q4x_sigm(gate[j])
+    end
+    TN = T * NE
+    mixed = zeros(Float32, T, NE)
+    @inbounds for s in 0:(HC-1)
+        o = TN * s
+        @simd for k in 1:TN
+            mixed[k] += xn[o+k] * gate[o+k]
         end
-        mixed[t, i] = acc / HC
+    end
+    @inbounds @simd for k in 1:TN
+        mixed[k] /= HC
     end
     return mixed, inject ? _q4x_mm(m, xn, pre * "_inject.weight") : nothing
 end

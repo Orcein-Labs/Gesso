@@ -49,6 +49,32 @@ end
     @test maximum(abs.(cold .- full[10:11, :])) > 1e-3
 end
 
+@testset "qwen4exp: small-row matmul and group rms against plain loops" begin
+    INF = Gesso.Inference
+    Random.seed!(7)
+    nin, nout = 40, 4
+    W = randn(Float32, nout, nin)
+    # Input-major storage, as _q4x_load keeps the hyper-connection inject weights.
+    Wt = transpose(Matrix{Float32}(permutedims(W)))
+    for T in (1, 3)
+        x = randn(Float32, T, nin)
+        ref = [sum(Float64(x[t, i]) * W[o, i] for i in 1:nin) for t in 1:T, o in 1:nout]
+        @test isapprox(INF._q4x_mm(Wt, x), ref; rtol=1e-5)
+        @test isapprox(INF._q4x_mm(W, x), ref; rtol=1e-5)
+    end
+    n, G, T = 6, 3, 2
+    x = randn(Float32, T, n * G)
+    for w in (randn(Float32, n), randn(Float32, n * G))
+        y = INF._q4x_group_rms(x, n, w, 1e-6)
+        for g in 0:(G-1), t in 1:T
+            seg = Float64.(x[t, g*n+1:g*n+n])
+            r = 1 / sqrt(sum(abs2, seg) / n + 1e-6)
+            o = length(w) == n ? 0 : g * n
+            @test isapprox(y[t, g*n+1:g*n+n], seg .* r .* w[o+1:o+n]; rtol=1e-5)
+        end
+    end
+end
+
 @testset "qwen4exp: QSA layers refuse contexts past top_k" begin
     cfg = qwen4exp_config(_q4x_toy_kv())
     m = _q4x_toy_model(cfg)
