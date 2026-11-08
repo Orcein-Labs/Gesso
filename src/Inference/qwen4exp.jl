@@ -262,18 +262,22 @@ end
 
 # RMS norm over contiguous groups of n columns. w has n entries (shared) or one
 # per column. Token rows split across the pool; each (group, token) runs the
-# same loop as a serial pass, so the bits do not depend on the split.
-function _q4x_group_rms(x::AbstractMatrix, n::Int, w, eps::Float64)
+# same loop as a serial pass, so the bits do not depend on the split. A gate z
+# (same shape as x) multiplies each normed value by sigmoid(z), the same
+# Float32 product as `group_rms(...) .* sigm.(z)` without the two extra passes.
+function _q4x_group_rms(x::AbstractMatrix, n::Int, w, eps::Float64, z=nothing)
     T, F = size(x)
+    z === nothing || size(z) == (T, F) ||
+        error("qwen4exp: rms gate $(size(z)) ≠ $((T, F))")
     y = Matrix{Float32}(undef, T, F)
     wo = length(w) == n ? 0 : n
     _q4x_par_ranges(T, _q4x_nchunks(T, T * F)) do t0, t1
-        _q4x_group_rms_rows!(y, x, n, w, wo, eps, t0, t1)
+        _q4x_group_rms_rows!(y, x, n, w, wo, eps, t0, t1, z)
     end
     return y
 end
 
-function _q4x_group_rms_rows!(y::Matrix{Float32}, x::AbstractMatrix, n::Int, w, wo::Int, eps::Float64, t0::Int, t1::Int)
+function _q4x_group_rms_rows!(y::Matrix{Float32}, x::AbstractMatrix, n::Int, w, wo::Int, eps::Float64, t0::Int, t1::Int, z)
     F = size(x, 2)
     @inbounds for g in 0:(F÷n-1), t in t0:t1
         acc = 0.0
@@ -282,30 +286,57 @@ function _q4x_group_rms_rows!(y::Matrix{Float32}, x::AbstractMatrix, n::Int, w, 
         end
         r = 1 / sqrt(acc / n + eps)
         o = g * wo
-        @simd for i in 1:n
-            y[t, g*n+i] = Float32(x[t, g*n+i] * r) * w[o+i]
+        if z === nothing
+            @simd for i in 1:n
+                y[t, g*n+i] = Float32(x[t, g*n+i] * r) * w[o+i]
+            end
+        else
+            @simd for i in 1:n
+                j = g * n + i
+                y[t, j] = Float32(Float32(x[t, j] * r) * w[o+i]) * _q4x_sigm(z[t, j])
+            end
         end
     end
     return nothing
 end
 
 # Depthwise causal conv over [hist; x]; w is ggml [k, C] flat. hist holds the
-# last (k - 1) * dil input rows and is advanced in place.
-function _q4x_causal_conv!(hist::Matrix{Float32}, x::AbstractMatrix, w, k::Int, dil::Int)
+# last (k - 1) * dil input rows and is advanced in place. Channels split across
+# the pool; each output is the same p-ordered sum, so the split leaves the bits
+# alone. `_q4x_causal_conv_silu!` also returns silu of each output, the value
+# `_q4x_silu.(y)` gives, from the same pass.
+_q4x_causal_conv!(hist::Matrix{Float32}, x::AbstractMatrix, w, k::Int, dil::Int) =
+    _q4x_causal_conv_impl!(hist, x, w, k, dil, nothing)
+
+function _q4x_causal_conv_silu!(hist::Matrix{Float32}, x::AbstractMatrix, w, k::Int, dil::Int)
+    s = Matrix{Float32}(undef, size(x))
+    y = _q4x_causal_conv_impl!(hist, x, w, k, dil, s)
+    return y, s
+end
+
+function _q4x_causal_conv_impl!(hist::Matrix{Float32}, x::AbstractMatrix, w, k::Int, dil::Int, s)
     H = size(hist, 1)
     H == (k - 1) * dil || error("qwen4exp: conv history has $H rows, needs $((k - 1) * dil)")
     T, C = size(x)
     xx = vcat(hist, x)
     y = Matrix{Float32}(undef, T, C)
-    @inbounds for c in 1:C, t in 1:T
+    _q4x_par_ranges(C, _q4x_nchunks(C, T * C)) do c0, c1
+        _q4x_causal_conv_cols!(y, s, xx, w, k, dil, H, T, c0, c1)
+    end
+    hist .= @view xx[end-H+1:end, :]
+    return y
+end
+
+function _q4x_causal_conv_cols!(y::Matrix{Float32}, s, xx::Matrix{Float32}, w, k::Int, dil::Int, H::Int, T::Int, c0::Int, c1::Int)
+    @inbounds for c in c0:c1, t in 1:T
         acc = 0f0
         for p in 0:(k-1)
             acc += w[p+1+k*(c-1)] * xx[H+t-(k-1-p)*dil, c]
         end
         y[t, c] = acc
+        s === nothing || (s[t, c] = _q4x_silu(y[t, c]))
     end
-    hist .= @view xx[end-H+1:end, :]
-    return y
+    return nothing
 end
 
 """
@@ -493,8 +524,7 @@ function _q4x_gdn(m::Qwen4expModel, st::Qwen4expState, il::Int, x, taps)
     g = sp .* transpose(_q4x_w(m, p * "ssm_a"))
     k = cfg.conv_kernel
     hist = get!(() -> zeros(Float32, k - 1, size(qkv, 2)), st.conv, il)
-    craw = _q4x_causal_conv!(hist, qkv, _q4x_w(m, p * "ssm_conv1d.weight"), k, 1)
-    c = _q4x_silu.(craw)
+    craw, c = _q4x_causal_conv_silu!(hist, qkv, _q4x_w(m, p * "ssm_conv1d.weight"), k, 1)
     nq = nk * dk
     # Views, not copies: the kernel widens q, k, v and beta to Float64 per
     # element, so the values match the old Float64 copies. g stays Float64
@@ -502,7 +532,9 @@ function _q4x_gdn(m::Qwen4expModel, st::Qwen4expState, il::Int, x, taps)
     q = PermutedDimsArray(reshape(view(c, :, 1:nq), T, dk, nk), (1, 3, 2))
     kk = PermutedDimsArray(reshape(view(c, :, nq+1:2nq), T, dk, nk), (1, 3, 2))
     v = PermutedDimsArray(reshape(view(c, :, 2nq+1:size(c, 2)), T, dv, nv), (1, 3, 2))
-    o = zeros(Float64, T, dv, nv)
+    # The kernel only stores into out, so a Float32 out rounds each value once,
+    # the same as Float32.(o) on a Float64 buffer, without the buffer.
+    o = Array{Float32}(undef, T, dv, nv)
     # The delta state is stored (dv, dk, nv) so each value head is one
     # contiguous block; the kernel sees it as (nv, dk, dv) through the view.
     # Held (nv, dk, dv) directly, a head's values sit nv apart and the head
@@ -510,8 +542,8 @@ function _q4x_gdn(m::Qwen4expModel, st::Qwen4expState, il::Int, x, taps)
     raw = get!(() -> zeros(Float64, dv, dk, nv), st.ssm, il)
     _cpu_gated_delta_rule!(PermutedDimsArray(o, (1, 3, 2)), q, kk, v, Float64.(g),
         beta, PermutedDimsArray(raw, (3, 2, 1)); l2norm=true, v_head_tiled=true)
-    of = Float32.(reshape(o, T, nv * dv))
-    fo = _q4x_group_rms(of, dv, _q4x_w(m, p * "ssm_norm.weight"), cfg.eps) .* _q4x_sigm.(z)
+    of = reshape(o, T, nv * dv)
+    fo = _q4x_group_rms(of, dv, _q4x_w(m, p * "ssm_norm.weight"), cfg.eps, z)
     out = _q4x_mm(m, fo, p * "ssm_out.weight")
     if taps !== nothing
         for (n, a) in (("linear_attn_qkv_mixed", qkv), ("z", z), ("beta_sigmoid", beta),
