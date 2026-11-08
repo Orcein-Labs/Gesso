@@ -119,6 +119,13 @@ end
         @test P(; threads=36, override=3) == 3
         @test P(; threads=36, override=40) == 36
         @test P(; threads=36, override=1) == 1
+        B = _RP._cpu_pool_blas_cap
+        @test B(; cpu=16, participants=16, blas=8, user_set=false) == 1
+        @test B(; cpu=16, participants=12, blas=8, user_set=false) == 4
+        @test B(; cpu=16, participants=8, blas=8, user_set=false) === nothing
+        @test B(; cpu=16, participants=16, blas=8, user_set=true) === nothing
+        @test B(; cpu=16, participants=16, blas=1, user_set=false) === nothing
+        @test B(; cpu=4, participants=8, blas=4, user_set=false) == 1
     end
 
     @testset "bad nchunks" begin

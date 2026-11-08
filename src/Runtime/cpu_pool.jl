@@ -45,6 +45,7 @@
 # usable afterwards.
 
 using Base.Threads: Atomic, atomic_add!, atomic_cas!, atomic_xchg!
+using LinearAlgebra: BLAS
 
 const CPU_POOL_MAX_PARTICIPANTS = 18
 const CPU_POOL_THREADS_ENV = "GESSO_CPU_POOL_THREADS"
@@ -151,6 +152,28 @@ function _cpu_pool_participants(;
     return min(threads, CPU_POOL_MAX_PARTICIPANTS)
 end
 
+# BLAS threads left beside the pool. OpenBLAS keeps its idle threads spinning
+# for a while after every call, and the pool workers spin too, so the two
+# together must fit the machine's logical CPUs. Measured on a 16-vCPU EPYC
+# Milan VM, Flash-Next 512-token prefill at -t 16 (16 participants, Julia's
+# default 8 BLAS threads): 19.9 s. With BLAS at 1 thread: 15.6 s, same greedy
+# ids. At -t 8 (8 + 8 = 16) nothing changes. Returns the new BLAS thread count,
+# or nothing to leave BLAS alone. A BLAS thread count the user set through the
+# environment is never overridden.
+const CPU_POOL_BLAS_ENVS = ("OPENBLAS_NUM_THREADS", "OMP_NUM_THREADS", "GOTO_NUM_THREADS")
+
+function _cpu_pool_blas_cap(;
+    cpu::Integer=Sys.CPU_THREADS,
+    participants::Integer,
+    blas::Integer=BLAS.get_num_threads(),
+    user_set::Bool=any(k -> haskey(ENV, k), CPU_POOL_BLAS_ENVS),
+)::Union{Nothing, Int}
+    user_set && return nothing
+    participants + blas <= cpu && return nothing
+    cap = max(1, Int(cpu) - Int(participants))
+    return blas <= cap ? nothing : cap
+end
+
 # ------------------------------------------------------------ lifecycle
 
 function _cpu_pool_start(participants::Int, spin_us::Int)::CPUPool
@@ -238,7 +261,10 @@ function _cpu_pool()::CPUPool
                 _cpu_pool_env_int(CPU_POOL_SPIN_ENV; minimum=0),
                 CPU_POOL_DEFAULT_SPIN_US,
             )
-            q = _cpu_pool_start(_cpu_pool_participants(), spin_us)
+            n = _cpu_pool_participants()
+            nb = _cpu_pool_blas_cap(; participants=n)
+            nb === nothing || BLAS.set_num_threads(nb)
+            q = _cpu_pool_start(n, spin_us)
             @atomic :release _CPU_POOL_SLOT.pool = q
             if !_CPU_POOL_ATEXIT[]
                 _CPU_POOL_ATEXIT[] = true
