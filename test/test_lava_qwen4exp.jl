@@ -54,18 +54,32 @@ else
     Base.size(b::_Lq4ExactBank) = size(getfield(b, :s))
     Base.getproperty(b::_Lq4ExactBank, f::Symbol) =
         f in (:s, :w, :lock) ? getfield(b, f) : getproperty(getfield(b, :s), f)
-    _lq4_inf._q4x_moe!(y, x, router, g::_Lq4ExactBank, u, d, k) =
-        _lq4_inf._cpu_moe_topk_swiglu_gguf!(y, x, router, g, u, d, k)
-    function _lq4_inf._qgemv_expert!(y::AbstractVector{Float32}, x::AbstractVector{Float32},
-            b::_Lq4ExactBank, e::Int; alpha::Float32=1.0f0, beta::Float32=0.0f0)
-        W = lock(b.lock) do
-            get!(() -> _lq4_inf._gguf_dequant_expert_uncached(b.s, e), b.w, e)
-        end
-        p = W * x
-        if iszero(beta)
-            y .= alpha .* p
-        else
-            y .= alpha .* p .+ beta .* y
+    _lq4_expert(b::_Lq4ExactBank, e::Int) = lock(b.lock) do
+        get!(() -> _lq4_inf._gguf_dequant_expert_uncached(b.s, e), b.w, e)
+    end
+    # The MoE over the exact banks, on its own: the routing is the host route's
+    # (`_moe_route_token!`), the experts are F32 matrix products. The host
+    # dispatcher sends any non-GgufQuantSlice bank down its byte-slice path, which
+    # a wrapper cannot serve, so the fixture does not go through it.
+    function _lq4_inf._q4x_moe!(y, x, router, g::_Lq4ExactBank, u::_Lq4ExactBank,
+            d::_Lq4ExactBank, k::Int)
+        seq = size(x, 1)
+        n_exp = size(router, 1)
+        fill!(y, 0.0f0)
+        experts = Matrix{Int}(undef, k, seq)
+        wts = Matrix{Float32}(undef, k, seq)
+        logits = Vector{Float32}(undef, n_exp)
+        order = Vector{Int}(undef, n_exp)
+        for t in 1:seq
+            _lq4_inf._moe_route_token!(experts, wts, t, x, router, logits, order, k) || continue
+            xt = Float32.(x[t, :])
+            for j in 1:k
+                e = experts[j, t]
+                gv = _lq4_expert(g, e) * xt
+                uv = _lq4_expert(u, e) * xt
+                a = _lq4_inf._cpu_silu.(gv) .* uv
+                y[t, :] .+= wts[j, t] .* (_lq4_expert(d, e) * a)
+            end
         end
         return y
     end
