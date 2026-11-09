@@ -40,6 +40,7 @@ accepted by the chat server. New GPU work goes into Lava.
 | `GESSO_DFLASH_PMIN` | `scripts/saluki_dflash_bench.jl` |
 | `GESSO_DQ_GEMM_MIN` | `ext/cuda_quant_dense.jl`, `ext/lava_quant.jl`, `test/test_cuda_quant_dense.jl`, `test/test_lava_quant.jl`, `test/test_lava_quant_flash_next.jl` |
 | `GESSO_DQ_GEMM_SCRATCH_MIB` | `ext/cuda_quant_dense.jl`, `ext/lava_quant.jl`, `test/test_cuda_quant_dense.jl`, `test/test_lava_quant.jl` |
+| `GESSO_DSV41_GGUF` | `test/runtests.jl` |
 | `GESSO_EAGER_PYTHON` | `benchmark/runbenchmarks.jl` |
 | `GESSO_EXPERT_CACHE` | `src/Inference/gguf_import.jl` |
 | `GESSO_EXPERT_PROFILE` | `ext/cuda_ops.jl`, `scripts/routing_profile.jl`, `test/test_expert_cache.jl` |
@@ -96,8 +97,13 @@ accepted by the chat server. New GPU work goes into Lava.
 | `GESSO_L1_SEED` | `scripts/stress_ornith_lava.jl` |
 | `GESSO_L1_STATE_MODES` | `scripts/stress_ornith_lava.jl` |
 | `GESSO_L1_VARIANT_LEN` | `scripts/stress_ornith_lava.jl` |
+| `GESSO_LAVA_CPU_ORDER_QUANT` | `ext/lava_quant.jl` |
+| `GESSO_LAVA_CPU_ORDER_WG_MAX` | `ext/lava_quant_cpu_order.jl` |
+| `GESSO_LAVA_ROPE_TABLE_CACHE` | `ext/lava_rope_reference.jl` |
+| `GESSO_LAVA_WINDOW_FUSED` | `ext/lava_attention.jl`, `test/test_lava_attention_decode.jl` |
 | `GESSO_LFM25_GGUF` | `test/test_lfm25.jl`, `test/test_lfm_chat.jl` |
 | `GESSO_LFM2_GGUF` | `test/test_lfm25.jl`, `test/test_lfm_chat.jl` |
+| `GESSO_LFM3_GGUF` | `test/test_lfm_unified.jl` |
 | `GESSO_LLAMA_GGUF` | `test/test_gguf_llama.jl` |
 | `GESSO_LOAD_35B` | `test/test_gguf_import.jl` |
 | `GESSO_MOE_DEVICE_PREFILL` | `ext/cuda_ops.jl`, `test/test_cuda_moe.jl` |
@@ -109,11 +115,16 @@ accepted by the chat server. New GPU work goes into Lava.
 | `GESSO_MTP_HEAD` | `scripts/saluki_mtp_bench.jl` |
 | `GESSO_MTP_PMIN` | `scripts/saluki_mtp_bench.jl` |
 | `GESSO_NORMALIZATION_LABEL` | `test/regime_i_performance.jl` |
+| `GESSO_NUMA` | `src/Runtime/numa.jl` |
+| `GESSO_NUMA_NODES` | `src/Runtime/numa.jl`, `test/runtests.jl`, `test/test_numa.jl` |
 | `GESSO_ORACLE_NEW` | `scripts/saluki_window_oracle.jl` |
 | `GESSO_ORACLE_T` | `scripts/saluki_window_oracle.jl` |
 | `GESSO_ORNITH35_GGUF` | `scripts/bench_35b.jl`, `scripts/gate_35b.jl`, `scripts/gesso-serve.jl`, `scripts/julia_runtime/ttft_probe.jl`, `scripts/profile_35b.jl`, `scripts/routing_trace_35b.jl`, `scripts/stress_ornith_lava.jl`, `test/test_cuda_moe.jl`, `test/test_cuda_quant_dense.jl`, `test/test_gguf_import.jl`, `test/test_gguf_tokenizer.jl`, `test/test_lava_quant_kexperts.jl`, `test/test_quant_cpu_kquants.jl`, `test/test_quant_cpu_simd.jl`, `test/test_qwen35_dense.jl`, `test/test_serve_engine.jl` |
-| `GESSO_PREFILL_CHUNK` | `src/Inference/Inference.jl`, `src/Inference/gpu_budget.jl`, `test/test_cuda_hybrid.jl`, `test/test_prefill_profile.jl`, `test/test_qwen35_hybrid.jl`, `test/test_verify_window_batch.jl` |
-| `GESSO_PREFILL_MULTI` | `scripts/stress_ornith_lava.jl`, `src/Inference/moe_host.jl`, `src/Inference/quant_cpu_multi.jl`, `test/test_quant_cpu_multi.jl` |
+| `GESSO_PIN_THREADS` | `src/Runtime/numa_pin.jl` |
+| `GESSO_PRECOMPILE_WORKLOAD` | `src/precompile.jl` |
+| `GESSO_PREFAULT` | `src/Inference/gguf_import.jl`, `test/test_expert_cache.jl` |
+| `GESSO_PREFILL_CHUNK` | `src/Inference/Inference.jl`, `src/Inference/gpu_budget.jl`, `test/test_cuda_hybrid.jl`, `test/test_gemma4.jl`, `test/test_prefill_profile.jl`, `test/test_qwen35_hybrid.jl`, `test/test_verify_window_batch.jl` |
+| `GESSO_PREFILL_MULTI` | `scripts/stress_ornith_lava.jl`, `src/Inference/cpu_decode.jl`, `src/Inference/moe_host.jl`, `src/Inference/quant_cpu_multi.jl`, `test/test_quant_cpu_multi.jl` |
 | `GESSO_PREFILL_PROFILE` | `src/Inference/decode_profile.jl`, `test/test_prefill_profile.jl` |
 | `GESSO_PREFILL_WINDOW` | `src/Inference/Inference.jl`, `test/test_ctx_checkpoints.jl` |
 | `GESSO_PROFILE` | `scripts/julia_runtime/threads_forkjoin.jl`, `scripts/profile_35b.jl`, `src/Inference/Inference.jl`, `src/Inference/decode_profile.jl`, `test/test_decode_profile.jl` |
@@ -121,7 +132,7 @@ accepted by the chat server. New GPU work goes into Lava.
 | `GESSO_PROFILE_CTX` | `scripts/profile_35b.jl` |
 | `GESSO_PROFILE_TEXT` | `scripts/profile_35b.jl` |
 | `GESSO_PROFILE_TOKENS` | `scripts/profile_35b.jl`, `scripts/profile_qwen38_27b.jl` |
-| `GESSO_QUANT_SIMD` | `src/Inference/quant_cpu_simd.jl` |
+| `GESSO_QUANT_SIMD` | `src/Inference/quant_cpu_simd.jl`, `test/test_quant_cpu_simd.jl` |
 | `GESSO_QWEN35_08B_DIR` | `test/test_cuda_hybrid.jl`, `test/test_qwen35_hybrid.jl` |
 | `GESSO_QWEN38_27B_GGUF` | `scripts/bench_qwen38_27b.jl`, `scripts/gen_qwen38_27b.jl`, `scripts/julia_runtime/juliac_min_entry.jl`, `scripts/julia_runtime/ttft_probe.jl`, `scripts/profile_qwen38_27b.jl`, `scripts/saluki_bean_bench.jl`, `scripts/saluki_capture_hidden.jl`, `scripts/saluki_combo_bench.jl`, `scripts/saluki_dflash_bench.jl`, `scripts/saluki_draft_bench.jl`, `scripts/saluki_mtp_bench.jl`, `scripts/saluki_window_oracle.jl`, `test/test_qwen35_dense.jl` |
 | `GESSO_QWEN38_27B_IQ2M_GGUF` | `test/test_quant_cpu_iq_s.jl` |
