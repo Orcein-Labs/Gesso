@@ -722,11 +722,15 @@ function _lq_matmul!(Y, X, q::LavaDenseQuant)
     size(Y) == (ntok, q.nrows) || throw(
         DimensionMismatch("lava quant GEMV: dst is $(size(Y)), want $((ntok, q.nrows))"),
     )
-    ntok > 0 && q isa LavaQ8Quant && return _c1_cpu_q80_matmul!(Y, X, q)
-    ntok > 0 &&
-        q isa LavaBlockQuant &&
-        q.kind == _LQ_KIND_Q4_K &&
+    cpu_order = ntok > 0 && _lq_cpu_order()
+    if cpu_order && q isa LavaQ8Quant
+        ntok <= _c1_wg_max(8) && return _c1_cpu_q80_matmul_wg!(Y, X, q)
+        return _c1_cpu_q80_matmul!(Y, X, q)
+    end
+    if cpu_order && q isa LavaBlockQuant && q.kind == _LQ_KIND_Q4_K
+        ntok <= _c1_wg_max(2) && return _c1_cpu_q4k_matmul_wg!(Y, X, q)
         return _c1_cpu_q4k_matmul!(Y, X, q)
+    end
     ntok >= _lq_gemm_min() && return _lq_gemm_prefill!(Y, X, q)
     return _lq_gemv!(Y, X, q)
 end
@@ -769,6 +773,10 @@ end
 # is the cooperative-matrix path when the shape tiles, and the staged GEMM
 # otherwise.
 _lq_gemm_min() = parse(Int, get(ENV, "GESSO_DQ_GEMM_MIN", "32"))
+# Q8_0 and Q4_K go to the CPU-order kernels (ext/lava_quant_cpu_order.jl:
+# thread per output row, CPU summation order) unless this is "0", which uses
+# the subgroup GEMV and dequant GEMM every other quant kind already takes.
+_lq_cpu_order() = get(ENV, "GESSO_LAVA_CPU_ORDER_QUANT", "1") != "0"
 _lq_gemm_scratch_mib() = parse(Int, get(ENV, "GESSO_DQ_GEMM_SCRATCH_MIB", "32"))
 
 # Element e of row r0 + r goes to Wt[r * ne0 + e + 1], so Wt is the (ne0 x rc)
