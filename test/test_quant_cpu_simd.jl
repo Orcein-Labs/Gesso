@@ -319,7 +319,7 @@ end
     if Sys.ARCH === :aarch64
         # NEON is the ARMv8 baseline: the gate is open on every aarch64 host
         @test _QSIMD._cpu_has_simd()
-        if get(ENV, "GESSO_QUANT_SIMD", "1") != "0"
+        if !Gesso.env_disabled(:quant_simd)
             @test _QSIMD.q8k_simd_enabled()
         end
         for (name, ty) in (_QTYPES..., _Q80TYPES...)

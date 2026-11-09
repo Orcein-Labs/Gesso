@@ -108,7 +108,7 @@ else
     end
 
     # Dense path: to_device places the weight; matmul! runs the GEMV (or the
-    # dequant-to-F16 prefill step from ntok >= GESSO_DQ_GEMM_MIN).
+    # dequant-to-F16 prefill step from ntok >= dq_gemm_min).
     function _fnq_dense_matmul(qm, X)
         pw = Gesso.ProjectionWeight(; shape=size(qm), storage=qm)
         emb = Gesso.EmbeddingTable(; shape=(4, 2), storage=ones(Float32, 4, 2))

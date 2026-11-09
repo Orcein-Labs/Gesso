@@ -57,6 +57,10 @@ import Gesso.Inference:
     _add_storage!
 
 using Gesso:
+    env_disabled,
+    env_profile,
+    env_profile_on,
+    env_tune,
     AbstractGessoBackend,
     Activation,
     EmbeddingTable,

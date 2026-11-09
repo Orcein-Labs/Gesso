@@ -34,6 +34,10 @@
 module Inference
 
 using ..Gesso:
+    env_disabled,
+    env_profile,
+    env_profile_on,
+    env_tune,
     AbstractGessoBackend,
     CPUBackend,
     Activation,
@@ -118,7 +122,7 @@ copies host memory, and host Array storage under a non-CPU backend is
 
 _block_mixer(bt) = haskey(bt, :mixer) ? bt.mixer : :full_attention
 
-include("decode_profile.jl")       # GESSO_PROFILE=1 decode stage profiler
+include("decode_profile.jl")       # GESSO_PROFILE=decode stage profiler
 include("kv_format.jl")            # GESSO_KV_FORMAT cache storage: f32, f16, q8, q4h
 include("kv_tier.jl")              # exact row-split attention partials + log-sum-exp merge (CPU)
 include("generate_state.jl")       # KV and GDN state carried between generate calls
@@ -1710,8 +1714,8 @@ end
 # here, so a pass has the device to itself.
 _backend_prefill_pass!(::AbstractGessoBackend, ::Int) = nothing
 
-# GESSO_PREFILL_WINDOW=0 keeps the per-row prefill for A/B timing and oracle checks.
-_prefill_window_enabled() = get(ENV, "GESSO_PREFILL_WINDOW", "1") != "0"
+# GESSO_DISABLE=prefill_window keeps the per-row prefill for A/B timing and oracle checks.
+_prefill_window_enabled() = !env_disabled(:prefill_window)
 
 # The window's GDN blocks run only on the CPU Float32 fast path; any other state
 # keeps the per-row prefill. A dense model has no GDN block to window, and its
@@ -2466,7 +2470,7 @@ function _reference_generate(
         ids = collect(prompt)
         steps = 0
         spec_windows = spec_drafted = spec_accepted = 0
-        timing = get(ENV, "GESSO_TIMING", "") == "1"
+        timing = env_profile_on(:timing)
         if timing
             println(
                 "gesso_timing prefill_ms=$(round((time_ns() - t_prefill) / 1e6; digits=1))",

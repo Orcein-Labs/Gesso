@@ -641,7 +641,7 @@ _lava_host_hold!() = Gesso.Runtime.pool_hold!(_LAVA_HOST_HOLD_NS)
 # host Array) and are never uploaded; x and the router come down, the CPU
 # route runs, and y goes back up. Device expert routing is L3.
 #
-# GESSO_MOE_HOST_EXPERTS=0 means "upload the experts" on CUDA. There is no
+# GESSO_DISABLE=moe_host_experts means "upload the experts" on CUDA. There is no
 # device expert path on Lava yet, so 0 is refused rather than ignored.
 function Gesso.Inference._moe_topk_swiglu!(
     backend::LavaBackend,
@@ -654,10 +654,10 @@ function Gesso.Inference._moe_topk_swiglu!(
     n_used::Int;
     overlap=nothing,
 )
-    get(ENV, "GESSO_MOE_HOST_EXPERTS", "1") == "1" || throw(
+    !env_disabled(:moe_host_experts) || throw(
         gesso_error(
             ERR_INVALID_PLAN,
-            "GESSO_MOE_HOST_EXPERTS=0 has no Lava path yet (device expert routing is L3); " *
+            "GESSO_DISABLE=moe_host_experts has no Lava path yet (device expert routing is L3); " *
             "leave it unset on Lava",
         ),
     )
@@ -673,8 +673,8 @@ function Gesso.Inference._moe_topk_swiglu!(
     # Lava only records dispatches until something flushes, so the shared
     # expert is submitted after x is down and runs on the GPU while the CPU runs
     # the routed experts. It writes neither y nor anything they read.
-    # GESSO_MOE_OVERLAP=0 runs it before the download instead, as CUDA does.
-    ov = overlap !== nothing && get(ENV, "GESSO_MOE_OVERLAP", "1") == "1"
+    # GESSO_DISABLE=moe_overlap runs it before the download instead, as CUDA does.
+    ov = overlap !== nothing && !env_disabled(:moe_overlap)
     ov || overlap === nothing || overlap()
     xh = Gesso.Inference.@decode_stage :moe_d2h backend _lh_host(x)
     if ov

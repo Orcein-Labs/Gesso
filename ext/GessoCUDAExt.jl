@@ -72,6 +72,10 @@ import Gesso.Inference:
     _fallback_zeros_factory
 
 using Gesso:
+    env_disabled,
+    env_profile,
+    env_profile_on,
+    env_tune,
     AbstractGessoBackend,
     Activation,
     EmbeddingTable,

@@ -135,7 +135,7 @@ else
         nl = _HOT_EXT._LHOT_NLAYERS[]
         _HOT_EXT._LHOT_NLAYERS[] = 0
         try
-            withenv("GESSO_GPU_HOT_EXPERTS" => "1", "GESSO_GPU_HOT_EXPERTS_MIB" => string(mib)) do
+            withenv("GESSO_TUNE" => "lava_hot_experts=1,hot_mib=$mib") do
                 f()
             end
         finally

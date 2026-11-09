@@ -1,4 +1,4 @@
-# Hot host experts in VRAM (on by default; GESSO_GPU_HOT_EXPERTS=0 disables).
+# Hot host experts in VRAM (on by default; GESSO_DISABLE=hot_experts turns it off).
 #
 # MoE layers whose expert slabs stay on the host run their experts on the CPU.
 # On Ornith-35B that is about 16 ms of a 28 ms token, and it is bound by the
@@ -19,7 +19,7 @@
 # host would otherwise spend idle.
 #
 # By default each hot layer's slabs move into page-locked anonymous memory
-# (GESSO_GPU_HOT_PIN=0 opts out; a file mmap cannot be registered with the
+# (GESSO_DISABLE=hot_pin opts out; a file mmap cannot be registered with the
 # driver). A swap is then three async DMA copies with no host memcpy. On a
 # single-channel host the staged copy read and wrote each expert through DRAM
 # before the DMA read it a third time, while the CPU experts competed for the
@@ -28,7 +28,7 @@
 # Hits use the GPU kernels (q8_1 activations) and misses the CPU ones (Q8_K),
 # so the output rounds differently from the all-CPU path.
 
-_hot_experts_enabled() = get(ENV, "GESSO_GPU_HOT_EXPERTS", "1") == "1"
+_hot_experts_enabled() = !env_disabled(:hot_experts)
 
 # Left free on the card for the desktop or compositor: a full card has crashed
 # the browser with an NVRM OOM. A prefill that runs short releases pools
@@ -43,25 +43,17 @@ function _hot_env_int(name, default)
     return v
 end
 
-function _hot_env_float(name, default)
-    raw = strip(get(ENV, name, ""))
-    isempty(raw) && return default
-    v = tryparse(Float64, raw)
-    v === nothing && error("$name must be a number, got '$raw'")
-    return v
-end
-
-# GESSO_GPU_HOT_EXPERTS_MIB when set, else the free device memory after
-# placement minus GESSO_GPU_HOT_RESERVE_MIB.
+# GESSO_TUNE=hot_mib=N when set, else the free device memory after
+# placement minus GESSO_GPU_RESERVE_MIB.
 function _hot_budget_bytes()
     mib = Int64(1024 * 1024)
-    fixed = _hot_env_int("GESSO_GPU_HOT_EXPERTS_MIB", -1)
+    fixed = env_tune(:hot_mib, -1)
     fixed >= 0 && return Int64(fixed) * mib
     CUDA.reclaim(CUDA.CUDACore.RECLAIM_GC)
     return _expert_budget_from_free(_cuda_free_for_budget(), _hot_reserve_mib())
 end
 
-_hot_reserve_mib() = _hot_env_int("GESSO_GPU_HOT_RESERVE_MIB", _HOT_RESERVE_DEFAULT_MIB)
+_hot_reserve_mib() = _hot_env_int("GESSO_GPU_RESERVE_MIB", _HOT_RESERVE_DEFAULT_MIB)
 # Room promised to everything else on the card: a desktop crashed on a full
 # one. Pools are sized against it at load, but a long prompt's KV is allocated
 # later, so every pool allocation and prefill pass checks it again.
@@ -75,10 +67,10 @@ struct _HotConfig
 end
 
 _hot_config() = _HotConfig(
-    Float32(_hot_env_float("GESSO_GPU_HOT_DECAY", 0.99)),
-    max(1, _hot_env_int("GESSO_GPU_HOT_FILL", 2)),
-    _hot_env_int("GESSO_GPU_HOT_PREFILL_KEEP", typemax(Int)),
-    Float32(_hot_env_float("GESSO_GPU_HOT_MARGIN", 1.0)),
+    Float32(env_tune(:hot_decay, 0.99)),
+    max(1, env_tune(:hot_fill, 2)),
+    env_tune(:hot_prefill_keep, typemax(Int)),
+    Float32(env_tune(:hot_margin, 1.0)),
 )
 
 # One slot holds an expert's gate, up and down rows back to back. The three
@@ -269,7 +261,7 @@ function _hot_register!(blocks)
     triples = filter(t -> _hot_supported(t[2], t[3], t[4]), _moe_expert_triples(blocks))
     isempty(triples) && return
     per_layer = div(_hot_budget_bytes(), Int64(length(triples)))
-    pin = get(ENV, "GESSO_GPU_HOT_PIN", "1") == "1"
+    pin = !env_disabled(:hot_pin)
     slots = Int[]
     for (li, g, u, d) in triples
         stride = g.bytes_per_expert + u.bytes_per_expert + d.bytes_per_expert
@@ -722,8 +714,9 @@ end
 # pairs leave the CPU: on a 1024-token prompt the CPU takes ~0.5 s over such a
 # layer, the uploads and GEMVs tens of ms.
 #
-# GESSO_GPU_HOT_PREFILL=0 keeps hot-layer prefill on the CPU. The cost model's
-# rates are tunable: _GBPS (PCIe), _EXPERT_US and _PAIR_US (CPU).
+# GESSO_DISABLE=hot_prefill keeps hot-layer prefill on the CPU. The cost model's
+# rates are tunable: GESSO_TUNE=hot_prefill_gbps (PCIe), hot_prefill_expert_us and
+# hot_prefill_pair_us (CPU).
 struct _HotPrefillConfig
     on::Bool
     max_seq::Int        # longer prompts stay on the CPU; D holds h floats per pair
@@ -737,15 +730,15 @@ struct _HotPrefillConfig
 end
 
 _hot_prefill_config() = _HotPrefillConfig(
-    get(ENV, "GESSO_GPU_HOT_PREFILL", "1") == "1",
-    min(_hot_env_int("GESSO_GPU_HOT_PREFILL_MAX_SEQ", 4096), 65535),
-    max(1, _hot_env_int("GESSO_GPU_HOT_PREFILL_ROUND", 16)),
-    clamp(_hot_env_int("GESSO_GPU_HOT_PREFILL_SEG", 1024), 1, 65535),
-    1 / (1e9 * _hot_env_float("GESSO_GPU_HOT_PREFILL_GBPS", 6.5)),
-    1e-6 * _hot_env_float("GESSO_GPU_HOT_PREFILL_EXPERT_US", 70),
-    1e-6 * _hot_env_float("GESSO_GPU_HOT_PREFILL_PAIR_US", 45),
-    1024 * max(0, _hot_env_int("GESSO_GPU_HOT_PREFILL_HEADROOM_KIB", 768)),
-    max(0, _hot_env_int("GESSO_GPU_HOT_PREFILL_STREAM", 32)),
+    !env_disabled(:hot_prefill),
+    min(env_tune(:hot_prefill_max_seq, 4096), 65535),
+    max(1, env_tune(:hot_prefill_round, 16)),
+    clamp(env_tune(:hot_prefill_seg, 1024), 1, 65535),
+    1 / (1e9 * env_tune(:hot_prefill_gbps, 6.5)),
+    1e-6 * env_tune(:hot_prefill_expert_us, 70.0),
+    1e-6 * env_tune(:hot_prefill_pair_us, 45.0),
+    1024 * max(0, env_tune(:hot_prefill_headroom_kib, 768)),
+    max(0, env_tune(:hot_prefill_stream, 32)),
 )
 
 const _HOT_PF_CFG =

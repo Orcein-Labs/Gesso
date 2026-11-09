@@ -1310,17 +1310,17 @@ Config-agnostic: geometry is whatever the tensors carry, so Ornith
 256/8, Xing 64/4, and Gemma4 128/8 share this path.
 """
 # Device element type for dense projection and tied-table weights.
-# GESSO_GPU_WEIGHT_DTYPE=f16 (default) stores them as CuArray{Float16} and the
+# GESSO_TUNE=cuda_weight_dtype=f16 (default) stores them as CuArray{Float16} and the
 # matmul accumulates in Float32; f32 keeps the exact F32 device path. Norms,
 # biases and other small parameters stay F32 either way. F16 exists only on
 # the device: the host copy is always F32.
-_moe_host_experts_enabled() = get(ENV, "GESSO_MOE_HOST_EXPERTS", "1") == "1"
+_moe_host_experts_enabled() = !env_disabled(:moe_host_experts)
 
 function _gpu_weight_eltype()
-    raw = lowercase(strip(get(ENV, "GESSO_GPU_WEIGHT_DTYPE", "f16")))
+    raw = lowercase(env_tune(:cuda_weight_dtype, "f16"))
     raw == "f16" && return Float16
     raw == "f32" && return Float32
-    throw(ArgumentError("GESSO_GPU_WEIGHT_DTYPE must be f16 or f32, got '$raw'"))
+    throw(ArgumentError("GESSO_TUNE cuda_weight_dtype must be f16 or f32, got '$raw'"))
 end
 
 # Matrices below this many elements keep F32 (small routers and gates; their
@@ -1501,7 +1501,7 @@ function _to_device_cuda(tensors)
         Int64(CUDA.free_memory()),
         Int64(1024 * 1024),
     )
-    # Opt-in (GESSO_GPU_EXPERT_CACHE=1) until misses run on the CPU: with
+    # Opt-in (GESSO_TUNE=cuda_expert_cache=1) until misses run on the CPU: with
     # misses uploaded, the cache measured slower than whole-slab placement.
     use_cache = _expert_cache_enabled()
     all_triples = _moe_expert_triples(tensors.blocks)
@@ -1590,21 +1590,16 @@ end
 
 const _EXPERT_RESERVE_DEFAULT_MIB = 1024
 
-_expert_cache_enabled() = get(ENV, "GESSO_GPU_EXPERT_CACHE", "0") == "1"
+_expert_cache_enabled() = env_tune(:cuda_expert_cache, false)
 
-# Device bytes for expert slot pools: GESSO_GPU_EXPERT_CACHE_MIB when set (0
+# Device bytes for expert slot pools: GESSO_TUNE=cuda_expert_cache_mib when set (0
 # disables residency, every expert misses), else free device memory now minus
 # GESSO_GPU_RESERVE_MIB (default 1024) for activations, KV and scratch. Called
 # after dense placement, so the free figure already reflects dense weights.
 function _expert_cache_budget_bytes()
     mib = Int64(1024 * 1024)
-    raw = strip(get(ENV, "GESSO_GPU_EXPERT_CACHE_MIB", ""))
-    if !isempty(raw)
-        v = tryparse(Int, raw)
-        v === nothing &&
-            error("GESSO_GPU_EXPERT_CACHE_MIB must be an integer MiB, got '$raw'")
-        return Int64(max(0, v)) * mib
-    end
+    v = env_tune(:cuda_expert_cache_mib, -1)
+    v >= 0 && return Int64(v) * mib
     rraw = strip(get(ENV, "GESSO_GPU_RESERVE_MIB", string(_EXPERT_RESERVE_DEFAULT_MIB)))
     reserve = tryparse(Int, rraw)
     reserve === nothing &&
@@ -1651,12 +1646,12 @@ function _moe_expert_triples(blocks)
     return out
 end
 
-# Fill each layer's pools from the profile (GESSO_EXPERT_PROFILE) or by id,
+# Fill each layer's pools from the profile (GESSO_PROFILE=expert=PATH) or by id,
 # then bind the three projections of every layer to one residency table.
 function _place_expert_caches!(conv, triples; budget::Int64=_expert_cache_budget_bytes())
     isempty(triples) && return conv
     Inf_ = Gesso.Inference
-    prof_path = get(ENV, "GESSO_EXPERT_PROFILE", "")
+    prof_path = something(env_profile(:expert), "")
     profile = isempty(prof_path) ? nothing : Inf_.read_expert_profile(prof_path)
     per_layer = div(budget, Int64(length(triples)))
     slots_log = Int[]
@@ -1874,7 +1869,7 @@ end
 # consecutive tokens, so every core/z/merged access is coalesced, and a head's
 # dv values stay in one thread so no block reduction is needed. Replaces about
 # 5 launches per head per layer (57 ms of a 35B P256 prefill).
-# GESSO_GDN_PREFILL_GNORM=0 runs the per-head loop again.
+# GESSO_DISABLE=gdn_prefill_gnorm runs the per-head loop again.
 function _cuda_gdn_gnorm_prefill_kernel!(merged, core, z, norm_w, dv::Int, eps::Float32)
     t = Int((blockIdx().x - 1) * blockDim().x + threadIdx().x)
     hh = Int(blockIdx().y)
@@ -1901,7 +1896,7 @@ function _gdn_gnorm_merge!(
     scale,
     eps,
 )
-    get(ENV, "GESSO_GDN_PREFILL_GNORM", "1") == "1" || return false
+    env_disabled(:gdn_prefill_gnorm) && return false
     seq, nv, dv = size(core)
     seq == 0 && return true
     norm_w = _cuda_materialize_small(scale.storage)
@@ -2095,9 +2090,9 @@ end
 # chunk is prefetched into registers while the current one is computed. The
 # q and k l2 norms come from a separate coalesced kernel, not the recurrence.
 # The sums run in a different order from the CPU reference, so results agree
-# to rounding, not bitwise. GESSO_GDN_RECUR_REG=0 restores the shared-memory
+# to rounding, not bitwise. GESSO_DISABLE=gdn_recur_reg restores the shared-memory
 # kernel above.
-_gdn_recur_reg_enabled() = get(ENV, "GESSO_GDN_RECUR_REG", "1") == "1"
+_gdn_recur_reg_enabled() = !env_disabled(:gdn_recur_reg)
 
 # One block per (32-token tile, k head), 32 x 8 threads, coalesced along t.
 # The 8 threads of a token split the head's dk columns of k and q.
@@ -3163,8 +3158,8 @@ _moe_host_event() = get!(
     CUDA.deviceid(CUDA.device()),
 )
 
-# GESSO_MOE_OVERLAP=0 runs the shared expert after the copies land instead, for A/B.
-_moe_overlap_enabled() = get(ENV, "GESSO_MOE_OVERLAP", "1") == "1"
+# GESSO_DISABLE=moe_overlap runs the shared expert after the copies land instead, for A/B.
+_moe_overlap_enabled() = !env_disabled(:moe_overlap)
 
 # How long the CPU pool stays hot after a host-expert layer. It must cover the
 # GPU work up to the next host-expert layer (about 1 to 2 ms on the 35B); a
@@ -3421,8 +3416,8 @@ end
 # a logits D2H the host waits on, then the expert table, the weights and three
 # metadata blocks back up, all in every GPU MoE layer. That is 19 host
 # round trips per Ornith-35B token, and each one stops the host queueing work
-# ahead of the GPU. GESSO_MOE_DEVICE_ROUTE=0 restores the host route.
-_moe_device_route_enabled() = get(ENV, "GESSO_MOE_DEVICE_ROUTE", "1") == "1"
+# ahead of the GPU. GESSO_DISABLE=moe_device_route restores the host route.
+_moe_device_route_enabled() = !env_disabled(:moe_device_route)
 
 const _MOE_ROUTE_MAX_EXP = 1024
 const _MOE_ROUTE_MAX_USED = 32
@@ -3601,7 +3596,7 @@ end
 # E, W and its return. The host spent about 5 us of exp and sort per token per
 # layer on this (170 to 340 ms of a P256 prefill on the Ornith-35B), and the
 # table is a sixteenth the size of the logits it replaces on the bus.
-# GESSO_MOE_PREFILL_ROUTE=0 routes on the host again.
+# GESSO_DISABLE=moe_prefill_route routes on the host again.
 function _moe_route_rows_kernel!(R, logits, n_exp::Int32, n_used::Int32)
     @_moe_route_shared
     t = Int(blockIdx().x)
@@ -3622,7 +3617,7 @@ function _moe_route_rows_kernel!(R, logits, n_exp::Int32, n_used::Int32)
 end
 
 _moe_prefill_route_ok(n_exp::Int, n_used::Int) =
-    get(ENV, "GESSO_MOE_PREFILL_ROUTE", "1") == "1" &&
+    !env_disabled(:moe_prefill_route) &&
     n_exp <= _MOE_ROUTE_MAX_EXP &&
     n_used <= _MOE_ROUTE_MAX_USED
 
@@ -3771,11 +3766,11 @@ end
 # expert's weights stay in L2 across the tokens that picked it. Each pair goes
 # through the same kernels as the token loop and the combine sums a token's
 # experts in k order, so the result matches the loop bit for bit.
-# GESSO_MOE_DEVICE_PREFILL=0 restores the token loop.
-_moe_device_prefill_enabled() = get(ENV, "GESSO_MOE_DEVICE_PREFILL", "1") == "1"
+# GESSO_DISABLE=moe_device_prefill restores the token loop.
+_moe_device_prefill_enabled() = !env_disabled(:moe_device_prefill)
 
 # Tokens per launch group. Bounds the D buffer at h * chunk * n_used floats.
-_moe_device_prefill_chunk() = parse(Int, get(ENV, "GESSO_MOE_DEVICE_PREFILL_CHUNK", "512"))
+_moe_device_prefill_chunk() = env_tune(:moe_device_prefill_chunk, 512)
 
 const _MOE_PAIR_SEG = 1024
 
@@ -4112,7 +4107,7 @@ function _moe_topk_swiglu!(
 
     # Banks that are mmap'd on the host (GgufQuantSlice in all three slabs)
     # run on the CPU; only the activation goes D2H and the output goes H2D.
-    # Default on; GESSO_MOE_HOST_EXPERTS=0 uploads the active experts instead.
+    # Default on; GESSO_DISABLE=moe_host_experts uploads the active experts instead.
     # Ornith-35B Q2_K_XL, warm profile: host mode 132 ms/token (moe_host 35.9 ms
     # over 21 calls) against 477 ms/token before the batched Q8_K host path.
     # Gate decode: 8.48 tok/s host vs 6.80 tok/s upload, both ids_ok=true.

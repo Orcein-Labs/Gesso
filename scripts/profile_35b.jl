@@ -11,8 +11,8 @@
 # GESSO_WALL_TOKENS (unprofiled decode tokens timed, default 16),
 # GESSO_PROFILE_CTX (prompt length, default 1; longer prompts are real text
 # from GESSO_PROFILE_TEXT, repeated, so decode runs against a filled KV cache).
-# The engine switches are read as usual: GESSO_GPU_WEIGHT_DTYPE (f16 default),
-# GESSO_MOE_HOST_EXPERTS (0 default).
+# The engine switches are read as usual: GESSO_TUNE=cuda_weight_dtype (f16 default)
+# and GESSO_DISABLE=moe_host_experts (host experts on by default).
 #
 # Three phases, one process:
 #   1. JIT warm: two tokens, profiler off (compiles the decode path).
@@ -82,8 +82,8 @@ gen(n) = Gesso.reference_generate(
     backend=backend,
 )
 
-dtype = get(ENV, "GESSO_GPU_WEIGHT_DTYPE", "f16")
-moe_host = get(ENV, "GESSO_MOE_HOST_EXPERTS", "0")
+dtype = Gesso.env_tune(:cuda_weight_dtype, "f16")
+moe_host = Gesso.env_disabled(:moe_host_experts) ? "0" : "1"
 
 # The reference sequence is checked teacher-forced, not by greedy ids: step 2
 # is a near-tie (271 over 353 by 0.016 logits on the byte-wise Q8_0 kernel),

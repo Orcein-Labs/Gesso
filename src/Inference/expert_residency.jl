@@ -162,7 +162,7 @@ function read_expert_profile(path::AbstractString)
     return prof
 end
 
-# --- routing trace (GESSO_ROUTING_TRACE=<path>) ----------------------------
+# --- routing trace (GESSO_PROFILE=routing=<path>) ----------------------------
 #
 # One line per (layer, token row): `layer token_index id_1 ... id_k`, ids in
 # routing rank order. `token_index` counts rows per layer. Opt-in and recorded
@@ -174,12 +174,12 @@ const _ROUTING_TRACE_IO = Ref{Any}(:unset)
 """
     routing_trace_io() -> IO or nothing
 
-The trace stream when `GESSO_ROUTING_TRACE` is set, else `nothing`.
+The trace stream when `GESSO_PROFILE` lists `routing=<path>`, else `nothing`.
 """
 function routing_trace_io()
     io = _ROUTING_TRACE_IO[]
     io === :unset || return io
-    path = get(ENV, "GESSO_ROUTING_TRACE", "")
+    path = something(env_profile(:routing), "")
     io = isempty(path) ? nothing : open(path, "w")
     _ROUTING_TRACE_IO[] = io
     return io

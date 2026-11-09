@@ -1,4 +1,4 @@
-# Opt-in decode stage profiler (env GESSO_PROFILE=1, read once at load).
+# Opt-in decode stage profiler (GESSO_PROFILE=decode, read once at load).
 #
 # Off (the default): each stage site is one read of a const Ref and one
 # branch. Nothing is allocated and no backend sync is issued.
@@ -125,8 +125,8 @@ end
 const _PROFILE = Ref{Union{Nothing, DecodeProfile}}(nothing)
 
 function __init__()
-    get(ENV, "GESSO_PROFILE", "") == "1" && profile_enable!()
-    get(ENV, "GESSO_PREFILL_PROFILE", "") == "1" && prefill_profile_enable!()
+    env_profile_on(:decode) && profile_enable!()
+    env_profile_on(:prefill) && prefill_profile_enable!()
     return nothing
 end
 
@@ -143,7 +143,7 @@ profile_disable!() = (_PROFILE[]=nothing; nothing)
 function _profile_current()
     p = _PROFILE[]
     p === nothing &&
-        error("decode profile is not enabled (set GESSO_PROFILE=1 or call profile_enable!)")
+        error("decode profile is not enabled (set GESSO_PROFILE=decode or call profile_enable!)")
     return p
 end
 
@@ -417,7 +417,7 @@ function print_token_log(io::IO, p::DecodeProfile)
     return nothing
 end
 
-# Prefill profiler (env GESSO_PREFILL_PROFILE=1, read once at load).
+# Prefill profiler (GESSO_PROFILE=prefill, read once at load).
 #
 # Each prefill pass is its own window. The stage macros above accumulate into
 # `_PROFILE[]`, so a pass swaps that Ref to a private DecodeProfile for its

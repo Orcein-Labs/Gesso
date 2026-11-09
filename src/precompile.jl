@@ -5,7 +5,7 @@
 #
 # Deps are stdlibs plus JSON, so this is written by hand rather than with
 # PrecompileTools. It runs only while generating output, and
-# GESSO_PRECOMPILE_WORKLOAD=0 at build time skips it.
+# GESSO_DISABLE=precompile_workload at build time skips it.
 #
 # The workload must not leave state in the image. Lazily cached settings (SIMD
 # and pool modes start at -1 and read ENV on first use), scratch buffers, the
@@ -617,7 +617,7 @@ function _run_precompile_workload()
     return nothing
 end
 
-if ccall(:jl_generating_output, Cint, ()) == 1 && get(ENV, "GESSO_PRECOMPILE_WORKLOAD", "1") != "0"
+if ccall(:jl_generating_output, Cint, ()) == 1 && !env_disabled(:precompile_workload)
     let
         Base.Experimental.@force_compile
         _run_precompile_workload()

@@ -18,7 +18,7 @@
 # a Core.Box, which is the boxing the pool exists to avoid.
 #
 # Workers. The pool holds participants-1 worker tasks, started on first use.
-# A worker spins on the generation word for GESSO_CPU_POOL_SPIN_US (default
+# A worker spins on the generation word for GESSO_TUNE=cpu_pool_spin_us (default
 # 200) after each job, then parks on a Condition. A parked pool costs no CPU.
 # The spin keeps back-to-back calls off the wake path. The spin is also the
 # most CPU a burst can leave behind: at most workers x spin per burst.
@@ -49,7 +49,6 @@ using LinearAlgebra: BLAS
 
 const CPU_POOL_MAX_PARTICIPANTS = 18
 const CPU_POOL_THREADS_ENV = "GESSO_CPU_POOL_THREADS"
-const CPU_POOL_SPIN_ENV = "GESSO_CPU_POOL_SPIN_US"
 const CPU_POOL_DEFAULT_SPIN_US = 200
 const _CPU_POOL_HOLD_YIELD_NS = UInt64(50_000)
 const _CPU_POOL_IDX_MASK = UInt64(0xffff_ffff)
@@ -257,10 +256,7 @@ function _cpu_pool()::CPUPool
     return lock(_CPU_POOL_LOCK) do
         q = _CPU_POOL_SLOT.pool
         if q === nothing
-            spin_us = something(
-                _cpu_pool_env_int(CPU_POOL_SPIN_ENV; minimum=0),
-                CPU_POOL_DEFAULT_SPIN_US,
-            )
+            spin_us = max(0, env_tune(:cpu_pool_spin_us, CPU_POOL_DEFAULT_SPIN_US))
             n = _cpu_pool_participants()
             nb = _cpu_pool_blas_cap(; participants=n)
             nb === nothing || BLAS.set_num_threads(nb)

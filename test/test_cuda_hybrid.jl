@@ -44,16 +44,16 @@ else
 
     @testset "cuda F16 projection weights: placement and matmul" begin
         # placement: a >=1M-element projection is F16 on device by default,
-        # F32 under GESSO_GPU_WEIGHT_DTYPE=f32, and the host copy stays F32
+        # F32 under GESSO_TUNE=cuda_weight_dtype=f32, and the host copy stays F32
         big =
             Gesso.ProjectionWeight(; shape=(1024, 1024), storage=ones(Float32, 1024, 1024))
         ts = (; embedding=big, blocks=[(; w=big)], lm_head=big)
-        withenv("GESSO_GPU_WEIGHT_DTYPE" => "f16") do
+        withenv("GESSO_TUNE" => "cuda_weight_dtype=f16") do
             gpu = withenv(() -> Gesso.to_device(cuda, ts), "GESSO_GPU_BUDGET_MIB" => "4800")
             @test gpu.lm_head.storage isa CUDA.CuArray{Float16}
             @test big.storage isa Array{Float32}
         end
-        withenv("GESSO_GPU_WEIGHT_DTYPE" => "f32") do
+        withenv("GESSO_TUNE" => "cuda_weight_dtype=f32") do
             gpu = withenv(() -> Gesso.to_device(cuda, ts), "GESSO_GPU_BUDGET_MIB" => "4800")
             @test gpu.lm_head.storage isa CUDA.CuArray{Float32}
         end
@@ -362,7 +362,7 @@ else
             )
             out_g = CUDA.zeros(Float32, seq, nv, dv)
             st_g = CuArray{Float32}(st0)
-            withenv("GESSO_GDN_RECUR_REG" => reg) do
+            withenv("GESSO_DISABLE" => (reg == "0" ? "gdn_recur_reg" : nothing)) do
                 Inf_._gated_delta_rule!(
                     cuda,
                     out_g,

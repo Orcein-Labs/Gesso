@@ -767,17 +767,17 @@ end
 
 # --- prefill GEMM ----------------------------------------------------------------
 # The GEMV decodes each weight once per token, so a 256-token prefill decodes
-# every weight 256 times. From GESSO_DQ_GEMM_MIN tokens on (the same default as the CUDA path),
-# W is dequantized to F16 in row chunks, capped by GESSO_DQ_GEMM_SCRATCH_MIB,
+# every weight 256 times. From GESSO_TUNE=dq_gemm_min tokens on (the same default as the CUDA path),
+# W is dequantized to F16 in row chunks, capped by GESSO_TUNE=dq_gemm_scratch_mib,
 # and Lava's mul! multiplies it with an F16 copy of X into an F32 result. That
 # is the cooperative-matrix path when the shape tiles, and the staged GEMM
 # otherwise.
-_lq_gemm_min() = parse(Int, get(ENV, "GESSO_DQ_GEMM_MIN", "32"))
+_lq_gemm_min() = env_tune(:dq_gemm_min, 32)
 # Q8_0 and Q4_K go to the CPU-order kernels (ext/lava_quant_cpu_order.jl:
 # thread per output row, CPU summation order) unless this is "0", which uses
 # the subgroup GEMV and dequant GEMM every other quant kind already takes.
 _lq_cpu_order() = get(ENV, "GESSO_LAVA_CPU_ORDER_QUANT", "1") != "0"
-_lq_gemm_scratch_mib() = parse(Int, get(ENV, "GESSO_DQ_GEMM_SCRATCH_MIB", "32"))
+_lq_gemm_scratch_mib() = env_tune(:dq_gemm_scratch_mib, 32)
 
 # Element e of row r0 + r goes to Wt[r * ne0 + e + 1], so Wt is the (ne0 x rc)
 # column-major matrix whose columns are the chunk's rows.

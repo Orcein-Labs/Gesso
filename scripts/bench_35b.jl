@@ -83,8 +83,8 @@ timed_generate(prompt_of(64), 4)
 ids_io = isempty(IDS_OUT) ? nothing : open(IDS_OUT, "w")
 println(
     "RECEIPT bench_35b load backend=$which threads=$(Threads.nthreads()) load_s=$(round(t_load; digits=1)) ",
-    "kv=$(get(ENV, "GESSO_KV_FORMAT", "default")) hot=$(get(ENV, "GESSO_GPU_HOT_EXPERTS", "1")) ",
-    "hot_mib=$(get(ENV, "GESSO_GPU_HOT_EXPERTS_MIB", "auto")) model=$(basename(GGUF))",
+    "kv=$(get(ENV, "GESSO_KV_FORMAT", "default")) disable=$(get(ENV, "GESSO_DISABLE", "")) ",
+    "tune=$(get(ENV, "GESSO_TUNE", "")) model=$(basename(GGUF))",
 )
 for P in CONTEXTS
     prompt = prompt_of(P)

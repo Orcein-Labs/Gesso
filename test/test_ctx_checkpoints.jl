@@ -24,7 +24,7 @@ function _ck_run(ts, prompt; every::Int, window::Bool)
     st = GenerateState(64)
     g = _with_env(
         "GESSO_CTX_CHECKPOINT_EVERY" => string(every),
-        "GESSO_PREFILL_WINDOW" => window ? "1" : "0",
+        "GESSO_DISABLE" => window ? "" : "prefill_window",
     ) do
         reference_generate(ts.model, ts, prompt; max_new_tokens=3, state=st)
     end

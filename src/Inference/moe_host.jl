@@ -329,7 +329,7 @@ end
 # the row's unpacking is shared across a tile; each column of that kernel is
 # bit-equal to `_dot_q8k` on the same Q8_K activation (quant_cpu_multi.jl). Each
 # token's weighted sum still runs in k order, so the result matches the token
-# loop bit for bit. GESSO_PREFILL_MULTI=0 restores one `_dot_q8k` per pair.
+# loop bit for bit. GESSO_DISABLE=prefill_multi restores one `_dot_q8k` per pair.
 
 """
     MoePrefillScratch

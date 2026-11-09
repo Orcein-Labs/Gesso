@@ -548,8 +548,8 @@ function main()
         source=realpath(pkgdir(Gesso))
         source==repo || error("active Gesso source differs from GESSO_REPO")
         backend_name=="lava" &&
-            get(ENV, "GESSO_MOE_HOST_EXPERTS", "1")!="1" &&
-            error("Lava requires GESSO_MOE_HOST_EXPERTS=1")
+            Gesso.env_disabled(:moe_host_experts) &&
+            error("Lava requires host experts: remove moe_host_experts from GESSO_DISABLE")
         oracle_path=strip(get(ENV, "GESSO_L1_ORACLE", ""))
         oracle_out=strip(get(ENV, "GESSO_L1_ORACLE_OUT", ""))
         if role=="oracle"
@@ -623,8 +623,8 @@ function main()
                     cancel_after=ca,
                     recovery_tokens=rt,
                 ),
-                moe_overlap=get(ENV, "GESSO_MOE_OVERLAP", "default"),
-                prefill_multi=get(ENV, "GESSO_PREFILL_MULTI", "default"),
+                moe_overlap=!Gesso.env_disabled(:moe_overlap),
+                prefill_multi=!Gesso.env_disabled(:prefill_multi),
                 rms_norm_eps=Float64(spec.rms_norm_eps),
             ),
         )

@@ -1,10 +1,10 @@
-# Turn a routing trace (GESSO_ROUTING_TRACE) into a ranked expert profile.
+# Turn a routing trace (GESSO_PROFILE=routing=PATH) into a ranked expert profile.
 #
 #   julia scripts/routing_profile.jl <trace> <profile-out>
 #
 # Trace lines: `layer token id_1 ... id_k` (one per layer per token row).
 # Profile lines: `layer expert count`, sorted by layer, then count descending,
-# then expert id. Feed the profile back with GESSO_EXPERT_PROFILE=<profile-out>.
+# then expert id. Feed the profile back with GESSO_PROFILE=expert=<profile-out>.
 # Pure Julia, no packages, no GPU.
 
 length(ARGS) == 2 || error("usage: julia scripts/routing_profile.jl <trace> <profile-out>")

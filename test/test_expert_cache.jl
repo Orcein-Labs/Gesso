@@ -69,7 +69,7 @@ end
     hdr = (data=data, data_start=4096 + 32, path=path)
     @test _EC_Inf._prefault_gguf_data!(hdr) === (Sys.islinux() ? :done : :off)
     @test data == bytes
-    withenv("GESSO_PREFAULT" => "0") do
+    withenv("GESSO_DISABLE" => "prefault") do
         @test _EC_Inf._prefault_gguf_data!(hdr) === :off
     end
     @test _EC_Inf._prefault_gguf_data!((data=data, data_start=length(data), path=path)) === :off
@@ -186,7 +186,7 @@ else
     # Host experts are the default for GgufQuantSlice banks since bb1b15b; the
     # cached path runs on device, so the reference must too for `==` to hold.
     y_ref = CUDA.zeros(Float32, seq, h)
-    withenv("GESSO_MOE_HOST_EXPERTS" => "0") do
+    withenv("GESSO_DISABLE" => "moe_host_experts") do
         Gesso.Inference._moe_topk_swiglu!(
             cuda,
             y_ref,
@@ -216,7 +216,7 @@ else
             end
             conv = IdDict{Any, Any}()
             withenv(
-                "GESSO_EXPERT_PROFILE" => (isempty(profile_path) ? nothing : profile_path),
+                "GESSO_PROFILE" => (isempty(profile_path) ? nothing : "expert=$profile_path"),
             ) do
                 ext._place_expert_caches!(conv, [(1, gate, up, down)]; budget=budget_bytes)
             end
@@ -287,24 +287,24 @@ else
     end
 
     @testset "device expert cache: budget env and fallbacks" begin
-        withenv("GESSO_GPU_EXPERT_CACHE" => nothing) do
+        withenv("GESSO_TUNE" => nothing) do
             @test !ext._expert_cache_enabled()   # opt-in: whole-slab placement is the default
         end
-        withenv("GESSO_GPU_EXPERT_CACHE" => "1") do
+        withenv("GESSO_TUNE" => "cuda_expert_cache=1") do
             @test ext._expert_cache_enabled()
         end
-        withenv("GESSO_GPU_EXPERT_CACHE_MIB" => "0") do
+        withenv("GESSO_TUNE" => "cuda_expert_cache_mib=0") do
             @test ext._expert_cache_budget_bytes() == 0
         end
-        withenv("GESSO_GPU_EXPERT_CACHE_MIB" => "3") do
+        withenv("GESSO_TUNE" => "cuda_expert_cache_mib=3") do
             @test ext._expert_cache_budget_bytes() == Int64(3) * 1024 * 1024
         end
-        withenv("GESSO_GPU_EXPERT_CACHE_MIB" => "not-a-number") do
+        withenv("GESSO_TUNE" => "cuda_expert_cache_mib=not-a-number") do
             @test_throws ErrorException ext._expert_cache_budget_bytes()
         end
         # with no override the budget is free memory minus the reserve, never negative
         withenv(
-            "GESSO_GPU_EXPERT_CACHE_MIB" => nothing,
+            "GESSO_TUNE" => nothing,
             "GESSO_GPU_RESERVE_MIB" => "1048576",
         ) do
             @test ext._expert_cache_budget_bytes() == 0

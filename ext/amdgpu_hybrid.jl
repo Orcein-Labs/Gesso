@@ -792,10 +792,10 @@ function Gesso.Inference._moe_topk_swiglu!(
     n_used::Int;
     overlap=nothing,
 )
-    get(ENV, "GESSO_MOE_HOST_EXPERTS", "1") == "1" || throw(
+    !env_disabled(:moe_host_experts) || throw(
         gesso_error(
             ERR_INVALID_PLAN,
-            "GESSO_MOE_HOST_EXPERTS=0 has no $(backend_name(bk)) path yet " *
+            "GESSO_DISABLE=moe_host_experts has no $(backend_name(bk)) path yet " *
             "(device expert routing is not ported); leave it unset",
         ),
     )

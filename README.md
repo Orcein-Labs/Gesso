@@ -49,10 +49,10 @@ The baseline is llama.cpp's CUDA build on the same machine:
 prompt.
 
 **Decode (CUDA comparator path).** Gesso on CUDA with default settings runs at
-27-29 ms per token, against llama.cpp's 30.5 ms. Hot experts are opt-in and
-exist only on the CUDA path (`GESSO_GPU_HOT_EXPERTS=1 GESSO_GPU_HOT_PIN=1`).
-They keep the most-used host experts in a VRAM pool, and decode speed then
-holds up as the context grows:
+27-29 ms per token without hot experts (`GESSO_DISABLE=hot_experts`),
+against llama.cpp's 30.5 ms. Hot experts are on by default on CUDA and opt-in
+on Lava (`GESSO_TUNE=lava_hot_experts=1`). They keep the most-used host
+experts in a VRAM pool, and decode speed then holds up as the context grows:
 
 | Context | ms/token | tok/s |
 | --- | ---: | ---: |
@@ -63,7 +63,7 @@ holds up as the context grows:
 
 Each row is one 65-token generation, timed per token over tokens 2-64, with
 the default q8 KV cache and the hot-expert budget fixed at 480 MiB
-(`GESSO_GPU_HOT_EXPERTS_MIB=480`). At 32k tokens Gesso still decodes faster than
+(`GESSO_TUNE=hot_mib=480`). At 32k tokens Gesso still decodes faster than
 llama.cpp does at short context. An F32 cache runs out of memory at 16k, and
 F16 runs out at 32k.
 
@@ -163,9 +163,9 @@ julia --project=benchmark -t 16 scripts/gate_35b.jl
 ```
 
 To reproduce the CUDA comparator numbers above, add `GESSO_BACKEND=cuda`.
-Add `GESSO_GPU_HOT_EXPERTS=1 GESSO_GPU_HOT_PIN=1` for hot experts (CUDA path
-only). Keep the model file on a fast local disk. Mapping it from a slow network or FUSE
-mount made expert reads about 5× slower for us.
+Hot experts and pinning are on by default there; `GESSO_DISABLE=hot_experts`
+turns them off. Keep the model file on a fast local disk. Mapping it from a
+slow network or FUSE mount made expert reads about 5× slower for us.
 
 The SmolLM2 tables:
 

@@ -78,8 +78,8 @@ On a GPU backend, weights are moved to the device up to a budget set by
 the default). Weights past the budget stay in host memory, and for
 mixture-of-experts models the experts that do not fit are read from the host.
 Raise the value on a larger card. Set it with the KV cache in mind, since the
-cache also lives on the device. `GESSO_GPU_HOT_EXPERTS` and
-`GESSO_GPU_HOT_EXPERTS_MIB` keep frequently used host experts in a device
+cache also lives on the device. Hot experts (on by default on CUDA,
+`GESSO_TUNE=lava_hot_experts=1` on Lava, sized by `GESSO_TUNE=hot_mib=N`) keep frequently used host experts in a device
 pool; see [env-vars.md](env-vars.md) for which backends read which variables.
 
 ## Saving a session

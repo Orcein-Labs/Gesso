@@ -221,7 +221,7 @@ function _lava_device_storage!(op::Symbol, t)
     )
 end
 # Expert banks stay host-resident GgufQuantSlice storage: the MoE route runs
-# them on the host (GESSO_MOE_HOST_EXPERTS=1), the same split as CUDA. Only
+# them on the host (the default; GESSO_DISABLE=moe_host_experts is CUDA only), the same split as CUDA. Only
 # expert banks are exempt; a dense weight still on the host fails the guard.
 # A device expert bank is refused where it would be used (_moe_topk_swiglu!).
 function Gesso.Inference._check_device_storage(op::Symbol, backend::LavaBackend, t)
@@ -1498,7 +1498,7 @@ function _lava_weight_budget(tensors)
     geo = G._gpu_geometry(tensors)
     ctx = G._gpu_budget_ctx()
     rows = G._gpu_budget_pass_rows(ctx)
-    floor = Int64(_lhot_env_int("GESSO_GPU_HOT_RESERVE_MIB", _LHOT_RESERVE_MIB)) << 20
+    floor = Int64(_lhot_env_int("GESSO_GPU_RESERVE_MIB", _LHOT_RESERVE_MIB)) << 20
     reserve = G._gpu_reserve(;
         kv_per_token=G._gpu_kv_per_token(geo, :lava),
         ctx,
@@ -1577,7 +1577,7 @@ function _lava_to_device(tensors)
             proj && t isa Gesso.ProjectionWeight ? _to_proj(t.storage) : _to_f32(t.storage)
         typeof(t)(; shape=t.shape, storage=st)
     end
-    # Routed expert banks stay on the host (the CUDA GESSO_MOE_HOST_EXPERTS
+    # Routed expert banks stay on the host (the CUDA moe_host_experts
     # split): a GGUF slab is never dequantized to device F32 here. The host
     # MoE route in lava_hybrid.jl reads these banks in place.
     _host_expert_key(k) = k in (:wexp_gate, :wexp_up, :wexp_gate_up, :wexp_down)

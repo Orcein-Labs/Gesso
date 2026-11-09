@@ -145,7 +145,7 @@ else
         end
     end
 
-    # From GESSO_DQ_GEMM_MIN tokens the prefill dequantizes W to F16 and runs
+    # From GESSO_TUNE dq_gemm_min tokens the prefill dequantizes W to F16 and runs
     # cuBLAS. Scratch 0 MiB forces one row per chunk, so the chunk offsets into
     # W and into dst are exercised as well.
     @testset "GpuDenseQuant: prefill GEMM vs host dequant" begin
@@ -154,7 +154,7 @@ else
             qm = _random_quant_matrix(rng, kind, 37, 512)
             X = randn(rng, Float32, 40, 512)
             dev =
-                withenv("GESSO_DQ_GEMM_MIN" => "32", "GESSO_DQ_GEMM_SCRATCH_MIB" => mib) do
+                withenv("GESSO_TUNE" => "dq_gemm_min=32,dq_gemm_scratch_mib=$mib") do
                     _device_matmul(qm, X, Gesso.PrefillWorkload())
                 end
             _check_against_host(qm, X, dev; label="$kind GEMM n=40 scratch=$mib")
@@ -165,7 +165,7 @@ else
         X = randn(rng, Float32, 40, 96)
         dev = withenv(
             () -> _device_matmul(qm, X, Gesso.PrefillWorkload()),
-            "GESSO_DQ_GEMM_MIN" => "32",
+            "GESSO_TUNE" => "dq_gemm_min=32",
         )
         _check_against_host(qm, X, dev; label="q8_0 GEMM n=40 k=96")
     end
@@ -176,13 +176,13 @@ else
         pw = Gesso.ProjectionWeight(; shape=size(qm), storage=qm)
         emb = Gesso.EmbeddingTable(; shape=(4, 2), storage=ones(Float32, 4, 2))
         ts = (; embedding=emb, blocks=[(; w=pw)], lm_head=emb)
-        withenv("GESSO_GPU_DENSE_QUANT" => "0", "GESSO_GPU_BUDGET_MIB" => "4800") do
+        withenv("GESSO_DISABLE" => "gpu_dense_quant", "GESSO_GPU_BUDGET_MIB" => "4800") do
             gpu = Gesso.to_device(cuda, ts)
             @test gpu.blocks[1].w.storage isa CUDA.CuArray{Float16}
         end
         # budget 0: the native bytes do not fit, so the weight takes the existing
         # path (dequant to F32, then HostOffload when even F32 does not fit)
-        withenv("GESSO_GPU_DENSE_QUANT" => "1", "GESSO_GPU_BUDGET_MIB" => "0") do
+        withenv("GESSO_DISABLE" => nothing, "GESSO_GPU_BUDGET_MIB" => "0") do
             gpu = Gesso.to_device(cuda, ts)
             @test gpu.blocks[1].w.storage isa Gesso.Inference.HostOffload
         end

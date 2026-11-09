@@ -214,7 +214,7 @@ _q8k_of(x::Q8KVec) = x
 _q8k_of(x::Q6KPrepVec) = x.q
 
 # The column a decode group reads: the prepped one when the AVX2 kernels and
-# the multi path are on (GESSO_PREFILL_MULTI=0 turns this off with prefill's)
+# the multi path are on (GESSO_DISABLE=prefill_multi turns this off with prefill's)
 # and some weight of the group is a prep type. The prep is O(width) against the
 # group's O(rows * width), so one prep-type weight pays for it.
 _decode_group_act(xq::Q8KVec, ::Tuple) = xq

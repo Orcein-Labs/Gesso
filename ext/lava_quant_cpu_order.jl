@@ -360,11 +360,10 @@ end
 end
 
 # Largest token count that takes the workgroup kernels (receipts on the 5060: Q8_0
-# wins through m=8, Q4_K through m=2; both lose at m=33). GESSO_LAVA_CPU_ORDER_WG_MAX
+# wins through m=8, Q4_K through m=2; both lose at m=33). GESSO_TUNE=cpu_order_wg_max=N
 # overrides both; 0 keeps the thread-per-row kernels.
 function _c1_wg_max(default::Int)
-    v = get(ENV, "GESSO_LAVA_CPU_ORDER_WG_MAX", "")
-    return isempty(v) ? default : parse(Int, v)
+    return env_tune(:cpu_order_wg_max, default)
 end
 
 function _c1_cpu_q80_matmul_wg!(Y, X, q::LavaQ8Quant)

@@ -387,13 +387,13 @@ resident (RssFile 1.2 of 9 GB, 4.2 s per step). Read in one pass, the file
 streams at disk speed and is resident before the first token.
 
 Skipped, leaving decode to fault lazily as before: off Linux, with
-`GESSO_PREFAULT=0`, when the data does not fit in `_PREFAULT_MEM_FRACTION` of
+`GESSO_DISABLE=prefault`, when the data does not fit in `_PREFAULT_MEM_FRACTION` of
 MemAvailable, or when madvise fails. The bytes are not touched, so output is
 unchanged. Returns `:done`, `:off`, `:too_big` or `:failed`.
 """
 function _prefault_gguf_data!(hdr; avail::Integer=_mem_available_bytes())::Symbol
     Sys.islinux() || return :off
-    get(ENV, "GESSO_PREFAULT", "1") == "0" && return :off
+    env_disabled(:prefault) && return :off
     data = hdr.data
     length(data) > hdr.data_start || return :off
     length(data) - hdr.data_start <= _PREFAULT_MEM_FRACTION * avail || return :too_big
@@ -910,9 +910,7 @@ function _expert_slice(hdr, info::GgufTensorInfo)
 end
 
 function _expert_cache_cap()
-    raw = get(ENV, "GESSO_EXPERT_CACHE", "0")
-    n = tryparse(Int, raw)
-    return n === nothing ? 0 : max(0, n)
+    return max(0, env_tune(:expert_cache, 0))
 end
 
 function _gguf_dequant_expert_into!(
@@ -980,7 +978,7 @@ llama.cpp `_LinearAttentionVReorderBase` stores V heads in tiled order
 them (`[G0_v0..v{r-1}, G1_…]`). `_v_head_perm(nk, r, hd)` maps tiled →
 grouped. The inverse is `_v_head_perm(r, nk, hd)` — an involution only
 when `nk == r`. Gesso GDN on GGUF uses tiled pairing instead, so this
-gather stays behind `GESSO_GGUF_UNREORDER_V=1`.
+gather stays behind `GESSO_TUNE=gguf_unreorder_v=1`.
 """
 function _v_head_perm(nk::Int, r::Int, hd::Int)
     n = nk * r * hd
@@ -1049,14 +1047,14 @@ const _QUANT_RESIDENT_MIN_ELEMS = 1 << 20
 
 """
 A 2-D non-F32 tensor at or above `_QUANT_RESIDENT_MIN_ELEMS` stays as quant
-bytes (`QuantMatrix`). `GESSO_GGUF_UNREORDER_V=1` is the opt-in tiled→grouped
+bytes (`QuantMatrix`). `GESSO_TUNE=gguf_unreorder_v=1` is the opt-in tiled→grouped
 V gather, which rewrites F32 arrays, so it keeps the all-F32 load.
 """
 function _quant_resident(info::GgufTensorInfo)
     length(info.dims) == 2 || return false
     info.ggml_type == GGML_TYPE_F32 && return false
     prod(info.dims) >= _QUANT_RESIDENT_MIN_ELEMS || return false
-    return get(ENV, "GESSO_GGUF_UNREORDER_V", "") != "1"
+    return !env_tune(:gguf_unreorder_v, false)
 end
 
 # Node-local weight copies. On a pinned pool that spans NUMA nodes (see
@@ -1165,8 +1163,8 @@ function _materialize_gguf_tensor(
     end
     # Unsloth qwen35moe GGUF is already llama.cpp tiled. Gesso GDN on this
     # path uses LinearMixerSpec.v_head_tiled, so leave weights as stored.
-    # Opt in to a tiled→grouped gather with GESSO_GGUF_UNREORDER_V=1.
-    if get(ENV, "GESSO_GGUF_UNREORDER_V", "") == "1"
+    # Opt in to a tiled→grouped gather with GESSO_TUNE=gguf_unreorder_v=1.
+    if env_tune(:gguf_unreorder_v, false)
         A = _gguf_unreorder_linear(A, info.name, spec)
     end
     return _maybe_T(A, T)

@@ -30,6 +30,10 @@ import Gesso: backend_name, execution_tier, supports
 import Gesso: rmsnorm!, rope!, softmax!, swiglu!, matmul!, embedding_lookup!
 
 using Gesso:
+    env_disabled,
+    env_profile,
+    env_profile_on,
+    env_tune,
     AbstractGessoBackend,
     Activation,
     EmbeddingTable,

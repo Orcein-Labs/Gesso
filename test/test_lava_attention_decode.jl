@@ -157,7 +157,7 @@ else
         )
         @test f(8, 8) === false
         @test f(8, 0) === false
-        withenv("GESSO_LAVA_WINDOW_FUSED" => "0") do
+        withenv("GESSO_DISABLE" => "window_fused") do
             @test f(8, 4) === false
         end
         @test f(8, 4) === true

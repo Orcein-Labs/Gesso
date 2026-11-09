@@ -17,6 +17,7 @@ using Gesso: reference_prefill, reference_generate
     include("test_foundation.jl")
     include("test_errors.jl")
     include("test_receipts.jl")
+    include("test_env.jl")
     include("test_semantics.jl")
     include("test_parameters.jl")
     include("test_operators.jl")

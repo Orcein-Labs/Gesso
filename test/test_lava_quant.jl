@@ -145,7 +145,7 @@ else
         end
     end
 
-    # Prefill (ntok >= GESSO_DQ_GEMM_MIN, default 32): W is dequantized to F16
+    # Prefill (ntok >= dq_gemm_min, default 32): W is dequantized to F16
     # and multiplied with an F16 copy of X, so each value carries two F16 roundings.
     # Bound: 2e-3 times the absolute sum, against the same F64 host reference.
     # Q4_K takes the CPU-order kernel at every ntok and keeps the tight bound.
@@ -176,7 +176,7 @@ else
             )
         end
         @testset "chunked scratch with a partial last chunk" begin
-            withenv("GESSO_DQ_GEMM_SCRATCH_MIB" => "1") do
+            withenv("GESSO_TUNE" => "dq_gemm_scratch_mib=1") do
                 qm = _lq_random_matrix(rng, :q5_k, 2300, 512)
                 X = randn(rng, Float32, 40, 512)
                 _lq_check(
@@ -286,7 +286,7 @@ else
             )
         end
         @testset "chunked scratch with a partial last chunk" begin
-            withenv("GESSO_DQ_GEMM_SCRATCH_MIB" => "1") do
+            withenv("GESSO_TUNE" => "dq_gemm_scratch_mib=1") do
                 qm = _lq_random_matrix(rng, :q8_0, 2300, 512)
                 X = randn(rng, Float32, 40, 512)
                 _lq_check(

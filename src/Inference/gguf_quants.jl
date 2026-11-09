@@ -514,7 +514,7 @@ const _QGEMV_MIN_ROWS = 8
 # Chunks per thread for the row-chunk loops. The pool hands chunks out by
 # ticket, so more chunks than threads lets a fast thread take a slow one's
 # share instead of the whole pass waiting on the slowest thread (unpinned
-# threads can share a physical core). `GESSO_GEMV_CHUNKS_PER_THREAD` overrides;
+# threads can share a physical core). `GESSO_TUNE=gemv_chunks_per_thread=N` overrides;
 # read once per process.
 const _GEMV_CHUNKS_PER_THREAD = Ref{Int}(0)
 const _GEMV_CHUNKS_PER_THREAD_DEFAULT = 16
@@ -522,8 +522,8 @@ const _GEMV_CHUNKS_PER_THREAD_DEFAULT = 16
 function _gemv_chunks_per_thread()::Int
     k = _GEMV_CHUNKS_PER_THREAD[]
     if k <= 0
-        v = tryparse(Int, get(ENV, "GESSO_GEMV_CHUNKS_PER_THREAD", ""))
-        k = v === nothing || v < 1 ? _GEMV_CHUNKS_PER_THREAD_DEFAULT : v
+        v = env_tune(:gemv_chunks_per_thread, 0)
+        k = v < 1 ? _GEMV_CHUNKS_PER_THREAD_DEFAULT : v
         _GEMV_CHUNKS_PER_THREAD[] = k
     end
     return k
@@ -539,7 +539,7 @@ _qgemv_nchunks(rows::Int)::Int = clamp(
 # Scheduler for the row-chunk loops above. `f(c)` runs chunk c of 1:nc.
 # `@threads` forks and joins on every call. The persistent pool (cpu_pool.jl,
 # `Gesso.Runtime.pool_run!`) keeps its workers, so a call costs a wake-up, not
-# a task spawn. `GESSO_GEMV_POOL` picks the scheduler: `threads`, `pool`, or
+# a task spawn. `GESSO_TUNE=gemv_pool=` picks the scheduler: `threads`, `pool`, or
 # `auto` (the default). `auto` uses the pool for every call size: timed
 # decode on the 27B measured the pool ahead of `@threads` for the large FFN
 # and projection calls too, and `@threads` allocates per call. The mode is
@@ -549,7 +549,7 @@ const _GEMV_POOL_MODE = Ref{Int8}(-1)
 function _gemv_pool_mode()::Int8
     m = _GEMV_POOL_MODE[]
     if m < 0
-        s = get(ENV, "GESSO_GEMV_POOL", "auto")
+        s = lowercase(env_tune(:gemv_pool, "auto"))
         m = s == "threads" ? Int8(0) : s == "pool" ? Int8(1) : Int8(2)
         _GEMV_POOL_MODE[] = m
     end

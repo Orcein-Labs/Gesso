@@ -21,7 +21,7 @@
 # Dependency law: only Base.llvmcall and LLVM intrinsics. The dispatcher runs
 # a SIMD kernel only when the CPU has one (AVX2 on x86_64, which needs CPUID
 # AVX2 and the OS saving YMM state; NEON on aarch64, which is baseline).
-# Otherwise the scalar path runs. GESSO_QUANT_SIMD=0 forces the scalar path.
+# Otherwise the scalar path runs. GESSO_DISABLE=quant_simd forces the scalar path.
 #
 # A runtime gate does not keep a kernel out of codegen: any compiled caller
 # that can reach it compiles it, @noinline or not, and LLVM aborts the process
@@ -157,12 +157,12 @@ const _Q8K_SIMD_MODE = Ref{Int8}(-1)
 
 True when the SIMD kernels are selected (AVX2 on x86_64, NEON on aarch64; see
 `_simd_type_ok` for which types have one). Resolved once per process: false if
-`GESSO_QUANT_SIMD=0`, or if the CPU has no SIMD kernels (logged once).
+`GESSO_DISABLE=quant_simd`, or if the CPU has no SIMD kernels (logged once).
 """
 function q8k_simd_enabled()::Bool
     m = _Q8K_SIMD_MODE[]
     if m < 0
-        if get(ENV, "GESSO_QUANT_SIMD", "1") == "0"
+        if env_disabled(:quant_simd)
             m = Int8(0)
         elseif _cpu_has_simd()
             m = Int8(1)

@@ -31,7 +31,9 @@ const _LHOT_MARGIN = 1.0f0
 const _LHOT_RESERVE_MIB = 1024
 const _LHOT_FALLBACK_MIB = 2048
 
-_lhot_enabled() = get(ENV, "GESSO_GPU_HOT_EXPERTS", "0") == "1"
+# Opt-in on Lava (GESSO_TUNE=lava_hot_experts=1); GESSO_DISABLE=hot_experts
+# turns it off on every backend.
+_lhot_enabled() = env_tune(:lava_hot_experts, false) && !env_disabled(:hot_experts)
 
 function _lhot_env_int(name::AbstractString, default::Int)
     raw = strip(get(ENV, name, ""))
@@ -105,14 +107,14 @@ function _lava_device_free_bytes()
     return _lava_free_from_heaps(rows)
 end
 
-# Pool budget in bytes. GESSO_GPU_HOT_EXPERTS_MIB pins it. Otherwise it is the
-# device-local heap budget minus usage, less GESSO_GPU_HOT_RESERVE_MIB. When the
+# Pool budget in bytes. GESSO_TUNE=hot_mib=N pins it. Otherwise it is the
+# device-local heap budget minus usage, less GESSO_GPU_RESERVE_MIB. When the
 # driver reports no budget (VK_EXT_memory_budget missing), a fixed 2048 MiB is
 # used: the probe cannot tell a full card from an empty one, and 2048 MiB is
 # well inside the 8 GB card.
 function _lhot_budget_bytes()
     mib = Int64(1) << 20
-    fixed = _lhot_env_int("GESSO_GPU_HOT_EXPERTS_MIB", -1)
+    fixed = env_tune(:hot_mib, -1)
     fixed >= 0 && return Int64(fixed) * mib
     free = something(_lava_device_free_bytes(), Int64(0))
     if free == 0
@@ -122,7 +124,7 @@ function _lhot_budget_bytes()
         end
         return Int64(_LHOT_FALLBACK_MIB) * mib
     end
-    reserve = Int64(_lhot_env_int("GESSO_GPU_HOT_RESERVE_MIB", _LHOT_RESERVE_MIB)) * mib
+    reserve = Int64(_lhot_env_int("GESSO_GPU_RESERVE_MIB", _LHOT_RESERVE_MIB)) * mib
     return max(Int64(0), free - reserve)
 end
 
@@ -694,7 +696,7 @@ end
 # Drops every layer's pool. The device memory goes with the last reference;
 # the budget is probed again on the next decode token.
 function release_lava_hot_experts!()
-    if get(ENV, "GESSO_GPU_HOT_STATS", "0") == "1"
+    if env_profile_on(:hot_stats)
         for s in lava_hot_experts_stats()
             println(stderr, "lava hot experts layer $(s.layer): slots=$(s.slots) tokens=$(s.tokens) " *
                 "picks=$(s.picks) hits=$(s.hits) hit_rate=$(round(s.hit_rate; digits=3)) " *

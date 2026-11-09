@@ -207,8 +207,8 @@ end
 
 # Sliding-window decode: the query at position K reads rows (K-window+1):K, the
 # rows the reference `_window_mask!` leaves unmasked. Same kernels, start row
-# K-window. GESSO_LAVA_WINDOW_FUSED=0 restores the reference per-head path.
-_lava_window_fused() = get(ENV, "GESSO_LAVA_WINDOW_FUSED", "1") != "0"
+# K-window. GESSO_DISABLE=window_fused restores the reference per-head path.
+_lava_window_fused() = !env_disabled(:window_fused)
 
 function _attention_decode_window_device!(
     ::LavaBackend,

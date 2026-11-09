@@ -34,8 +34,8 @@ Base.ndims(::GpuDenseQuant) = 2
 Base.length(q::GpuDenseQuant) = q.nrows * q.ne0
 Base.sizeof(q::GpuDenseQuant) = sizeof(q.data)
 
-# GESSO_GPU_DENSE_QUANT=0 restores the dequant-to-F16 path for A/B runs.
-_gpu_dense_quant_on() = get(ENV, "GESSO_GPU_DENSE_QUANT", "1") != "0"
+# GESSO_DISABLE=gpu_dense_quant restores the dequant-to-F16 path for A/B runs.
+_gpu_dense_quant_on() = !env_disabled(:gpu_dense_quant)
 
 function _dq_kind(t::Int32)
     I = Gesso.Inference
@@ -400,12 +400,12 @@ end
 
 # --- prefill GEMM: dequantize W to F16 once, multiply on the tensor cores ---
 # The GEMV above decodes every weight block once per token, so a 256-token
-# prefill decodes each weight 256 times. From GESSO_DQ_GEMM_MIN tokens on, W is
-# dequantized to F16 in row chunks (scratch capped at GESSO_DQ_GEMM_SCRATCH_MIB)
+# prefill decodes each weight 256 times. From GESSO_TUNE=dq_gemm_min tokens on, W is
+# dequantized to F16 in row chunks (scratch capped at GESSO_TUNE=dq_gemm_scratch_mib)
 # and cuBLAS multiplies it with an F16 copy of x, accumulating in F32. F16 x
 # keeps more bits than the Q8_1 blocks the GEMV reads.
-_dq_gemm_min() = parse(Int, get(ENV, "GESSO_DQ_GEMM_MIN", "32"))
-_dq_gemm_scratch_mib() = parse(Int, get(ENV, "GESSO_DQ_GEMM_SCRATCH_MIB", "32"))
+_dq_gemm_min() = env_tune(:dq_gemm_min, 32)
+_dq_gemm_scratch_mib() = env_tune(:dq_gemm_scratch_mib, 32)
 
 mutable struct _DqGemmScratch
     w16::Union{Nothing, _CuVec{Float16}}

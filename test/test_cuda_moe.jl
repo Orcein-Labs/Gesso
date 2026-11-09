@@ -687,7 +687,7 @@ else
                 xd = CuArray{Float32}(x)
                 side = CUDA.zeros(Float32, seq, h)
                 ran = Ref(0)
-                withenv("GESSO_MOE_OVERLAP" => ov) do
+                withenv("GESSO_DISABLE" => (ov == "0" ? "moe_overlap" : nothing)) do
                     Inf_._moe_topk_swiglu!(
                         cuda,
                         y_gpu,
@@ -766,7 +766,7 @@ else
             rd = CuArray(router)
             xd = CuArray(x)
             y_host = CUDA.fill(NaN32, 1, h)
-            withenv("GESSO_MOE_DEVICE_ROUTE" => "0") do
+            withenv("GESSO_DISABLE" => "moe_device_route") do
                 Inf_._moe_topk_swiglu!(cuda, y_host, xd, rd, gs, us, ds, n_used)
             end
             y_dev = CUDA.fill(NaN32, 1, h)
@@ -832,7 +832,7 @@ else
             ds = resident("blk.0.ffn_down_exps.weight")
             h = gs.ne0
             router = CuArray(0.05f0 .* randn(rng, Float32, n_exp, h))
-            prefill(y, x, chunk) = withenv("GESSO_MOE_DEVICE_PREFILL_CHUNK" => chunk) do
+            prefill(y, x, chunk) = withenv("GESSO_TUNE" => "moe_device_prefill_chunk=$chunk") do
                 Inf_._moe_topk_swiglu!(cuda, y, x, router, gs, us, ds, n_used)
             end
             # chunk 16 over 37 tokens leaves a short last chunk; chunk 1 gives
@@ -840,7 +840,7 @@ else
             for (seq, chunk) in ((37, "16"), (5, "512"), (3, "1"))
                 x = CuArray(randn(rng, Float32, seq, h))
                 y_loop = CUDA.fill(NaN32, seq, h)
-                withenv("GESSO_MOE_DEVICE_PREFILL" => "0") do
+                withenv("GESSO_DISABLE" => "moe_device_prefill") do
                     Inf_._moe_topk_swiglu!(cuda, y_loop, x, router, gs, us, ds, n_used)
                 end
                 y_pf = CUDA.fill(NaN32, seq, h)
@@ -1107,7 +1107,7 @@ else
         )
         # Exact id equality with the CPU path assumes no hot-expert pool, which
         # is on by default now.
-        gpu = withenv("GESSO_GPU_HOT_EXPERTS" => "0") do
+        gpu = withenv("GESSO_DISABLE" => "hot_experts") do
             _to_device_default_budget(tensors)
         end
         ids_gpu = Gesso.reference_generate(
@@ -1120,7 +1120,7 @@ else
         )
         @test ids_gpu == ids_cpu
 
-        gpu_off = withenv("GESSO_GPU_BUDGET_MIB" => "0", "GESSO_GPU_HOT_EXPERTS" => "0") do
+        gpu_off = withenv("GESSO_GPU_BUDGET_MIB" => "0", "GESSO_DISABLE" => "hot_experts") do
             Gesso.to_device(cuda, tensors)
         end
         @test gpu_off.embedding.storage isa Gesso.HostOffload

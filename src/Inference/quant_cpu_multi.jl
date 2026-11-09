@@ -22,14 +22,14 @@
 
 const _MULTI_TILE = 8
 
-# GESSO_PREFILL_MULTI=0 selects the per-token path. Read once per process,
+# GESSO_DISABLE=prefill_multi selects the per-token path. Read once per process,
 # lazily: a module-level const would freeze the value into the precompile cache.
 const _PREFILL_MULTI = Ref(Int8(-1))
 
 function _prefill_multi_enabled()::Bool
     s = _PREFILL_MULTI[]
     if s < 0
-        s = get(ENV, "GESSO_PREFILL_MULTI", "1") == "0" ? Int8(0) : Int8(1)
+        s = env_disabled(:prefill_multi) ? Int8(0) : Int8(1)
         _PREFILL_MULTI[] = s
     end
     return s == 1

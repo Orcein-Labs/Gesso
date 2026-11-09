@@ -21,6 +21,7 @@ include("versions.jl")     # §LXIX       schema versions for persisted artifact
 include("backends.jl")     # §XX/XXI     backend contract + lowering stubs
 include("errors.jl")       # §LXX        typed failure vocabulary + taxonomy
 include("receipts.jl")     # §XLII       receipt records + sink interface
+include("env.jl")           #             GESSO_DISABLE / GESSO_PROFILE / GESSO_TUNE lists
 
 # --- domain modules (contract skeletons; bodies land with their phases) -----
 include("Semantics/Semantics.jl")           # Phase 1
@@ -332,6 +333,9 @@ export DraftSource,
     complete_text,
     feedback_counts
 
+
+# Old run scripts still set replaced variables; say what to set instead.
+__init__() = _env_warn_replaced()
 
 # precompile workload: a tiny synthetic Qwen3.5 GGUF through load, chat
 # render, tokenize, generate and detokenize, so a first reply does not pay

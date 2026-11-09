@@ -3,7 +3,7 @@
 #     column bit-equal (===) to the single-column _dot_q8k, for simd on and off
 #   * the same on real rows when GESSO_SALUKI_GGUF is set (skipped otherwise)
 #   * the prefill path through _quant_matmul! equals the per-token path bit for
-#     bit, with the GESSO_PREFILL_MULTI switch on and off
+#     bit, with GESSO_DISABLE=prefill_multi set and unset
 #   * Q6_K at the integer extremes (u = 0 and 63, scales and activations at
 #     -128 and 127), bit-equal to the single-column kernel
 #   * Q4_K and Q5_K at the integer extremes (weights 0 and 15/31, scales and
@@ -686,7 +686,7 @@ end
     end
 end
 
-@testset "GESSO_PREFILL_MULTI switch is read as a flag" begin
+@testset "prefill_multi switch is read as a flag" begin
     @test _MQ._prefill_multi_enabled() isa Bool
 end
 

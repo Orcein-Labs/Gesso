@@ -1,4 +1,4 @@
-# Prefill pass profiler (src/Inference/decode_profile.jl, GESSO_PREFILL_PROFILE).
+# Prefill pass profiler (src/Inference/decode_profile.jl, GESSO_PROFILE=prefill).
 # CPU only: the stages that run on the CPU backend are the mixers and the dense
 # FFN, and the MoE and GPU stages are exercised by the CUDA suite instead.
 
@@ -12,7 +12,7 @@ function _prefill_run(ts; max_new_tokens=0)
     return reference_generate(ts.model, ts, PREFILL_PROMPT; max_new_tokens)
 end
 
-@testset "prefill profiler (GESSO_PREFILL_PROFILE)" begin
+@testset "prefill profiler (GESSO_PROFILE=prefill)" begin
     saved_decode = PPI._PROFILE[]
     saved_prefill = PPI._PREFILL_PROFILE[]
     saved_chunk = get(ENV, "GESSO_PREFILL_CHUNK", nothing)

@@ -37,7 +37,7 @@ end
 # kept because families with per-layer RoPE (sliding-window layers on a local
 # base, full layers on the global base) interleave two frequency sets, and a
 # single entry was replaced at every switch, missing on every such layer.
-# GESSO_LAVA_ROPE_TABLE_CACHE=0 restores the per-call upload.
+# GESSO_DISABLE=rope_table_cache restores the per-call upload.
 struct _LavaRopeTableEntry
     positions::Vector{Int}
     freq::Vector{Float64}
@@ -49,7 +49,7 @@ end
 const _LAVA_ROPE_TABLE_SLOTS = 4
 const _LAVA_ROPE_TABLE = _LavaRopeTableEntry[]   # most recently used first
 const _LAVA_ROPE_TABLE_LOCK = ReentrantLock()
-_lava_rope_table_cache() = get(ENV, "GESSO_LAVA_ROPE_TABLE_CACHE", "1") != "0"
+_lava_rope_table_cache() = !env_disabled(:rope_table_cache)
 
 _lava_rope_entry_hit(e, ctx, positions, freq, rd) =
     e.ctx === ctx &&

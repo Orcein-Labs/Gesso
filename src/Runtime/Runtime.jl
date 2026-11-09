@@ -12,6 +12,10 @@ using ..Inference:
     kv_bytes,
     page_count
 using ..Gesso:
+    env_disabled,
+    env_profile,
+    env_profile_on,
+    env_tune,
     GessoException,
     gesso_error,
     ERR_INVALID_PLAN,
