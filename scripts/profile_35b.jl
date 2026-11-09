@@ -135,7 +135,10 @@ function measure()
     t1 = @elapsed gen(1)
     ids_wall = nothing
     tw = @elapsed (ids_wall = gen(WALL + 1))
-    wall_ms = 1e3 * (tw - t1) / max(1, length(ids_wall) - 1)
+    # reference_generate ids include the prompt; gen(1) already covers the
+    # prefill and first token, so the difference is the decoded tail only.
+    nwall = length(ids_wall) - length(prompt) - 1
+    wall_ms = 1e3 * (tw - t1) / max(1, nwall)
     forced = ForcedIds(EXPECTED[2:end], 0, Float32[])
     CTX == 1 && Gesso.reference_generate(
         model,
@@ -156,7 +159,7 @@ function measure()
         hits1,
         b,
         wall_ms,
-        nwall=length(ids_wall) - 1,
+        nwall,
     )
 end
 (; forced, ids_cold, cold, a, hits0, ids_warm, hits1, b, wall_ms, nwall) = measure()
