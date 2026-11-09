@@ -28,9 +28,27 @@
     end
 end
 
-function _lava_rope_reference!(q, k, positions, freq, rd, interleaved)
+# Every layer of one token rotates by the same positions and frequencies, but a
+# host-to-device upload is a blocking flush (Lava copy_buffer! waits for the
+# queue), so a fresh table per call stalled the queue twice per layer. The last
+# uploaded table is kept and reused while the context, positions, frequencies and
+# rd match (under a lock, so concurrent callers never see a half-updated entry);
+# the device arrays are read-only once uploaded and are replaced, never written.
+# GESSO_LAVA_ROPE_TABLE_CACHE=0 restores the per-call upload.
+mutable struct _LavaRopeTableCache
+    positions::Vector{Int}
+    freq::Vector{Float64}
+    rd::Int
+    ctx::Any
+    cd::Any
+    sd::Any
+end
+const _LAVA_ROPE_TABLE = _LavaRopeTableCache(Int[], Float64[], 0, nothing, nothing, nothing)
+const _LAVA_ROPE_TABLE_LOCK = ReentrantLock()
+_lava_rope_table_cache() = get(ENV, "GESSO_LAVA_ROPE_TABLE_CACHE", "1") != "0"
+
+function _lava_rope_reference_table(positions, freq, rd)
     seq = length(positions)
-    seq == 0 && return nothing
     c = Matrix{Float64}(undef, seq, rd ÷ 2)
     s = similar(c)
     for t in eachindex(positions), i in 1:(rd÷2)
@@ -38,9 +56,38 @@ function _lava_rope_reference!(q, k, positions, freq, rd, interleaved)
         c[t, i] = cos(phase)
         s[t, i] = sin(phase)
     end
-    # Per-call buffers avoid persistent context ownership, eviction and cache races.
-    cd = Lava.LavaArray{Float64}(c)
-    sd = Lava.LavaArray{Float64}(s)
+    return Lava.LavaArray{Float64}(c), Lava.LavaArray{Float64}(s)
+end
+
+function _lava_rope_reference_cached(positions, freq, rd)
+    _lava_rope_table_cache() || return _lava_rope_reference_table(positions, freq, rd)
+    ctx = Lava.vk_context()
+    lock(_LAVA_ROPE_TABLE_LOCK) do
+        e = _LAVA_ROPE_TABLE
+        hit =
+            e.cd !== nothing &&
+            e.ctx === ctx &&
+            e.rd == rd &&
+            length(e.positions) == length(positions) &&
+            all(((a, b),) -> a == b, zip(e.positions, positions)) &&
+            length(e.freq) >= rd ÷ 2 &&
+            all(i -> e.freq[i] == Float64(freq[i]), 1:(rd÷2))
+        hit && return e.cd, e.sd
+        cd, sd = _lava_rope_reference_table(positions, freq, rd)
+        e.positions = collect(Int, positions)
+        e.freq = Float64[freq[i] for i in 1:(rd÷2)]
+        e.rd = rd
+        e.ctx = ctx
+        e.cd = cd
+        e.sd = sd
+        return cd, sd
+    end
+end
+
+function _lava_rope_reference!(q, k, positions, freq, rd, interleaved)
+    seq = length(positions)
+    seq == 0 && return nothing
+    cd, sd = _lava_rope_reference_cached(positions, freq, rd)
     for x in (q, k)
         size(x, 2) == 0 && continue
         kernel = Lava.with_no_contraction(
