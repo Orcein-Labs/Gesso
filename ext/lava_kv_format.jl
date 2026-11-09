@@ -146,6 +146,34 @@ _attention_decode_device!(
     K,
 )
 
+function _attention_decode_window_device!(
+    ::LavaBackend,
+    attn::Lava.LavaArray,
+    q::Lava.LavaArray,
+    kc::_LavaQ8,
+    vc::_LavaQ8,
+    n_heads::Int,
+    d_head::Int,
+    group::Int,
+    K::Int,
+    window::Int,
+)
+    (_lava_window_fused() && 0 < window < K) || return false
+    return _lava_attn_decode!(
+        attn,
+        q,
+        kc.codes,
+        kc.scales,
+        vc.codes,
+        vc.scales,
+        n_heads,
+        d_head,
+        group,
+        K;
+        k_lo=K - window,
+    )
+end
+
 # q4h needs a Hadamard rotation and nibble kernels that Lava does not have yet.
 # Refusing it here keeps a Lava run from silently falling back to a host copy.
 function _kv_alloc(fmt::Symbol, like::Lava.LavaArray, rows::Int, n_kv::Int, d::Int)

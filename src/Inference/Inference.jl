@@ -1105,6 +1105,12 @@ end
 # backend extension returns true after it has written `attn`.
 _attention_decode_device!(backend, attn, q, kc, vc, n_heads, d_head, group, K) = false
 
+# The same over the sliding window only: a query at position K reads cache rows
+# (K-window+1):K, exactly the rows `_window_mask!` leaves unmasked. Declines by
+# default; a backend whose fused kernel takes a start row returns true.
+_attention_decode_window_device!(backend, attn, q, kc, vc, n_heads, d_head, group, K, window) =
+    false
+
 # Prefill attention of L query rows over K keys with the same in-place GQA
 # mapping and its own scratch. The reference path needs the KV heads repeated
 # (8*K*n_heads*d_head bytes, 1 GiB at 32k keys on a 16-head model) and two
@@ -3016,9 +3022,23 @@ function _decode_attn_core!(
         # cache rows in place; otherwise the CACHE rows are repeated per
         # query head (kh above is the single new row; it was consumed by
         # the append) and the reference per-head loop runs. The fused
-        # kernels are full-causal, so a window that masks rows declines them.
-        fused =
-            !(window > 0 && K > window) &&
+        # kernels are full-causal, so a window that masks rows takes the
+        # windowed entry point, which only a backend with a start-row kernel
+        # accepts.
+        fused = if window > 0 && K > window
+            @decode_sub :attn_core cpu _attention_decode_window_device!(
+                cpu,
+                attn.storage,
+                qh.storage,
+                kc[bi].storage,
+                vc[bi].storage,
+                n_heads,
+                d_head,
+                group,
+                K,
+                window,
+            )
+        else
             @decode_sub :attn_core cpu _attention_decode_device!(
                 cpu,
                 attn.storage,
@@ -3030,6 +3050,7 @@ function _decode_attn_core!(
                 group,
                 K,
             )
+        end
         if !fused
             # the reference attention needs (1, K) workspaces; the fused
             # path allocates none

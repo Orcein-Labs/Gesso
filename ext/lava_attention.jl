@@ -23,7 +23,7 @@ const _LAVA_ATTN_LANES = 64
 const _LAVA_ATTN_TILE = 512
 const _LAVA_ATTN_DMAX = 512
 
-import Gesso.Inference: _attention_decode_device!
+import Gesso.Inference: _attention_decode_device!, _attention_decode_window_device!
 
 @inline _lava_kv_at(c, sc, u, h, j) = c[u, h, j]
 @inline _lava_kv_at(c::AbstractArray{Int8}, sc, u, h, j) =
@@ -41,6 +41,7 @@ import Gesso.Inference: _attention_decode_device!
     scale::Float32,
     d::Int,
     nsplit::Int,
+    k_lo::Int,
 )
     tl = @index(Local, Linear)
     g = @index(Group, Linear)
@@ -67,7 +68,7 @@ import Gesso.Inference: _attention_decode_device!
         n = min(_LAVA_ATTN_TILE, kn - t0)
         lmax = Float32(-Inf)
         for i in tl:_LAVA_ATTN_LANES:n
-            u = k0 + t0 + i
+            u = k_lo + k0 + t0 + i
             x = Float32(0)
             for j in 1:d
                 x += sq[j] * _lava_kv_at(kc, ks, u, hk, j)
@@ -103,7 +104,7 @@ import Gesso.Inference: _attention_decode_device!
         for j in tl:_LAVA_ATTN_LANES:d
             piece = Float32(0)
             for i in 1:n
-                piece += sp[i] * _lava_kv_at(vc, vs, k0 + t0 + i, hk, j)
+                piece += sp[i] * _lava_kv_at(vc, vs, k_lo + k0 + t0 + i, hk, j)
             end
             acc[j] = acc[j] * alpha + piece
         end
@@ -161,12 +162,17 @@ function _lava_attn_decode!(
     n_heads::Int,
     d_head::Int,
     group::Int,
-    K::Int,
+    K::Int;
+    k_lo::Int=0,
 )
     K >= 1 ||
         throw(ArgumentError("decode attention needs at least one cache row, got K=$K"))
+    0 <= k_lo < K ||
+        throw(ArgumentError("decode attention start row k_lo=$k_lo is outside 0:$(K - 1)"))
     d_head <= _LAVA_ATTN_DMAX || return false
-    nsplit = cld(K, _LAVA_ATTN_TILE)
+    # the split kernel sees only rows k_lo+1:K, so K below is the row count
+    Kw = K - k_lo
+    nsplit = cld(Kw, _LAVA_ATTN_TILE)
     part = Lava.LavaArray{Float32}(undef, nsplit, n_heads, d_head + 2)
     backend = KA.get_backend(attn)
     scale = Float32(1 / sqrt(d_head))
@@ -179,10 +185,11 @@ function _lava_attn_decode!(
         vc,
         vs,
         Int(group),
-        Int(K),
+        Int(Kw),
         scale,
         Int(d_head),
-        Int(nsplit);
+        Int(nsplit),
+        Int(k_lo);
         ndrange=n_heads * nsplit * _LAVA_ATTN_LANES,
         workgroupsize=(_LAVA_ATTN_LANES,),
     )
@@ -196,4 +203,27 @@ function _lava_attn_decode!(
         workgroupsize=(_LAVA_ATTN_LANES,),
     )
     return true
+end
+
+# Sliding-window decode: the query at position K reads rows (K-window+1):K, the
+# rows the reference `_window_mask!` leaves unmasked. Same kernels, start row
+# K-window. GESSO_LAVA_WINDOW_FUSED=0 restores the reference per-head path.
+_lava_window_fused() = get(ENV, "GESSO_LAVA_WINDOW_FUSED", "1") != "0"
+
+function _attention_decode_window_device!(
+    ::LavaBackend,
+    attn::Lava.LavaArray,
+    q::Lava.LavaArray,
+    kc::Lava.LavaArray,
+    vc::Lava.LavaArray,
+    n_heads::Int,
+    d_head::Int,
+    group::Int,
+    K::Int,
+    window::Int,
+)
+    (_lava_window_fused() && 0 < window < K) || return false
+    return _lava_attn_decode!(
+        attn, q, kc, kc, vc, vc, n_heads, d_head, group, K; k_lo=K - window,
+    )
 end

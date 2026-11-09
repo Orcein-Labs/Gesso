@@ -165,6 +165,26 @@ else
             "lava f32 decode over the dequantized cache max|err| vs F64 oracle = ",
             maximum(abs, Float64.(Array(dense_attn)) .- ref),
         )
+        # sliding window over the same q8 cache: matches the oracle over the window
+        # rows and the windowed f32 kernel over the dequantized cache bit for bit
+        w = 200
+        lo = K - w + 1
+        wref = _lava_kv_decode_oracle(
+            q, kref[lo:K, :, :], vref[lo:K, :, :], n_heads, group, w, d,
+        )
+        wq8 = Lava.LavaArray{Float32}(zeros(Float32, 1, n_heads, d))
+        @test _kvl._attention_decode_window_device!(
+            Gesso.LavaBackend(), wq8, Lava.LavaArray{Float32}(q), dev_k, dev_v,
+            n_heads, d, group, K, w,
+        )
+        @test maximum(abs, Float64.(Array(wq8)) .- wref) <= _lava_kv_tol(wref)
+        wf32 = Lava.LavaArray{Float32}(zeros(Float32, 1, n_heads, d))
+        @test _kvl._attention_decode_window_device!(
+            Gesso.LavaBackend(), wf32, Lava.LavaArray{Float32}(q),
+            _kvl._kv_dense(dev_k, R), _kvl._kv_dense(dev_v, R),
+            n_heads, d, group, K, w,
+        )
+        @test Array(wq8) == Array(wf32)
     end
 
     @testset "negative control: scales shifted by one block exceed tolerance" begin

@@ -83,6 +83,86 @@ else
         end
     end
 
+    # Sliding window: rows outside (K-window+1):K hold 1e3, so a read outside the
+    # window fails. The windowed call must also equal the full-causal kernel run
+    # over a cache that holds only the window rows, bit for bit: same rows, same
+    # tiles, same order.
+    function _run_lava_window_case(n_heads, n_kv, d, K, window, extra; seed)
+        rng = MersenneTwister(seed)
+        R = K + extra
+        lo = K - window + 1
+        q = randn(rng, Float32, 1, n_heads, d)
+        kc = randn(rng, Float32, R, n_kv, d)
+        vc = randn(rng, Float32, R, n_kv, d)
+        for c in (kc, vc)
+            c[1:(lo-1), :, :] .= 1.0f3
+            c[(K+1):end, :, :] .= 1.0f3
+        end
+        group = div(n_heads, n_kv)
+        qd = Lava.LavaArray{Float32}(q)
+        attn = Lava.LavaArray{Float32}(zeros(Float32, 1, n_heads, d))
+        ok = Gesso.Inference._attention_decode_window_device!(
+            _attn_lava,
+            attn,
+            qd,
+            Lava.LavaArray{Float32}(kc),
+            Lava.LavaArray{Float32}(vc),
+            n_heads,
+            d,
+            group,
+            K,
+            window,
+        )
+        ok === true || return (Inf, false)
+        want = _lava_decode_attn_oracle(
+            q, kc[lo:K, :, :], vc[lo:K, :, :], n_heads, group, window, d,
+        )
+        err = maximum(abs.(Float64.(Array(attn)) .- want))
+        sliced = Lava.LavaArray{Float32}(zeros(Float32, 1, n_heads, d))
+        Gesso.Inference._attention_decode_device!(
+            _attn_lava,
+            sliced,
+            qd,
+            Lava.LavaArray{Float32}(kc[lo:K, :, :]),
+            Lava.LavaArray{Float32}(vc[lo:K, :, :]),
+            n_heads,
+            d,
+            group,
+            window,
+        )
+        return (err, Array(attn) == Array(sliced))
+    end
+
+    @testset "lava windowed decode attention vs host F64 oracle" begin
+        cases = [
+            # (n_heads, n_kv, d_head, K, window, extra rows past K)
+            (4, 4, 8, 2, 1, 0),         # window of one key
+            (4, 2, 8, 40, 7, 3),        # GQA, window below the tile
+            (8, 2, 16, 700, 512, 1),    # window exactly one tile
+            (6, 3, 32, 1500, 600, 5),   # window spans a tile boundary
+            (16, 4, 256, 4160, 512, 0), # the Spark shape (window 512, d_head 256)
+        ]
+        for (i, (nh, nk, d, K, w, extra)) in enumerate(cases)
+            err, same = _run_lava_window_case(nh, nk, d, K, w, extra; seed=0x5a0 + i)
+            @test err <= 1e-4
+            @test same
+        end
+    end
+
+    @testset "lava windowed decode declines a window that masks nothing" begin
+        attn = Lava.LavaArray{Float32}(zeros(Float32, 1, 2, 4))
+        kc = Lava.LavaArray{Float32}(zeros(Float32, 8, 1, 4))
+        f(K, w) = Gesso.Inference._attention_decode_window_device!(
+            _attn_lava, attn, attn, kc, kc, 2, 4, 2, K, w,
+        )
+        @test f(8, 8) === false
+        @test f(8, 0) === false
+        withenv("GESSO_LAVA_WINDOW_FUSED" => "0") do
+            @test f(8, 4) === false
+        end
+        @test f(8, 4) === true
+    end
+
     @testset "lava fused decode attention rejects an empty cache" begin
         attn = Lava.LavaArray{Float32}(zeros(Float32, 1, 2, 4))
         kc = Lava.LavaArray{Float32}(zeros(Float32, 1, 1, 4))
