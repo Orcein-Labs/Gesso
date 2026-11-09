@@ -28,14 +28,17 @@
     end
 end
 
-# Every layer of one token rotates by the same positions and frequencies, but a
-# host-to-device upload is a blocking flush (Lava copy_buffer! waits for the
-# queue), so a fresh table per call stalled the queue twice per layer. The last
-# uploaded table is kept and reused while the context, positions, frequencies and
-# rd match (under a lock, so concurrent callers never see a half-updated entry);
-# the device arrays are read-only once uploaded and are replaced, never written.
+# Every layer of one token rotates by the same positions, but a host-to-device
+# upload is a blocking flush (Lava copy_buffer! waits for the queue), so a fresh
+# table per call stalled the queue twice per layer. Recent uploaded tables are
+# kept and reused while the context, positions, frequencies and rd match (under a
+# lock, so concurrent callers never see a half-updated entry); the device arrays
+# are read-only once uploaded and are replaced, never written. Several entries are
+# kept because families with per-layer RoPE (sliding-window layers on a local
+# base, full layers on the global base) interleave two frequency sets, and a
+# single entry was replaced at every switch, missing on every such layer.
 # GESSO_LAVA_ROPE_TABLE_CACHE=0 restores the per-call upload.
-mutable struct _LavaRopeTableCache
+struct _LavaRopeTableEntry
     positions::Vector{Int}
     freq::Vector{Float64}
     rd::Int
@@ -43,9 +46,18 @@ mutable struct _LavaRopeTableCache
     cd::Any
     sd::Any
 end
-const _LAVA_ROPE_TABLE = _LavaRopeTableCache(Int[], Float64[], 0, nothing, nothing, nothing)
+const _LAVA_ROPE_TABLE_SLOTS = 4
+const _LAVA_ROPE_TABLE = _LavaRopeTableEntry[]   # most recently used first
 const _LAVA_ROPE_TABLE_LOCK = ReentrantLock()
 _lava_rope_table_cache() = get(ENV, "GESSO_LAVA_ROPE_TABLE_CACHE", "1") != "0"
+
+_lava_rope_entry_hit(e, ctx, positions, freq, rd) =
+    e.ctx === ctx &&
+    e.rd == rd &&
+    length(e.positions) == length(positions) &&
+    length(e.freq) >= rd ÷ 2 &&
+    all(i -> e.freq[i] == Float64(freq[i]), 1:(rd÷2)) &&
+    all(((a, b),) -> a == b, zip(e.positions, positions))
 
 function _lava_rope_reference_table(positions, freq, rd)
     seq = length(positions)
@@ -63,23 +75,18 @@ function _lava_rope_reference_cached(positions, freq, rd)
     _lava_rope_table_cache() || return _lava_rope_reference_table(positions, freq, rd)
     ctx = Lava.vk_context()
     lock(_LAVA_ROPE_TABLE_LOCK) do
-        e = _LAVA_ROPE_TABLE
-        hit =
-            e.cd !== nothing &&
-            e.ctx === ctx &&
-            e.rd == rd &&
-            length(e.positions) == length(positions) &&
-            all(((a, b),) -> a == b, zip(e.positions, positions)) &&
-            length(e.freq) >= rd ÷ 2 &&
-            all(i -> e.freq[i] == Float64(freq[i]), 1:(rd÷2))
-        hit && return e.cd, e.sd
+        tbl = _LAVA_ROPE_TABLE
+        for j in eachindex(tbl)
+            e = tbl[j]
+            _lava_rope_entry_hit(e, ctx, positions, freq, rd) || continue
+            j > 1 && (deleteat!(tbl, j); pushfirst!(tbl, e))
+            return e.cd, e.sd
+        end
         cd, sd = _lava_rope_reference_table(positions, freq, rd)
-        e.positions = collect(Int, positions)
-        e.freq = Float64[freq[i] for i in 1:(rd÷2)]
-        e.rd = rd
-        e.ctx = ctx
-        e.cd = cd
-        e.sd = sd
+        e = _LavaRopeTableEntry(
+            collect(Int, positions), Float64[freq[i] for i in 1:(rd÷2)], rd, ctx, cd, sd)
+        pushfirst!(tbl, e)
+        length(tbl) > _LAVA_ROPE_TABLE_SLOTS && resize!(tbl, _LAVA_ROPE_TABLE_SLOTS)
         return cd, sd
     end
 end
