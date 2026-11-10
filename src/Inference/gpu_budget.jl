@@ -59,9 +59,9 @@ end
 
 # KV bytes per token in the format a generation on `backend` allocates; f32 when
 # the geometry does not fit the quantized layout.
-function _gpu_kv_per_token(geo, backend::Symbol)
+function _gpu_kv_per_token(geo, backend::Symbol, ctx::Integer)
     geo.spec === nothing && return 0
-    fmt = _kv_format(_kv_default_format(backend, geo.head_dim))
+    fmt = _kv_format(_kv_default_format(backend, geo.head_dim, ctx))
     return try
         kv_bytes_per_token(geo.spec, fmt)
     catch
@@ -76,16 +76,19 @@ _gpu_prefill_row_bytes(geo) =
     4 * (8 * geo.hidden + 2 * geo.qdim + 2 * geo.kvdim + 3 * geo.ffn)
 
 """
-    _gpu_reserve(; kv_per_token, ctx, prefill, floor, blas) -> NamedTuple
+    _gpu_reserve(; kv_per_token, ctx, prefill, floor, blas, driver=0) -> NamedTuple
 
 Bytes set aside beside the weights: the KV cache for `ctx` tokens, the largest
 prefill pass (`prefill`), the allocator's floor that must stay free after a
-pass (`floor`), the BLAS handle and a fixed slack. `total` sums them.
+pass (`floor`), the BLAS handle, memory the driver takes outside the
+allocator (`driver`) and a fixed slack. `total` sums them.
 """
-function _gpu_reserve(; kv_per_token::Integer, ctx::Integer, prefill::Integer, floor::Integer, blas::Integer)
+function _gpu_reserve(; kv_per_token::Integer, ctx::Integer, prefill::Integer, floor::Integer, blas::Integer,
+                      driver::Integer=0)
     kv = Int64(kv_per_token) * Int64(ctx)
-    parts = (; kv, prefill=Int64(prefill), floor=Int64(floor), blas=Int64(blas), slack=_GPU_RESERVE_SLACK)
-    return (; parts..., total=kv + parts.prefill + parts.floor + parts.blas + parts.slack)
+    parts = (; kv, prefill=Int64(prefill), floor=Int64(floor), blas=Int64(blas), driver=Int64(driver),
+             slack=_GPU_RESERVE_SLACK)
+    return (; parts..., total=kv + parts.prefill + parts.floor + parts.blas + parts.driver + parts.slack)
 end
 
 """

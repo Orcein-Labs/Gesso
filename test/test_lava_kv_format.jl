@@ -57,11 +57,12 @@ else
         return src
     end
 
-    @testset "q8 default is on for Lava when d_head is a whole number of blocks" begin
-        @test _kvl._kv_default_format(:lava, 64) === :q8
-        @test _kvl._kv_default_format(:lava, 256) === :q8
-        @test _kvl._kv_default_format(:lava, 16) === :f32
-        @test _kvl._kv_default_format(:cpu, 64) === :f32
+    @testset "q8 default is on for Lava under 512 rows when d_head is a whole number of blocks" begin
+        @test _kvl._kv_default_format(:lava, 64, 128) === :q8
+        @test _kvl._kv_default_format(:lava, 256, 511) === :q8
+        @test _kvl._kv_default_format(:lava, 256, 512) === :f32
+        @test _kvl._kv_default_format(:lava, 16, 128) === :f32
+        @test _kvl._kv_default_format(:cpu, 64, 128) === :f32
     end
 
     @testset "q4h on Lava is refused with ERR_INVALID_PLAN" begin
@@ -74,6 +75,30 @@ else
         @test err isa Gesso.GessoError
         @test err.code == Gesso.ERR_INVALID_PLAN
         @test occursin("q4h", sprint(showerror, err))
+    end
+
+    @testset "Lava KV caches take dedicated buffers, not 64 MiB pool blocks" begin
+        # Gemma 4 sliding layer at ctx 4161: 32.5 MiB in f32, which the pool
+        # would round to 36 MiB and give a 64 MiB block of its own
+        pooled(x) = x.buf[].pool_block !== nothing
+        for (fmt, T) in ((:f32, Float32), (:f16, Float16))
+            x = _kvl._kv_alloc(fmt, _lava_kv_like, 4161, 8, 256)
+            @test x isa Lava.LavaArray{T,3}
+            @test size(x) == (4161, 8, 256)
+            @test !pooled(x)
+            @test all(iszero, Array(x))
+            Lava.unsafe_free!(x)
+        end
+        q = _kvl._kv_alloc(:q8, _lava_kv_like, 64, 2, 64)
+        @test !pooled(q.codes) && !pooled(q.scales)
+        @test all(iszero, Array(q.codes)) && all(iszero, Array(q.scales))
+        err = try
+            _kvl._kv_alloc(:q8, _lava_kv_like, 8, 2, 48)
+            nothing
+        catch e
+            e
+        end
+        @test err isa Gesso.GessoError
     end
 
     @testset "device q8 write equals the host write bit for bit" begin

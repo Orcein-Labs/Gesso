@@ -53,6 +53,12 @@ else
     error("bench_35b: GESSO_BACKEND must be lava, cuda or cpu, got '$which'")
 end
 
+# Size the device weight budget's KV reserve to the longest run here, not the
+# server's default context: a 64k reserve leaves a small card no room for the
+# weights and the bench then times host-resident weights.
+haskey(ENV, "GESSO_GPU_BUDGET_CTX") ||
+    Gesso.Inference.gpu_budget_context!(maximum(CONTEXTS) + NEW)
+
 t_load = @elapsed begin
     model, tensors, spec = Gesso.load_gguf(GGUF)
     dev = which == "cpu" ? tensors : Gesso.to_device(backend, tensors)

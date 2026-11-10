@@ -19,7 +19,7 @@ const PATTERN = r"\bGESSO_[A-Z0-9_]*[A-Z0-9]\b"
 # name, default, meaning
 const USER = [
     ("GESSO_BACKEND", "`lava`", "Backend for the scripts and the chat server: `lava`, `cpu` (the correctness oracle), `cuda` (comparator), `amdgpu` (chat server, GPU-untested)."),
-    ("GESSO_KV_FORMAT", "per backend", "KV cache format: `f32`, `f16`, `q8` or `q4h`. Unset is `q8` on CUDA and Lava."),
+    ("GESSO_KV_FORMAT", "per backend", "KV cache format: `f32`, `f16`, `q8` or `q4h`. Unset is `q8` on CUDA, `q8` on Lava below 512 tokens of context and `f32` from 512."),
     ("GESSO_GPU_BUDGET_MIB", "free memory less the reserve", "Device memory for weights, in MiB. Unset probes free memory; 4800 when the probe is unavailable."),
     ("GESSO_GPU_BUDGET_CTX", "65536", "Context length the weight budget keeps KV room for. A server's `--n-ctx` wins."),
     ("GESSO_GPU_RESERVE_MIB", "1024", "Least device memory kept free for KV, prefill passes and the desktop, in MiB."),
@@ -43,6 +43,7 @@ const DISABLE_DOC = Dict(
     "gdn_prefill_gnorm" => "Fused gated-norm in GatedDeltaNet prefill.",
     "gdn_recur_reg" => "Register-resident GatedDeltaNet recurrence kernel; falls back to the shared-memory kernel.",
     "gpu_dense_quant" => "Quantized dense GEMV/GEMM on the device; falls back to dequant-to-F16.",
+    "gguf_read" => "Reading the GGUF into memory at load; falls back to the mmap.",
     "hot_experts" => "Device pool of frequently used host experts (on by default on CUDA, opt-in on Lava).",
     "hot_pin" => "Pinned host staging for the hot-expert pool.",
     "hot_prefill" => "Hot-expert planning during prefill.",

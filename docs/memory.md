@@ -6,8 +6,10 @@ can pick a context length that fits.
 ## KV formats
 
 Set `GESSO_KV_FORMAT` to one of `f32`, `f16`, `q8`, `q4h` (case-insensitive).
-When unset, `q8` is used on the CUDA and Lava backends and `f32` on the CPU
-backend. If the head size is not a multiple of 32, the default is `f32`.
+When unset, CUDA uses `q8`. Lava uses `q8` when the context (prompt plus
+`max_new_tokens`) is under 512 tokens, and `f32` from 512 tokens up, where
+`q8` drifts past llama.cpp on long prompts. The CPU backend uses `f32`. If the
+head size is not a multiple of 32, the default is `f32`.
 Any other value fails with `ERR_INVALID_PLAN`.
 
 Bytes for one head's key (or value) row of `d` elements:

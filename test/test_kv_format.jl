@@ -34,9 +34,13 @@ _kv_dense(x) = Float32[x[u, h, j] for u in axes(x, 1), h in axes(x, 2), j in axe
     # unset takes the backend default; a set variable overrides it either way
     @test withenv(() -> _KVI._kv_format(:q8), "GESSO_KV_FORMAT" => nothing) === :q8
     @test withenv(() -> _KVI._kv_format(:q8), "GESSO_KV_FORMAT" => "f32") === :f32
-    @test _KVI._kv_default_format(:cuda, 256) === :q8
-    @test _KVI._kv_default_format(:cuda, 16) === :f32
-    @test _KVI._kv_default_format(:cpu, 256) === :f32
+    @test _KVI._kv_default_format(:cuda, 256, 4096) === :q8
+    @test _KVI._kv_default_format(:cuda, 16, 64) === :f32
+    @test _KVI._kv_default_format(:cpu, 256, 64) === :f32
+    # Lava keeps q8 only for caches under 512 rows
+    @test _KVI._kv_default_format(:lava, 256, 511) === :q8
+    @test _KVI._kv_default_format(:lava, 256, 512) === :f32
+    @test _KVI._kv_default_format(:lava, 16, 64) === :f32
 end
 
 @testset "kv format: allocation sizes and shape checks" begin

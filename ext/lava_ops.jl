@@ -1500,12 +1500,13 @@ function _lava_weight_budget(tensors)
     rows = G._gpu_budget_pass_rows(ctx)
     floor = Int64(_lhot_env_int("GESSO_GPU_RESERVE_MIB", _LHOT_RESERVE_MIB)) << 20
     reserve = G._gpu_reserve(;
-        kv_per_token=G._gpu_kv_per_token(geo, :lava),
+        kv_per_token=G._gpu_kv_per_token(geo, :lava, ctx),
         ctx,
         prefill=geo.spec === nothing ? 0 :
             G._gpu_prefill_row_bytes(geo) * rows + _lava_attention_tile_bytes(tensors, geo, ctx, rows),
         floor,
         blas=0,
+        driver=Int64(_LAVA_DRIVER_RESERVE_MIB) << 20,
     )
     return G._gpu_budget_resolve(:lava, haskey(ENV, "GESSO_GPU_BUDGET_MIB") ? nothing : _lava_device_free_bytes(), reserve)
 end

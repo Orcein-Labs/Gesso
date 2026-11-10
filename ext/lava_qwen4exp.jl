@@ -60,7 +60,8 @@ function _q4x_weight_budget(cfg::Gesso.Inference.Qwen4expConfig)
     ctx = G._gpu_budget_ctx()
     kv_per_token = count(cfg.attn_layer) * 2 * cfg.n_head_kv * cfg.head_dim * 4
     floor = Int64(_lhot_env_int("GESSO_GPU_RESERVE_MIB", _LHOT_RESERVE_MIB)) << 20
-    reserve = G._gpu_reserve(; kv_per_token, ctx, prefill=0, floor, blas=0)
+    reserve = G._gpu_reserve(; kv_per_token, ctx, prefill=0, floor, blas=0,
+                             driver=Int64(_LAVA_DRIVER_RESERVE_MIB) << 20)
     free = haskey(ENV, "GESSO_GPU_BUDGET_MIB") ? nothing : _lava_device_free_bytes()
     return G._gpu_budget_resolve(:lava_qwen4exp, free, reserve)
 end

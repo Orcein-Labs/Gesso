@@ -485,9 +485,7 @@ function load_state(
     tensors;
     backend::AbstractGessoBackend=CPUBackend(),
 )
-    fmt = _kv_format(
-        _kv_default_format(backend_name(backend), _tensor_head_dim(model, tensors)),
-    )
+    d_head = _tensor_head_dim(model, tensors)
     fp = _model_fingerprint(tensors)
     limit = filesize(path)
     try
@@ -498,6 +496,8 @@ function load_state(
             ver == _STATE_VERSION || _state_refuse("version $ver, expected $_STATE_VERSION")
             read(io, UInt64) == fp || _state_refuse("saved from another model")
             ctx = Int(read(io, Int64))
+            # the default depends on the cache size, so it is known once ctx is read
+            fmt = _kv_format(_kv_default_format(backend_name(backend), d_head, ctx))
             stored_fmt = Symbol(String(read(io, Int(read(io, UInt8)))))
             stored_fmt == fmt ||
                 _state_refuse("saved with KV format $stored_fmt, this backend uses $fmt")

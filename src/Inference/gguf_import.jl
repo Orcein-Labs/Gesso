@@ -412,6 +412,41 @@ function _prefault_gguf_data!(hdr; avail::Integer=_mem_available_bytes())::Symbo
 end
 
 """
+    _gguf_read_resident(hdr; avail=_mem_available_bytes()) -> (hdr, status::Symbol)
+
+Copy the whole GGUF into an anonymous `Vector{UInt8}` and return `hdr` with
+that buffer as `data`. The header offsets are unchanged and the bytes are the
+file's, so every reader sees the same weights.
+
+Host-run weights read through the mmap stay file pages. Reclaim can drop them
+even with plenty of memory free, and decode then faults them back from the
+model disk, which on a spinning disk collapses decode. Anonymous pages are
+never dropped; at worst they swap, and swap-in from zram runs at memory speed.
+
+Skipped, so the mmap stays: with `GESSO_DISABLE=gguf_read`, when the file does
+not fit in `_PREFAULT_MEM_FRACTION` of MemAvailable, when NUMA weight
+localization is on (it copies dense weights per node and drops their file
+range, which on anonymous memory would zero it), or when the read comes up
+short. The result carries `mapped=false`. Returns `:read`, `:off`, `:numa`,
+`:too_big` or `:failed`.
+"""
+function _gguf_read_resident(hdr; avail::Integer=_mem_available_bytes())
+    env_disabled(:gguf_read) && return hdr, :off
+    _numa_localize_enabled(_NUMA_LOCALIZE_MIN_BYTES) && return hdr, :numa
+    n = length(hdr.data)
+    n <= _PREFAULT_MEM_FRACTION * avail || return hdr, :too_big
+    buf = Vector{UInt8}(undef, n)
+    got = open(hdr.path, "r") do io
+        readbytes!(io, buf, n)
+    end
+    if got != n
+        @debug "gguf read skipped" path=hdr.path got n
+        return hdr, :failed
+    end
+    return merge(hdr, (data=buf, mapped=false)), :read
+end
+
+"""
     gguf_header(path) -> (; data, kv, tensors, data_start)
 
 Parse a GGUF header and check it against the file before anything reads
@@ -1130,7 +1165,7 @@ function _quant_matrix(hdr, info::GgufTensorInfo)
     offset0 = Int(hdr.data_start) + Int(info.offset)
     if _numa_localize_enabled(nbytes)
         local_bytes = _numa_localize_rows(hdr.data, offset0, nrows, rb)
-        _release_file_range!(hdr.path, hdr.data, offset0, nbytes)
+        get(hdr, :mapped, true) && _release_file_range!(hdr.path, hdr.data, offset0, nbytes)
         return QuantMatrix(local_bytes, 0, info.ggml_type, ne0, nrows, rb, traits.blck_size)
     end
     return QuantMatrix(
@@ -1246,12 +1281,13 @@ Load a GGUF of any architecture `spec_from_gguf_kv` accepts (qwen35,
 qwen35moe, llama, spark2_5, qwen4exp, deepseek41, lfm2, lfm2moe, lfm3, gemma4). Dense 2-D projection weights and
 the embedding and output head stay as quant bytes (`QuantMatrix`), not F32.
 Small and 1-D tensors materialize to `T` (Float32 by default; F64 cannot hold
-these checkpoints). Routed experts stay mmap'd as `GgufQuantSlice` and dequant
-one selected expert at a time. `tensors.mtp` records the MTP blocks (not run).
+these checkpoints). The file is read into memory when it fits (`_gguf_read_resident`), else
+mmap'd. Routed experts stay byte views (`GgufQuantSlice`) and dequant one
+selected expert at a time. `tensors.mtp` records the MTP blocks (not run).
 """
 function load_gguf(path::AbstractString; T::Type=Float32, verbose::Bool=false)
-    hdr = gguf_header(path)
-    _prefault_gguf_data!(hdr)
+    hdr, how = _gguf_read_resident(gguf_header(path))
+    how === :read || _prefault_gguf_data!(hdr)
     spec = spec_from_gguf_kv(hdr.kv; tensor_names=Set(t.name for t in hdr.tensors))
     pmap = _gguf_param_map(spec)
     info_by = Dict{String, GgufTensorInfo}(info.name => info for info in hdr.tensors)

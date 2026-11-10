@@ -35,18 +35,28 @@ function _kv_format(default::Symbol=:f32)
     return f
 end
 
-# Unset GESSO_KV_FORMAT means q8 on CUDA and Lava. On CUDA its logit drift on
-# the 35B matches f16 (llama.cpp's default) and its decode beats f32 at every
+# Unset GESSO_KV_FORMAT means q8 on CUDA, and on Lava below
+# _LAVA_KV_F32_CTX rows of context; `ctx` is the cache's row capacity (prompt
+# plus new tokens), fixed when the cache is allocated. On CUDA q8's logit drift
+# on the 35B matches f16 (llama.cpp's default) and its decode beats f32 at every
 # length, at 27% of the memory. Lava stores the same codes; its fused decode
 # reads them in place and its other readers take a dense Float32 copy of the
-# rows they attend (see ext/lava_kv_format.jl). Teacher-forced at 2048 tokens
-# on the 35B, Lava's q8 drift sits with CUDA's and inside the spread two f32
-# runs on CUDA show, so a greedy split under q8 is routing noise, not q8 error.
-# The CPU decode reads a quantized cache one getindex per element and has no
-# vectorized reader, so it stays f32 until one is measured. A head too narrow
-# for one scale block also stays f32.
-_kv_default_format(backend::Symbol, d_head::Int) =
-    backend in (:cuda, :lava) && d_head % _KV_BLOCK == 0 ? :q8 : :f32
+# rows they attend (see ext/lava_kv_format.jl). From 512 rows Lava keeps f32:
+# scored against the all-f32 oracle on a 512-token prompt, LFM2.5 8B under q8
+# misses 4 of 32 forced top-1 tokens with a KL max of .37, where f32 misses 1
+# with a KL mean of .026, level with llama.cpp CPU's .027. q8's per-row error
+# accumulates over the rows a query attends, so the threshold follows the
+# context, not the step. The CPU decode reads a quantized cache one getindex
+# per element and has no vectorized reader, so it stays f32 until one is
+# measured. A head too narrow for one scale block also stays f32.
+const _LAVA_KV_F32_CTX = 512
+
+function _kv_default_format(backend::Symbol, d_head::Int, ctx::Integer)
+    d_head % _KV_BLOCK == 0 || return :f32
+    backend === :cuda && return :q8
+    backend === :lava && return ctx >= _LAVA_KV_F32_CTX ? :f32 : :q8
+    return :f32
+end
 
 # A device reader that cannot take a cache in its stored format returns a dense
 # Float32 view of rows 1:K here. Other backends read the cache as it is.

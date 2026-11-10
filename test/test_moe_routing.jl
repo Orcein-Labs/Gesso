@@ -40,6 +40,12 @@ end
     r = G._gpu_reserve(; kv_per_token=10_000, ctx=1000, prefill=300 * mib, floor=1024 * mib, blas=64 * mib)
     @test r.kv == 10_000_000
     @test r.total == r.kv + 300mib + 1024mib + 64mib + 128mib
+    # the driver part defaults to zero and adds straight to the total
+    @test r.driver == 0
+    rd = G._gpu_reserve(; kv_per_token=10_000, ctx=1000, prefill=300 * mib, floor=1024 * mib, blas=64 * mib,
+                        driver=768 * mib)
+    @test rd.driver == 768mib
+    @test rd.total == r.total + 768mib
     withenv("GESSO_GPU_BUDGET_MIB" => nothing) do
         # normal probe: free minus reserve
         @test G._gpu_budget_decide(8000mib, r.total) == (8000mib - r.total, :probe)
@@ -71,10 +77,10 @@ end
     @test G._gpu_budget_pass_rows(65536) == 1024
     # a hand-built toy has no spec: no KV is reserved
     geo = G._gpu_geometry((; embedding=nothing))
-    @test G._gpu_kv_per_token(geo, :cuda) == 0
+    @test G._gpu_kv_per_token(geo, :cuda, 4096) == 0
     # a stub spec without model sizes counts as no spec
     geo = G._gpu_geometry((; spec=(; family=:probe)))
-    @test G._gpu_kv_per_token(geo, :cuda) == 0
+    @test G._gpu_kv_per_token(geo, :cuda, 4096) == 0
 end
 
 @testset "MoE top-k SwiGLU: unit router" begin

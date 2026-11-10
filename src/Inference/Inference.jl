@@ -2076,8 +2076,8 @@ function _reference_generate(
     cap = max(max_new_tokens, 0)
     vocab = size(tensors.embedding.storage, 1)
     on_cpu = backend_name(cpu) === :cpu
-    kv_fmt = _kv_format(_kv_default_format(backend_name(cpu), d_head))
     st = state === nothing ? GenerateState(P + cap) : state
+    kv_fmt = _kv_format(_kv_default_format(backend_name(cpu), d_head, st.ctx))
     key = (objectid(tensors.embedding.storage), backend_name(cpu), kv_fmt)
     st.key === nothing ||
         st.key == key ||
@@ -2119,11 +2119,13 @@ function _reference_generate(
             if on_cpu && kv_fmt === :f32 && rows > 0 && haskey(bt, :gemma4_layer) && hd % 32 == 0 && _G4_KV_TILED[]
                 return kind === :k ? G4KeyTiles(rows, nkv, hd) : G4ValBlocks(rows, nkv, hd)
             end
-            (kv_fmt === :f32 || rows == 0) && return zeros_like((rows, nkv, hd))
+            rows == 0 && return zeros_like((rows, nkv, hd))
             # storage rows padded to a multiple of 4: the CUDA decode reads 4
             # consecutive rows per load and needs every column 4-row aligned.
             # Readers take K rows explicitly, so the tail rows stay unread.
-            x = _kv_alloc(kv_fmt, kv_like, cld(rows, 4) * 4, nkv, hd)
+            # f32 rows stay unpadded. Every format goes through _kv_alloc so a
+            # backend can place the cache itself (Lava: dedicated buffers).
+            x = _kv_alloc(kv_fmt, kv_like, kv_fmt === :f32 ? rows : cld(rows, 4) * 4, nkv, hd)
             push!(zeros_like.held, x)
             return x
         end

@@ -183,6 +183,14 @@ function _kv_alloc(fmt::Symbol, like::Lava.LavaArray, rows::Int, n_kv::Int, d::I
             "GESSO_KV_FORMAT=q4h is not implemented on Lava; use q8 or f32",
         ),
     )
+    T = eltype(like)
+    fmt === :f32 && return _lava_kv_zeros(T, (rows, n_kv, d))
+    fmt === :f16 && return _lava_kv_zeros(Float16, (rows, n_kv, d))
+    fmt === :q8 && d % _KV_BLOCK == 0 && return QuantKV{:q8}(
+        _lava_kv_zeros(Int8, (rows, n_kv, d)),
+        _lava_kv_zeros(Float16, (rows, n_kv, d ÷ _KV_BLOCK)),
+        d,
+    )
     return invoke(
         _kv_alloc,
         Tuple{Symbol,AbstractArray,Int,Int,Int},
@@ -192,4 +200,18 @@ function _kv_alloc(fmt::Symbol, like::Lava.LavaArray, rows::Int, n_kv::Int, d::I
         n_kv,
         d,
     )
+end
+
+# A KV layer lives for the whole state, so it gets a dedicated buffer. Through
+# the pool, a 32.5 MiB f32 layer (Gemma 4 at ctx 4161) rounds to the 36 MiB
+# class and takes a 64 MiB block to itself: 1.8 GB of KV filled 3.8 GB of
+# blocks and ran the device out of memory beside a budget that reserved 1.8 GB.
+# A dedicated buffer costs its own size. Every Lava buffer already carries
+# TRANSFER_DST; naming it as extra usage only routes the allocation past the
+# pool, the flags stay the same.
+const _LAVA_KV_DEDICATED_USAGE = UInt32(Lava.Vulkan.BUFFER_USAGE_TRANSFER_DST_BIT)
+
+function _lava_kv_zeros(::Type{T}, dims::NTuple{N,Int}) where {T,N}
+    x = Lava.LavaArray{T,N}(undef, dims; extra_usage=_LAVA_KV_DEDICATED_USAGE)
+    return fill!(x, zero(T))
 end

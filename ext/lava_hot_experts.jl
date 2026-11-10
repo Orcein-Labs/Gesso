@@ -31,6 +31,13 @@ const _LHOT_MARGIN = 1.0f0
 const _LHOT_RESERVE_MIB = 1024
 const _LHOT_FALLBACK_MIB = 2048
 
+# The NVIDIA driver takes a flat ~650-730 MiB of VRAM on the first real GPU work
+# (measured on the 8 GB 5060 with Ornith 9B, Gemma 26B and Ornith 35B). It sits
+# outside heap-0 usage, so the free probe taken at load still counts it as free
+# and the VK_EXT_memory_budget budget drops by the same amount later. The weight
+# budget reserves it up front.
+const _LAVA_DRIVER_RESERVE_MIB = 768
+
 # Opt-in on Lava (GESSO_TUNE=lava_hot_experts=1); GESSO_DISABLE=hot_experts
 # turns it off on every backend.
 _lhot_enabled() = env_tune(:lava_hot_experts, false) && !env_disabled(:hot_experts)

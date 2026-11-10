@@ -86,6 +86,35 @@ end
     rm(path; force=true)
 end
 
+@testset "whole-file gguf read: same bytes, opt-out, too big" begin
+    path, io = mktemp()
+    bytes = rand(deterministic_rng(10), UInt8, 3 * 65536 + 77)
+    write(io, bytes)
+    close(io)
+    data = open(f -> _EC_Inf.Mmap.mmap(f, Vector{UInt8}; grow=false, shared=false), path)
+    hdr = (data=data, data_start=4096 + 32, path=path, kv=Dict{String, Any}())
+    n = length(bytes)
+    h2, how = _EC_Inf._gguf_read_resident(hdr; avail=2n)
+    numa = _EC_Inf._numa_localize_enabled(_EC_Inf._NUMA_LOCALIZE_MIN_BYTES)
+    if numa
+        @test how === :numa && h2 === hdr
+    else
+        @test how === :read
+        @test h2.data == bytes && h2.data !== data
+        @test h2.mapped === false
+        @test h2.data_start == hdr.data_start && h2.kv === hdr.kv && h2.path == path
+    end
+    withenv("GESSO_DISABLE" => "gguf_read") do
+        @test _EC_Inf._gguf_read_resident(hdr; avail=2n) === (hdr, :off)
+    end
+    numa || @test _EC_Inf._gguf_read_resident(hdr; avail=n) === (hdr, :too_big)
+    numa || @test _EC_Inf._gguf_read_resident(hdr; avail=0) === (hdr, :too_big)
+    data = nothing
+    hdr = nothing
+    GC.gc()
+    rm(path; force=true)
+end
+
 @testset "expert residency: quota, fill order, profile, trace (host)" begin
     rng = deterministic_rng(31)
     n_exp, h, ff = 6, 4, 3

@@ -1365,7 +1365,7 @@ function _cuda_weight_budget(tensors)
     ctx = G._gpu_budget_ctx()
     rows = G._gpu_budget_pass_rows(ctx)
     reserve = G._gpu_reserve(;
-        kv_per_token=G._gpu_kv_per_token(geo, :cuda),
+        kv_per_token=G._gpu_kv_per_token(geo, :cuda, ctx),
         ctx,
         prefill=geo.spec === nothing ? 0 : _prefill_pass_bytes(rows, ctx, geo.qdim, geo.group),
         floor=max(_PREFILL_PASS_MARGIN, _hot_reserve_bytes()),
