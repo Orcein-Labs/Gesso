@@ -1614,6 +1614,7 @@ function _lava_to_device(tensors)
     # now only reports how far the weights eat into the KV reserve.
     budget, free0 = _lava_weight_budget(tensors)
     used = Ref(Int64(0))
+    live0 = Lava.gpu_live_bytes()
     _to_f32(s) =
         s isa Lava.LavaArray ? s :
         s isa Gesso.Inference.QuantMatrix ?
@@ -1657,17 +1658,24 @@ function _lava_to_device(tensors)
     lm_head = tied ? embedding : _conv_t(tensors.lm_head; proj=true)
     fr = haskey(tensors, :final_rms) ? tensors.final_rms : nothing
     final_rms = fr === nothing ? nothing : _conv_t(fr)
-    if used[] > budget
-        mib(x) = div(x, Int64(1) << 20)
-        @warn "lava: quant weights exceed the weight budget; the reserved context may not fit" weights_mib =
-            mib(used[]) budget_mib = mib(budget) ctx = Gesso.Inference._gpu_budget_ctx()
-    end
     Gesso.Inference._prefault_host_experts!(blocks)
     _lhot_register!(blocks)
     _lava_sync!()
+    # Every device byte the upload holds, not only the quant projections: F32
+    # norms, routers, ineligible matrices dequantized to F32 and a tied head
+    # are resident too, so the live delta across the upload is measured. The
+    # trim collects upload temporaries first so they do not count.
+    Lava.trim_gpu_pool!()
+    weights = max(used[], Int64(Lava.gpu_live_bytes() - live0))
+    mib(x) = div(x, Int64(1) << 20)
+    @info "lava device weights" weights_mib = mib(weights) quant_mib = mib(used[])
+    if weights > budget
+        @warn "lava: device weights exceed the weight budget; the reserved context may not fit" weights_mib =
+            mib(weights) quant_mib = mib(used[]) budget_mib = mib(budget) ctx = Gesso.Inference._gpu_budget_ctx()
+    end
     free0 === nothing ||
         lock(_LAVA_KV_FIT_LOCK) do
-            _LAVA_KV_FIT[objectid(blocks)] = (; blocks=WeakRef(blocks), free=Int64(free0), weights=used[], warned=Set{Symbol}())
+            _LAVA_KV_FIT[objectid(blocks)] = (; blocks=WeakRef(blocks), free=Int64(free0), weights, warned=Set{Symbol}())
         end
     result = (; embedding, blocks, lm_head, final_rms)
     return merge(result, _keep_tensor_meta(tensors))
