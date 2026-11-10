@@ -1603,7 +1603,10 @@ end
 Copy `Array` storage to `LavaArray{Float32}` (F64→F32 conversion is part of
 the lowering) and return a new named tuple of the same shape — `embedding`,
 `blocks`, `lm_head`, and `final_rms` when present. NEVER mutates the CPU
-tensors. Tied heads stay tied on device: `lm_head === embedding`.
+tensors. A tied F32 head stays tied on device (`lm_head === embedding`). A tied
+quant table that the Lava quant kernels accept is split: the embedding keeps its
+host GGUF bytes for row lookup and the head gets a device quant copy
+(`GESSO_DISABLE=lava_quant_head` restores the device F32 copy).
 """
 function _lava_to_device(tensors)
     # GGUF quant matrices dequantize to F32 here (embedding rows are gathered
@@ -1649,13 +1652,28 @@ function _lava_to_device(tensors)
         end,
     )
     # An untied GGUF embedding is a row-gather table only: it stays as host
-    # quant bytes. A tied one is also the head, so it goes to the device.
+    # quant bytes. A tied quant table is split: lookups gather from the host
+    # bytes and the head is a device copy of the same quant bytes. Device F32
+    # would be vocab x dim x 4 bytes: 2816 MiB on Gemma 4 26B against 484 MiB
+    # of Q5_K, room the KV cache and the hot-expert pool need on an 8 GB card.
+    # GESSO_DISABLE=lava_quant_head keeps the F32 table for A/B runs.
     tied = tensors.lm_head === tensors.embedding
+    emb_q = tensors.embedding.storage
+    tied_quant =
+        tied && emb_q isa Gesso.Inference.QuantMatrix && _lq_eligible(emb_q) &&
+        !env_disabled(:lava_quant_head)
     embedding =
-        !tied && tensors.embedding.storage isa Gesso.Inference.QuantMatrix ?
+        (!tied || tied_quant) && emb_q isa Gesso.Inference.QuantMatrix ?
         tensors.embedding : _conv_t(tensors.embedding)
     blocks = [_conv_blk(b) for b in tensors.blocks]
-    lm_head = tied ? embedding : _conv_t(tensors.lm_head; proj=true)
+    lm_head = if tied_quant
+        used[] += _lq_device_bytes(emb_q)
+        typeof(tensors.embedding)(; shape=tensors.embedding.shape, storage=_lq_upload(emb_q))
+    elseif tied
+        embedding
+    else
+        _conv_t(tensors.lm_head; proj=true)
+    end
     fr = haskey(tensors, :final_rms) ? tensors.final_rms : nothing
     final_rms = fr === nothing ? nothing : _conv_t(fr)
     Gesso.Inference._prefault_host_experts!(blocks)

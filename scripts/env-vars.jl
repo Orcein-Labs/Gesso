@@ -47,6 +47,7 @@ const DISABLE_DOC = Dict(
     "hot_experts" => "Device pool of frequently used host experts (on by default on CUDA, opt-in on Lava).",
     "hot_pin" => "Pinned host staging for the hot-expert pool.",
     "hot_prefill" => "Hot-expert planning during prefill.",
+    "lava_quant_head" => "Quantized tied output head on the device; falls back to a device F32 copy of the embedding.",
     "moe_device_prefill" => "Batched device MoE prefill; falls back to the per-token loop.",
     "moe_device_route" => "Router top-k on the device; falls back to the host route.",
     "moe_host_experts" => "Routed experts kept on the host. Lava and AMDGPU require it.",

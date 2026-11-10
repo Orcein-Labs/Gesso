@@ -45,6 +45,7 @@ Backend `all` means the CPU path and every GPU backend.
 | `hot_experts` | CUDA, Lava | Device pool of frequently used host experts (on by default on CUDA, opt-in on Lava). |
 | `hot_pin` | CUDA | Pinned host staging for the hot-expert pool. |
 | `hot_prefill` | CUDA | Hot-expert planning during prefill. |
+| `lava_quant_head` | Lava | Quantized tied output head on the device; falls back to a device F32 copy of the embedding. |
 | `moe_device_prefill` | CUDA | Batched device MoE prefill; falls back to the per-token loop. |
 | `moe_device_route` | CUDA | Router top-k on the device; falls back to the host route. |
 | `moe_host_experts` | AMDGPU, CUDA, Lava | Routed experts kept on the host. Lava and AMDGPU require it. |
