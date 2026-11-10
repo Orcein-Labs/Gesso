@@ -177,6 +177,14 @@ _lava_after_op!(::Gesso.DecodeWorkload) = nothing
 # submit cost and the queued work is charged to the next stage that blocks.
 Gesso.Inference._profile_sync(::LavaBackend) = _lava_sync!()
 
+# The block arena, a closed GenerateState and the prefill's dropped KV copies
+# hand their device arrays back here. Without this method they waited for a GC
+# finalizer, and a run after another in the same process could find the last
+# run's caches still holding the card. A LavaArray's DataRef is refcounted, so
+# freeing a view drops only the view's reference, and a batch that uses the
+# array holds its own (pin!), so in-flight work keeps its buffer.
+Gesso.Inference._release_storage!(x::Lava.LavaArray) = (Lava.unsafe_free!(x); nothing)
+
 # A completed engine action leaves all primary device work synchronized.
 function Gesso.Inference._engine_boundary!(::LavaBackend)
     _lava_sync!()
@@ -1491,16 +1499,17 @@ function _lava_attention_tile_bytes(tensors, geo, ctx::Int, rows::Int)
     return max(_LAVA_PREFILL_TILE_BYTES, _g4l_score_tile_bytes(geo.spec.n_heads, ctx, rows))
 end
 
-# Free device-local bytes less the reserve (KV, one prefill pass, the hot-pool
-# floor, slack). Lava has no pass-size override, so the pass is the chunk.
-function _lava_weight_budget(tensors)
+# Bytes Lava keeps beside the weights for a `ctx`-row cache in `fmt`: the KV,
+# one prefill pass, the hot-pool floor, the driver's share and slack. Lava has
+# no pass-size override, so the pass is the chunk.
+function _lava_reserve(tensors, ctx::Integer, fmt::Symbol)
     G = Gesso.Inference
     geo = G._gpu_geometry(tensors)
-    ctx = G._gpu_budget_ctx()
+    ctx = Int(ctx)
     rows = G._gpu_budget_pass_rows(ctx)
     floor = Int64(_lhot_env_int("GESSO_GPU_RESERVE_MIB", _LHOT_RESERVE_MIB)) << 20
-    reserve = G._gpu_reserve(;
-        kv_per_token=G._gpu_kv_per_token(geo, :lava, ctx),
+    return G._gpu_reserve(;
+        kv_per_token=G._gpu_kv_per_token(geo, :lava, ctx; fmt),
         ctx,
         prefill=geo.spec === nothing ? 0 :
             G._gpu_prefill_row_bytes(geo) * rows + _lava_attention_tile_bytes(tensors, geo, ctx, rows),
@@ -1508,7 +1517,55 @@ function _lava_weight_budget(tensors)
         blas=0,
         driver=Int64(_LAVA_DRIVER_RESERVE_MIB) << 20,
     )
-    return G._gpu_budget_resolve(:lava, haskey(ENV, "GESSO_GPU_BUDGET_MIB") ? nothing : _lava_device_free_bytes(), reserve)
+end
+
+# Free device-local bytes less the reserve for the budget context, and the free
+# bytes it started from (nothing when GESSO_GPU_BUDGET_MIB sets the budget).
+function _lava_weight_budget(tensors)
+    G = Gesso.Inference
+    ctx = G._gpu_budget_ctx()
+    fmt = G._kv_format(G._kv_default_format(:lava, G._gpu_geometry(tensors).head_dim, ctx))
+    free = haskey(ENV, "GESSO_GPU_BUDGET_MIB") ? nothing : _lava_device_free_bytes()
+    return G._gpu_budget_resolve(:lava, free, _lava_reserve(tensors, ctx, fmt)), free
+end
+
+# What a default KV format is checked against, per uploaded model: the device
+# bytes free before the upload and the bytes the weights took. Keyed on the
+# device block vector, which every generation over that upload passes back; the
+# entry holds it weakly and checks identity, since an objectid can be reused.
+const _LAVA_KV_FIT = Dict{UInt,Any}()
+const _LAVA_KV_FIT_LOCK = ReentrantLock()
+
+function _lava_kv_fit(tensors)
+    tensors isa NamedTuple && haskey(tensors, :blocks) || return nothing
+    fit = lock(() -> get(_LAVA_KV_FIT, objectid(tensors.blocks), nothing), _LAVA_KV_FIT_LOCK)
+    return fit !== nothing && fit.blocks.value === tensors.blocks ? fit : nothing
+end
+
+# Lava's default is f32 KV from 512 rows. When an f32 cache of `ctx` rows does
+# not fit beside the weights this upload holds, the default steps down to f16,
+# then q8, and warns once per model and format: without it the cache allocation
+# runs the device out of memory. An explicit GESSO_KV_FORMAT is used as given.
+function _lava_kv_fit_format(fit, tensors, ctx::Integer, fmt::Symbol)
+    fmt === :f32 || return fmt
+    fits(f) = fit.weights + _lava_reserve(tensors, ctx, f).total <= fit.free
+    fits(:f32) && return :f32
+    pick = fits(:f16) ? :f16 : :q8
+    if !(pick in fit.warned)
+        push!(fit.warned, pick)
+        mib(x) = div(Int64(x), Int64(1) << 20)
+        @warn "lava: an f32 KV cache does not fit beside the weights; using $pick (set GESSO_KV_FORMAT to choose)" ctx weights_mib =
+            mib(fit.weights) free_mib = mib(fit.free) f32_reserve_mib = mib(_lava_reserve(tensors, ctx, :f32).total)
+    end
+    return pick
+end
+
+function Gesso.Inference._kv_auto_format(::LavaBackend, tensors, d_head::Int, ctx::Integer)
+    fmt = Gesso.Inference._kv_default_format(:lava, d_head, ctx)
+    haskey(ENV, "GESSO_KV_FORMAT") && return fmt
+    fit = _lava_kv_fit(tensors)
+    fit === nothing && return fmt
+    return lock(() -> _lava_kv_fit_format(fit, tensors, ctx, fmt), _LAVA_KV_FIT_LOCK)
 end
 
 # Lava uploads through one pinned staging buffer per queue that grows to the
@@ -1555,7 +1612,7 @@ function _lava_to_device(tensors)
     # path, so its only alternative is device F32, which is larger than the
     # quant bytes and turned a tight budget into an out-of-memory. The budget
     # now only reports how far the weights eat into the KV reserve.
-    budget = _lava_weight_budget(tensors)
+    budget, free0 = _lava_weight_budget(tensors)
     used = Ref(Int64(0))
     _to_f32(s) =
         s isa Lava.LavaArray ? s :
@@ -1608,6 +1665,10 @@ function _lava_to_device(tensors)
     Gesso.Inference._prefault_host_experts!(blocks)
     _lhot_register!(blocks)
     _lava_sync!()
+    free0 === nothing ||
+        lock(_LAVA_KV_FIT_LOCK) do
+            _LAVA_KV_FIT[objectid(blocks)] = (; blocks=WeakRef(blocks), free=Int64(free0), weights=used[], warned=Set{Symbol}())
+        end
     result = (; embedding, blocks, lm_head, final_rms)
     return merge(result, _keep_tensor_meta(tensors))
 end

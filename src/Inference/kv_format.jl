@@ -58,6 +58,12 @@ function _kv_default_format(backend::Symbol, d_head::Int, ctx::Integer)
     return :f32
 end
 
+# The unset-GESSO_KV_FORMAT format for a generation over `tensors` on
+# `backend`, given the cache's row capacity. A backend whose default cache may
+# not fit beside the weights it holds steps it down in its own method.
+_kv_auto_format(backend, tensors, d_head::Int, ctx::Integer) =
+    _kv_default_format(backend_name(backend), d_head, ctx)
+
 # A device reader that cannot take a cache in its stored format returns a dense
 # Float32 view of rows 1:K here. Other backends read the cache as it is.
 _kv_dense(x::AbstractArray, K::Int) = x

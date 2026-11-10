@@ -497,7 +497,7 @@ function load_state(
             read(io, UInt64) == fp || _state_refuse("saved from another model")
             ctx = Int(read(io, Int64))
             # the default depends on the cache size, so it is known once ctx is read
-            fmt = _kv_format(_kv_default_format(backend_name(backend), d_head, ctx))
+            fmt = _kv_format(_kv_auto_format(backend, tensors, d_head, ctx))
             stored_fmt = Symbol(String(read(io, Int(read(io, UInt8)))))
             stored_fmt == fmt ||
                 _state_refuse("saved with KV format $stored_fmt, this backend uses $fmt")

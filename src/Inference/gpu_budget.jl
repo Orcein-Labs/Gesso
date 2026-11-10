@@ -59,9 +59,9 @@ end
 
 # KV bytes per token in the format a generation on `backend` allocates; f32 when
 # the geometry does not fit the quantized layout.
-function _gpu_kv_per_token(geo, backend::Symbol, ctx::Integer)
+function _gpu_kv_per_token(geo, backend::Symbol, ctx::Integer;
+                           fmt::Symbol=_kv_format(_kv_default_format(backend, geo.head_dim, ctx)))
     geo.spec === nothing && return 0
-    fmt = _kv_format(_kv_default_format(backend, geo.head_dim, ctx))
     return try
         kv_bytes_per_token(geo.spec, fmt)
     catch

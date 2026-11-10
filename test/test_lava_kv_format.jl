@@ -65,6 +65,49 @@ else
         @test _kvl._kv_default_format(:cpu, 64, 128) === :f32
     end
 
+    @testset "Lava steps an f32 default down to f16 or q8 when it does not fit beside the weights" begin
+        ext = Base.get_extension(Gesso, :GessoLavaExt)
+        # Dense, 4 layers, 2 KV heads of 64: f32 KV is 4 * 2 * 2 * 64 * 4 = 4096 B a token.
+        spec = _kvl.ArchitectureSpec(family=:llama, hidden_size=256, num_layers=4, n_heads=4,
+            n_kv_heads=2, head_dim=64, vocab_size=100, intermediate_size=512)
+        blocks = [(; w=1)]
+        tensors = (; blocks, spec)
+        ctx = 1024
+        r(f) = ext._lava_reserve(tensors, ctx, f).total
+        @test r(:f32) > r(:f16) > r(:q8)
+        @test r(:f32) - r(:f16) == 2048 * ctx
+        weights = Int64(3) << 30
+        fit(free) = (; blocks=WeakRef(blocks), free=Int64(free), weights, warned=Set{Symbol}())
+        pick(f, c=ctx) = ext._lava_kv_fit_format(f, tensors, c, _kvl._kv_default_format(:lava, 64, c))
+        @test pick(fit(weights + r(:f32))) === :f32
+        @test pick(fit(weights + r(:f32) - 1)) === :f16
+        @test pick(fit(weights + r(:f16))) === :f16
+        @test pick(fit(weights + r(:f16) - 1)) === :q8
+        @test pick(fit(weights)) === :q8
+        # Under 512 rows the default is already q8 and is left alone.
+        @test pick(fit(weights), 256) === :q8
+        # The warning names each step-down once.
+        f = fit(weights + r(:f16))
+        @test_logs (:warn, r"does not fit") pick(f)
+        @test_logs pick(f)
+
+        # The record is keyed by the uploaded blocks: another model, or none, keeps the default.
+        lb = Gesso.LavaBackend()
+        ext._LAVA_KV_FIT[objectid(blocks)] = fit(weights)
+        try
+            withenv("GESSO_KV_FORMAT" => nothing) do
+                @test _kvl._kv_auto_format(lb, tensors, 64, ctx) === :q8
+                @test _kvl._kv_auto_format(lb, (; blocks=[(; w=2)], spec), 64, ctx) === :f32
+                @test _kvl._kv_auto_format(lb, (; spec), 64, ctx) === :f32
+            end
+            withenv("GESSO_KV_FORMAT" => "f32") do
+                @test _kvl._kv_format(_kvl._kv_auto_format(lb, tensors, 64, ctx)) === :f32
+            end
+        finally
+            delete!(ext._LAVA_KV_FIT, objectid(blocks))
+        end
+    end
+
     @testset "q4h on Lava is refused with ERR_INVALID_PLAN" begin
         err = try
             _kvl._kv_alloc(:q4h, _lava_kv_like, 8, 2, 64)
@@ -275,6 +318,38 @@ else
         err = maximum(abs, Float64.(Array(attn)) .- ref)
         @test err > _lava_kv_tol(ref)
         println("lava q8 decode, shifted V scales: max|err| = ", err)
+    end
+
+    @testset "released device caches free now, a released view keeps its parent" begin
+        # The zero fill's batch holds its own reference until the batch retires,
+        # so counts are read after a sync.
+        lava_sync() = _kvl._profile_sync(Gesso.LavaBackend())
+        q8 = _kvl._kv_alloc(:q8, _lava_kv_like, 64, 2, 64)
+        lava_sync()
+        @test !q8.codes.buf.freed && !q8.scales.buf.freed
+        @test q8.codes.buf.rc.count[] == 1 && q8.scales.buf.rc.count[] == 1
+        _kvl._release_storage!(q8)
+        @test q8.codes.buf.freed && q8.scales.buf.freed
+        @test q8.codes.buf.rc.count[] == 0 && q8.scales.buf.rc.count[] == 0
+
+        # Released while its fill is still in flight: the batch keeps the
+        # buffer alive, and it frees when the batch retires.
+        y = _kvl._kv_alloc(:f32, _lava_kv_like, 64, 2, 64)
+        _kvl._release_storage!(y)
+        @test y.buf.freed
+        lava_sync()
+        @test y.buf.rc.count[] == 0
+
+        x = _kvl._kv_alloc(:f32, _lava_kv_like, 64, 2, 64)
+        lava_sync()
+        v = view(x, :, :, 1:32)
+        @test v isa Lava.LavaArray
+        @test x.buf.rc.count[] == 2
+        _kvl._release_storage!(v)
+        @test v.buf.freed && !x.buf.freed && x.buf.rc.count[] == 1
+        @test sum(Array(x)) == 0.0f0
+        _kvl._release_storage!(x)
+        @test x.buf.freed && x.buf.rc.count[] == 0
     end
 
 end

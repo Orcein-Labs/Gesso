@@ -2077,7 +2077,7 @@ function _reference_generate(
     vocab = size(tensors.embedding.storage, 1)
     on_cpu = backend_name(cpu) === :cpu
     st = state === nothing ? GenerateState(P + cap) : state
-    kv_fmt = _kv_format(_kv_default_format(backend_name(cpu), d_head, st.ctx))
+    kv_fmt = _kv_format(_kv_auto_format(cpu, tensors, d_head, st.ctx))
     key = (objectid(tensors.embedding.storage), backend_name(cpu), kv_fmt)
     st.key === nothing ||
         st.key == key ||
