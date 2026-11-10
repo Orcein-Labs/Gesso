@@ -414,7 +414,7 @@ end
 """
     _gguf_read_resident(hdr; avail=_mem_available_bytes()) -> (hdr, status::Symbol)
 
-Copy the whole GGUF into an anonymous `Vector{UInt8}` and return `hdr` with
+Copy the whole GGUF into a private anonymous mapping and return `hdr` with
 that buffer as `data`. The header offsets are unchanged and the bytes are the
 file's, so every reader sees the same weights.
 
@@ -422,6 +422,9 @@ Host-run weights read through the mmap stay file pages. Reclaim can drop them
 even with plenty of memory free, and decode then faults them back from the
 model disk, which on a spinning disk collapses decode. Anonymous pages are
 never dropped; at worst they swap, and swap-in from zram runs at memory speed.
+The buffer is mapped, not a `Vector{UInt8}` from the GC: a heap that counts
+10 GB of weights stays near its target, and every small allocation in decode
+then starts a full collection (Gemma 26B: ~530 ms decode stalls).
 
 Skipped, so the mmap stays: with `GESSO_DISABLE=gguf_read`, when the file does
 not fit in `_PREFAULT_MEM_FRACTION` of MemAvailable, when NUMA weight
@@ -435,7 +438,7 @@ function _gguf_read_resident(hdr; avail::Integer=_mem_available_bytes())
     _numa_localize_enabled(_NUMA_LOCALIZE_MIN_BYTES) && return hdr, :numa
     n = length(hdr.data)
     n <= _PREFAULT_MEM_FRACTION * avail || return hdr, :too_big
-    buf = Vector{UInt8}(undef, n)
+    buf = Mmap.mmap(Mmap.Anonymous(), Vector{UInt8}, (n,), 0; shared=false)
     got = open(hdr.path, "r") do io
         readbytes!(io, buf, n)
     end

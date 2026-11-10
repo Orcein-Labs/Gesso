@@ -109,6 +109,33 @@ end
     end
     numa || @test _EC_Inf._gguf_read_resident(hdr; avail=n) === (hdr, :too_big)
     numa || @test _EC_Inf._gguf_read_resident(hdr; avail=0) === (hdr, :too_big)
+    h2 = nothing
+    data = nothing
+    hdr = nothing
+    GC.gc()
+    rm(path; force=true)
+end
+
+# A GC heap that counts the weights stays near its target, and decode then runs
+# a full collection on small allocations. The resident copy must not count.
+@testset "whole-file gguf read stays off the GC heap" begin
+    path, io = mktemp()
+    n = 32 << 20
+    write(io, rand(deterministic_rng(11), UInt8, n))
+    close(io)
+    data = open(f -> _EC_Inf.Mmap.mmap(f, Vector{UInt8}; grow=false, shared=false), path)
+    hdr = (data=data, data_start=4096 + 32, path=path, kv=Dict{String, Any}())
+    if !_EC_Inf._numa_localize_enabled(_EC_Inf._NUMA_LOCALIZE_MIN_BYTES)
+        GC.gc()
+        b0 = Base.gc_live_bytes()
+        h2, how = _EC_Inf._gguf_read_resident(hdr; avail=2n)
+        GC.gc()
+        grew = Base.gc_live_bytes() - b0
+        @test how === :read
+        @test grew < n ÷ 4
+        @test h2.data == data
+        h2 = nothing
+    end
     data = nothing
     hdr = nothing
     GC.gc()
