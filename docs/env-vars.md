@@ -40,7 +40,7 @@ Backend `all` means the CPU path and every GPU backend.
 |---|---|---|
 | `gdn_prefill_gnorm` | CUDA | Fused gated-norm in GatedDeltaNet prefill. |
 | `gdn_recur_reg` | CUDA | Register-resident GatedDeltaNet recurrence kernel; falls back to the shared-memory kernel. |
-| `gguf_read` | all | Reading the GGUF into memory at load; falls back to the mmap. |
+| `gguf_read` | all | Reading the GGUF into memory at load (slow model disks only, unless forced); falls back to the mmap. |
 | `gpu_dense_quant` | CUDA | Quantized dense GEMV/GEMM on the device; falls back to dequant-to-F16. |
 | `hot_experts` | CUDA, Lava | Device pool of frequently used host experts (on by default on CUDA, opt-in on Lava). |
 | `hot_pin` | CUDA | Pinned host staging for the hot-expert pool. |
@@ -84,6 +84,7 @@ Backend `all` means the CPU path and every GPU backend.
 | `expert_cache` | `0` | all | Host expert slices kept dequantized; `0` is off. |
 | `gemv_chunks_per_thread` | 16 | all | CPU GEMV work chunks per thread. |
 | `gemv_pool` | `auto` | all | CPU GEMV scheduler: `auto`, `pool` or `threads`. |
+| `gguf_read` | `0` | all | `1` reads the GGUF into memory on any disk; by default only on a rotational, FUSE or network disk. |
 | `gguf_unreorder_v` | `0` | all | `1` gathers tiled V heads into grouped order at load. |
 | `hot_decay` | `0.99` | CUDA | Decay of the hot-expert usage score per token. |
 | `hot_fill` | `2` | CUDA | Experts the hot pool loads per token. |

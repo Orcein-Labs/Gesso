@@ -94,7 +94,7 @@ end
     data = open(f -> _EC_Inf.Mmap.mmap(f, Vector{UInt8}; grow=false, shared=false), path)
     hdr = (data=data, data_start=4096 + 32, path=path, kv=Dict{String, Any}())
     n = length(bytes)
-    h2, how = _EC_Inf._gguf_read_resident(hdr; avail=2n)
+    h2, how = _EC_Inf._gguf_read_resident(hdr; avail=2n, slow=true)
     numa = _EC_Inf._numa_localize_enabled(_EC_Inf._NUMA_LOCALIZE_MIN_BYTES)
     if numa
         @test how === :numa && h2 === hdr
@@ -105,10 +105,10 @@ end
         @test h2.data_start == hdr.data_start && h2.kv === hdr.kv && h2.path == path
     end
     withenv("GESSO_DISABLE" => "gguf_read") do
-        @test _EC_Inf._gguf_read_resident(hdr; avail=2n) === (hdr, :off)
+        @test _EC_Inf._gguf_read_resident(hdr; avail=2n, slow=true) === (hdr, :off)
     end
-    numa || @test _EC_Inf._gguf_read_resident(hdr; avail=n) === (hdr, :too_big)
-    numa || @test _EC_Inf._gguf_read_resident(hdr; avail=0) === (hdr, :too_big)
+    numa || @test _EC_Inf._gguf_read_resident(hdr; avail=n, slow=true) === (hdr, :too_big)
+    numa || @test _EC_Inf._gguf_read_resident(hdr; avail=0, slow=true) === (hdr, :too_big)
     h2 = nothing
     data = nothing
     hdr = nothing
@@ -116,6 +116,48 @@ end
     rm(path; force=true)
 end
 
+
+@testset "gguf read only on a slow model disk" begin
+    root = mktempdir()
+    sys = joinpath(root, "sys"); mi = joinpath(root, "mountinfo")
+    # sda: rotational disk with partition sda2; nvme0n1: SSD with partition p2
+    for (disk, rot) in (("sda", "1"), ("nvme0n1", "0"))
+        mkpath(joinpath(sys, "devices", disk, "queue"))
+        write(joinpath(sys, "devices", disk, "queue", "rotational"), rot * "\n")
+    end
+    mkpath(joinpath(sys, "devices", "sda", "sda2")); mkpath(joinpath(sys, "devices", "nvme0n1", "nvme0n1p2"))
+    cls = joinpath(sys, "class"); mkpath(cls)
+    symlink(joinpath(sys, "devices", "sda", "sda2"), joinpath(cls, "sda2"))
+    symlink(joinpath(sys, "devices", "nvme0n1", "nvme0n1p2"), joinpath(cls, "nvme0n1p2"))
+    symlink(joinpath(sys, "devices", "nvme0n1"), joinpath(cls, "nvme0n1"))
+    hdd = mkpath(joinpath(root, "hdd")); ssd = mkpath(joinpath(root, "ssd")); fz = mkpath(joinpath(root, "fz"))
+    write(mi, """
+    67 1 0:32 /@ / rw - btrfs /dev/nvme0n1 rw
+    70 67 8:2 / $hdd rw shared:4 - ext4 /dev/sda2 rw
+    71 67 0:33 / $ssd rw - btrfs /dev/nvme0n1p2 rw
+    72 67 8:2 / $fz rw - fuseblk /dev/nvme0n1p2 rw
+    """)
+    f(d) = (p = joinpath(d, "m.gguf"); touch(p); _EC_Inf._slow_model_disk(p; mountinfo=mi, sysblock=cls))
+    @test f(hdd)               # rotational partition, via the parent disk's queue
+    @test !f(ssd)              # SSD partition
+    @test f(fz)                # FUSE, whatever the device
+    @test !f(root)             # falls to the / mount on the whole SSD disk
+    write(mi, "70 1 0:40 / / rw - tmpfs tmpfs rw\n")
+    @test f(root)              # unknown device: keep the copy
+    # a fast disk keeps the mmap unless forced
+    p = joinpath(ssd, "m.gguf"); write(p, rand(deterministic_rng(12), UInt8, 70000))
+    data = open(io -> _EC_Inf.Mmap.mmap(io, Vector{UInt8}; grow=false, shared=false), p)
+    hdr = (data=data, data_start=4096 + 32, path=p, kv=Dict{String, Any}())
+    @test _EC_Inf._gguf_read_resident(hdr; avail=10^9, slow=false) === (hdr, :fast_disk)
+    if !_EC_Inf._numa_localize_enabled(_EC_Inf._NUMA_LOCALIZE_MIN_BYTES)
+        withenv("GESSO_TUNE" => "gguf_read=1") do
+            h2, how = _EC_Inf._gguf_read_resident(hdr; avail=10^9, slow=false)
+            @test how === :read && h2.data == data
+        end
+    end
+    data = nothing; hdr = nothing; GC.gc()
+    rm(root; recursive=true, force=true)
+end
 # A GC heap that counts the weights stays near its target, and decode then runs
 # a full collection on small allocations. The resident copy must not count.
 @testset "whole-file gguf read stays off the GC heap" begin
@@ -128,7 +170,7 @@ end
     if !_EC_Inf._numa_localize_enabled(_EC_Inf._NUMA_LOCALIZE_MIN_BYTES)
         GC.gc()
         b0 = Base.gc_live_bytes()
-        h2, how = _EC_Inf._gguf_read_resident(hdr; avail=2n)
+        h2, how = _EC_Inf._gguf_read_resident(hdr; avail=2n, slow=true)
         GC.gc()
         grew = Base.gc_live_bytes() - b0
         @test how === :read

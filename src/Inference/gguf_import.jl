@@ -411,6 +411,44 @@ function _prefault_gguf_data!(hdr; avail::Integer=_mem_available_bytes())::Symbo
     return :done
 end
 
+const _SLOW_FSTYPES = ("fuseblk", "fuse", "nfs", "nfs4", "cifs", "smb3", "sshfs", "9p")
+
+"""
+    _slow_model_disk(path; mountinfo="/proc/self/mountinfo", sysblock="/sys/class/block") -> Bool
+
+True when `path` lives on a disk where refaulting dropped pages is slow: a
+FUSE, network or 9p mount, or a block device whose `queue/rotational` is 1.
+Uses the mount with the longest mount point that contains the resolved path.
+When the device cannot be identified (not Linux, a missing sysfs entry, a
+device-mapper stack without a rotational flag) it answers true, so the
+behaviour that was measured stays the default.
+"""
+function _slow_model_disk(path::AbstractString; mountinfo::AbstractString="/proc/self/mountinfo",
+                          sysblock::AbstractString="/sys/class/block")
+    Sys.islinux() || return true
+    p = try realpath(path) catch; return true end
+    best, fstype, src = "", "", ""
+    for line in eachline(mountinfo)
+        f = split(line, ' ')
+        sep = findfirst(==("-"), f)
+        (sep === nothing || length(f) < sep + 2 || length(f) < 5) && continue
+        mp = replace(f[5], "\\040" => " ")
+        inside = mp == "/" || p == mp || startswith(p, mp * "/")
+        (inside && length(mp) >= length(best)) || continue
+        best, fstype, src = mp, f[sep + 1], f[sep + 2]
+    end
+    isempty(best) && return true
+    (fstype in _SLOW_FSTYPES || startswith(fstype, "fuse.")) && return true
+    startswith(src, "/dev/") || return true
+    dev = basename(try realpath(src) catch; src end)
+    d = joinpath(sysblock, dev)
+    isdir(d) || return true
+    q = joinpath(d, "queue", "rotational")
+    isfile(q) || (q = joinpath(dirname(realpath(d)), "queue", "rotational"))  # a partition: the parent disk's queue
+    isfile(q) || return true
+    return strip(read(q, String)) != "0"
+end
+
 """
     _gguf_read_resident(hdr; avail=_mem_available_bytes()) -> (hdr, status::Symbol)
 
@@ -426,15 +464,25 @@ The buffer is mapped, not a `Vector{UInt8}` from the GC: a heap that counts
 10 GB of weights stays near its target, and every small allocation in decode
 then starts a full collection (Gemma 26B: ~530 ms decode stalls).
 
-Skipped, so the mmap stays: with `GESSO_DISABLE=gguf_read`, when the file does
-not fit in `_PREFAULT_MEM_FRACTION` of MemAvailable, when NUMA weight
-localization is on (it copies dense weights per node and drops their file
-range, which on anonymous memory would zero it), or when the read comes up
-short. The result carries `mapped=false`. Returns `:read`, `:off`, `:numa`,
-`:too_big` or `:failed`.
+The copy only pays on a slow model disk, so by default it runs only when the
+file sits on one (`_slow_model_disk`): a rotational disk, or a FUSE or network
+mount. On an SSD a dropped page faults back cheaply and the mmap avoids holding
+a second copy of the weights. `GESSO_TUNE=gguf_read=1` forces the copy on any
+disk; `slow` overrides the detection (tests).
+
+Skipped, so the mmap stays: with `GESSO_DISABLE=gguf_read`, on a fast disk,
+when the file does not fit in `_PREFAULT_MEM_FRACTION` of MemAvailable, when
+NUMA weight localization is on (it copies dense weights per node and drops
+their file range, which on anonymous memory would zero it), or when the read
+comes up short. The result carries `mapped=false`. Returns `:read`, `:off`,
+`:fast_disk`, `:numa`, `:too_big` or `:failed`.
 """
-function _gguf_read_resident(hdr; avail::Integer=_mem_available_bytes())
+function _gguf_read_resident(hdr; avail::Integer=_mem_available_bytes(),
+                             slow::Union{Nothing, Bool}=nothing)
     env_disabled(:gguf_read) && return hdr, :off
+    if !env_tune(:gguf_read, false)
+        something(slow, _slow_model_disk(hdr.path)) || return hdr, :fast_disk
+    end
     _numa_localize_enabled(_NUMA_LOCALIZE_MIN_BYTES) && return hdr, :numa
     n = length(hdr.data)
     n <= _PREFAULT_MEM_FRACTION * avail || return hdr, :too_big
