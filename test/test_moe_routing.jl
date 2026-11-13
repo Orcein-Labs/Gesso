@@ -285,3 +285,59 @@ end
         @test reinterpret(UInt32, y2) == reinterpret(UInt32, y1)
     end
 end
+
+@testset "decode router panels are bit-identical to the serial router" begin
+    I = Gesso.Inference
+    rng = MersenneTwister(0x52d7)
+    for (n_exp, h) in ((256, 2048), (200, 1024))
+        router = randn(rng, Float32, n_exp, h)
+        x = randn(rng, Float32, 3, h)
+        ref = zeros(Float32, n_exp)
+        mref = I._cpu_router_logits!(ref, x, 2, router)
+        got = zeros(Float32, n_exp)
+        m = I._router_logits_dec!(got, x, 2, router)
+        @test reinterpret(UInt32, got) == reinterpret(UInt32, ref)
+        @test m === mref
+        # The chunk kernel itself, run serially (covers -t 1 runs and the
+        # partial last panel when n_exp is not a multiple of the width).
+        rp = I._router_panels(router)
+        @test I._router_panels(router) === rp
+        w, _, np = size(rp.P)
+        A = zeros(Float32, w + 16, np)
+        L = fill(NaN32, n_exp)
+        c = I._RouterPanelChunk(L, A, rp.P, x, 2, rp.n_exp)
+        for p in np:-1:1
+            c(p)
+        end
+        @test reinterpret(UInt32, L) == reinterpret(UInt32, ref)
+    end
+end
+
+@testset "router top-k partial sort matches a full sort, ties included" begin
+    I = Gesso.Inference
+    rng = MersenneTwister(0x70b8)
+    n_exp, n_used = 64, 8
+    for trial in 1:200
+        vals = trial % 2 == 0 ? Float32.(rand(rng, 1:6, n_exp)) : randn(rng, Float32, n_exp)
+        l1 = copy(vals)
+        experts = zeros(Int, n_used, 1)
+        wts = zeros(Float32, n_used, 1)
+        ok = I._moe_route_logits!(experts, wts, 1, l1, maximum(l1), collect(1:n_exp), n_used)
+        # Reference: same softmax, full stable sort on (-p, e).
+        p = exp.(vals .- maximum(vals))
+        s = 0.0f0
+        for v in p
+            s += v
+        end
+        invs = 1.0f0 / s
+        p .*= invs
+        order = sort(1:n_exp; by=e -> (-p[e], e))
+        wsum = 0.0f0
+        for k in 1:n_used
+            wsum += p[order[k]]
+        end
+        @test ok
+        @test experts[:, 1] == order[1:n_used]
+        @test reinterpret(UInt32, wts[:, 1]) == reinterpret(UInt32, p[order[1:n_used]] .* (1.0f0 / wsum))
+    end
+end

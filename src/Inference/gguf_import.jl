@@ -1604,8 +1604,104 @@ end
 # hot-expert route, so both select the same experts with the same weights.
 # Returns false when the token routes nothing (weights sum to zero).
 function _moe_route_token!(experts, wts, t::Int, x, router, logits, order, n_used::Int)
-    m = _cpu_router_logits!(logits, x, t, router)
+    m = _router_logits_dec!(logits, x, t, router)
     return _moe_route_logits!(experts, wts, t, logits, m, order, n_used)
+end
+
+# Decode router logits on the CPU pool. The serial `_cpu_router_logits!` reads
+# the router from DRAM on one core: on the Ornith 35B (F32 256 x 2048, 40
+# layers) that was 181 us per layer on Rome, and it ran long enough for the pool
+# workers to park before the expert driver. Splitting the experts across chunks
+# in the stored layout reads 64-256 B out of every 1 KB column, which is slower
+# than serial, so the router is repacked once into panels
+# P[j, i, p] = router[(p - 1) * w + j, i] and chunk p reads one contiguous
+# w x h panel. Each logit is the same products summed over i in order, so the
+# logits are bit-identical to `_cpu_router_logits!`. The panels are cached per
+# router array (weights are not mutated after load).
+const _ROUTER_PANEL_W = 32
+const _ROUTER_PANEL_MIN_BYTES = 1 << 19
+
+struct _RouterPanels
+    P::Array{Float32,3}
+    n_exp::Int
+end
+
+# Keyed by identity (a WeakKeyDict would hash and compare the 2 MB router by
+# content on every lookup). The router is held weakly; entries whose router was
+# collected are dropped whenever a new router is packed.
+const _ROUTER_PANELS = Tuple{WeakRef,_RouterPanels}[]
+const _ROUTER_PANELS_LOCK = ReentrantLock()
+
+function _pack_router_panels(router::AbstractMatrix{Float32})
+    n_exp, h = size(router)
+    w = _ROUTER_PANEL_W
+    np = cld(n_exp, w)
+    P = zeros(Float32, w, h, np)
+    @inbounds for p in 1:np, i in 1:h
+        e0 = (p - 1) * w
+        for j in 1:min(w, n_exp - e0)
+            P[j, i, p] = router[e0 + j, i]
+        end
+    end
+    return _RouterPanels(P, n_exp)
+end
+
+function _router_panels(router::AbstractMatrix{Float32})
+    lock(_ROUTER_PANELS_LOCK) do
+        for (wr, rp) in _ROUTER_PANELS
+            wr.value === router && return rp
+        end
+        filter!(e -> e[1].value !== nothing, _ROUTER_PANELS)
+        rp = _pack_router_panels(router)
+        push!(_ROUTER_PANELS, (WeakRef(router), rp))
+        return rp
+    end
+end
+
+# Chunk p accumulates its w logits in its own column of A (stride w + 16 floats,
+# so no cache line is shared between chunks) and writes them to L once.
+struct _RouterPanelChunk{X}
+    L::Vector{Float32}
+    A::Matrix{Float32}
+    P::Array{Float32,3}
+    x::X
+    t::Int
+    n_exp::Int
+end
+
+function (c::_RouterPanelChunk)(p::Int)
+    w, h, _ = size(c.P)
+    P = c.P
+    x = c.x
+    A = c.A
+    t = c.t
+    e0 = (p - 1) * w
+    nv = min(w, c.n_exp - e0)
+    @inbounds for j in 1:nv
+        A[j, p] = 0.0f0
+    end
+    @inbounds for i in 1:h
+        xi = Float32(x[t, i])
+        @simd for j in 1:nv
+            A[j, p] += xi * P[j, i, p]
+        end
+    end
+    @inbounds for j in 1:nv
+        c.L[e0 + j] = A[j, p]
+    end
+    return nothing
+end
+
+function _router_logits_dec!(logits, x, t::Int, router)
+    (logits isa Vector{Float32} &&
+     router isa Matrix{Float32} &&
+     Threads.nthreads() > 1 &&
+     sizeof(router) >= _ROUTER_PANEL_MIN_BYTES) || return _cpu_router_logits!(logits, x, t, router)
+    rp = _router_panels(router)
+    w, _, np = size(rp.P)
+    A = Matrix{Float32}(undef, w + 16, np)
+    _run_row_chunks!(_RouterPanelChunk(logits, A, rp.P, x, t, rp.n_exp), np, length(rp.P))
+    return maximum(logits)
 end
 
 # The routing above, from logits already computed for token t (m is their max).
@@ -1622,7 +1718,9 @@ function _moe_route_logits!(experts, wts, t::Int, logits, m, order, n_used::Int)
         logits[e] *= invs
         order[e] = e
     end
-    sort!(order; by=e -> (-logits[e], e))
+    # (-logit, e) under isless is a total order, so the first n_used entries
+    # match a full sort exactly; only those are read below.
+    partialsort!(order, 1:n_used; by=e -> (-logits[e], e))
     wsum = 0.0f0
     for k in 1:n_used
         wsum += logits[order[k]]

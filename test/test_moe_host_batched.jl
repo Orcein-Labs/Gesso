@@ -228,3 +228,73 @@ end
         @test yauto == yref
     end
 end
+
+# The single-token batched path runs the K = 1 row kernels of dense decode on
+# Q3_K..Q6_K slabs and the per-row `_dot_q8k` otherwise; GESSO_PREFILL_MULTI
+# (`_PREFILL_MULTI[]`) picks between them. The two must agree bit for bit.
+# Red control: an activation nudged by one Q8_K step must change the output.
+@testset "batched host MoE: K = 1 row kernels match per-row dots bit for bit" begin
+    rng = Xoshiro(47)
+    h, ff, nexp, nused = 512, 512, 6, 4
+    order = [5, 2, 6, 1]
+    weights = Float32[0.4, 0.3, 0.2, 0.1]
+    cases = (
+        ("Q4_K gate/up, Q6_K down", _MKE.GGML_TYPE_Q4_K, _MKE.GGML_TYPE_Q4_K, _MKE.GGML_TYPE_Q6_K),
+        ("Q4_K gate/up, Q5_K down (LFM)", _MKE.GGML_TYPE_Q4_K, _MKE.GGML_TYPE_Q4_K, _MKE.GGML_TYPE_Q5_K),
+        ("Q3_K gate, Q4_K up, Q3_K down", _MKE.GGML_TYPE_Q3_K, _MKE.GGML_TYPE_Q4_K, _MKE.GGML_TYPE_Q3_K),
+        ("Q2_K gate/up, Q3_K down", _MKE.GGML_TYPE_Q2_K, _MKE.GGML_TYPE_Q2_K, _MKE.GGML_TYPE_Q3_K),
+        ("IQ4_XS gate/up, Q6_K down", _MKE.GGML_TYPE_IQ4_XS, _MKE.GGML_TYPE_IQ4_XS, _MKE.GGML_TYPE_Q6_K),
+    )
+    saved = _MKE._PREFILL_MULTI[]
+    try
+        for (label, tg, tu, td) in cases
+            wg = _mke_random_bytes(rng, tg, nexp, ff, h)
+            wu = _mke_random_bytes(rng, tu, nexp, ff, h)
+            wd = _mke_random_bytes(rng, td, nexp, h, ff)
+            gate_s = _mke_slice(wg, tg, nexp, h, ff)
+            up_s = _mke_slice(wu, tu, nexp, h, ff)
+            down_s = _mke_slice(wd, td, nexp, ff, h)
+            x = randn(rng, Float32, h)
+            @test _MKE._moe_host_batchable(gate_s, up_s, down_s, h, ff)
+
+            _MKE._PREFILL_MULTI[] = Int8(0)
+            @test !_MKE._moe_k1_prep(true, td)
+            yrow = zeros(Float32, h)
+            _MKE._moe_host_experts_auto!(yrow, x, order, weights, nused, gate_s, up_s, down_s)
+
+            _MKE._PREFILL_MULTI[] = Int8(1)
+            simd = _MKE.q8k_simd_enabled()
+            @test _MKE._moe_k1_prep(simd, td) == (simd && _MKE._q6k_prep_type(td))
+            yk1 = zeros(Float32, h)
+            _MKE._moe_host_experts_auto!(yk1, x, order, weights, nused, gate_s, up_s, down_s)
+            # Run twice: the reused scratch must not carry state between tokens.
+            yk1b = zeros(Float32, h)
+            _MKE._moe_host_experts_auto!(yk1b, x, order, weights, nused, gate_s, up_s, down_s)
+
+            xbad = copy(x)
+            xbad[1] += 0.25f0 * maximum(abs, x)
+            ybad = zeros(Float32, h)
+            _MKE._moe_host_experts_auto!(ybad, xbad, order, weights, nused, gate_s, up_s, down_s)
+
+            println(
+                "moe k1 rows ",
+                label,
+                " simd=",
+                simd,
+                " k1_path=",
+                _MKE._moe_k1_prep(simd, td),
+                " bitwise=",
+                yk1 == yrow,
+                " max_abs=",
+                maximum(abs.(yk1 .- yrow)),
+                " red_control_differs=",
+                ybad != yrow,
+            )
+            @test yk1 == yrow
+            @test yk1b == yrow
+            @test ybad != yrow
+        end
+    finally
+        _MKE._PREFILL_MULTI[] = saved
+    end
+end

@@ -13,6 +13,9 @@
 Buffers for one `(h, ff, n_used)` expert shape. Built once and reused across
 tokens and layers, so the token loop allocates nothing. The gate/up columns are
 interleaved per expert: column `2k-1` is gate of selected expert `k`, `2k` is up.
+`xp` and `hp` are the prepped forms of `xq` and `hq` (they share the Q8_K
+data), and `gu1`/`dn1` are `gu`/`dn` as one row, the destination shape of the
+K = 1 row kernels.
 """
 mutable struct MoeHostScratch
     h::Int
@@ -20,8 +23,12 @@ mutable struct MoeHostScratch
     n_used::Int
     xq::Q8KVec
     hq::Vector{Q8KVec}
+    xp::Q6KPrepVec
+    hp::Vector{Q6KPrepVec}
     gu::Matrix{Float32}
     dn::Matrix{Float32}
+    gu1::Matrix{Float32}
+    dn1::Matrix{Float32}
     hacts::Matrix{Float32}
     hact::Vector{Float32}
     gacc::Vector{Float32}
@@ -30,14 +37,22 @@ mutable struct MoeHostScratch
 end
 
 function MoeHostScratch(h::Int, ff::Int, n_used::Int)
+    xq = Q8KVec(div(h, QK_K))
+    hq = [Q8KVec(div(ff, QK_K)) for _ in 1:n_used]
+    gu = zeros(Float32, ff, 2 * n_used)
+    dn = zeros(Float32, h, n_used)
     return MoeHostScratch(
         h,
         ff,
         n_used,
-        Q8KVec(div(h, QK_K)),
-        [Q8KVec(div(ff, QK_K)) for _ in 1:n_used],
-        zeros(Float32, ff, 2 * n_used),
-        zeros(Float32, h, n_used),
+        xq,
+        hq,
+        _q6k_prep(xq),
+        [_q6k_prep(v) for v in hq],
+        gu,
+        dn,
+        reshape(gu, 1, length(gu)),
+        reshape(dn, 1, length(dn)),
         zeros(Float32, ff, n_used),
         zeros(Float32, ff),
         zeros(Float32, ff),
@@ -196,23 +211,26 @@ function _moe_host_experts_batched!(
     scr.n_used >= n_used ||
         error("moe host: scratch built for $(scr.n_used) experts, got $n_used")
     simd = q8k_simd_enabled()
+    pgu = _moe_k1_prep(simd, gate_s.ggml_type) || _moe_k1_prep(simd, up_s.ggml_type)
+    pdn = _moe_k1_prep(simd, down_s.ggml_type)
 
     quantize_q8_K!(scr.xq, xf)
+    pgu && _q6k_prep!(scr.xp)
 
     gu_total = 2 * n_used * ff
     gu_nc = _moe_host_nchunks(gu_total)
     _run_row_chunks!(
-        _MoeGateUpChunk(gate_s, up_s, order, scr.gu, scr.xq, gu_total, gu_nc, ff, simd),
+        _MoeGateUpChunk(gate_s, up_s, order, scr.gu, scr.gu1, scr.xq, scr.xp, gu_total, gu_nc, ff, simd),
         gu_nc,
         gu_total * length(scr.xq),
     )
 
-    _run_row_chunks!(_MoeSiluQuantChunk(scr.gu, scr.hacts, scr.hq, ff), n_used, n_used * ff)
+    _run_row_chunks!(_MoeSiluQuantChunk(scr.gu, scr.hacts, scr.hq, scr.hp, ff, pdn), n_used, n_used * ff)
 
     dn_total = n_used * h
     dn_nc = _moe_host_nchunks(dn_total)
     _run_row_chunks!(
-        _MoeDownChunk(down_s, order, scr.hq, scr.dn, h, dn_total, dn_nc, simd),
+        _MoeDownChunk(down_s, order, scr.hq, scr.hp, scr.dn, scr.dn1, h, dn_total, dn_nc, simd),
         dn_nc,
         dn_total * ff,
     )
@@ -227,6 +245,21 @@ function _moe_host_experts_batched!(
     return yrow
 end
 
+# The slab types that take the K = 1 row kernels of dense decode
+# (`_dot_q8k_rows_k1!`): the same predicate as `_decode_group_act`. Those
+# kernels run the block loop of the K = 1 multi tile, whose column is bit-equal
+# to `_dot_q8k` on the same Q8_K activation, so the expert rows keep their bits;
+# the type dispatch, bounds checks and column setup run once per row range
+# instead of once per row. GESSO_PREFILL_MULTI=0 turns them off with prefill's.
+_moe_k1_prep(simd::Bool, t::Int32) = simd && _prefill_multi_enabled() && _q6k_prep_type(t)
+
+# Expert rows j0:j1 (row j at 0-based byte `off0 + (j - 1) * rb`) into
+# dst1[1, o + j0 : o + j1], where dst1 is a scratch matrix viewed as one row and
+# `o` the linear offset of the expert's column. The row kernel writes dst[1, i]
+# from the row at `base + (i - 1) * rb`, so base shifts back by o rows.
+@inline _moe_rows_k1!(dst1, t, data, off0, rb, xp, o, j0, j1) =
+    _dot_q8k_rows_k1!(dst1, t, data, off0 - o * rb, rb, xp, o + j0, o + j1)
+
 # One chunk of the gate/up pass. Global rows are numbered slot by slot: slot
 # `s` (0-based) is gate of selected expert `s÷2+1` when `s` is even and its up
 # when odd, and holds `ff` rows. A chunk's row range can span several slots.
@@ -235,7 +268,9 @@ struct _MoeGateUpChunk
     up::GgufQuantSlice
     order::Vector{Int}
     gu::Matrix{Float32}
+    gu1::Matrix{Float32}
     xq::Q8KVec
+    xp::Q6KPrepVec
     total::Int
     nc::Int
     ff::Int
@@ -256,9 +291,13 @@ function (g::_MoeGateUpChunk)(c::Int)
         rb = _qrow_bytes(t, sl.ne0)
         off0 = _quant_expert_off0(sl, e)
         col = s + 1
-        @inbounds for jj in j:jend
-            g.gu[jj, col] =
-                1.0f0 * _dot_q8k(t, sl.data, off0 + (jj - 1) * rb, g.xq, g.simd) + 0.0f0
+        if _moe_k1_prep(g.simd, t)
+            _moe_rows_k1!(g.gu1, t, sl.data, off0, rb, g.xp, (col - 1) * g.ff, j, jend)
+        else
+            @inbounds for jj in j:jend
+                g.gu[jj, col] =
+                    1.0f0 * _dot_q8k(t, sl.data, off0 + (jj - 1) * rb, g.xq, g.simd) + 0.0f0
+            end
         end
         r += jend - j + 1
     end
@@ -273,7 +312,9 @@ struct _MoeSiluQuantChunk
     gu::Matrix{Float32}
     hacts::Matrix{Float32}
     hq::Vector{Q8KVec}
+    hp::Vector{Q6KPrepVec}
     ff::Int
+    prep::Bool
 end
 
 function (g::_MoeSiluQuantChunk)(k::Int)
@@ -281,6 +322,7 @@ function (g::_MoeSiluQuantChunk)(k::Int)
         g.hacts[j, k] = _cpu_silu(g.gu[j, 2k-1]) * g.gu[j, 2k]
     end
     quantize_q8_K!(g.hq[k], view(g.hacts, :, k))
+    g.prep && _q6k_prep!(g.hp[k])
     return nothing
 end
 
@@ -290,7 +332,9 @@ struct _MoeDownChunk
     down::GgufQuantSlice
     order::Vector{Int}
     hq::Vector{Q8KVec}
+    hp::Vector{Q6KPrepVec}
     dn::Matrix{Float32}
+    dn1::Matrix{Float32}
     h::Int
     total::Int
     nc::Int
@@ -309,10 +353,14 @@ function (g::_MoeDownChunk)(c::Int)
         t = g.down.ggml_type
         rb = _qrow_bytes(t, g.down.ne0)
         off0 = _quant_expert_off0(g.down, e)
-        xq = g.hq[k]
-        @inbounds for jj in j:jend
-            g.dn[jj, k] =
-                1.0f0 * _dot_q8k(t, g.down.data, off0 + (jj - 1) * rb, xq, g.simd) + 0.0f0
+        if _moe_k1_prep(g.simd, t)
+            _moe_rows_k1!(g.dn1, t, g.down.data, off0, rb, g.hp[k], (k - 1) * g.h, j, jend)
+        else
+            xq = g.hq[k]
+            @inbounds for jj in j:jend
+                g.dn[jj, k] =
+                    1.0f0 * _dot_q8k(t, g.down.data, off0 + (jj - 1) * rb, xq, g.simd) + 0.0f0
+            end
         end
         r += jend - j + 1
     end

@@ -135,3 +135,42 @@ end
         end
     end
 end
+
+@testset "kv-head groups equal the reference and the one-slot loop (bit-exact)" begin
+    rng = Xoshiro(20261108)
+    backend = _GI.CPUBackend()
+    wl = Gesso.Semantics.DecodeWorkload()
+    # d_head 64 and 256 take the grouped three-pass path when the scratch has a
+    # slot per head; K runs across the 8- and 64-key block edges. The cache has
+    # spare rows past K, filled with a value that would show if read.
+    for d in (64, 256), (n_heads, n_kv) in ((8, 2), (16, 4), (6, 1), (4, 4)),
+        K in (1, 9, 63, 65, 200, 700)
+
+        group = div(n_heads, n_kv)
+        cap = K + 5
+        q = randn(rng, Float32, 1, n_heads, d)
+        kc = randn(rng, Float32, cap, n_kv, d) .* 2
+        vc = randn(rng, Float32, cap, n_kv, d)
+        kc[K+1:end, :, :] .= 1f30
+        vc[K+1:end, :, :] .= NaN32
+        kx = _GI._repeat_heads(_GI.Activation(; shape=(cap, n_kv, d), storage=kc), group)
+        vx = _GI._repeat_heads(_GI.Activation(; shape=(cap, n_kv, d), storage=vc), group)
+        scores = _GI.TemporaryWorkspace(; shape=(1, K), storage=zeros(Float32, 1, K))
+        probs = _GI.TemporaryWorkspace(; shape=(1, K), storage=zeros(Float32, 1, K))
+        ref = zeros(Float32, 1, n_heads, d)
+        _GI._attention_heads!(backend, ref, scores, probs, q, kx.storage, vx.storage,
+            n_heads, d, 1, K, wl)
+        ok = true
+        for window in (0, 40)
+            one = fill(NaN32, 1, n_heads, d)
+            _GI._attention_decode_cpu!(one, q, kc, vc, zeros(Float32, cap), n_heads, d, group,
+                K; window)
+            grouped = fill(NaN32, 1, n_heads, d)
+            _GI._attention_decode_cpu!(grouped, q, kc, vc, zeros(Float32, cap * n_heads),
+                n_heads, d, group, K; window)
+            ok &= _adec_bits(grouped) == _adec_bits(one)
+            window == 0 && (ok &= _adec_bits(grouped) == _adec_bits(ref))
+        end
+        @test ok
+    end
+end

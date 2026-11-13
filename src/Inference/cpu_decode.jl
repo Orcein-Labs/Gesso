@@ -136,7 +136,7 @@ function _cpu_decode_scratch(
         zeros(R, 1, ff),
         zeros(R, 1, ff),
         zeros(R, 1, ff),
-        zeros(R, ctx * max(1, min(Int(n_heads), Threads.nthreads()))),
+        zeros(R, ctx * _attn_probs_slots(ctx, Int(n_heads))),
         [0],
         zeros(R, 1, vocab),
         zeros(R, 1, dim),
@@ -795,8 +795,14 @@ function _attention_decode_cpu!(
     K::Int;
     window::Int=0,
 )
-    fill!(attn, zero(eltype(attn)))
     lo = window > 0 ? max(1, K - window + 1) : 1
+    return _attention_decode_cpu_heads!(attn, q, kc, vc, probs, n_heads, d_head, group, K, lo)
+end
+
+# One pool task per head slot: the path for any cache layout.
+function _attention_decode_cpu_heads!(attn, q, kc, vc, probs::AbstractVector, n_heads::Int,
+    d_head::Int, group::Int, K::Int, lo::Int)
+    fill!(attn, zero(eltype(attn)))
     nc = min(n_heads, Threads.nthreads(), div(length(probs), K))
     nc > 1 && (K - lo + 1) * d_head * n_heads < _ATTN_DECODE_POOL_MIN && (nc = 1)
     f = _AttnDecodeChunk(

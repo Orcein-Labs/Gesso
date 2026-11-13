@@ -275,3 +275,100 @@ end
         PPI._PREFILL_PROFILE[] = saved
     end
 end
+
+@testset "LFM: channel-major conv mix and batched router logits match the token-major loops bit for bit" begin
+    # Token-major reference: the loop order the conv mix used before it went channel-major.
+    function conv_ref!(mixed, bcx, w, hist)
+        seq, dim = size(mixed)
+        width = size(w, 2)
+        for t in 1:seq, c in 1:dim
+            bx = bcx[t, c] * bcx[t, 2dim+c]
+            y = zero(eltype(mixed))
+            for p in 1:(width-1)
+                y += hist[c, p] * w[c, p]
+            end
+            y += bx * w[c, width]
+            mixed[t, c] = bcx[t, dim+c] * y
+            for p in 1:(width-2)
+                hist[c, p] = hist[c, p+1]
+            end
+            hist[c, width-1] = bx
+        end
+        return mixed
+    end
+    rng = MersenneTwister(0x1f5)
+    cpu = Gesso.CPUBackend()
+    for (seq, dim, width) in ((1, 200, 3), (37, 200, 3), (64, 333, 4), (5, 64, 2))
+        bcx = randn(rng, Float32, seq, 3dim)
+        w = randn(rng, Float32, dim, width)
+        h0 = randn(rng, Float32, dim, width - 1)
+        ref, href = zeros(Float32, seq, dim), copy(h0)
+        conv_ref!(ref, bcx, w, href)
+        got, hgot = zeros(Float32, seq, dim), copy(h0)
+        _lfm_inf._short_conv_mix!(cpu, got, bcx, w, hgot)
+        @test got == ref
+        @test hgot == href
+        # Red control: one changed input in the last channel must reach the output.
+        bad = copy(bcx); bad[seq, dim] += 1.0f0
+        got2, h2 = zeros(Float32, seq, dim), copy(h0)
+        _lfm_inf._short_conv_mix!(cpu, got2, bad, w, h2)
+        @test got2 != ref
+    end
+    for (seq, ne, h) in ((2, 32, 96), (37, 32, 200), (100, 8, 64))
+        x = randn(rng, Float32, seq, h)
+        router = randn(rng, Float32, ne, h)
+        L = _lfm_inf._router_logits_all(x, router, Float32)
+        lg = zeros(Float32, ne)
+        ok = true
+        for t in 1:seq
+            m = _lfm_inf._cpu_router_logits!(lg, x, t, router)
+            ok &= view(L, :, t) == lg && maximum(view(L, :, t)) == m
+        end
+        @test ok
+        xb = copy(x); xb[seq, h] += 1.0f0
+        @test _lfm_inf._router_logits_all(xb, router, Float32)[:, seq] != L[:, seq]
+    end
+end
+
+@testset "LFM: decode conv projections take the Q8_K group route bit for bit" begin
+    I = _lfm_inf
+    function rand_qm(rng, ty, nrows, ne0)
+        rb = I._qrow_bytes(ty, ne0)
+        data = rand(rng, UInt8, nrows * rb)
+        bsz = I._iq_block_bytes(ty)
+        for blk in 0:(nrows*div(rb, bsz)-1)
+            bits = reinterpret(UInt16, Float16(0.005f0 + 0.05f0 * rand(rng, Float32)))
+            data[blk*bsz+1] = UInt8(bits & 0xff)
+            data[blk*bsz+2] = UInt8(bits >> 8)
+        end
+        return I.QuantMatrix(data, 0, ty, ne0, nrows, rb, Int64(I.QK_K))
+    end
+    u32(a) = reinterpret(UInt32, vec(a))
+    rng = MersenneTwister(0x20261107)
+    cpu = Gesso.CPUBackend()
+    wl = Gesso.Semantics.DecodeWorkload()
+    ne0 = 512
+    for (ty, nrows) in ((I.GGML_TYPE_Q4_K, 96), (I.GGML_TYPE_Q4_K, 37), (I.GGML_TYPE_Q5_K, 40), (I.GGML_TYPE_Q6_K, 24))
+        qm = rand_qm(rng, ty, nrows, ne0)
+        w = Gesso.ProjectionWeight((nrows, ne0), qm)
+        x = Gesso.Activation(; shape=(1, ne0), storage=randn(rng, Float32, 1, ne0))
+        ref = Gesso.Activation(; shape=(1, nrows), storage=zeros(Float32, 1, nrows))
+        I.matmul!(cpu, ref, x, w, wl)
+        for xq in (I.Q8KVec(div(ne0, I.QK_K)), I._q6k_prep(I.Q8KVec(div(ne0, I.QK_K))), nothing)
+            got = Gesso.Activation(; shape=(1, nrows), storage=fill(NaN32, 1, nrows))
+            I._conv_proj!(cpu, got, x, w, wl, xq)
+            @test u32(got.storage) == u32(ref.storage)
+        end
+    end
+    # Q8_0 has no Q8_K kernel and a prompt row count above one: both keep matmul!.
+    q80 = rand_qm(rng, I.GGML_TYPE_Q8_0, 16, ne0)
+    w80 = Gesso.ProjectionWeight((16, ne0), q80)
+    for seq in (1, 3)
+        x = Gesso.Activation(; shape=(seq, ne0), storage=randn(rng, Float32, seq, ne0))
+        ref = Gesso.Activation(; shape=(seq, 16), storage=zeros(Float32, seq, 16))
+        I.matmul!(cpu, ref, x, w80, wl)
+        got = Gesso.Activation(; shape=(seq, 16), storage=fill(NaN32, seq, 16))
+        I._conv_proj!(cpu, got, x, w80, wl, I._q6k_prep(I.Q8KVec(div(ne0, I.QK_K))))
+        @test u32(got.storage) == u32(ref.storage)
+    end
+end

@@ -615,16 +615,16 @@ struct _PrefillActMem
     qs::Memory{Int8}
     bsums::Memory{Int16}
     xp::Memory{Int8}
-    mo::Memory{Int16}
+    xb::Memory{Int8}
     # Per-token wrappers over the fields, by (vector type, seq, ne0): built once
     # per pooled buffer instead of five small allocations per token per matmul.
     views::Dict{Tuple{DataType,Int,Int},Vector}
 end
 
-# Per-token stride, in elements, of the qs, xp and mo fields: an odd multiple
+# Per-token stride, in elements, of the qs, xp and xb fields: an odd multiple
 # of 256 bytes. A tile reads its tokens' rows in lockstep, four cache lines per
 # block each. At ne0 = 4096 or 8192 unpadded rows sit a multiple of 4 KiB
-# apart, so every token falls in the same L1 sets and the Q6_K tile (xp and mo)
+# apart, so every token falls in the same L1 sets and the Q6_K tile (xp and xb)
 # ran at half speed; an odd multiple of 256 bytes gives each of 16 tokens its
 # own four sets.
 function _act_stride(n::Int, ::Type{T}) where {T}
@@ -632,7 +632,7 @@ function _act_stride(n::Int, ::Type{T}) where {T}
     return (u + iseven(u)) * 256 ÷ sizeof(T)
 end
 
-# Element counts of the d, qs, bsums, xp and mo fields.
+# Element counts of the d, qs, bsums, xp and xb fields.
 function _prefill_act_sizes(q80::Bool, seq::Int, ne0::Int, prep::Bool)
     nd = q80 ? ne0 ÷ 32 : ne0 ÷ QK_K
     return (
@@ -640,7 +640,7 @@ function _prefill_act_sizes(q80::Bool, seq::Int, ne0::Int, prep::Bool)
         seq * _act_stride(ne0, Int8),
         q80 ? 0 : seq * (ne0 ÷ 16),
         prep ? seq * _act_stride(ne0, Int8) : 0,
-        prep ? seq * _act_stride(ne0 >> 1, Int16) : 0,
+        prep ? seq * _act_stride(ne0, Int8) : 0,
     )
 end
 
@@ -651,7 +651,7 @@ function _PrefillActMem(q80::Bool, seq::Int, ne0::Int, prep::Bool)
         Memory{Int8}(undef, n[2]),
         Memory{Int16}(undef, n[3]),
         Memory{Int8}(undef, n[4]),
-        Memory{Int16}(undef, n[5]),
+        Memory{Int8}(undef, n[5]),
         Dict{Tuple{DataType,Int,Int},Vector}(),
     )
 end
@@ -666,10 +666,10 @@ const _PREFILL_ACT_POOL_MAX = 4
 const _PREFILL_ACT_POOL_BYTES = 64 << 20
 
 _act_bytes(m::_PrefillActMem) =
-    sizeof(m.d) + sizeof(m.qs) + sizeof(m.bsums) + sizeof(m.xp) + sizeof(m.mo)
+    sizeof(m.d) + sizeof(m.qs) + sizeof(m.bsums) + sizeof(m.xp) + sizeof(m.xb)
 
 _act_lengths(m::_PrefillActMem) =
-    (length(m.d), length(m.qs), length(m.bsums), length(m.xp), length(m.mo))
+    (length(m.d), length(m.qs), length(m.bsums), length(m.xp), length(m.xb))
 
 # A pooled buffer at least as large as each field needs, else a new one.
 function _prefill_act_acquire(q80::Bool, seq::Int, ne0::Int, prep::Bool)
@@ -879,7 +879,7 @@ _prefill_view(::Q80Vec, m::_PrefillActMem, t::Int, ne0::Int) = _prefill_act(Q80V
 _prefill_view(::Q8KVec, m::_PrefillActMem, t::Int, ne0::Int) = _prefill_act(Q8KVec, m, t, ne0)
 function _prefill_view(::Q6KPrepVec, m::_PrefillActMem, t::Int, ne0::Int)
     y = _prefill_act(Q8KVec, m, t, ne0)
-    return Q6KPrepVec(y.d, y, _act_row(m.xp, t, ne0), _act_row(m.mo, t, ne0 >> 1))
+    return Q6KPrepVec(y.d, y, _act_row(m.xp, t, ne0), _act_row(m.xb, t, ne0))
 end
 
 function _prefill_quantize_row(
@@ -1009,6 +1009,27 @@ function (p::_PrefillChunk)(c::Int)
     rb = _qrow_bytes(p.ggml_type, p.ne0)
     seq = length(p.xqs)
     buf = view(p.out, ((c-1)*seq+1):(c*seq))
+    nb = div(p.ne0, QK_K)
+    if nb > 0 && j0 <= j1 && _q6k_dec_ok(p.ggml_type, p.xqs, p.simd)
+        return _q6k_dec_chunk!(p, buf, j0, j1, rb, nb, seq)
+    end
+    if j0 <= j1 && _q45k_rows_ok(p.ggml_type, p.xqs, p.simd)
+        q5 = p.ggml_type == GGML_TYPE_Q5_K
+        for b0 in j0:_MULTI_ROW_BLOCK:j1
+            b1 = min(b0 + _MULTI_ROW_BLOCK - 1, j1)
+            t0 = 1
+            while t0 <= seq
+                K = min(_MULTI_TILE, seq - t0 + 1)
+                if q5
+                    _q45k_rows_tile!(p.dst, p.bytes, 0, rb, b0, b1, p.xqs, t0, K, Val(true), p.dt)
+                else
+                    _q45k_rows_tile!(p.dst, p.bytes, 0, rb, b0, b1, p.xqs, t0, K, Val(false), p.dt)
+                end
+                t0 += K
+            end
+        end
+        return nothing
+    end
     @inbounds for b0 in j0:_MULTI_ROW_BLOCK:j1
         b1 = min(b0 + _MULTI_ROW_BLOCK - 1, j1)
         t0 = 1
@@ -1033,6 +1054,29 @@ function (p::_PrefillChunk)(c::Int)
             end
             t0 += K
         end
+    end
+    return nothing
+end
+
+# Rows j0:j1 of a Q6_K prefill chunk: each block of _q6k_dec_rows rows decoded
+# once, then run against every tile. Same dots as the loop above.
+function _q6k_dec_chunk!(p::_PrefillChunk, buf, j0::Int, j1::Int, rb::Int, nb::Int, seq::Int)
+    nr = _q6k_dec_rows(nb)
+    m = _q6k_dec_scratch(nr * nb * (_Q6K_DEC_BYTES + 4))
+    dt = _multi_d_only(p.dt)
+    try
+        for b0 in j0:nr:j1
+            b1 = min(b0 + nr - 1, j1)
+            _q6k_decode_rows!(m, p.bytes, 0, rb, nb, b0, b1)
+            t0 = 1
+            while t0 <= seq
+                K = min(_MULTI_TILE, seq - t0 + 1)
+                _q6k_dec_tile!(p.dst, buf, m, b1 - b0 + 1, nb, b0, p.xqs, t0, K, dt)
+                t0 += K
+            end
+        end
+    finally
+        _q6k_dec_scratch_release!(m)
     end
     return nothing
 end
