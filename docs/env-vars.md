@@ -82,6 +82,7 @@ Backend `all` means the CPU path and every GPU backend.
 | `dq_gemm_min` | `32` | CUDA, Lava | Fewest tokens for which a quant matmul takes the dequant GEMM instead of the GEMV. |
 | `dq_gemm_scratch_mib` | `32` | CUDA, Lava | Dequant GEMM scratch buffer, in MiB. |
 | `expert_cache` | `0` | all | Host expert slices kept dequantized; `0` is off. |
+| `g4_expert_prefill_min` | 32 | Lava | Fewest prompt tokens before Gemma 4 routed experts run on the Lava device. |
 | `gemv_chunks_per_thread` | 16 | all | CPU GEMV work chunks per thread. |
 | `gemv_pool` | `auto` | all | CPU GEMV scheduler: `auto`, `pool` or `threads`. |
 | `gguf_read` | `0` | all | `1` reads the GGUF into memory on any disk; by default only on a rotational, FUSE or network disk. |
@@ -99,6 +100,7 @@ Backend `all` means the CPU path and every GPU backend.
 | `hot_prefill_round` | `16` | CUDA | Token rounding of hot-expert prefill segments. |
 | `hot_prefill_seg` | `1024` | CUDA | Tokens per hot-expert prefill segment. |
 | `hot_prefill_stream` | `32` | CUDA | Experts the prefill planner streams per segment. |
+| `lava_g4_expert_prefill` | off | Lava | `1` runs Gemma 4 routed experts on the Lava device for prefill with at least `g4_expert_prefill_min` tokens; decode stays on the host. |
 | `lava_hot_experts` | `0` | Lava | `1` turns on the hot-expert pool on Lava. |
 | `moe_device_prefill_chunk` | `512` | CUDA | Tokens per launch group in device MoE prefill. |
 

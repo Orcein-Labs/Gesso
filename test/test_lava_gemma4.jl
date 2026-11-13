@@ -183,6 +183,26 @@ else
         @test ext._lava_attention_tile_bytes(other, (; spec), 8192, 1024) == ext._LAVA_PREFILL_TILE_BYTES
     end
 
+    # The dense branch and its norms run on the device: after a prefill the host
+    # weight cache holds the router (read by the routed part) and none of the
+    # dense weights.
+    @testset "lava Gemma4: dense FFN runs on the device, only routed weights reach the host" begin
+        ext = Base.get_extension(Gesso, :GessoLavaExt)
+        @test ext._G4L_HOST_BT_FIELDS == (:wrouter, :wexp_gate_up, :wexp_down, :wexp_down_scale)
+        t_dev = Gesso.to_device(_lg4_lava, _lg4_f.t)
+        @test _lg4_err(_lg4_prefill(_lg4_f, t_dev, _lg4_lava), logits_cpu) <= _lg4_tol(logits_cpu)
+        cached(w) = lock(ext._LH_HOST_WEIGHTS_LOCK) do
+            haskey(ext._LH_HOST_WEIGHTS, objectid(ext._g4l_wstore(w)))
+        end
+        for bt in t_dev.blocks
+            @test cached(bt.wrouter.storage)
+            for f in (:wgate, :wup, :wdown, :ffn_rms, :ffn_post_rms_1, :ffn_pre_rms_2,
+                      :ffn_post_rms_2, :ffn_post_rms, :wrouter_scale)
+                @test !cached(getproperty(bt, f).storage)
+            end
+        end
+    end
+
     @testset "lava Gemma4: negative control, sliding window off exceeds the bound" begin
         prev = Gesso.Inference._GEMMA4_WINDOW_MASK_ENABLED[]
         Gesso.Inference._GEMMA4_WINDOW_MASK_ENABLED[] = false

@@ -204,6 +204,9 @@ include("lava_lfm2.jl")
 # Gemma 4: device attention, norms, RoPE and KV writes; the routed FFN runs on host.
 include("lava_gemma4.jl")
 
+# Gemma 4 routed-expert prefill on Lava: device GEMV per expert for N >= 32 tokens.
+include("lava_g4_experts.jl")
+
 # Bind the backend into the package's namespace: after this ext triggers,
 # `Gesso.LavaBackend` resolves to the type defined HERE — while a Lava-less
 # load of core leaves the name entirely absent (both directions are pinned

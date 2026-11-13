@@ -1,5 +1,5 @@
-# Gemma 4 on Lava. Projections, norms, NeoX RoPE, KV writes and attention run on
-# device. The dense FFN and the routed experts run on host through the CPU
+# Gemma 4 on Lava. Projections, norms, NeoX RoPE, KV writes, attention and the
+# dense FFN run on device. Only the routed experts run on host, through the CPU
 # routine, as the LFM2 MoE route does, so their numerics are the CPU oracle's.
 
 const _G4L_WG = (64,)
@@ -184,6 +184,22 @@ end
     i = @index(Global)
     if i <= length(X)
         X[i] = X[i] * s
+    end
+end
+
+# gate <- gelu(gate) * up, with the CPU's own GELU.
+@kernel cpu=false function _g4l_gelu_mul_kernel!(gate, up)
+    i = @index(Global)
+    if i <= length(gate)
+        gate[i] = Gesso.Inference._g4_gelu(gate[i]) * up[i]
+    end
+end
+
+# Router input scale: rin[t, i] *= inv_sqrt_e * r_scale[i], as _g4_router_input!.
+@kernel cpu=false function _g4l_router_scale_kernel!(rin, r_scale, inv_sqrt_e::Float32, N::Int)
+    i = @index(Global)
+    if i <= length(rin)
+        rin[i] = rin[i] * inv_sqrt_e * r_scale[(i - 1) ÷ N + 1]
     end
 end
 
@@ -380,30 +396,55 @@ _g4l_host_wrap(w::FrozenParameter) = FrozenParameter(w.shape, _g4l_host_storage(
 _g4l_host_wrap(w::Gesso.ExpertWeight) = Gesso.ExpertWeight(w.shape, _g4l_host_storage(w.storage))
 _g4l_host_wrap(w) = w
 
-const _G4L_HOST_BT_FIELDS = (
-    :ffn_rms, :wgate, :wup, :wdown, :ffn_post_rms_1,
-    :wrouter, :wrouter_scale, :ffn_pre_rms_2,
-    :wexp_gate_up, :wexp_down, :wexp_down_scale,
-    :ffn_post_rms_2, :ffn_post_rms,
-)
+# Fields the host routed part reads: the router, the expert banks and the
+# per-expert down scale. The rest of the FFN runs on the device.
+const _G4L_HOST_BT_FIELDS = (:wrouter, :wexp_gate_up, :wexp_down, :wexp_down_scale)
 
 function _g4l_host_bt(bt)
     pairs_ = (f => _g4l_host_wrap(getproperty(bt, f)) for f in _G4L_HOST_BT_FIELDS if haskey(bt, f))
     return merge(bt, NamedTuple(pairs_))
 end
 
-# Attention-free FFN block: the device attention output comes down, the CPU
-# routine runs on host copies, and the result goes back up.
+_g4l_dev_vec(w) = (s = _g4l_wstore(w); s isa Lava.LavaArray ? s : _g4l_up(Vector{Float32}(s)))
+
+# Parallel FFN, the llama.cpp -ncmoe split: the dense branch, the norms and the
+# router input run on the device through the quant kernels; only rin and x2
+# come down, the CPU routing and expert code runs on them, and moe goes back
+# up for its post norm and the sum.
 function _g4l_moe(attn::Lava.LavaArray, bt, eps_f::Float32)
-    xh = _lh_host(attn)
-    mlp = Gesso.Inference._gemma4_parallel_moe_ffn!(
-        Gesso.CPUBackend(), xh, _g4l_host_bt(bt), eps_f;
-        scratch=Gesso.Inference._Gemma4Scratch(),
-    )
-    _lava_host_hold!()
-    out = _g4l_new(size(xh)...)
-    copyto!(out, Matrix{Float32}(mlp))
-    return out
+    N, E = size(attn)
+    n_ff = bt.wgate.shape[1]
+
+    xf = _g4l_rms_rows!(_g4l_new(N, E), attn, bt.ffn_rms, eps_f)
+    gate = _g4l_mm!(_g4l_new(N, n_ff), xf, bt.wgate)
+    up = _g4l_mm!(_g4l_new(N, n_ff), xf, bt.wup)
+    _g4l_launch!(_g4l_gelu_mul_kernel!, gate, length(gate), gate, up)
+    mlp = _g4l_mm!(_g4l_new(N, E), gate, bt.wdown)
+    _g4l_rms_rows!(mlp, mlp, bt.ffn_post_rms_1, eps_f)
+    _g4l_free!(xf, up, gate)
+
+    rin = _g4l_rms_rows!(_g4l_new(N, E), attn, nothing, eps_f)
+    _g4l_launch!(_g4l_router_scale_kernel!, rin, length(rin), rin, _g4l_dev_vec(bt.wrouter_scale),
+                 1.0f0 / sqrt(Float32(E)), N)
+    x2 = _g4l_rms_rows!(_g4l_new(N, E), attn, bt.ffn_pre_rms_2, eps_f)
+    rin_h = _lh_host(rin)
+    hbt = _g4l_host_bt(bt)
+    # Prefill with enough rows runs the experts on the device; decode and the
+    # disabled flag keep the host routine.
+    moe_d = _g4x_enabled(N) ? _g4x_routed(rin_h, x2, hbt) : nothing
+    if moe_d === nothing
+        x2_h = _lh_host(x2)
+        moe = Gesso.Inference._gemma4_routed_experts!(
+            Gesso.Inference._Gemma4Scratch(), rin_h, x2_h, hbt,
+        )
+        _lava_host_hold!()
+        moe_d = _g4l_up(moe)
+    end
+    _g4l_free!(rin, x2)
+    _g4l_rms_rows!(moe_d, moe_d, bt.ffn_post_rms_2, eps_f)
+    _g4l_launch!(_g4l_add2_kernel!, mlp, length(mlp), mlp, mlp, moe_d)
+    _g4l_free!(moe_d)
+    return _g4l_rms_rows!(mlp, mlp, bt.ffn_post_rms, eps_f)
 end
 
 # --- hooks --------------------------------------------------------------------

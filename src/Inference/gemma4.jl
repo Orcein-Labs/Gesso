@@ -712,45 +712,11 @@ function _g4_route_rows!(experts::Matrix{Int}, weights::Matrix{Float32}, rin::Ma
     return experts
 end
 
-function _gemma4_parallel_moe_ffn!(backend, attn, bt, eps::Real; scratch::_Gemma4Scratch=_Gemma4Scratch())
-    backend_name(backend) === :cpu || throw(LoweringNotImplemented(:gemma4_parallel_moe, backend_name(backend)))
-    X = attn isa Activation ? attn.storage : attn
-    N, E = size(X)
-    eps_f = Float32(eps)
-
-    # 1. Dense FFN (reuse hoisted N x E and N x n_ff buffers)
-    xf = _g4_mat!(scratch, :xf, N, E)
-    n_ff = bt.wgate.shape[1]
-    gate = _g4_mat!(scratch, :gate, N, n_ff)
-    up = _g4_mat!(scratch, :up, N, n_ff)
-    mlp = _g4_mat!(scratch, :mlp, N, E)
-    @decode_stage :dense_ffn nothing begin
-        _g4_rmsnorm_rows!(xf, X, bt.ffn_rms, eps_f)
-        @decode_sub :ffn_gateup nothing begin
-            _g4_gemms!((gate, up), xf, (bt.wgate, bt.wup))
-        end
-        @decode_sub :ffn_act nothing begin
-            _g4_elems!(length(gate)) do r
-                @inbounds for i in r
-                    gate[i] = _g4_gelu(gate[i]) * up[i]
-                end
-            end
-        end
-        @decode_sub :ffn_down nothing _g4_gemm!(mlp, gate, bt.wdown)
-        _g4_rmsnorm_rows!(mlp, mlp, bt.ffn_post_rms_1, eps_f)
-    end
-
-    # 2. Routed MoE (reuse hoisted N x E buffers)
-    inv_sqrt_e = 1.0f0 / sqrt(Float32(E))
-    rin = _g4_mat!(scratch, :rin, N, E)
-    x2 = _g4_mat!(scratch, :x2, N, E)
-    @decode_stage :norm nothing begin
-        _g4_rmsnorm_rows!(rin, X, nothing, eps_f)
-        r_scale = bt.wrouter_scale isa FrozenParameter ? bt.wrouter_scale.storage : bt.wrouter_scale
-        _g4_router_input!(rin, inv_sqrt_e, r_scale)
-        _g4_rmsnorm_rows!(x2, X, bt.ffn_pre_rms_2, eps_f)
-    end
-
+# The routed branch of the parallel FFN: routing from rin, then the experts on
+# x2. Returns moe before its post norm. A backend that runs the dense branch
+# elsewhere calls this on host copies of rin and x2.
+function _gemma4_routed_experts!(scratch::_Gemma4Scratch, rin::Matrix{Float32}, x2::Matrix{Float32}, bt)
+    N, E = size(rin)
     r_stor = bt.wrouter.storage
     n_expert = r_stor isa QuantMatrix ? r_stor.nrows : size(r_stor, 1)
     n_used = bt.n_expert_used
@@ -803,6 +769,49 @@ function _gemma4_parallel_moe_ffn!(backend, attn, bt, eps::Real; scratch::_Gemma
             end
         end
     end
+    return moe
+end
+
+function _gemma4_parallel_moe_ffn!(backend, attn, bt, eps::Real; scratch::_Gemma4Scratch=_Gemma4Scratch())
+    backend_name(backend) === :cpu || throw(LoweringNotImplemented(:gemma4_parallel_moe, backend_name(backend)))
+    X = attn isa Activation ? attn.storage : attn
+    N, E = size(X)
+    eps_f = Float32(eps)
+
+    # 1. Dense FFN (reuse hoisted N x E and N x n_ff buffers)
+    xf = _g4_mat!(scratch, :xf, N, E)
+    n_ff = bt.wgate.shape[1]
+    gate = _g4_mat!(scratch, :gate, N, n_ff)
+    up = _g4_mat!(scratch, :up, N, n_ff)
+    mlp = _g4_mat!(scratch, :mlp, N, E)
+    @decode_stage :dense_ffn nothing begin
+        _g4_rmsnorm_rows!(xf, X, bt.ffn_rms, eps_f)
+        @decode_sub :ffn_gateup nothing begin
+            _g4_gemms!((gate, up), xf, (bt.wgate, bt.wup))
+        end
+        @decode_sub :ffn_act nothing begin
+            _g4_elems!(length(gate)) do r
+                @inbounds for i in r
+                    gate[i] = _g4_gelu(gate[i]) * up[i]
+                end
+            end
+        end
+        @decode_sub :ffn_down nothing _g4_gemm!(mlp, gate, bt.wdown)
+        _g4_rmsnorm_rows!(mlp, mlp, bt.ffn_post_rms_1, eps_f)
+    end
+
+    # 2. Routed MoE (reuse hoisted N x E buffers)
+    inv_sqrt_e = 1.0f0 / sqrt(Float32(E))
+    rin = _g4_mat!(scratch, :rin, N, E)
+    x2 = _g4_mat!(scratch, :x2, N, E)
+    @decode_stage :norm nothing begin
+        _g4_rmsnorm_rows!(rin, X, nothing, eps_f)
+        r_scale = bt.wrouter_scale isa FrozenParameter ? bt.wrouter_scale.storage : bt.wrouter_scale
+        _g4_router_input!(rin, inv_sqrt_e, r_scale)
+        _g4_rmsnorm_rows!(x2, X, bt.ffn_pre_rms_2, eps_f)
+    end
+
+    moe = _gemma4_routed_experts!(scratch, rin, x2, bt)
     @decode_stage :norm nothing begin
         _g4_rmsnorm_rows!(moe, moe, bt.ffn_post_rms_2, eps_f)
 
