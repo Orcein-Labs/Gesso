@@ -305,7 +305,7 @@ end
 # Decode (K = 1) Q6_K rows take the offset-word (mo) kernel when the prep has
 # mo. It must give the biased kernel's bits and _dot_q8k's bits, on random and
 # integer-extreme rows; a prep without mo (the prefill view) and
-# GESSO_Q6K_K1_MO=0 take the biased kernel; a corrupted mo must change the bits.
+# GESSO_DISABLE=q6k_k1_mo take the biased kernel; a corrupted mo must change the bits.
 @testset "K = 1 Q6_K mo kernel matches the biased kernel" begin
     if _GI.q8k_simd_enabled()
         rng = Xoshiro(20261107)
@@ -346,7 +346,7 @@ end
             @test isnan(got[1, 1]) && isnan(got[1, n])
             @test _bits(got[1, 2:(n-1)]) == _bits(ref[1, 2:(n-1)])
             off = fill(NaN32, 1, n)
-            withenv("GESSO_Q6K_K1_MO" => "0") do
+            withenv("GESSO_DISABLE" => "q6k_k1_mo") do
                 _GI._dot_q8k_rows_k1!(off, ty, w.data, w.offset0, rb, p, 1, n)
             end
             @test _bits(off) == _bits(ref)

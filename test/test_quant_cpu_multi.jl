@@ -596,8 +596,8 @@ end
     saved = _MQ._PREFILL_MULTI[]
     try
         _MQ._PREFILL_MULTI[] = Int8(1)
-        withenv(() -> _MQ._quant_matmul!(a, x, q), "GESSO_Q6K_DECODE" => "1")
-        withenv(() -> _MQ._quant_matmul!(b, x, q), "GESSO_Q6K_DECODE" => "0")
+        withenv(() -> _MQ._quant_matmul!(a, x, q), "GESSO_DISABLE" => nothing)
+        withenv(() -> _MQ._quant_matmul!(b, x, q), "GESSO_DISABLE" => "q6k_decode")
     finally
         _MQ._PREFILL_MULTI[] = saved
     end
@@ -654,8 +654,8 @@ end
         saved = _MQ._PREFILL_MULTI[]
         try
             _MQ._PREFILL_MULTI[] = Int8(1)
-            withenv(() -> _MQ._quant_matmul!(a, x, q), "GESSO_Q45K_ROWS" => "1")
-            withenv(() -> _MQ._quant_matmul!(b, x, q), "GESSO_Q45K_ROWS" => "0")
+            withenv(() -> _MQ._quant_matmul!(a, x, q), "GESSO_DISABLE" => nothing)
+            withenv(() -> _MQ._quant_matmul!(b, x, q), "GESSO_DISABLE" => "q45k_rows")
         finally
             _MQ._PREFILL_MULTI[] = saved
         end

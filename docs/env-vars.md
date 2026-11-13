@@ -55,6 +55,9 @@ Backend `all` means the CPU path and every GPU backend.
 | `prefault` | all | Prefaulting GGUF weight pages at load. |
 | `prefill_multi` | all | Multi-row quant prefill kernels on the CPU. |
 | `prefill_window` | all | Windowed prefill; falls back to the per-row prefill. |
+| `q45k_rows` | all | Multi-row Q4_K/Q5_K CPU kernels; same bits either way (A/B only). |
+| `q6k_decode` | all | Pre-decoded Q6_K CPU path; same bits either way (A/B only). |
+| `q6k_k1_mo` | all | Single-row Q6_K multi-output CPU kernel; falls back to the biased kernel (A/B only). |
 | `quant_simd` | all | SIMD quant kernels on the CPU; falls back to the scalar kernels. |
 | `rope_table_cache` | Lava | Cached RoPE tables on Lava. |
 | `window_fused` | Lava | Fused sliding-window attention on Lava; falls back to the per-head path. |

@@ -1670,8 +1670,8 @@ _q6k_dec_ok(ggml_type::Int32, xqs, simd::Bool) =
     simd && _multi_kernels_ok() && ggml_type == GGML_TYPE_Q6_K &&
     xqs isa AbstractVector{Q6KPrepVec} && _q6k_dec_enabled()
 
-# GESSO_Q6K_DECODE=0 turns the decoded path off (for A/B; same bits either way).
-_q6k_dec_enabled() = get(ENV, "GESSO_Q6K_DECODE", "1") != "0"
+# GESSO_DISABLE=q6k_decode turns the decoded path off (for A/B; same bits either way).
+_q6k_dec_enabled() = !env_disabled(:q6k_decode)
 
 # ---------------------------------------------------------------- Q4_K and Q5_K
 #
@@ -2000,13 +2000,13 @@ function _q45k_rows_tile!(dst, w, base, rb, b0, b1, xqs, t0, K::Int, q5::Val, dt
 end
 
 # Whether a prefill chunk takes _q45k_rows_tile!: the types and columns the Q4_K
-# and Q5_K multi kernels take. GESSO_Q45K_ROWS=0 turns it off (for A/B; same
+# and Q5_K multi kernels take. GESSO_DISABLE=q45k_rows turns it off (for A/B; same
 # bits either way).
 _q45k_rows_ok(ggml_type::Int32, xqs, simd::Bool) =
     simd && _multi_kernels_ok() &&
     (ggml_type == GGML_TYPE_Q4_K || ggml_type == GGML_TYPE_Q5_K) &&
     xqs isa AbstractVector{<:Union{Q8KVec, Q6KPrepVec}} && _q45k_rows_enabled()
-_q45k_rows_enabled() = get(ENV, "GESSO_Q45K_ROWS", "1") != "0"
+_q45k_rows_enabled() = !env_disabled(:q45k_rows)
 
 # The K column totals of the row at woff. The caller checks the bounds and
 # holds w and the columns.
@@ -3609,8 +3609,8 @@ end
     return dst
 end
 
-# GESSO_Q6K_K1_MO=0 sends K = 1 rows to the biased kernel (for A/B; same bits).
-_q6k_mo_enabled() = get(ENV, "GESSO_Q6K_K1_MO", "1") != "0"
+# GESSO_DISABLE=q6k_k1_mo sends K = 1 rows to the biased kernel (for A/B; same bits).
+_q6k_mo_enabled() = !env_disabled(:q6k_k1_mo)
 
 @noinline function _rows_q6k_k1_mo!(dst, w, base, rb, x::Q6KPrepVec, j0, j1)
     nb = length(x.d)
