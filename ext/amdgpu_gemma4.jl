@@ -75,6 +75,11 @@ end
 function _ka_g4_seg_norm!(ka, dst, src, w, eps::Real, hd::Int, N::Int, nheads::Int, use_w::Bool; wg::Int=_KA_OP_WG)
     _ka_check_wg(wg)
     (N > 0 && nheads > 0 && hd > 0) || return dst
+    if w === nothing
+        use_w && throw(ArgumentError("_ka_g4_seg_norm!: use_w is set but w is nothing"))
+        # The kernel reads w only when use_w is set; a typed array keeps it compiling.
+        w = src
+    end
     _ka_g4_seg_norm_kernel!(ka, wg)(
         dst, src, w, Float32(eps), N, hd, use_w;
         ndrange=wg * N * nheads,
@@ -414,11 +419,7 @@ end
 function _ka_g4_seg_norm(b::KADeviceBackend, src, nheads::Int, hd::Int, w, eps::Real)
     dst = KA.allocate(b.ka, Float32, size(src))
     N = size(src, 1)
-    if w === nothing
-        # The kernel reads w only when use_w is set, so the input stands in for it.
-        return _ka_g4_seg_norm!(b.ka, dst, src, src, eps, hd, N, nheads, false)
-    end
-    return _ka_g4_seg_norm!(b.ka, dst, src, w, eps, hd, N, nheads, true)
+    return _ka_g4_seg_norm!(b.ka, dst, src, w, eps, hd, N, nheads, w !== nothing)
 end
 
 function _ka_g4_geom(bt, tensors, eps)

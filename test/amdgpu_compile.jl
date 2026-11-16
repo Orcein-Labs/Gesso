@@ -14,7 +14,10 @@ if !isdefined(@__MODULE__, :amd_compile)
     function _amd_context(obj, ndr)
         KA = _AMD_KA
         if pkgversion(KA) >= v"0.10"
-            ndrange, wgs, iterspace = KA.launch_setup(KA.sizes_only(obj), ndr, nothing)
+            # launch_setup returns (ndrange, wgs, iterspace) on early KA 0.10 and
+            # (skip, ndrange, wgs, iterspace) from KA 0.10.7 on.
+            r = KA.launch_setup(KA.sizes_only(obj), ndr, nothing)
+            ndrange, wgs, iterspace = length(r) == 4 ? Base.tail(r) : r
             groups = size(KA.blocks(iterspace))
             items = size(KA.workitems(iterspace))
             launch = KA.select_launch(
