@@ -123,7 +123,7 @@ else
             end
             qm = _amdiq_random(rng, t, bv, bb, 37, 512)
             X = randn(rng, Float32, 40, 512)
-            _amdiq_check(qm, X; label="$name 37x512 ntok=40 (not a multiple of wg)")
+            _amdiq_check_wg(qm, X, 64; label="$name 37x512 ntok=40 (not a multiple of wg)")
         end
     end
 

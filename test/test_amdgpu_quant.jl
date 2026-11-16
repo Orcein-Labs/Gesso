@@ -118,7 +118,7 @@ else
         end
         qm = _amdq_random_q8(rng, 37, 512)
         X = randn(rng, Float32, 40, 512)
-        _amdq_check(qm, X; label="q8_0 37x512 ntok=40 (not a multiple of wg)")
+        _amdq_check(qm, X; label="q8_0 37x512 ntok=40 (not a multiple of wg)", launch=_AMDX._amdq_gemv!)
     end
 
     @testset "amdgpu quant Q4_K: device GEMV vs CPU F64 oracle (KA CPU backend)" begin
@@ -130,7 +130,7 @@ else
         end
         qm = _amdq_random_q4k(rng, 37, 512)
         X = randn(rng, Float32, 40, 512)
-        _amdq_check(qm, X; label="q4_k 37x512 ntok=40 (not a multiple of wg)", refx=_amdq_ref_xk)
+        _amdq_check(qm, X; label="q4_k 37x512 ntok=40 (not a multiple of wg)", refx=_amdq_ref_xk, launch=_AMDX._amdq_gemv!)
     end
 
     @testset "amdgpu quant Q8_0: workgroup sizes 1, 64, 256 agree with the oracle" begin

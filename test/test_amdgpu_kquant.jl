@@ -124,7 +124,7 @@ else
             end
             qm = _amdkq_random(rng, t, 37, 512)
             X = randn(rng, Float32, 40, 512)
-            _amdkq_check(qm, X; label="$name 37x512 ntok=40 (not a multiple of wg)")
+            _amdkq_check_wg(qm, X, 64; label="$name 37x512 ntok=40 (not a multiple of wg)")
         end
     end
 

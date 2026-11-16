@@ -246,6 +246,8 @@ using Gesso: reference_prefill, reference_generate
     include("test_amdgpu_hybrid.jl")
     # AMDGPU dense K-quant GEMV (Q2_K, Q3_K, Q5_K, Q6_K): device parity and compile.
     include("test_amdgpu_kquant.jl")
+    # AMDGPU quant prefill GEMM (dequant once + BLAS): F64 parity, row chunks, dispatch.
+    include("test_amdgpu_quant_gemm.jl")
     # AMDGPU q8 KV cache: write bit-equal to the host quantizer, dense copy, fused decode.
     include("test_amdgpu_kv_format.jl")
     # AMDGPU LFM2 short convolution and MoE toy: device parity, typed failures, compile.

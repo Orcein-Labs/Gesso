@@ -330,6 +330,10 @@ function _amdq_matmul_op!(b::KADeviceBackend, dst::Gesso.Activation, x::Gesso.Ac
     size(dst.storage) == (ntok, q.nrows) || throw(
         DimensionMismatch("amdgpu quant GEMV: dst is $(size(dst.storage)), want $((ntok, q.nrows))"),
     )
-    _amdq_gemv!(dst.storage, x.storage, q)
+    if ntok >= _amdq_gemm_min() && _lq_kind(q.ggml_type) !== nothing
+        _amdq_gemm_prefill!(dst.storage, x.storage, q)
+    else
+        _amdq_gemv!(dst.storage, x.storage, q)
+    end
     return dst
 end
