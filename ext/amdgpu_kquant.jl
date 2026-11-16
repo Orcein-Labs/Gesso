@@ -5,11 +5,14 @@
 # K-quant weight (`_quant_q8k_native`). The weight decode follows the GGML block
 # layouts documented in lava_quant.jl.
 #
-# Thread layout: one workgroup per (token, output row). Lane `l` of the group
-# walks superblocks l, l+wg, l+2wg, ... and folds each one into a lane-local
-# Float32 accumulator. The lane partials are then summed through local memory as
-# a tree (the same reduction as `_ka_rmsnorm_rows_kernel!`), so the superblock
-# order differs from the CPU's serial fold by a reassociation of Float32 sums.
+# Thread layout: one workgroup per (token, output row). A work item is one
+# scale group (16 or 32 values) of one superblock; lane `l` walks items l, l+wg,
+# l+2wg, ... and folds each into a lane-local Float32 accumulator, so all lanes
+# are busy and neighbouring lanes read neighbouring bytes. (One lane per
+# superblock left 44 of 64 lanes idle on a 5120-wide row.) The lane partials
+# are then summed through local memory as a tree (the same reduction as
+# `_ka_rmsnorm_rows_kernel!`), so the order differs from the CPU's serial fold
+# by a reassociation of Float32 sums.
 # Each dot sums integer products per sub-block. `wg` is a power of two of at most
 # `_KA_MAX_WG`, checked by `_ka_check_wg`.
 
@@ -34,12 +37,16 @@
     nsb = K ÷ 256
     base = r * row_bytes
     acc = 0.0f0
-    sb = lane - 1
+    # Lane layout: wg >= 16 gives each lane one unit per superblock step;
+    # smaller workgroups loop over units inside a superblock.
+    ustride = min(wg, 16)
+    sbstride = max(wg >> 4, 1)
+    u0 = (lane - 1) & 15
+    sb = (lane - 1) >> 4
     while sb < nsb
-        blk = base + sb * 84
-        isc = Int32(0)
-        imn = Int32(0)
-        for g in 0:15
+        g = u0
+        while g < 16
+            blk = base + sb * 84
             sc = _amdq_u8(W, blk + g)
             sub = Int32(0)
             bs = Int32(0)
@@ -51,13 +58,12 @@
                 sub += q2 * qv
                 bs += qv
             end
-            isc += (sc & Int32(15)) * sub
-            imn += (sc >> 4) * bs
+            dd = _amdq_f16(W, blk + 80) * D[t, sb+1]
+            dm = _amdq_f16(W, blk + 82) * D[t, sb+1]
+            acc += dd * Float32((sc & Int32(15)) * sub) - dm * Float32((sc >> 4) * bs)
+            g += ustride
         end
-        dd = _amdq_f16(W, blk + 80) * D[t, sb+1]
-        dm = _amdq_f16(W, blk + 82) * D[t, sb+1]
-        acc += dd * Float32(isc) - dm * Float32(imn)
-        sb += wg
+        sb += sbstride
     end
     part[lane] = acc
     @synchronize
@@ -122,11 +128,16 @@ end
     nsb = K ÷ 256
     base = r * row_bytes
     acc = 0.0f0
-    sb = lane - 1
+    # Lane layout: wg >= 16 gives each lane one unit per superblock step;
+    # smaller workgroups loop over units inside a superblock.
+    ustride = min(wg, 16)
+    sbstride = max(wg >> 4, 1)
+    u0 = (lane - 1) & 15
+    sb = (lane - 1) >> 4
     while sb < nsb
-        blk = base + sb * 110
-        isum = Int32(0)
-        for g in 0:15
+        g = u0
+        while g < 16
+            blk = base + sb * 110
             sc = _amdq_q3k_scale(W, blk, g)
             sub = Int32(0)
             for i in 0:15
@@ -139,11 +150,11 @@ end
                 qv = Q[t, sb*256+e+1]
                 sub += (q2 - Int32(4) * (Int32(1) - hm)) * qv
             end
-            isum += sc * sub
+            dd = _amdq_f16(W, blk + 108) * D[t, sb+1]
+            acc += dd * Float32(sc * sub)
+            g += ustride
         end
-        dd = _amdq_f16(W, blk + 108) * D[t, sb+1]
-        acc += dd * Float32(isum)
-        sb += wg
+        sb += sbstride
     end
     part[lane] = acc
     @synchronize
@@ -185,12 +196,16 @@ end
     nsb = K ÷ 256
     base = r * row_bytes
     acc = 0.0f0
-    sb = lane - 1
+    # Lane layout: wg >= 8 gives each lane one unit per superblock step;
+    # smaller workgroups loop over units inside a superblock.
+    ustride = min(wg, 8)
+    sbstride = max(wg >> 3, 1)
+    u0 = (lane - 1) & 7
+    sb = (lane - 1) >> 3
     while sb < nsb
-        blk = base + sb * 176
-        isc = Int32(0)
-        imn = Int32(0)
-        for g in 0:7
+        g = u0
+        while g < 8
+            blk = base + sb * 176
             sc, mn = _amdq_scale_min(W, blk + 4, g)
             sub = Int32(0)
             bs = Int32(0)
@@ -202,13 +217,12 @@ end
                 sub += (nib + (bit << 4)) * qv
                 bs += qv
             end
-            isc += sc * sub
-            imn += mn * bs
+            dd = _amdq_f16(W, blk) * D[t, sb+1]
+            dm = _amdq_f16(W, blk + 2) * D[t, sb+1]
+            acc += dd * Float32(sc * sub) - dm * Float32(mn * bs)
+            g += ustride
         end
-        dd = _amdq_f16(W, blk) * D[t, sb+1]
-        dm = _amdq_f16(W, blk + 2) * D[t, sb+1]
-        acc += dd * Float32(isc) - dm * Float32(imn)
-        sb += wg
+        sb += sbstride
     end
     part[lane] = acc
     @synchronize
@@ -251,11 +265,16 @@ end
     nsb = K ÷ 256
     base = r * row_bytes
     acc = 0.0f0
-    sb = lane - 1
+    # Lane layout: wg >= 16 gives each lane one unit per superblock step;
+    # smaller workgroups loop over units inside a superblock.
+    ustride = min(wg, 16)
+    sbstride = max(wg >> 4, 1)
+    u0 = (lane - 1) & 15
+    sb = (lane - 1) >> 4
     while sb < nsb
-        blk = base + sb * 210
-        isum = Int32(0)
-        for g in 0:15
+        g = u0
+        while g < 16
+            blk = base + sb * 210
             sc = _amdq_i8(W, blk + 192 + g)
             sub = Int32(0)
             for i in 0:15
@@ -269,11 +288,11 @@ end
                 q6 = (nib | (hb << 4)) - Int32(32)
                 sub += q6 * Q[t, sb*256+e+1]
             end
-            isum += sc * sub
+            dd = _amdq_f16(W, blk + 208) * D[t, sb+1]
+            acc += dd * Float32(sc * sub)
+            g += ustride
         end
-        dd = _amdq_f16(W, blk + 208) * D[t, sb+1]
-        acc += dd * Float32(isum)
-        sb += wg
+        sb += sbstride
     end
     part[lane] = acc
     @synchronize

@@ -111,8 +111,10 @@ end
     end
 end
 
-# One workgroup per (token, output row); lane l walks superblocks l, l+wg, ... and
-# the lane partials are summed through local memory as a tree (see the K-quant
+# One workgroup per (token, output row). Each lane owns one 16-value unit of a
+# superblock (16 lanes per superblock), so every lane is busy once the row has
+# wg/16 superblocks and neighbouring lanes read neighbouring bytes. The lane
+# partials are summed through local memory as a tree (see the K-quant
 # dot kernels in amdgpu_kquant.jl for the layout).
 @kernel function _amdq_iq_dot_kernel!(
     Y,
@@ -137,10 +139,16 @@ end
     bs = row_bytes ÷ nsb
     base = r * row_bytes
     acc = 0.0f0
-    sb = lane - 1
+    # Lane layout: wg >= 16 gives each lane one unit per superblock step;
+    # smaller workgroups loop over units inside a superblock.
+    ustride = min(wg, 16)
+    sbstride = max(wg >> 4, 1)
+    u0 = (lane - 1) & 15
+    sb = (lane - 1) >> 4
     while sb < nsb
-        blk = base + sb * bs
-        for u in 0:15
+        u = u0
+        while u < 16
+            blk = base + sb * bs
             sc = _amdq_iq_unit_scale(kind, W, blk, u)
             s = 0.0f0
             for l in 0:15
@@ -148,8 +156,9 @@ end
                 s += Float32(_amdq_iq_ival(kind, W, blk, e, G2, G3, KS, KV)) * X[t, sb*256+e+1]
             end
             acc += sc * s
+            u += ustride
         end
-        sb += wg
+        sb += sbstride
     end
     part[lane] = acc
     @synchronize

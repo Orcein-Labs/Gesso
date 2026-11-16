@@ -202,8 +202,9 @@ end
     return sc, mn
 end
 
-# One workgroup per (token, output row), lanes stride over superblocks as in the
-# Q8_0 kernel above.
+# One workgroup per (token, output row). Each lane owns one 32-value sub-block
+# of a superblock (8 lanes per superblock), so a 5120-wide row (160 sub-blocks)
+# keeps all 64 lanes busy; one lane per superblock left 44 of 64 idle.
 @kernel function _amdq_q4k_dot_kernel!(Y, @Const(Q), @Const(D), @Const(W), M::Int, K::Int, row_bytes::Int)
     wg = @uniform @groupsize()[1]
     part = @localmem Float32 (_KA_MAX_WG,)
@@ -213,12 +214,16 @@ end
     base = ((grp - 1) ÷ M) * row_bytes
     t = (grp - 1) % M + 1
     acc = 0.0f0
-    sb = lane - 1
+    # Lane layout: wg >= 8 gives each lane one unit per superblock step;
+    # smaller workgroups loop over units inside a superblock.
+    ustride = min(wg, 8)
+    sbstride = max(wg >> 3, 1)
+    u0 = (lane - 1) & 7
+    sb = (lane - 1) >> 3
     while sb < nsb
-        blk = base + sb * 144
-        isc = Int32(0)
-        imn = Int32(0)
-        for g in 0:7
+        g = u0
+        while g < 8
+            blk = base + sb * 144
             sc, mn = _amdq_scale_min(W, blk + 4, g)
             sub = Int32(0)
             bs = Int32(0)
@@ -229,13 +234,12 @@ end
                 sub += nib * qv
                 bs += qv
             end
-            isc += sc * sub
-            imn += mn * bs
+            dd = _amdq_f16(W, blk) * D[t, sb+1]
+            dm = _amdq_f16(W, blk + 2) * D[t, sb+1]
+            acc += dd * Float32(sc * sub) - dm * Float32(mn * bs)
+            g += ustride
         end
-        dd = _amdq_f16(W, blk) * D[t, sb+1]
-        dm = _amdq_f16(W, blk + 2) * D[t, sb+1]
-        acc += dd * Float32(isc) - dm * Float32(imn)
-        sb += wg
+        sb += sbstride
     end
     part[lane] = acc
     @synchronize
