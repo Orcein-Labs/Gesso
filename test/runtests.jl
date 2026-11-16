@@ -248,6 +248,8 @@ using Gesso: reference_prefill, reference_generate
     include("test_amdgpu_kquant.jl")
     # AMDGPU quant prefill GEMM (dequant once + BLAS): F64 parity, row chunks, dispatch.
     include("test_amdgpu_quant_gemm.jl")
+    # AMDGPU quant kernels on a real ROCm device vs KA CPU (skips without a device).
+    include("test_amdgpu_quant_device.jl")
     # AMDGPU q8 KV cache: write bit-equal to the host quantizer, dense copy, fused decode.
     include("test_amdgpu_kv_format.jl")
     # AMDGPU LFM2 short convolution and MoE toy: device parity, typed failures, compile.
