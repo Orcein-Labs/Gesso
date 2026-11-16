@@ -9,7 +9,7 @@ Gesso runs the same models on four backends. Pick one by passing it to
 | CPU | `Gesso.CPUBackend()` | Nothing beyond Julia 1.12 | `Session` when no backend is passed |
 | Lava (Vulkan) | `Gesso.LavaBackend()` after `using Lava` | The vendored Lava package and a working Vulkan driver | Scripts and the chat server when `GESSO_BACKEND` is unset |
 | CUDA | `Gesso.CUDABackend()` after `using CUDA` | CUDA.jl and an NVIDIA driver with a functional device | Nothing; opt-in |
-| AMDGPU (ROCm) | `Gesso.AMDGPUBackend()` after `using AMDGPU, KernelAbstractions` | AMDGPU.jl, KernelAbstractions.jl and a ROCm driver with a functional device | Nothing; opt-in, GPU-untested |
+| AMDGPU (ROCm) | `Gesso.AMDGPUBackend()` after `using AMDGPU, KernelAbstractions` | AMDGPU.jl, KernelAbstractions.jl and a ROCm driver with a functional device | Nothing; opt-in |
 
 ## CPU
 
@@ -43,11 +43,19 @@ with no lowering raises `LoweringNotImplemented`.
 
 ## AMDGPU
 
-GPU-untested. This backend has never run on AMD hardware. Its kernels are
-written in KernelAbstractions, and the test suite runs them on
-KernelAbstractions' CPU backend against the CPU oracle and compiles them for
-AMD targets. The kernels are written for correctness and are not tuned for
-speed.
+Tested on one AMD Instinct MI325X (gfx942, ROCm 6.4.1). On that card the
+five release families pass the long-prompt parity gate against an all-f32 CPU
+reference, and the device test suite passes. Qwen3.8-27B Q4_K_M ran at
+104 ms per decoded token and 8.7 s for a 512-token prefill. There is no
+same-box llama.cpp ROCm comparison yet. Other AMD GPUs, including Radeon cards
+and Ryzen AI Max APUs, have not been tested.
+
+The kernels are written in KernelAbstractions. The test suite runs them on
+KernelAbstractions' CPU backend against the CPU oracle, and
+`test/test_amdgpu_quant_device.jl` checks every quantized kernel on a ROCm
+device when one is present (it skips otherwise). From 32 prompt tokens on,
+quantized weights are dequantized once per chunk and multiplied with rocBLAS
+(`GESSO_TUNE=dq_gemm_min`).
 
 Install AMDGPU.jl and KernelAbstractions.jl, then
 `using AMDGPU, KernelAbstractions, Gesso`; both packages are needed to load

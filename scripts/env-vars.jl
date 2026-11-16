@@ -18,8 +18,8 @@ const PATTERN = r"\bGESSO_[A-Z0-9_]*[A-Z0-9]\b"
 
 # name, default, meaning
 const USER = [
-    ("GESSO_BACKEND", "`lava`", "Backend for the scripts and the chat server: `lava`, `cpu` (the correctness oracle), `cuda` (comparator), `amdgpu` (chat server, GPU-untested)."),
-    ("GESSO_KV_FORMAT", "per backend", "KV cache format: `f32`, `f16`, `q8` or `q4h`. Unset is `q8` on CUDA, `q8` on Lava below 512 tokens of context and `f32` from 512."),
+    ("GESSO_BACKEND", "`lava`", "Backend for the scripts and the chat server: `lava`, `cpu` (the correctness oracle), `cuda` (comparator), `amdgpu` (chat server)."),
+    ("GESSO_KV_FORMAT", "per backend", "KV cache format: `f32`, `f16`, `q8` or `q4h`. Unset is `q8` on CUDA, `q8` on Lava below 512 tokens of context and `f32` from 512, `f32` on AMDGPU and the CPU."),
     ("GESSO_GPU_BUDGET_MIB", "free memory less the reserve", "Device memory for weights, in MiB. Unset probes free memory; 4800 when the probe is unavailable."),
     ("GESSO_GPU_BUDGET_CTX", "65536", "Context length the weight budget keeps KV room for. A server's `--n-ctx` wins."),
     ("GESSO_GPU_RESERVE_MIB", "1024", "Least device memory kept free for KV, prefill passes and the desktop, in MiB."),

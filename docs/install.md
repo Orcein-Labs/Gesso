@@ -35,7 +35,7 @@ Loading one stack activates the matching package extension (`GessoCUDAExt`,
 `GessoLavaExt`, `GessoAMDGPUExt`).
 
 - CUDA: add `CUDA` to your environment, then `using CUDA`.
-- AMDGPU (GPU-untested): add `AMDGPU` and `KernelAbstractions`, then
+- AMDGPU: add `AMDGPU` and `KernelAbstractions`, then
   `using AMDGPU, KernelAbstractions`. It needs a ROCm install; see
   [backends.md](backends.md).
 - Lava: Gesso carries a patched copy of Lava at `vendor/Lava`. Install that

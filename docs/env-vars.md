@@ -15,8 +15,8 @@ an error.
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `GESSO_BACKEND` | `lava` | Backend for the scripts and the chat server: `lava`, `cpu` (the correctness oracle), `cuda` (comparator), `amdgpu` (chat server, GPU-untested). |
-| `GESSO_KV_FORMAT` | per backend | KV cache format: `f32`, `f16`, `q8` or `q4h`. Unset is `q8` on CUDA, `q8` on Lava below 512 tokens of context and `f32` from 512. |
+| `GESSO_BACKEND` | `lava` | Backend for the scripts and the chat server: `lava`, `cpu` (the correctness oracle), `cuda` (comparator), `amdgpu` (chat server). |
+| `GESSO_KV_FORMAT` | per backend | KV cache format: `f32`, `f16`, `q8` or `q4h`. Unset is `q8` on CUDA, `q8` on Lava below 512 tokens of context and `f32` from 512, `f32` on AMDGPU and the CPU. |
 | `GESSO_GPU_BUDGET_MIB` | free memory less the reserve | Device memory for weights, in MiB. Unset probes free memory; 4800 when the probe is unavailable. |
 | `GESSO_GPU_BUDGET_CTX` | 65536 | Context length the weight budget keeps KV room for. A server's `--n-ctx` wins. |
 | `GESSO_GPU_RESERVE_MIB` | 1024 | Least device memory kept free for KV, prefill passes and the desktop, in MiB. |
@@ -82,8 +82,8 @@ Backend `all` means the CPU path and every GPU backend.
 | `cuda_expert_cache` | `0` | CUDA | `1` turns on the CUDA device expert cache. |
 | `cuda_expert_cache_mib` | auto | CUDA | CUDA expert cache size, in MiB. |
 | `cuda_weight_dtype` | `f16` | CUDA | Device dtype of large CUDA weights: `f16` or `f32`. |
-| `dq_gemm_min` | `32` | CUDA, Lava | Fewest tokens for which a quant matmul takes the dequant GEMM instead of the GEMV. |
-| `dq_gemm_scratch_mib` | `32` | CUDA, Lava | Dequant GEMM scratch buffer, in MiB. |
+| `dq_gemm_min` | `32` | AMDGPU, CUDA, Lava | Fewest tokens for which a quant matmul takes the dequant GEMM instead of the GEMV. |
+| `dq_gemm_scratch_mib` | `32` | AMDGPU, CUDA, Lava | Dequant GEMM scratch buffer, in MiB. |
 | `expert_cache` | `0` | all | Host expert slices kept dequantized; `0` is off. |
 | `g4_expert_prefill_min` | 32 | Lava | Fewest prompt tokens before Gemma 4 routed experts run on the Lava device. |
 | `gemv_chunks_per_thread` | 16 | all | CPU GEMV work chunks per thread. |

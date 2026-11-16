@@ -195,10 +195,30 @@ real-model gates are reported as named skips.
   - CUDA, an optional alternative and comparator. It has device argmax, GEMM
     attention, quantized expert kernels, hot experts and an autotuned
     `matmul!`.
-  - AMDGPU (ROCm), opt-in and GPU-untested: written in KernelAbstractions and
-    tested on its CPU backend, never on AMD hardware.
+  - AMDGPU (ROCm), opt-in: written in KernelAbstractions, tested on an AMD
+    Instinct MI325X (see below).
   The core package depends on none of the GPU stacks.
 - An OpenAI-compatible chat server with streaming and sampling.
+
+## Tested hardware
+
+Gesso has been run and checked on the hardware below. "Parity gate" means the
+five release families (Qwen3.5, Ornith 1.5, Spark-X2.6, LFM2.5, Gemma 4) were
+compared on a 512-token prompt against an all-f32 CPU reference, on mean and
+max KL and top-1 agreement.
+
+| Hardware | Backend | What was checked |
+| --- | --- | --- |
+| Intel Xeon E5-2699 v3 (Haswell, AVX2) | CPU | Full test suite; parity and speed vs llama.cpp |
+| AMD EPYC Rome (AVX2) | CPU | Parity and speed vs llama.cpp |
+| Intel Xeon Cascade Lake (AVX-512 VNNI) | CPU | Parity and speed vs llama.cpp |
+| aarch64 under qemu emulation | CPU | Correctness only; no speed numbers |
+| NVIDIA RTX 5060 8 GB (GDDR7) | Lava, CUDA | Parity gate; speed vs llama.cpp CUDA |
+| AMD Instinct MI325X (HBM3E) | AMDGPU | Parity gate; device test suite |
+
+Not tested yet: AMD Radeon GPUs, Ryzen AI Max APUs, Intel GPUs, Apple
+silicon and real ARM hardware. Lava is a Vulkan backend and should run on
+other vendors' GPUs, but it has only been measured on NVIDIA.
 
 ## Layout
 
